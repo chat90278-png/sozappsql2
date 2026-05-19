@@ -271,6 +271,7 @@ class ElidedLabel(QLabel):
 
 
 from src.services.excel_store import ExcelStore
+from src.services.sts_store import STSStore
 from src.workers import ExcelLoadWorker, ComponentSaveWorker, UserSaveWorker, ContractSaveWorker, AnalyzeDialog
 
 
@@ -889,6 +890,15 @@ class UserManagerDialog(StyledDialog):
                 "note": (self.table.item(r, 3).text() if self.table.item(r, 3) else ""),
             })
         self._save_payload = list(result)
+        if _is_sts_store(self.store):
+            try:
+                self.set_busy(True, "Kullanıcılar kaydediliyor...", 25)
+                self.store.write_users(self._save_payload, actor=self.store.current_actor())
+                self.store.save()
+                self.on_save_finished()
+            except Exception as exc:
+                self.on_save_failed(str(exc))
+            return
         self._start_async_save()
 
     def _start_async_save(self):
@@ -1323,6 +1333,15 @@ class ComponentManagerDialog(StyledDialog):
                 "platforms": dict(comp.platforms or {}),
             })
         self._save_payload = payload
+        if _is_sts_store(self.store):
+            try:
+                self.set_busy(True, "Bileşenler kaydediliyor...", 25)
+                self.store.write_components(result, actor=self.store.current_actor())
+                self.store.save()
+                self.on_save_finished({})
+            except Exception as exc:
+                self.on_save_failed(str(exc))
+            return
         self._start_async_save()
 
     def _start_async_save(self):
@@ -5856,6 +5875,16 @@ class ContractWorkWindow(QDialog):
 
 
 
+
+
+def _is_sts_store(store) -> bool:
+    return bool(
+        store is not None
+        and hasattr(store, "db")
+        and hasattr(store, "write_users")
+        and hasattr(store, "write_components")
+    )
+
 def section_label(text):
     l = QLabel(text)
     l.setObjectName("sectionTitle")
@@ -5916,7 +5945,7 @@ class MainWindow(QMainWindow):
         if self.store:
             if not self.contract_index:
                 # UI thread'i bloklamamak için hazır store olsa bile indeksleme yükünü worker'a bırak.
-                self.start_excel_load(self.store.path)
+                self.start_sts_load(self.store.path) if str(self.store.path).lower().endswith(".sts") else self.start_excel_load(self.store.path)
             else:
                 self.refresh(rebuild_index=False)
                 self._apply_version_to_ui()
@@ -5924,6 +5953,77 @@ class MainWindow(QMainWindow):
         else:
             self.set_empty_state()
             self.connection_label.setText("Excel bağlı değil")
+
+
+    def export_sts_to_excel(self):
+        if not self.store:
+            QMessageBox.information(self, "Veri dosyası gerekli", "Önce bir STS veri dosyası açın.")
+            return
+        if not hasattr(self.store, "export_to_excel"):
+            QMessageBox.information(self, "Excel’e Aktar", "Excel’e aktarım yalnızca STS veri dosyalarında desteklenir.")
+            return
+        active_platform = ""
+        cur = self.platform_list.currentItem() if hasattr(self, "platform_list") else None
+        if cur:
+            active_platform = str(cur.data(Qt.UserRole) or "")
+        from src.ui.dialogs.excel_export_options import ExcelExportDialog
+        dlg = ExcelExportDialog(self.store, self, active_platform=active_platform)
+        if not dlg.exec() or not dlg.result_options:
+            return
+        opts = dict(dlg.result_options)
+        out, _ = QFileDialog.getSaveFileName(self, "Excel’e Aktar", str(Path(self.path).with_suffix('.xlsx')), "Excel (*.xlsx)")
+        if not out:
+            return
+        from src.workers.export_workers import ExcelExportWorker
+        self._export_progress = QProgressDialog("Excel dosyası hazırlanıyor...", "", 0, 100, self)
+        self._export_progress.setWindowTitle("Excel oluşturuluyor")
+        self._export_progress.setCancelButton(None)
+        self._export_progress.setAutoClose(False)
+        self._export_progress.setAutoReset(False)
+        self._export_progress.setValue(0)
+        self._export_progress.show()
+
+        self._export_thread = QThread(self)
+        self._export_worker = ExcelExportWorker(self.store, out, opts)
+        self._export_worker.moveToThread(self._export_thread)
+        self._export_thread.started.connect(self._export_worker.run)
+        self._export_worker.progress.connect(lambda p, m: (self._export_progress.setLabelText(str(m)), self._export_progress.setValue(int(max(0,min(100,p))))))
+        def _done(_res):
+            self._export_progress.setValue(100)
+            self._export_progress.close()
+            QMessageBox.information(self, "Excel’e Aktar", "Excel dosyası oluşturuldu.")
+        def _fail(msg):
+            self._export_progress.close()
+            QMessageBox.critical(self, "Excel’e Aktar", str(msg))
+        self._export_worker.finished.connect(_done)
+        self._export_worker.failed.connect(_fail)
+        self._export_worker.finished.connect(self._export_thread.quit)
+        self._export_worker.failed.connect(self._export_thread.quit)
+        self._export_thread.finished.connect(self._export_worker.deleteLater)
+        self._export_thread.finished.connect(self._export_thread.deleteLater)
+        self._export_thread.start()
+
+    def open_database_management(self):
+        if not self.store:
+            QMessageBox.information(self, "Veri dosyası gerekli", "Önce bir STS veri dosyası açın.")
+            return
+        if not hasattr(self.store, "database_stats"):
+            QMessageBox.information(self, "Database Yönetimi", "Database yönetimi yalnızca STS veri dosyalarında desteklenir.")
+            return
+        from src.ui.dialogs.database_management import DatabaseManagementDialog
+        dlg = DatabaseManagementDialog(self.store, self)
+        dlg.exec()
+
+    def open_activity_logs(self):
+        if not self.store:
+            QMessageBox.information(self, "Veri dosyası gerekli", "Önce bir STS veri dosyası açın.")
+            return
+        if not hasattr(self.store, "list_logs"):
+            QMessageBox.information(self, "İşlem Geçmişi", "İşlem geçmişi yalnızca STS veri dosyalarında desteklenir.")
+            return
+        from src.ui.dialogs.activity_logs import ActivityLogDialog
+        dlg = ActivityLogDialog(self.store, self)
+        dlg.exec()
 
     def open_usage_guide(self):
         try:
@@ -5957,12 +6057,15 @@ class MainWindow(QMainWindow):
         self.top_actions_btn.setPopupMode(QToolButton.InstantPopup)
         self.top_actions_menu = QMenu(self.top_actions_btn)
         self.top_actions_menu.setObjectName("topActionsMenu")
-        self.top_actions_menu.addAction("Excel Dosyası Değiştir", self.open_file)
+        self.top_actions_menu.addAction("Veri Dosyası Değiştir", self.open_file)
+        self.top_actions_menu.addAction("Excel’e Aktar", self.export_sts_to_excel)
+        self.top_actions_menu.addAction("Database Yönetimi", self.open_database_management)
         self.top_actions_menu.addAction("Platform Yönetimi", self.manage_platforms)
         self.top_actions_menu.addSeparator()
         self.top_actions_menu.addAction("Kullanıcı Yönetimi", self.manage_users)
         self.top_actions_menu.addAction("Etiket Yönetimi", self.manage_tags)
         self.top_actions_menu.addAction("Bileşen Yönetimi", self.manage_components)
+        self.top_actions_menu.addAction("İşlem Geçmişi", self.open_activity_logs)
         self.top_actions_menu.addSeparator()
         self.top_actions_menu.addAction("📘 Kullanım Kılavuzu", self.open_usage_guide)
         self.top_actions_btn.setMenu(self.top_actions_menu)
@@ -6621,6 +6724,25 @@ class MainWindow(QMainWindow):
         self._loader_thread.finished.connect(self._clear_loader_refs)
         self._loader_thread.start()
 
+
+    def start_sts_load(self, path: Path):
+        self.path = Path(path)
+        self.store = STSStore(self.path)
+        self.contract_index = self.store.build_contract_index()
+        self._tag_color_map_cache = None
+        self._set_platform_items(self.store.platform_names())
+        self.update_alert_strip()
+        if self.platform_list.count():
+            self.platform_list.setCurrentRow(0)
+        self.connection_label.setText("✓ STS veri dosyası bağlı")
+
+    def is_sts_mode(self) -> bool:
+        return (
+            self.store is not None
+            and self.path is not None
+            and str(self.path).lower().endswith(".sts")
+        )
+
     def _clear_loader_refs(self):
         self._loader_worker = None
         self._loader_thread = None
@@ -6704,6 +6826,17 @@ class MainWindow(QMainWindow):
             return
         kind = str(scope or "all").strip().lower()
         if kind == "all":
+            if self.is_sts_mode():
+                self.contract_index = self.store.build_contract_index()
+                self._set_platform_items(self.store.platform_names())
+                self.update_alert_strip()
+                self.refresh_open_calendar()
+                if select_platform:
+                    self.select_platform(select_platform)
+                elif self.platform_list.count() and self.platform_list.currentRow() < 0:
+                    self.platform_list.setCurrentRow(0)
+                self.connection_label.setText("✓ STS veri dosyası bağlı")
+                return
             self._pending_select_platform = select_platform
             self.start_excel_load(self.path)
             return
@@ -6852,7 +6985,11 @@ class MainWindow(QMainWindow):
     def open_file(self):
         dlg = WorkbookStartDialog(self)
         if dlg.exec() and dlg.selected_path:
-            self.start_excel_load(dlg.selected_path)
+            sel = Path(dlg.selected_path)
+            if sel.suffix.lower() == ".sts":
+                self.start_sts_load(sel)
+            else:
+                self.start_excel_load(sel)
 
     def show_contract_summary(self, row: int, item: dict):
         if not self.store:
@@ -6996,6 +7133,8 @@ class MainWindow(QMainWindow):
         # Kayıttan sonra indeks tek seferde yenilenir; arama bu indeks üzerinden yapılır.
         if rebuild_index:
             self.contract_index = self.store.build_contract_index()
+        if self.is_sts_mode():
+            self.connection_label.setText("✓ STS veri dosyası bağlı")
         platforms = self.store.platform_names()
         self._set_platform_items(platforms)
         self.update_query_logo_background(None)

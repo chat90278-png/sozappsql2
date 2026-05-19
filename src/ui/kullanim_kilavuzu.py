@@ -403,16 +403,9 @@ class UsageGuideDialog(QDialog):
         text_lay = QVBoxLayout()
         text_lay.setContentsMargins(0, 0, 0, 0)
         text_lay.setSpacing(6)
+
         title = QLabel("📘 STS Kullanım Kılavuzu")
         title.setObjectName("guideHeroTitle")
-        top_bar.addWidget(title, 1)
-
-        pdf_btn = QPushButton("📄 Kapsamlı PDF Kılavuzu")
-        pdf_btn.setObjectName("guidePdfButton")
-        pdf_btn.setCursor(Qt.PointingHandCursor)
-        pdf_btn.clicked.connect(self._open_comprehensive_pdf_guide)
-        top_bar.addWidget(pdf_btn, 0, Qt.AlignRight | Qt.AlignTop)
-
         subtitle = QLabel(
             "Ekran bazlı hızlı anlatım: hangi ekran ne işe yarar, o ekranda neler yapılabilir ve hangi görsel dosyası kullanılmalıdır."
         )
