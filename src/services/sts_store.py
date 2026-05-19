@@ -1,5 +1,6 @@
 from __future__ import annotations
 import json
+import mimetypes
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -25,22 +26,57 @@ class STSStore:
     def _normalize_label(self, text: str) -> str: return " ".join(str(text or "").casefold().split())
     def all_sheet_names(self): return self.platform_names()
 
+
+    def _log(self, action: str, **kwargs):
+        self.db.add_log(action=action, **kwargs)
+
+    def list_logs(self, limit=500, action=None, entity_type=None, platform=None, contract_no=None, search=None):
+        return self.db.list_logs(limit=limit, action=action, entity_type=entity_type, platform=platform, contract_no=contract_no, search=search)
+
+    def supports_activity_logs(self):
+        return True
+
     def platform_names(self):
         return [r[0] for r in self.db.conn.execute("SELECT name FROM platforms WHERE is_active=1 ORDER BY sort_order,name").fetchall()]
     def create_platform(self, name, logo_source=None):
-        ts = now_iso(); self.db.conn.execute("INSERT OR IGNORE INTO platforms(name,display_name,created_at,updated_at) VALUES(?,?,?,?)", (name,name,ts,ts)); self.db.conn.commit()
-    def delete_platform(self, name): self.db.conn.execute("DELETE FROM platforms WHERE name=?", (name,)); self.db.conn.commit()
+        nm = str(name or "").strip()
+        if not nm:
+            return
+        ts = now_iso()
+        self.db.conn.execute("INSERT OR IGNORE INTO platforms(name,display_name,created_at,updated_at) VALUES(?,?,?,?)", (nm, nm, ts, ts))
+        self.db.conn.commit()
+        self._log("platform_created", entity_type="platform", entity_key=nm, platform=nm, message=f"Platform oluşturuldu: {nm}")
+        if logo_source:
+            raw = Path(logo_source).read_bytes()
+            ext = Path(logo_source).suffix.lower().lstrip('.')
+            self.set_platform_logo_bytes(nm, raw, ext=ext)
+
+    def delete_platform(self, name):
+        nm = str(name or "").strip()
+        self.db.conn.execute("DELETE FROM platforms WHERE name=?", (nm,)); self.db.conn.commit()
+        self._log("platform_deleted", entity_type="platform", entity_key=nm, platform=nm, message=f"Platform silindi: {nm}")
     def load_excluded_platforms(self):
         return [r[0] for r in self.db.conn.execute("SELECT name FROM platforms WHERE is_excluded=1").fetchall()]
     def save_excluded_platforms(self, excluded):
         ex = set(excluded or [])
-        for p in self.platform_names()+list(ex):
+        for p in self.platform_names() + list(ex):
             self.db.conn.execute("UPDATE platforms SET is_excluded=? WHERE name=?", (1 if p in ex else 0, p))
         self.db.conn.commit()
+        self._log("platform_exclusions_updated", entity_type="platform", message="Platform dışlamaları güncellendi", payload={"excluded": sorted(list(ex))})
     def get_platform_logo_bytes(self, platform):
         r=self.db.conn.execute("SELECT logo_blob FROM platforms WHERE name=?",(platform,)).fetchone(); return r[0] if r else None
     def set_platform_logo_bytes(self, platform, data, ext=None):
-        self.db.conn.execute("UPDATE platforms SET logo_blob=?,logo_ext=?,updated_at=? WHERE name=?", (data,ext,now_iso(),platform)); self.db.conn.commit()
+        raw = bytes(data or b"")
+        if len(raw) > 2 * 1024 * 1024:
+            raise ValueError("Logo dosyası 2 MB üstünde olamaz.")
+        extv = str(ext or "").lower().strip().lstrip('.')
+        if extv and extv not in {"png", "jpg", "jpeg", "bmp", "webp", "svg"}:
+            extv = ""
+        mime = mimetypes.types_map.get(f".{extv}", "application/octet-stream") if extv else "application/octet-stream"
+        ts = now_iso()
+        self.db.conn.execute("UPDATE platforms SET logo_blob=?,logo_ext=?,logo_mime=?,logo_updated_at=?,updated_at=? WHERE name=?", (raw, extv or None, mime, ts, ts, platform))
+        self.db.conn.commit()
+        self._log("platform_logo_updated", entity_type="platform", entity_key=str(platform or ""), platform=str(platform or ""), message="Platform logosu güncellendi", payload={"ext": extv, "size": len(raw)})
 
     def load_users(self, active_only=True):
         q="SELECT name,yi_yd,active,note FROM users"+(" WHERE active=1" if active_only else "")+" ORDER BY name"
@@ -67,6 +103,7 @@ class STSStore:
             self.db.conn.execute("DELETE FROM users")
             for row in rows:
                 self.db.conn.execute("INSERT INTO users(name,yi_yd,active,note,created_at,updated_at) VALUES(?,?,?,?,?,?)", row)
+        self._log("users_updated", entity_type="user", message="Kullanıcı listesi güncellendi", payload={"count": len(rows)}, actor=actor or self.current_actor())
 
     def load_components(self):
         out=[]
@@ -102,6 +139,7 @@ class STSStore:
                     if not str(p).strip():
                         continue
                     self.db.conn.execute("INSERT INTO component_platforms(component_id,platform_name,enabled) VALUES(?,?,?)", (cid, str(p).strip(), 1 if bool(en) else 0))
+        self._log("components_updated", entity_type="component", message="Bileşen listesi güncellendi", payload={"count": len(normalized)}, actor=actor or self.current_actor())
 
 
     def assigned_components(self, platform: str) -> List[str]:
@@ -181,6 +219,7 @@ class STSStore:
                 self.db.conn.execute("UPDATE tags SET color=?, kind=?, updated_at=? WHERE id=?", (color, kind, ts, row[0]))
             else:
                 self.db.conn.execute("INSERT INTO tags(name,color,kind,created_at,updated_at) VALUES(?,?,?,?,?)", (name, color, kind, ts, ts))
+        self._log("tag_upserted", entity_type="tag", entity_key=name, message="Etiket güncellendi", actor=getattr(self, "current_actor", lambda: "Sistem")())
 
     def delete_tag_def(self, tag_or_name):
         nm = self._tag_name_of(tag_or_name)
@@ -189,6 +228,7 @@ class STSStore:
         with self.db.tx():
             self.db.conn.execute("DELETE FROM tags WHERE name=?", (nm,))
             self.db.conn.execute("DELETE FROM contract_tags WHERE tag_name=?", (nm,))
+        self._log("tag_deleted", entity_type="tag", entity_key=nm, message="Etiket silindi")
 
     def load_tag_snapshot(self):
         return self.load_tag_defs(active_only=False), self.all_contract_tags_map()
@@ -198,6 +238,7 @@ class STSStore:
         for key, vals in (assignments_by_key or {}).items():
             p, no, ctype = key if isinstance(key, tuple) else key.split("|")
             self.save_contract_tags(p, no, ctype, vals or [], actor=actor)
+        self._log("tag_snapshot_updated", entity_type="tag", message="Etiket snapshot güncellendi", actor=actor or self.current_actor())
 
     def all_contract_tags_map(self):
         out = {}
@@ -266,6 +307,7 @@ class STSStore:
                     kind = str((t.get("kind") if isinstance(t, dict) else getattr(t, "kind", "contract")) or "contract")
                     self.db.conn.execute("INSERT INTO tags(name,color,kind,created_at,updated_at) VALUES(?,?,?,?,?)", (nm, color, kind, ts, ts))
                 self.db.conn.execute("INSERT OR IGNORE INTO contract_tags(contract_id,tag_name) VALUES(?,?)", (cid, nm))
+        self._log("contract_tags_updated", entity_type="contract", entity_id=cid, platform=str(platform or ""), contract_no=str(contract_no or ""), message="Sözleşme etiketleri güncellendi", payload={"count": len(names)}, actor=actor or self.current_actor())
 
     def list_main_contracts(self, platform, tags_map=None):
         rows=[]; tags_map = tags_map or self.all_contract_tags_map()
@@ -308,6 +350,7 @@ class STSStore:
                         self.db.conn.execute("INSERT INTO delivery_components(delivery_id,component_name,planned,delivered) VALUES(?,?,?,?)",(did,cname,float(p or 0),float((d.delivered or {}).get(cname,0) or 0)))
             self.db.conn.execute("DELETE FROM contract_tags WHERE contract_id=?",(cid,))
             for t in existing_tags: self.db.conn.execute("INSERT INTO contract_tags(contract_id,tag_name) VALUES(?,?)",(cid,t))
+        self._log("contract_updated" if row else "contract_created", entity_type="contract", entity_id=cid, platform=str(ci.platform or ""), contract_no=str(ci.no or ""), payload={"system_count": len(systems or []), "delivery_count": sum(len(v or []) for v in (deliveries or {}).values()), "component_count": sum(len((x.components or {})) for x in (systems or []))}, actor=self.current_actor())
         return cid
 
     def load_contract_structure(self, platform, contract_no, start_row=None):
@@ -332,4 +375,5 @@ class STSStore:
         row=self.db.conn.execute("SELECT id FROM contracts WHERE platform=? AND contract_no=? ORDER BY id LIMIT 1",(platform,contract_no)).fetchone()
         if not row: return {"platform":platform,"contract_no":contract_no,"start_row":0,"end_row":0,"deleted_rows":0}
         cid=row[0]; self.db.conn.execute("DELETE FROM contracts WHERE id=?",(cid,)); self.db.conn.commit()
+        self._log("contract_deleted", entity_type="contract", entity_id=cid, platform=str(platform or ""), contract_no=str(contract_no or ""), actor=actor or self.current_actor())
         return {"platform":platform,"contract_no":contract_no,"start_row":cid,"end_row":cid,"deleted_rows":1}

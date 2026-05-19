@@ -1,9 +1,18 @@
 import sys
 from pathlib import Path
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from pathlib import Path
 from tempfile import TemporaryDirectory
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from src.services.sts_database import STSDatabase
+
 with TemporaryDirectory() as td:
- p=Path(td)/'a.sts'; db=STSDatabase(p); db.conn.execute("INSERT INTO platforms(name) VALUES('P1')"); db.conn.execute("INSERT INTO users(name) VALUES('U1')"); db.conn.execute("INSERT INTO components(name) VALUES('C1')"); db.conn.execute("INSERT INTO tags(name) VALUES('T1')"); db.conn.execute("INSERT INTO contracts(platform,contract_no,contract_type,is_main) VALUES('P1','K1','Ana Sözleşme',1)"); cid=db.conn.execute('SELECT id FROM contracts').fetchone()[0]; db.conn.execute("INSERT INTO systems(contract_id,name) VALUES(?,?)",(cid,'S1')); sid=db.conn.execute('SELECT id FROM systems').fetchone()[0]; db.conn.execute("INSERT INTO system_components(system_id,component_name,qty) VALUES(?,?,?)",(sid,'C1',1)); db.conn.execute("INSERT INTO deliveries(contract_id,system_name,name) VALUES(?,?,?)",(cid,'S1','D1')); did=db.conn.execute('SELECT id FROM deliveries').fetchone()[0]; db.conn.execute("INSERT INTO delivery_components(delivery_id,component_name,planned,delivered) VALUES(?,?,?,?)",(did,'C1',1,1)); db.conn.commit(); assert db.conn.execute('SELECT COUNT(*) FROM contracts').fetchone()[0]==1; db.conn.execute('DELETE FROM contracts WHERE id=?',(cid,)); db.conn.commit(); assert db.conn.execute('SELECT COUNT(*) FROM systems').fetchone()[0]==0
+    db = STSDatabase(Path(td)/'db.sts')
+    db.add_log(action='x', entity_type='contract', entity_key='k', message='m', payload={'a':1}, actor='u', entity_id=5, platform='AKINCI', contract_no='K1', before={'b':1}, after={'b':2})
+    rows = db.list_logs(limit=10)
+    assert rows and rows[0].get('action') == 'x'
+    assert rows[0].get('before_json') and rows[0].get('after_json') and rows[0].get('payload_json')
+    assert db.list_logs(search='AKINCI')
+    assert db.list_logs(platform='AKINCI')
+    cols = {r[1] for r in db.conn.execute('PRAGMA table_info(activity_logs)').fetchall()}
+    for c in ['actor','entity_id','platform','contract_no','before_json','after_json','payload_json']:
+        assert c in cols
 print('ok')

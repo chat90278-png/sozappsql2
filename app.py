@@ -5954,6 +5954,18 @@ class MainWindow(QMainWindow):
             self.set_empty_state()
             self.connection_label.setText("Excel bağlı değil")
 
+
+    def open_activity_logs(self):
+        if not self.store:
+            QMessageBox.information(self, "Veri dosyası gerekli", "Önce bir STS veri dosyası açın.")
+            return
+        if not hasattr(self.store, "list_logs"):
+            QMessageBox.information(self, "İşlem Geçmişi", "İşlem geçmişi yalnızca STS veri dosyalarında desteklenir.")
+            return
+        from src.ui.dialogs.activity_logs import ActivityLogDialog
+        dlg = ActivityLogDialog(self.store, self)
+        dlg.exec()
+
     def open_usage_guide(self):
         try:
             dlg = UsageGuideDialog(self)
@@ -5992,6 +6004,7 @@ class MainWindow(QMainWindow):
         self.top_actions_menu.addAction("Kullanıcı Yönetimi", self.manage_users)
         self.top_actions_menu.addAction("Etiket Yönetimi", self.manage_tags)
         self.top_actions_menu.addAction("Bileşen Yönetimi", self.manage_components)
+        self.top_actions_menu.addAction("İşlem Geçmişi", self.open_activity_logs)
         self.top_actions_menu.addSeparator()
         self.top_actions_menu.addAction("📘 Kullanım Kılavuzu", self.open_usage_guide)
         self.top_actions_btn.setMenu(self.top_actions_menu)
