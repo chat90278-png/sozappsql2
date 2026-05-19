@@ -63,22 +63,22 @@ QLabel#dbHeroDesc { color:#c8d8ea; font-size:12px; background:transparent; }
 QLabel#dbBadgeOk { background:#123c24; color:#b9f7ce; border:1px solid rgba(185,247,206,0.35); border-radius:12px; padding:7px 12px; font-weight:800; }
 
 QFrame#dbCard { background:#ffffff; border:1px solid #d6e2f0; border-radius:14px; }
-QLabel#dbCardTitle { color:#12345a; font-size:14px; font-weight:800; }
-QLabel#dbMuted { color:#667995; font-size:12px; }
-QLabel#dbFileName { color:#0f2742; font-size:13px; font-weight:900; }
+QLabel#dbCardTitle { color:#12345a; font-size:14px; font-weight:800; background:transparent; }
+QLabel#dbMuted { color:#667995; font-size:12px; background:transparent; }
+QLabel#dbFileName { color:#0f2742; font-size:13px; font-weight:900; background:transparent; }
 
 QFrame#dbMetric { background:#e8f1ff; border:1px solid #cfe1fb; border-radius:12px; }
-QLabel#dbMetricLabel { color:#527093; font-size:10px; font-weight:800; }
-QLabel#dbMetricValue { color:#0f2f58; font-size:17px; font-weight:900; }
+QLabel#dbMetricLabel { color:#527093; font-size:10px; font-weight:800; background:transparent; }
+QLabel#dbMetricValue { color:#0f2f58; font-size:17px; font-weight:900; background:transparent; }
 
 QFrame#dbHealthRow { background:#fbfdff; border:1px solid #d6e2f0; border-radius:10px; }
-QLabel#dbHealthLabel { color:#1e3a5f; font-size:12px; }
+QLabel#dbHealthLabel { color:#1e3a5f; font-size:12px; background:transparent; }
 QLabel#dbBadgeWarn { background:#fef3c7; color:#92400e; border-radius:10px; padding:3px 9px; font-size:11px; font-weight:800; }
 QLabel#dbBadgeErr { background:#fee2e2; color:#991b1b; border-radius:10px; padding:3px 9px; font-size:11px; font-weight:800; }
 
 QPushButton#dbPrimaryButton { background:#2563eb; color:white; border:none; border-radius:10px; padding:8px 14px; font-weight:800; }
 QPushButton#dbSoftButton { background:#e8f1ff; color:#1d4ed8; border:1px solid #cfe1fb; border-radius:10px; padding:7px 12px; font-weight:800; }
-QPushButton#dbPreviewButton { background:#e8f1ff; color:#1d4ed8; border:1px solid #cfe1fb; border-radius:8px; padding:5px 10px; font-weight:800; }
+QPushButton#dbPreviewButton { background:#2563eb; color:#ffffff; border:1px solid #1d4ed8; border-radius:8px; padding:4px 10px; font-weight:800; min-width:118px; min-height:30px; }
 
 QPlainTextEdit#dbResultBox { background:#0b1727; color:#d7e8ff; border:1px solid #1f3759; border-radius:10px; }
 QTabWidget::pane { border:1px solid #d6e2f0; border-radius:12px; background:#ffffff; top:-1px; }
@@ -183,7 +183,7 @@ QTabBar::tab:selected { background:#2563eb; color:white; }
         self.table.setColumnWidth(0, 170)
         self.table.setColumnWidth(2, 120)
         self.table.setColumnWidth(3, 100)
-        self.table.setColumnWidth(4, 120)
+        self.table.setColumnWidth(4, 140)
         l1.addWidget(self.table)
         tabs.addTab(t1, "Tablolar")
 
@@ -328,7 +328,7 @@ QTabBar::tab:selected { background:#2563eb; color:white; }
             st_item = QTableWidgetItem(st)
             self.table.setItem(r, 3, st_item)
 
-            btn = QPushButton("İlk 100 Satır" if c >= 1_000_000 else "Önizle")
+            btn = QPushButton("Önizle (100)" if c >= 1_000_000 else "Önizle")
             btn.setObjectName("dbPreviewButton")
             btn.clicked.connect(lambda _=False, tt=t: self.preview_table(tt))
             w = QFrame()

@@ -53,9 +53,9 @@ QFrame#exportCard { background:#ffffff; border:1px solid #dbe5f1; border-radius:
 QLabel#exportCardHeader { color:#12345a; font-size:15px; font-weight:800; }
 QLabel#exportMuted { color:#64748b; font-size:11px; background:transparent; }
 
-QFrame#exportScopeOption { background:#ffffff; border:1px solid #e2e8f0; border-radius:12px; }
+QFrame#exportScopeOption { background:#ffffff; border:1px solid #edf2f7; border-radius:12px; }
 QFrame#exportScopeOptionActive { background:#eff6ff; border:1px solid #3b82f6; border-radius:12px; }
-QLabel#exportScopeTitle { color:#163b64; font-size:14px; font-weight:900; }
+QLabel#exportScopeTitle { color:#163b64; font-size:14px; font-weight:900; background:transparent; }
 QLabel#exportScopeBadge { color:#1d4ed8; border:1px solid #cfe1fb; border-radius:10px; padding:2px 7px; font-size:11px; font-weight:800; background:#ffffff; }
 
 QPushButton#exportLinkButton { background:transparent; color:#2563eb; border:none; padding:0; font-size:12px; font-weight:900; }
@@ -186,8 +186,8 @@ QListWidget::indicator:checked { border:1px solid #2563eb; border-radius:4px; ba
 
     def _opt_box(self, title, desc, checked):
         w = QFrame(); w.setObjectName("exportScopeOption")
-        l = QVBoxLayout(w); l.setContentsMargins(8, 8, 8, 8)
-        cb = QCheckBox(title); cb.setChecked(checked); cb.setStyleSheet("font-weight:800;")
+        l = QVBoxLayout(w); l.setContentsMargins(8, 6, 8, 6)
+        cb = QCheckBox(title); cb.setChecked(checked); cb.setStyleSheet("font-weight:800; background:transparent;")
         md = QLabel(desc); md.setObjectName("exportMuted"); md.setWordWrap(True)
         l.addWidget(cb); l.addWidget(md)
         return w
