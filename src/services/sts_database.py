@@ -192,3 +192,77 @@ CREATE TABLE IF NOT EXISTS activity_logs(id INTEGER PRIMARY KEY AUTOINCREMENT,cr
         lim = max(1, min(1000, int(limit or 100)))
         rows = self.conn.execute(f"SELECT * FROM {t} LIMIT ?", (lim,)).fetchall()
         return [dict(r) for r in rows]
+
+
+    def recent_performance_logs(self, limit=100):
+        lim = max(1, min(1000, int(limit or 100)))
+        rows = self.conn.execute(
+            "SELECT * FROM activity_logs ORDER BY created_at DESC LIMIT ?", (lim * 4,)
+        ).fetchall()
+        out = []
+        perf_actions = {
+            "performance_measurement", "excel_exported", "database_optimize_completed", "database_vacuum_completed",
+            "sts_opened", "platform_refresh", "contract_detail_open", "contract_saved"
+        }
+        for r in rows:
+            item = dict(r)
+            payload = {}
+            raw = item.get("payload_json")
+            if raw:
+                try:
+                    payload = json.loads(raw)
+                except Exception:
+                    payload = {}
+            has_dur = any(k in payload for k in ("duration_ms", "duration_sec", "elapsed_ms"))
+            if item.get("action") in perf_actions or has_dur:
+                out.append(item)
+            if len(out) >= lim:
+                break
+        return out
+
+    def add_performance_log(self, metric, duration_ms=None, duration_sec=None, payload=None):
+        pl = dict(payload or {})
+        pl["metric"] = str(metric or "")
+        if duration_ms is not None:
+            pl["duration_ms"] = float(duration_ms)
+        if duration_sec is not None:
+            pl["duration_sec"] = float(duration_sec)
+        self.add_log(
+            action="performance_measurement",
+            entity_type="performance",
+            entity_key=str(metric or ""),
+            message=f"Performans ölçümü: {metric}",
+            payload=pl,
+        )
+
+    def performance_stats(self):
+        base = self.database_stats()
+        counts = base.get("table_counts", {})
+        logs = self.recent_performance_logs(limit=200)
+        recent_metrics = {}
+        for it in logs:
+            action = str(it.get("action") or "")
+            payload = {}
+            raw = it.get("payload_json")
+            if raw:
+                try:
+                    payload = json.loads(raw)
+                except Exception:
+                    payload = {}
+            metric = str(payload.get("metric") or action or "")
+            if not metric:
+                continue
+            if metric not in recent_metrics:
+                recent_metrics[metric] = payload
+        total_records = sum(int(v or 0) for v in counts.values())
+        return {
+            **base,
+            "total_records": total_records,
+            "platform_count": int(counts.get("platforms", 0)),
+            "contract_count": int(counts.get("contracts", 0)),
+            "system_count": int(counts.get("systems", 0)),
+            "delivery_count": int(counts.get("deliveries", 0)),
+            "component_count": int(counts.get("components", 0)),
+            "activity_log_count": int(counts.get("activity_logs", 0)),
+            "recent_metrics": recent_metrics,
+        }

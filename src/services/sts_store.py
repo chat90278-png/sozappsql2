@@ -37,6 +37,19 @@ class STSStore:
         return True
 
 
+
+    def performance_stats(self):
+        return self.db.performance_stats()
+
+    def recent_performance_logs(self, limit=100):
+        return self.db.recent_performance_logs(limit=limit)
+
+    def add_performance_log(self, metric, duration_ms=None, duration_sec=None, payload=None):
+        return self.db.add_performance_log(metric, duration_ms=duration_ms, duration_sec=duration_sec, payload=payload)
+
+    def supports_performance_tracking(self):
+        return True
+
     def database_stats(self):
         return self.db.database_stats()
 

@@ -6016,6 +6016,24 @@ class MainWindow(QMainWindow):
         dlg = DatabaseManagementDialog(self.store, self)
         dlg.exec()
 
+
+    def open_performance_tracking(self):
+        if not self.store:
+            QMessageBox.information(self, "Veri dosyası gerekli", "Önce bir STS veri dosyası açın.")
+            return
+
+        if not hasattr(self.store, "performance_stats"):
+            QMessageBox.information(
+                self,
+                "Performans Takip",
+                "Performans takip ekranı yalnızca STS veri dosyalarında desteklenir."
+            )
+            return
+
+        from src.ui.dialogs.performance_tracking import PerformanceTrackingDialog
+        dlg = PerformanceTrackingDialog(self.store, self)
+        dlg.exec()
+
     def open_activity_logs(self):
         if not self.store:
             QMessageBox.information(self, "Veri dosyası gerekli", "Önce bir STS veri dosyası açın.")
@@ -6062,6 +6080,7 @@ class MainWindow(QMainWindow):
         self.top_actions_menu.addAction("Veri Dosyası Değiştir", self.open_file)
         self.top_actions_menu.addAction("Excel’e Aktar", self.export_sts_to_excel)
         self.top_actions_menu.addAction("Database Yönetimi", self.open_database_management)
+        self.top_actions_menu.addAction("Performans Takip", self.open_performance_tracking)
         self.top_actions_menu.addAction("Platform Yönetimi", self.manage_platforms)
         self.top_actions_menu.addSeparator()
         self.top_actions_menu.addAction("Kullanıcı Yönetimi", self.manage_users)
