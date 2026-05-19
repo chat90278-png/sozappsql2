@@ -41,9 +41,11 @@ TABLE_INFO = {
 
 
 class DatabaseManagementDialog(QDialog):
+    DIALOG_ID = "databaseManagementDialog"
     def __init__(self, store, parent=None):
         super().__init__(parent)
         self.store = store
+        self.setObjectName(self.DIALOG_ID)
         self.stats = {}
         self._last_maintenance = "-"
 
@@ -78,7 +80,8 @@ QLabel#dbBadgeErr { background:#fee2e2; color:#991b1b; border-radius:10px; paddi
 
 QPushButton#dbPrimaryButton { background:#2563eb; color:white; border:none; border-radius:10px; padding:8px 14px; font-weight:800; }
 QPushButton#dbSoftButton { background:#e8f1ff; color:#1d4ed8; border:1px solid #cfe1fb; border-radius:10px; padding:7px 12px; font-weight:800; }
-QPushButton#dbPreviewButton { background:#2563eb; color:#ffffff; border:1px solid #1d4ed8; border-radius:8px; padding:4px 10px; font-weight:800; min-width:118px; min-height:30px; }
+QPushButton#dbPreviewButton { background:#2563eb; color:#ffffff; border:1px solid #1d4ed8; border-radius:8px; padding:6px 10px; font-weight:800; min-width:112px; min-height:30px; }
+QDialog#databaseManagementDialog QLabel, QDialog#databaseManagementDialog QCheckBox, QDialog#databaseManagementDialog QRadioButton { background: transparent; }
 
 QPlainTextEdit#dbResultBox { background:#0b1727; color:#d7e8ff; border:1px solid #1f3759; border-radius:10px; }
 QTabWidget::pane { border:1px solid #d6e2f0; border-radius:12px; background:#ffffff; top:-1px; }
@@ -183,7 +186,7 @@ QTabBar::tab:selected { background:#2563eb; color:white; }
         self.table.setColumnWidth(0, 170)
         self.table.setColumnWidth(2, 120)
         self.table.setColumnWidth(3, 100)
-        self.table.setColumnWidth(4, 140)
+        self.table.setColumnWidth(4, 150)
         l1.addWidget(self.table)
         tabs.addTab(t1, "Tablolar")
 
@@ -330,6 +333,8 @@ QTabBar::tab:selected { background:#2563eb; color:white; }
 
             btn = QPushButton("Önizle (100)" if c >= 1_000_000 else "Önizle")
             btn.setObjectName("dbPreviewButton")
+            btn.setMinimumWidth(110)
+            btn.setFixedHeight(30)
             btn.clicked.connect(lambda _=False, tt=t: self.preview_table(tt))
             w = QFrame()
             wl = QHBoxLayout(w)

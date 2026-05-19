@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QPushButton,
     QTableWidget,
     QTableWidgetItem,
@@ -22,9 +23,11 @@ from src.ui.theme import STYLE
 
 
 class PerformanceTrackingDialog(QDialog):
+    DIALOG_ID = "performanceTrackingDialog"
     def __init__(self, store, parent=None):
         super().__init__(parent)
         self.store = store
+        self.setObjectName(self.DIALOG_ID)
         self.stats = {}
         self.logs = []
         self.setWindowTitle("Performans Takip")
@@ -45,6 +48,7 @@ QLabel#perfCardTitle { color:#12345a; font-size:15px; font-weight:800; }
 QLabel#perfMuted { color:#667995; font-size:12px; }
 QPushButton#perfPrimary { background:#2563eb; color:white; border:none; border-radius:10px; padding:8px 14px; font-weight:800; }
 QPushButton#perfSoft { background:#eef5ff; color:#1d4ed8; border:1px solid #cfe1fb; border-radius:10px; padding:7px 12px; font-weight:800; }
+QDialog#performanceTrackingDialog QLabel, QDialog#performanceTrackingDialog QCheckBox, QDialog#performanceTrackingDialog QRadioButton { background: transparent; }
 """
 
     def _build(self):
@@ -196,12 +200,47 @@ QPushButton#perfSoft { background:#eef5ff; color:#1d4ed8; border:1px solid #cfe1
         self.store.add_performance_log("platform_refresh", duration_ms=ms, payload={"contract_count": len(idx)})
         self.refresh_all()
 
+    def _find_sample_contract_for_measurement(self):
+        idx = self.store.build_contract_index() or []
+        if not idx:
+            return None
+        for item in idx:
+            platform = item.get("platform")
+            no = item.get("contract_no") or item.get("no") or item.get("contract")
+            if platform and no:
+                return item
+        return None
+
     def measure_detail_open(self):
-        idx=self.store.build_contract_index()
-        if not idx: return
-        it=idx[0]
-        t=time.perf_counter(); self.store.load_contract_structure(it.get("platform"), it.get("contract_no"), it.get("contract_type")); ms=(time.perf_counter()-t)*1000
-        self.store.add_performance_log("contract_detail_open", duration_ms=ms, payload={"platform": it.get("platform"), "contract_count": len(idx)})
+        item = self._find_sample_contract_for_measurement()
+        if not item:
+            QMessageBox.information(self, "Performans Takip", "Ölçüm yapılacak uygun sözleşme bulunamadı.")
+            return
+        platform = item.get("platform")
+        contract_no = item.get("contract_no") or item.get("no") or item.get("contract")
+        contract_types = [item.get("contract_type"), item.get("type"), item.get("sözleşme_türü"), item.get("type_display"), "Ana Sözleşme", ""]
+        seen = set(); contract_types = [x for x in contract_types if not (x in seen or seen.add(x))]
+        t0 = time.perf_counter()
+        last_err = None
+        ok = False
+        for ctype in contract_types:
+            try:
+                self.store.load_contract_structure(platform, contract_no, ctype)
+                ok = True
+                break
+            except ValueError as e:
+                last_err = e
+                continue
+            except Exception as e:
+                QMessageBox.warning(self, "Performans Takip", f"Detay açma ölçümü yapılamadı:\n{e}")
+                self.store.add_performance_log("contract_detail_open", payload={"error": str(e), "platform": platform, "contract_no": contract_no})
+                return
+        if not ok:
+            QMessageBox.warning(self, "Performans Takip", "Ölçüm yapılacak uygun sözleşme bulunamadı.")
+            self.store.add_performance_log("contract_detail_open", payload={"error": str(last_err or 'contract not found'), "platform": platform, "contract_no": contract_no})
+            return
+        ms = (time.perf_counter() - t0) * 1000
+        self.store.add_performance_log("contract_detail_open", duration_ms=ms, payload={"platform": platform, "contract_no": contract_no})
         self.refresh_all()
 
     def measure_db_check(self):

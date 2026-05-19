@@ -22,9 +22,11 @@ from src.ui.theme import STYLE
 
 
 class ExcelExportDialog(QDialog):
+    DIALOG_ID = "excelExportDialog"
     def __init__(self, store, parent=None, active_platform=None, contract_index=None):
         super().__init__(parent)
         self.store = store
+        self.setObjectName(self.DIALOG_ID)
         self.active_platform = str(active_platform or "").strip()
         self.contract_index = list(contract_index or [])
         self.result_options = None
@@ -64,6 +66,7 @@ QPushButton#exportSecondaryButton { background:#ffffff; color:#244767; border:1p
 
 QLabel#exportSummaryRow { background:#ffffff; border:1px solid #e2e8f0; border-radius:10px; padding:8px 10px; }
 QLabel#exportWarning { background:#fff7df; color:#7c4a03; border:1px solid #f7d48a; border-radius:12px; padding:10px 12px; font-weight:700; }
+QDialog#excelExportDialog QLabel, QDialog#excelExportDialog QCheckBox, QDialog#excelExportDialog QRadioButton { background: transparent; }
 """
 
     def build(self):
