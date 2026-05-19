@@ -49,12 +49,12 @@ QLabel#exportHeroTitle { color:#ffffff; font-size:24px; font-weight:900; backgro
 QLabel#exportHeroDesc { color:#c8d8ea; font-size:12px; background:transparent; }
 QLabel#exportBadge { color:#173b73; background:#eaf1ff; border-radius:12px; padding:8px 12px; font-weight:900; }
 
-QFrame#exportCard { background:#ffffff; border:1px solid #d6e2f0; border-radius:14px; }
+QFrame#exportCard { background:#ffffff; border:1px solid #dbe5f1; border-radius:14px; }
 QLabel#exportCardHeader { color:#12345a; font-size:15px; font-weight:800; }
-QLabel#exportMuted { color:#667995; font-size:11px; background:transparent; }
+QLabel#exportMuted { color:#64748b; font-size:11px; background:transparent; }
 
-QFrame#exportScopeOption { background:#fbfdff; border:1px solid #d6e2f0; border-radius:12px; }
-QFrame#exportScopeOptionActive { background:#e8f1ff; border:1px solid #2563eb; border-radius:12px; }
+QFrame#exportScopeOption { background:#ffffff; border:1px solid #e2e8f0; border-radius:12px; }
+QFrame#exportScopeOptionActive { background:#eff6ff; border:1px solid #3b82f6; border-radius:12px; }
 QLabel#exportScopeTitle { color:#163b64; font-size:14px; font-weight:900; }
 QLabel#exportScopeBadge { color:#1d4ed8; border:1px solid #cfe1fb; border-radius:10px; padding:2px 7px; font-size:11px; font-weight:800; background:#ffffff; }
 
@@ -62,7 +62,7 @@ QPushButton#exportLinkButton { background:transparent; color:#2563eb; border:non
 QPushButton#exportPrimaryButton { background:#2563eb; color:white; border:none; border-radius:12px; padding:11px 16px; font-weight:900; min-width:140px; }
 QPushButton#exportSecondaryButton { background:#ffffff; color:#244767; border:1px solid #d6e2f0; border-radius:12px; padding:11px 16px; font-weight:800; min-width:120px; }
 
-QLabel#exportSummaryRow { background:#fbfdff; border:1px solid #d6e2f0; border-radius:10px; padding:8px 10px; }
+QLabel#exportSummaryRow { background:#ffffff; border:1px solid #e2e8f0; border-radius:10px; padding:8px 10px; }
 QLabel#exportWarning { background:#fff7df; color:#7c4a03; border:1px solid #f7d48a; border-radius:12px; padding:10px 12px; font-weight:700; }
 """
 
@@ -126,6 +126,15 @@ QLabel#exportWarning { background:#fff7df; color:#7c4a03; border:1px solid #f7d4
         ph.addWidget(sel); ph.addWidget(clr)
         pl.addLayout(ph)
         self.platform_list = QListWidget()
+
+        self.platform_list.setStyleSheet("""
+QListWidget { border:1px solid #dbe5f1; border-radius:10px; background:#ffffff; padding:4px; }
+QListWidget::item { border:1px solid #e2e8f0; border-radius:10px; padding:10px 12px; margin:4px 2px; background:#ffffff; color:#0f172a; font-weight:800; }
+QListWidget::item:selected { background:#eff6ff; border:1px solid #93c5fd; color:#0f172a; }
+QListWidget::indicator { width:16px; height:16px; }
+QListWidget::indicator:unchecked { border:1px solid #94a3b8; border-radius:4px; background:#ffffff; }
+QListWidget::indicator:checked { border:1px solid #2563eb; border-radius:4px; background:#2563eb; }
+""")
         for p in (self.store.platform_names() if hasattr(self.store, "platform_names") else []):
             c = self._platform_counts.get(str(p), 0)
             it = QListWidgetItem(f"{p}    {c} sözleşme")
@@ -140,7 +149,7 @@ QLabel#exportWarning { background:#fff7df; color:#7c4a03; border:1px solid #f7d4
         summary_card = QFrame(); summary_card.setObjectName("exportCard")
         sl = QVBoxLayout(summary_card)
         sl.addWidget(QLabel("Seçim Özeti", objectName="exportCardHeader"))
-        self.summary_label = QLabel(""); self.summary_label.setWordWrap(True); self.summary_label.setObjectName("exportSummaryRow")
+        self.summary_label = QLabel(""); self.summary_label.setWordWrap(True); self.summary_label.setObjectName("exportSummaryRow"); self.summary_label.setTextFormat(Qt.RichText)
         sl.addWidget(self.summary_label)
         right_col.addWidget(summary_card)
 
@@ -281,11 +290,14 @@ QLabel#exportWarning { background:#fff7df; color:#7c4a03; border:1px solid #f7d4
         rows_txt = " + ".join(rows) if rows else "-"
 
         self.summary_label.setText(
-            f"Kapsam: {scope_name}\n"
-            f"Platform sayısı: {len(plats) if not rb_summary else 0}\n"
-            f"Tahmini sözleşme: {est}\n"
-            f"Satır kapsamı: {rows_txt}\n"
-            f"Bileşen kolonları: {'Açık' if self.cb_comp.findChild(QCheckBox).isChecked() else 'Kapalı'}"
+            ""
+            f"<div style='line-height:1.55'>"
+            f"<div><span style='color:#64748b'>Kapsam</span> <b style='float:right'>{scope_name}</b></div>"
+            f"<div><span style='color:#64748b'>Platform sayısı</span> <b style='float:right'>{len(plats) if not rb_summary else 0}</b></div>"
+            f"<div><span style='color:#64748b'>Tahmini sözleşme</span> <b style='float:right'>{est}</b></div>"
+            f"<div><span style='color:#64748b'>Satır kapsamı</span> <b style='float:right'>{rows_txt}</b></div>"
+            f"<div><span style='color:#64748b'>Bileşen kolonları</span> <b style='float:right'>{'Açık' if self.cb_comp.findChild(QCheckBox).isChecked() else 'Kapalı'}</b></div>"
+            f"</div>"
         )
 
         if rb_all and self.cb_delivery.findChild(QCheckBox).isChecked() and self.cb_comp.findChild(QCheckBox).isChecked():

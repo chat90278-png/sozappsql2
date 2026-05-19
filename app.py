@@ -71,7 +71,7 @@ from PySide6.QtWidgets import (
     QLabel, QPushButton, QListWidget, QListWidgetItem, QTableWidget, QTableWidgetItem,
     QDialog, QLineEdit, QComboBox, QDateEdit, QSpinBox, QDoubleSpinBox,
     QMessageBox, QFileDialog, QFrame, QScrollArea, QCheckBox, QHeaderView,
-    QSizePolicy, QProgressBar, QStyledItemDelegate, QTextEdit,
+    QSizePolicy, QProgressBar, QProgressDialog, QStyledItemDelegate, QTextEdit,
     QToolButton, QMenu, QInputDialog, QWidgetAction
 )
 
@@ -5976,8 +5976,10 @@ class MainWindow(QMainWindow):
             return
         from src.workers.export_workers import ExcelExportWorker
         self._export_progress = QProgressDialog("Excel dosyası hazırlanıyor...", "", 0, 100, self)
-        self._export_progress.setWindowTitle("Excel oluşturuluyor")
+        self._export_progress.setWindowTitle("Excel’e Aktar")
+        self._export_progress.setLabelText("Excel dosyası hazırlanıyor...")
         self._export_progress.setCancelButton(None)
+        self._export_progress.setMinimumDuration(0)
         self._export_progress.setAutoClose(False)
         self._export_progress.setAutoReset(False)
         self._export_progress.setValue(0)
