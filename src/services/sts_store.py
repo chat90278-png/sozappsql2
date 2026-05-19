@@ -36,6 +36,36 @@ class STSStore:
     def supports_activity_logs(self):
         return True
 
+
+    def database_stats(self):
+        return self.db.database_stats()
+
+    def integrity_check(self):
+        out = self.db.integrity_check()
+        self._log("database_integrity_checked", entity_type="database", payload={"result": out[:10]})
+        return out
+
+    def foreign_key_check(self):
+        return self.db.foreign_key_check()
+
+    def vacuum(self):
+        res = self.db.vacuum()
+        self._log("database_vacuum_completed", entity_type="database", payload=res)
+        return res
+
+    def optimize(self):
+        res = self.db.optimize()
+        self._log("database_optimize_completed", entity_type="database", payload=res)
+        return res
+
+    def backup_database(self, target_path):
+        res = self.db.backup_to(target_path)
+        self._log("database_backup_created", entity_type="database", payload=res)
+        return res
+
+    def supports_database_management(self):
+        return True
+
     def export_to_excel(self, output_path, progress_cb=None):
         import time
         t0 = time.time()

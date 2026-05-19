@@ -114,3 +114,68 @@ CREATE TABLE IF NOT EXISTS activity_logs(id INTEGER PRIMARY KEY AUTOINCREMENT,cr
         if limit and int(limit) > 0:
             q += " LIMIT ?"; params.append(int(limit))
         return [dict(r) for r in self.conn.execute(q, params).fetchall()]
+
+
+    def database_stats(self):
+        import os
+        tables = [
+            "platforms","users","components","component_platforms","tags","contracts","systems",
+            "system_components","deliveries","delivery_components","contract_tags","activity_logs"
+        ]
+        counts = {}
+        for t in tables:
+            try:
+                counts[t] = int(self.conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0])
+            except Exception:
+                counts[t] = 0
+        meta = {}
+        try:
+            for r in self.conn.execute("SELECT key,value FROM meta").fetchall():
+                meta[str(r[0])] = r[1]
+        except Exception:
+            pass
+        sz = self.path.stat().st_size if self.path.exists() else 0
+        jm = self.conn.execute("PRAGMA journal_mode").fetchone()[0]
+        page_count = int(self.conn.execute("PRAGMA page_count").fetchone()[0])
+        page_size = int(self.conn.execute("PRAGMA page_size").fetchone()[0])
+        freelist = int(self.conn.execute("PRAGMA freelist_count").fetchone()[0])
+        return {
+            "path": str(self.path),
+            "file_size_bytes": sz,
+            "file_size_mb": round(sz / (1024*1024), 3),
+            "journal_mode": jm,
+            "page_count": page_count,
+            "page_size": page_size,
+            "freelist_count": freelist,
+            "table_counts": counts,
+            "meta": meta,
+        }
+
+    def integrity_check(self):
+        return [str(r[0]) for r in self.conn.execute("PRAGMA integrity_check").fetchall()]
+
+    def foreign_key_check(self):
+        rows = self.conn.execute("PRAGMA foreign_key_check").fetchall()
+        return [dict(r) for r in rows]
+
+    def vacuum(self):
+        before = self.path.stat().st_size if self.path.exists() else 0
+        self.conn.execute("VACUUM")
+        self.conn.commit()
+        after = self.path.stat().st_size if self.path.exists() else 0
+        return {"before_bytes": before, "after_bytes": after}
+
+    def optimize(self):
+        self.conn.execute("PRAGMA optimize")
+        self.conn.commit()
+        return {"ok": True}
+
+    def backup_to(self, target_path):
+        dest = sqlite3.connect(str(target_path))
+        try:
+            self.conn.backup(dest)
+            dest.commit()
+        finally:
+            dest.close()
+        p = Path(target_path)
+        return {"target_path": str(p), "size_bytes": p.stat().st_size if p.exists() else 0}

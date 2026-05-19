@@ -5974,6 +5974,17 @@ class MainWindow(QMainWindow):
         finally:
             QApplication.restoreOverrideCursor()
 
+    def open_database_management(self):
+        if not self.store:
+            QMessageBox.information(self, "Veri dosyası gerekli", "Önce bir STS veri dosyası açın.")
+            return
+        if not hasattr(self.store, "database_stats"):
+            QMessageBox.information(self, "Database Yönetimi", "Database yönetimi yalnızca STS veri dosyalarında desteklenir.")
+            return
+        from src.ui.dialogs.database_management import DatabaseManagementDialog
+        dlg = DatabaseManagementDialog(self.store, self)
+        dlg.exec()
+
     def open_activity_logs(self):
         if not self.store:
             QMessageBox.information(self, "Veri dosyası gerekli", "Önce bir STS veri dosyası açın.")
@@ -6019,6 +6030,7 @@ class MainWindow(QMainWindow):
         self.top_actions_menu.setObjectName("topActionsMenu")
         self.top_actions_menu.addAction("Veri Dosyası Değiştir", self.open_file)
         self.top_actions_menu.addAction("Excel’e Aktar", self.export_sts_to_excel)
+        self.top_actions_menu.addAction("Database Yönetimi", self.open_database_management)
         self.top_actions_menu.addAction("Platform Yönetimi", self.manage_platforms)
         self.top_actions_menu.addSeparator()
         self.top_actions_menu.addAction("Kullanıcı Yönetimi", self.manage_users)
