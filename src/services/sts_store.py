@@ -66,6 +66,9 @@ class STSStore:
     def supports_database_management(self):
         return True
 
+    def preview_table(self, table_name, limit=100):
+        return self.db.preview_table(table_name, limit)
+
     def export_to_excel(self, output_path, options=None, progress_cb=None):
         import time
         t0 = time.time()

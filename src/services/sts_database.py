@@ -179,3 +179,16 @@ CREATE TABLE IF NOT EXISTS activity_logs(id INTEGER PRIMARY KEY AUTOINCREMENT,cr
             dest.close()
         p = Path(target_path)
         return {"target_path": str(p), "size_bytes": p.stat().st_size if p.exists() else 0}
+
+
+    def preview_table(self, table_name, limit=100):
+        allowed = {
+            "platforms","users","components","component_platforms","tags","contracts","systems",
+            "system_components","deliveries","delivery_components","contract_tags","activity_logs"
+        }
+        t = str(table_name or "").strip()
+        if t not in allowed:
+            raise ValueError("Geçersiz tablo adı")
+        lim = max(1, min(1000, int(limit or 100)))
+        rows = self.conn.execute(f"SELECT * FROM {t} LIMIT ?", (lim,)).fetchall()
+        return [dict(r) for r in rows]
