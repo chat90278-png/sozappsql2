@@ -6634,6 +6634,13 @@ class MainWindow(QMainWindow):
             self.platform_list.setCurrentRow(0)
         self.connection_label.setText("✓ STS veri dosyası bağlı")
 
+    def is_sts_mode(self) -> bool:
+        return (
+            self.store is not None
+            and self.path is not None
+            and str(self.path).lower().endswith(".sts")
+        )
+
     def _clear_loader_refs(self):
         self._loader_worker = None
         self._loader_thread = None
@@ -6717,6 +6724,17 @@ class MainWindow(QMainWindow):
             return
         kind = str(scope or "all").strip().lower()
         if kind == "all":
+            if self.is_sts_mode():
+                self.contract_index = self.store.build_contract_index()
+                self._set_platform_items(self.store.platform_names())
+                self.update_alert_strip()
+                self.refresh_open_calendar()
+                if select_platform:
+                    self.select_platform(select_platform)
+                elif self.platform_list.count() and self.platform_list.currentRow() < 0:
+                    self.platform_list.setCurrentRow(0)
+                self.connection_label.setText("✓ STS veri dosyası bağlı")
+                return
             self._pending_select_platform = select_platform
             self.start_excel_load(self.path)
             return
@@ -7013,6 +7031,8 @@ class MainWindow(QMainWindow):
         # Kayıttan sonra indeks tek seferde yenilenir; arama bu indeks üzerinden yapılır.
         if rebuild_index:
             self.contract_index = self.store.build_contract_index()
+        if self.is_sts_mode():
+            self.connection_label.setText("✓ STS veri dosyası bağlı")
         platforms = self.store.platform_names()
         self._set_platform_items(platforms)
         self.update_query_logo_background(None)
