@@ -66,16 +66,18 @@ class STSStore:
     def supports_database_management(self):
         return True
 
-    def export_to_excel(self, output_path, progress_cb=None):
+    def export_to_excel(self, output_path, options=None, progress_cb=None):
         import time
         t0 = time.time()
         from src.services.sts_excel_exporter import export_sts_to_excel
         try:
-            result = export_sts_to_excel(self.db, output_path, progress_cb=progress_cb)
-            self._log("excel_exported", entity_type="export", message="Excel dosyası oluşturuldu", payload=result, actor=self.current_actor())
+            result = export_sts_to_excel(self.db, output_path, options=options, progress_cb=progress_cb)
+            payload = dict(result or {})
+            payload["options"] = options or {}
+            self._log("excel_exported", entity_type="export", message="Excel dosyası oluşturuldu", payload=payload, actor=self.current_actor())
             return result
         except Exception as exc:
-            self._log("excel_export_failed", entity_type="export", message="Excel dışa aktarma hatası", payload={"output_path": str(output_path), "error": str(exc), "duration_sec": round(time.time()-t0,3)}, actor=self.current_actor())
+            self._log("excel_export_failed", entity_type="export", message="Excel dışa aktarma hatası", payload={"output_path": str(output_path), "error": str(exc), "duration_sec": round(time.time()-t0,3), "options": options or {}}, actor=self.current_actor())
             raise
 
     def platform_names(self):

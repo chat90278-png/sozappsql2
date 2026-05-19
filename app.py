@@ -5962,17 +5962,46 @@ class MainWindow(QMainWindow):
         if not hasattr(self.store, "export_to_excel"):
             QMessageBox.information(self, "Excel’e Aktar", "Excel’e aktarım yalnızca STS veri dosyalarında desteklenir.")
             return
+        active_platform = ""
+        cur = self.platform_list.currentItem() if hasattr(self, "platform_list") else None
+        if cur:
+            active_platform = str(cur.data(Qt.UserRole) or "")
+        from src.ui.dialogs.excel_export_options import ExcelExportDialog
+        dlg = ExcelExportDialog(self.store, self, active_platform=active_platform)
+        if not dlg.exec() or not dlg.result_options:
+            return
+        opts = dict(dlg.result_options)
         out, _ = QFileDialog.getSaveFileName(self, "Excel’e Aktar", str(Path(self.path).with_suffix('.xlsx')), "Excel (*.xlsx)")
         if not out:
             return
-        QApplication.setOverrideCursor(Qt.WaitCursor)
-        try:
-            self.store.export_to_excel(out)
+        from src.workers.export_workers import ExcelExportWorker
+        self._export_progress = QProgressDialog("Excel dosyası hazırlanıyor...", "", 0, 100, self)
+        self._export_progress.setWindowTitle("Excel oluşturuluyor")
+        self._export_progress.setCancelButton(None)
+        self._export_progress.setAutoClose(False)
+        self._export_progress.setAutoReset(False)
+        self._export_progress.setValue(0)
+        self._export_progress.show()
+
+        self._export_thread = QThread(self)
+        self._export_worker = ExcelExportWorker(self.store, out, opts)
+        self._export_worker.moveToThread(self._export_thread)
+        self._export_thread.started.connect(self._export_worker.run)
+        self._export_worker.progress.connect(lambda p, m: (self._export_progress.setLabelText(str(m)), self._export_progress.setValue(int(max(0,min(100,p))))))
+        def _done(_res):
+            self._export_progress.setValue(100)
+            self._export_progress.close()
             QMessageBox.information(self, "Excel’e Aktar", "Excel dosyası oluşturuldu.")
-        except Exception as exc:
-            QMessageBox.critical(self, "Excel’e Aktar", str(exc))
-        finally:
-            QApplication.restoreOverrideCursor()
+        def _fail(msg):
+            self._export_progress.close()
+            QMessageBox.critical(self, "Excel’e Aktar", str(msg))
+        self._export_worker.finished.connect(_done)
+        self._export_worker.failed.connect(_fail)
+        self._export_worker.finished.connect(self._export_thread.quit)
+        self._export_worker.failed.connect(self._export_thread.quit)
+        self._export_thread.finished.connect(self._export_worker.deleteLater)
+        self._export_thread.finished.connect(self._export_thread.deleteLater)
+        self._export_thread.start()
 
     def open_database_management(self):
         if not self.store:
