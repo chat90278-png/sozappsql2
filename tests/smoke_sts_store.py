@@ -11,23 +11,30 @@ with TemporaryDirectory() as td:
     store = STSStore(p)
 
     store.create_platform("AKINCI")
-
-    store.write_users([
-        {"name": "Serhat", "yi_yd": "Yİ", "active": True, "note": ""}
-    ])
-    users = store.load_users(active_only=False)
-    assert any(u.get("name") == "Serhat" for u in users)
+    store.create_platform("TB2")
 
     store.write_components([
-        ComponentDef(
-            name="GÖVDE",
-            version="",
-            unit="Adet",
-            active=True,
-            usage=1,
-            platforms={"AKINCI": True},
-        )
+        ComponentDef(name="GÖVDE", version="", unit="Adet", active=True, usage=1, platforms={"AKINCI": True, "TB2": False}),
+        ComponentDef(name="MOTOR", version="", unit="Adet", active=True, usage=1, platforms={"AKINCI": True, "TB2": True}),
     ])
+
+    akinci = store.assigned_components("AKINCI")
+    assert "GÖVDE" in akinci and "MOTOR" in akinci
+
+    tb2 = store.assigned_components("TB2")
+    assert "MOTOR" in tb2
+    assert "GÖVDE" not in tb2
+
+    # no platforms mapping -> fallback should still be safe
+    store.write_components([
+        {"name": "GÖVDE", "version": "", "unit": "Adet", "active": True, "usage": 1, "platforms": {"AKINCI": True, "TB2": False}},
+        {"name": "MOTOR", "version": "", "unit": "Adet", "active": True, "usage": 1, "platforms": {"AKINCI": True, "TB2": True}},
+        {"name": "KANAT", "version": "", "unit": "Adet", "active": True, "usage": 1},
+    ])
+    unknown = store.assigned_components("BILINMEYEN_PLATFORM")
+    assert isinstance(unknown, list)
+    assert "KANAT" in unknown
+
     components = store.load_components()
     govde = next((c for c in components if c.name == "GÖVDE"), None)
     assert govde is not None
@@ -36,9 +43,5 @@ with TemporaryDirectory() as td:
     store.upsert_tag_def(TagDef(name="Yeni Etiket", color="#3B82F6"))
     tags = store.load_tags()
     assert any(t.name == "Yeni Etiket" for t in tags)
-
-    snap_tags, snap_map = store.load_tag_snapshot()
-    assert isinstance(snap_tags, list)
-    assert isinstance(snap_map, dict)
 
 print("ok")

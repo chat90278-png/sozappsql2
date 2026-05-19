@@ -103,6 +103,30 @@ class STSStore:
                         continue
                     self.db.conn.execute("INSERT INTO component_platforms(component_id,platform_name,enabled) VALUES(?,?,?)", (cid, str(p).strip(), 1 if bool(en) else 0))
 
+
+    def assigned_components(self, platform: str) -> List[str]:
+        p = str(platform or "").strip()
+        rows = []
+        if p:
+            rows = self.db.conn.execute(
+                """
+                SELECT DISTINCT c.name
+                FROM components c
+                JOIN component_platforms cp ON cp.component_id = c.id
+                WHERE c.active = 1
+                  AND cp.platform_name = ?
+                  AND cp.enabled = 1
+                ORDER BY c.name ASC
+                """,
+                (p,),
+            ).fetchall()
+        if rows:
+            return [str(r[0]) for r in rows if str(r[0] or "").strip()]
+        fb = self.db.conn.execute(
+            "SELECT DISTINCT name FROM components WHERE active = 1 ORDER BY name ASC"
+        ).fetchall()
+        return [str(r[0]) for r in fb if str(r[0] or "").strip()]
+
     def load_tags(self): return [TagDef(name=r[0], color=r[1] or "#3B82F6") for r in self.db.conn.execute("SELECT name,color FROM tags ORDER BY name")]
     load_tag_defs = load_tags
     def write_tags(self, tags, actor=None):
