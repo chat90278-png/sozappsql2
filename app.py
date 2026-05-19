@@ -271,6 +271,7 @@ class ElidedLabel(QLabel):
 
 
 from src.services.excel_store import ExcelStore
+from src.services.sts_store import STSStore
 from src.workers import ExcelLoadWorker, ComponentSaveWorker, UserSaveWorker, ContractSaveWorker, AnalyzeDialog
 
 
@@ -5916,7 +5917,7 @@ class MainWindow(QMainWindow):
         if self.store:
             if not self.contract_index:
                 # UI thread'i bloklamamak için hazır store olsa bile indeksleme yükünü worker'a bırak.
-                self.start_excel_load(self.store.path)
+                self.start_sts_load(self.store.path) if str(self.store.path).lower().endswith(".sts") else self.start_excel_load(self.store.path)
             else:
                 self.refresh(rebuild_index=False)
                 self._apply_version_to_ui()
@@ -5957,7 +5958,7 @@ class MainWindow(QMainWindow):
         self.top_actions_btn.setPopupMode(QToolButton.InstantPopup)
         self.top_actions_menu = QMenu(self.top_actions_btn)
         self.top_actions_menu.setObjectName("topActionsMenu")
-        self.top_actions_menu.addAction("Excel Dosyası Değiştir", self.open_file)
+        self.top_actions_menu.addAction("Veri Dosyası Değiştir", self.open_file)
         self.top_actions_menu.addAction("Platform Yönetimi", self.manage_platforms)
         self.top_actions_menu.addSeparator()
         self.top_actions_menu.addAction("Kullanıcı Yönetimi", self.manage_users)
@@ -6621,6 +6622,18 @@ class MainWindow(QMainWindow):
         self._loader_thread.finished.connect(self._clear_loader_refs)
         self._loader_thread.start()
 
+
+    def start_sts_load(self, path: Path):
+        self.path = Path(path)
+        self.store = STSStore(self.path)
+        self.contract_index = self.store.build_contract_index()
+        self._tag_color_map_cache = None
+        self._set_platform_items(self.store.platform_names())
+        self.update_alert_strip()
+        if self.platform_list.count():
+            self.platform_list.setCurrentRow(0)
+        self.connection_label.setText("✓ STS veri dosyası bağlı")
+
     def _clear_loader_refs(self):
         self._loader_worker = None
         self._loader_thread = None
@@ -6852,7 +6865,11 @@ class MainWindow(QMainWindow):
     def open_file(self):
         dlg = WorkbookStartDialog(self)
         if dlg.exec() and dlg.selected_path:
-            self.start_excel_load(dlg.selected_path)
+            sel = Path(dlg.selected_path)
+            if sel.suffix.lower() == ".sts":
+                self.start_sts_load(sel)
+            else:
+                self.start_excel_load(sel)
 
     def show_contract_summary(self, row: int, item: dict):
         if not self.store:
