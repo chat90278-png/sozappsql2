@@ -36,6 +36,18 @@ class STSStore:
     def supports_activity_logs(self):
         return True
 
+    def export_to_excel(self, output_path, progress_cb=None):
+        import time
+        t0 = time.time()
+        from src.services.sts_excel_exporter import export_sts_to_excel
+        try:
+            result = export_sts_to_excel(self.db, output_path, progress_cb=progress_cb)
+            self._log("excel_exported", entity_type="export", message="Excel dosyası oluşturuldu", payload=result, actor=self.current_actor())
+            return result
+        except Exception as exc:
+            self._log("excel_export_failed", entity_type="export", message="Excel dışa aktarma hatası", payload={"output_path": str(output_path), "error": str(exc), "duration_sec": round(time.time()-t0,3)}, actor=self.current_actor())
+            raise
+
     def platform_names(self):
         return [r[0] for r in self.db.conn.execute("SELECT name FROM platforms WHERE is_active=1 ORDER BY sort_order,name").fetchall()]
     def create_platform(self, name, logo_source=None):

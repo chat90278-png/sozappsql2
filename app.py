@@ -5955,6 +5955,25 @@ class MainWindow(QMainWindow):
             self.connection_label.setText("Excel bağlı değil")
 
 
+    def export_sts_to_excel(self):
+        if not self.store:
+            QMessageBox.information(self, "Veri dosyası gerekli", "Önce bir STS veri dosyası açın.")
+            return
+        if not hasattr(self.store, "export_to_excel"):
+            QMessageBox.information(self, "Excel’e Aktar", "Excel’e aktarım yalnızca STS veri dosyalarında desteklenir.")
+            return
+        out, _ = QFileDialog.getSaveFileName(self, "Excel’e Aktar", str(Path(self.path).with_suffix('.xlsx')), "Excel (*.xlsx)")
+        if not out:
+            return
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            self.store.export_to_excel(out)
+            QMessageBox.information(self, "Excel’e Aktar", "Excel dosyası oluşturuldu.")
+        except Exception as exc:
+            QMessageBox.critical(self, "Excel’e Aktar", str(exc))
+        finally:
+            QApplication.restoreOverrideCursor()
+
     def open_activity_logs(self):
         if not self.store:
             QMessageBox.information(self, "Veri dosyası gerekli", "Önce bir STS veri dosyası açın.")
@@ -5999,6 +6018,7 @@ class MainWindow(QMainWindow):
         self.top_actions_menu = QMenu(self.top_actions_btn)
         self.top_actions_menu.setObjectName("topActionsMenu")
         self.top_actions_menu.addAction("Veri Dosyası Değiştir", self.open_file)
+        self.top_actions_menu.addAction("Excel’e Aktar", self.export_sts_to_excel)
         self.top_actions_menu.addAction("Platform Yönetimi", self.manage_platforms)
         self.top_actions_menu.addSeparator()
         self.top_actions_menu.addAction("Kullanıcı Yönetimi", self.manage_users)
