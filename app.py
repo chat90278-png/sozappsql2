@@ -890,6 +890,15 @@ class UserManagerDialog(StyledDialog):
                 "note": (self.table.item(r, 3).text() if self.table.item(r, 3) else ""),
             })
         self._save_payload = list(result)
+        if _is_sts_store(self.store):
+            try:
+                self.set_busy(True, "Kullanıcılar kaydediliyor...", 25)
+                self.store.write_users(self._save_payload, actor=self.store.current_actor())
+                self.store.save()
+                self.on_save_finished()
+            except Exception as exc:
+                self.on_save_failed(str(exc))
+            return
         self._start_async_save()
 
     def _start_async_save(self):
@@ -1324,6 +1333,15 @@ class ComponentManagerDialog(StyledDialog):
                 "platforms": dict(comp.platforms or {}),
             })
         self._save_payload = payload
+        if _is_sts_store(self.store):
+            try:
+                self.set_busy(True, "Bileşenler kaydediliyor...", 25)
+                self.store.write_components(result, actor=self.store.current_actor())
+                self.store.save()
+                self.on_save_finished({})
+            except Exception as exc:
+                self.on_save_failed(str(exc))
+            return
         self._start_async_save()
 
     def _start_async_save(self):
@@ -5856,6 +5874,16 @@ class ContractWorkWindow(QDialog):
         self._start_contract_save_worker(worker, "Sözleşme kaydediliyor...")
 
 
+
+
+
+def _is_sts_store(store) -> bool:
+    return bool(
+        store is not None
+        and hasattr(store, "db")
+        and hasattr(store, "write_users")
+        and hasattr(store, "write_components")
+    )
 
 def section_label(text):
     l = QLabel(text)

@@ -46,11 +46,27 @@ class STSStore:
         q="SELECT name,yi_yd,active,note FROM users"+(" WHERE active=1" if active_only else "")+" ORDER BY name"
         return [{"name":r[0],"yi_yd":r[1] or "Yİ","active":bool(r[2]),"note":r[3] or ""} for r in self.db.conn.execute(q)]
     def write_users(self, users_payload, actor=None):
-        ts=now_iso();
+        ts = now_iso()
+        rows = []
+        seen = set()
+        for u in list(users_payload or []):
+            name = str((u.get("name") if isinstance(u, dict) else getattr(u, "name", "")) or "").strip()
+            if not name:
+                continue
+            key = self._normalize_label(name)
+            if key in seen:
+                continue
+            seen.add(key)
+            yi_yd = str((u.get("yi_yd") if isinstance(u, dict) else getattr(u, "yi_yd", "Yİ")) or "Yİ").strip().upper()
+            yi_yd = "YD" if yi_yd == "YD" else "Yİ"
+            active_val = (u.get("active") if isinstance(u, dict) else getattr(u, "active", True))
+            active = 1 if bool(active_val) else 0
+            note = str((u.get("note") if isinstance(u, dict) else getattr(u, "note", "")) or "")
+            rows.append((name, yi_yd, active, note, ts, ts))
         with self.db.tx():
             self.db.conn.execute("DELETE FROM users")
-            for u in users_payload:
-                self.db.conn.execute("INSERT INTO users(name,yi_yd,active,note,created_at,updated_at) VALUES(?,?,?,?,?,?)",(u.get("name",""),u.get("yi_yd","Yİ"),1 if u.get("active",True) else 0,u.get("note",""),ts,ts))
+            for row in rows:
+                self.db.conn.execute("INSERT INTO users(name,yi_yd,active,note,created_at,updated_at) VALUES(?,?,?,?,?,?)", row)
 
     def load_components(self):
         out=[]
@@ -59,14 +75,33 @@ class STSStore:
             out.append(ComponentDef(name=r[1],version=r[2] or "",unit=r[3] or "Adet",active=bool(r[4]),usage=int(r[5] or 1),platforms=plats))
         return out
     def write_components(self, components_payload, actor=None):
-        ts=now_iso();
+        ts = now_iso()
+        normalized = []
+        seen = set()
+        for c in list(components_payload or []):
+            name = str((c.get("name") if isinstance(c, dict) else getattr(c, "name", "")) or "").strip()
+            if not name:
+                continue
+            key = self._normalize_label(name)
+            if key in seen:
+                continue
+            seen.add(key)
+            version = str((c.get("version") if isinstance(c, dict) else getattr(c, "version", "")) or "")
+            unit = str((c.get("unit") if isinstance(c, dict) else getattr(c, "unit", "Adet")) or "Adet")
+            active = 1 if bool((c.get("active") if isinstance(c, dict) else getattr(c, "active", True))) else 0
+            usage = float((c.get("usage") if isinstance(c, dict) else getattr(c, "usage", 1)) or 1)
+            platforms = dict((c.get("platforms") if isinstance(c, dict) else getattr(c, "platforms", {})) or {})
+            normalized.append((name, version, unit, active, usage, platforms))
         with self.db.tx():
-            self.db.conn.execute("DELETE FROM component_platforms"); self.db.conn.execute("DELETE FROM components")
-            for c in components_payload:
-                self.db.conn.execute("INSERT INTO components(name,version,unit,active,usage,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",(c.name,c.version,c.unit,1 if c.active else 0,float(c.usage),ts,ts))
-                cid=self.db.conn.execute("SELECT id FROM components WHERE name=?",(c.name,)).fetchone()[0]
-                for p,en in (c.platforms or {}).items():
-                    self.db.conn.execute("INSERT INTO component_platforms(component_id,platform_name,enabled) VALUES(?,?,?)",(cid,p,1 if en else 0))
+            self.db.conn.execute("DELETE FROM component_platforms")
+            self.db.conn.execute("DELETE FROM components")
+            for name, version, unit, active, usage, platforms in normalized:
+                self.db.conn.execute("INSERT INTO components(name,version,unit,active,usage,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",(name,version,unit,active,usage,ts,ts))
+                cid = self.db.conn.execute("SELECT id FROM components WHERE name=?", (name,)).fetchone()[0]
+                for p, en in platforms.items():
+                    if not str(p).strip():
+                        continue
+                    self.db.conn.execute("INSERT INTO component_platforms(component_id,platform_name,enabled) VALUES(?,?,?)", (cid, str(p).strip(), 1 if bool(en) else 0))
 
     def load_tags(self): return [TagDef(name=r[0], color=r[1] or "#3B82F6") for r in self.db.conn.execute("SELECT name,color FROM tags ORDER BY name")]
     load_tag_defs = load_tags
@@ -76,6 +111,28 @@ class STSStore:
             self.db.conn.execute("DELETE FROM tags")
             for t in tags: self.db.conn.execute("INSERT INTO tags(name,color,created_at,updated_at) VALUES(?,?,?,?)",(t.name,t.color,ts,ts))
     write_tag_defs = write_tags
+
+    def upsert_tag_def(self, tag):
+        ts = now_iso()
+        name = str((tag.get("name") if isinstance(tag, dict) else getattr(tag, "name", "")) or "").strip()
+        if not name:
+            return
+        color = str((tag.get("color") if isinstance(tag, dict) else getattr(tag, "color", "#3B82F6")) or "#3B82F6")
+        kind = str((tag.get("kind") if isinstance(tag, dict) else getattr(tag, "kind", "contract")) or "contract")
+        row = self.db.conn.execute("SELECT id FROM tags WHERE name=?", (name,)).fetchone()
+        with self.db.tx():
+            if row:
+                self.db.conn.execute("UPDATE tags SET color=?, kind=?, updated_at=? WHERE id=?", (color, kind, ts, row[0]))
+            else:
+                self.db.conn.execute("INSERT INTO tags(name,color,kind,created_at,updated_at) VALUES(?,?,?,?,?)", (name, color, kind, ts, ts))
+
+    def delete_tag_def(self, name: str):
+        nm = str(name or "").strip()
+        if not nm:
+            return
+        with self.db.tx():
+            self.db.conn.execute("DELETE FROM tags WHERE name=?", (nm,))
+            self.db.conn.execute("DELETE FROM contract_tags WHERE tag_name=?", (nm,))
     def load_tag_snapshot(self):
         return self.load_tags(), self.all_contract_tags_map()
     def write_tag_snapshot(self, tags, assignments_by_key, actor=None):
