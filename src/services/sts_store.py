@@ -26,6 +26,46 @@ class STSStore:
     def _normalize_label(self, text: str) -> str: return " ".join(str(text or "").casefold().split())
     def all_sheet_names(self): return self.platform_names()
 
+    def _decode_user_names(self, raw, fallback="") -> List[str]:
+        values: List[str] = []
+        if isinstance(raw, list):
+            values = [str(x or "").strip() for x in raw]
+        elif raw is not None:
+            txt = str(raw).strip()
+            if txt:
+                try:
+                    parsed = json.loads(txt)
+                    if isinstance(parsed, list):
+                        values = [str(x or "").strip() for x in parsed]
+                    else:
+                        values = [x.strip() for x in txt.split(",")]
+                except Exception:
+                    values = [x.strip() for x in txt.split(",")]
+        if not values:
+            f = str(fallback or "").strip()
+            values = [f] if f else []
+        out: List[str] = []
+        seen = set()
+        for v in values:
+            if not v:
+                continue
+            k = self._normalize_label(v)
+            if k in seen:
+                continue
+            seen.add(k)
+            out.append(v)
+        return out
+
+    def _encode_user_names(self, users) -> str:
+        clean = self._decode_user_names(list(users or []))
+        return json.dumps(clean, ensure_ascii=False)
+
+    def _user_display(self, users, fallback="") -> str:
+        clean = self._decode_user_names(list(users or []), fallback=fallback)
+        if clean:
+            return ", ".join(clean)
+        return str(fallback or "").strip()
+
 
     def _log(self, action: str, **kwargs):
         self.db.add_log(action=action, **kwargs)
@@ -373,7 +413,20 @@ class STSStore:
         rows=[]; tags_map = tags_map or self.all_contract_tags_map()
         for r in self.db.conn.execute("SELECT * FROM contracts WHERE platform=? ORDER BY id",(platform,)):
             tags=tags_map.get((r['platform'],r['contract_no'],r['contract_type']),[])
-            rows.append({"id":r["id"],"row":r["id"],"platform":r["platform"],"no":r["contract_no"],"user":r["user_name"],"type":r["contract_type"],"type_display":r["type_display"],"link":r["link_type"],"status":r["status"],"completion_date":r["completion_date"],"content":r["content"] or r["note"] or "","is_main":bool(r["is_main"]),"tags":list(tags),"search":r["search_text"] or ""})
+            users = self._decode_user_names(r["user_names"], r["user_name"] or "")
+            user_display = self._user_display(users, r["user_name"] or "")
+            search_text = str(r["search_text"] or "")
+            if users and not search_text:
+                search_text = " ".join(users)
+            rows.append({
+                "id":r["id"],"row":r["id"],"platform":r["platform"],
+                "no":r["contract_no"],"contract_no":r["contract_no"],
+                "user":user_display,"users":users,
+                "type":r["contract_type"],"contract_type":r["contract_type"],
+                "type_display":r["type_display"],"link":r["link_type"],"status":r["status"],
+                "completion_date":r["completion_date"],"content":r["content"] or r["note"] or "",
+                "is_main":bool(r["is_main"]),"tags":list(tags),"search":search_text
+            })
         return rows
     def build_contract_index(self, progress_cb=None):
         out=[]; tags=self.all_contract_tags_map()
@@ -388,18 +441,35 @@ class STSStore:
 
     def write_contract(self, ci, systems, deliveries, old_contract_no=None, old_start_row=None):
         ts=now_iso(); ctype=ci.contract_type
+        users = self._decode_user_names(getattr(ci, "users", None), getattr(ci, "user", ""))
+        if not users:
+            users = self._decode_user_names([], getattr(ci, "user", ""))
+        user_display = self._user_display(users, getattr(ci, "user", ""))
+        user_names_json = self._encode_user_names(users)
+        search_text = " ".join([
+            str(ci.platform or ""), str(ci.no or ""), str(ctype or ""), str(ci.note or ""), user_display, " ".join(users)
+        ]).strip()
+        ci.user = user_display
+        ci.users = users
         row=self.db.conn.execute("SELECT id FROM contracts WHERE platform=? AND contract_no=? AND contract_type=?",(ci.platform,ci.no,ctype)).fetchone()
         with self.db.tx():
             if row:
                 cid=row[0]
-                self.db.conn.execute("UPDATE contracts SET user_name=?,yi_yd=?,status=?,signed_date=?,t0_date=?,t0_months=?,completion_date=?,acceptance_date=?,note=?,content=?,updated_at=? WHERE id=?",(ci.user,ci.yi_yd,ci.status,ci.signature_date,ci.t0_date,int(ci.t0_months or 0),ci.completion_date,ci.acceptance_date,ci.note,ci.note,ts,cid))
+                self.db.conn.execute("UPDATE contracts SET user_name=?,user_names=?,yi_yd=?,status=?,signed_date=?,t0_date=?,t0_months=?,completion_date=?,acceptance_date=?,note=?,content=?,search_text=?,updated_at=? WHERE id=?",(user_display,user_names_json,ci.yi_yd,ci.status,ci.signature_date,ci.t0_date,int(ci.t0_months or 0),ci.completion_date,ci.acceptance_date,ci.note,ci.note,search_text,ts,cid))
                 self.db.conn.execute("DELETE FROM systems WHERE contract_id=?",(cid,)); self.db.conn.execute("DELETE FROM deliveries WHERE contract_id=?",(cid,))
             else:
-                self.db.conn.execute("INSERT INTO contracts(platform,contract_no,user_name,yi_yd,contract_type,type_display,link_type,status,signed_date,t0_date,t0_months,completion_date,acceptance_date,content,note,is_main,parent_contract_no,search_text,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(ci.platform,ci.no,ci.user,ci.yi_yd,ctype,ctype,"",ci.status,ci.signature_date,ci.t0_date,int(ci.t0_months or 0),ci.completion_date,ci.acceptance_date,ci.note,ci.note,1 if self._normalize_label(ctype)==self._normalize_label('Ana Sözleşme') else 0,ci.sd_anchor_no,"",ts,ts))
+                self.db.conn.execute("INSERT INTO contracts(platform,contract_no,user_name,user_names,yi_yd,contract_type,type_display,link_type,status,signed_date,t0_date,t0_months,completion_date,acceptance_date,content,note,is_main,parent_contract_no,search_text,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(ci.platform,ci.no,user_display,user_names_json,ci.yi_yd,ctype,ctype,"",ci.status,ci.signature_date,ci.t0_date,int(ci.t0_months or 0),ci.completion_date,ci.acceptance_date,ci.note,ci.note,1 if self._normalize_label(ctype)==self._normalize_label('Ana Sözleşme') else 0,ci.sd_anchor_no,search_text,ts,ts))
                 cid=self.db.conn.execute("SELECT id FROM contracts WHERE platform=? AND contract_no=? AND contract_type=?",(ci.platform,ci.no,ctype)).fetchone()[0]
             existing_tags=[r[0] for r in self.db.conn.execute("SELECT tag_name FROM contract_tags WHERE contract_id=?",(cid,))]
             for i,s in enumerate(systems or []):
-                self.db.conn.execute("INSERT INTO systems(contract_id,name,status,completion_date,acceptance_date,note,sort_order,payload_json) VALUES(?,?,?,?,?,?,?,?)",(cid,s.name,s.status,s.completion_date,s.acceptance_date,"",i,json.dumps({"t0_date":s.t0_date,"t0_months":s.t0_months})))
+                self.db.conn.execute(
+                    "INSERT INTO systems(contract_id,name,status,completion_date,acceptance_date,delivery_user,note,sort_order,payload_json) VALUES(?,?,?,?,?,?,?,?,?)",
+                    (
+                        cid, s.name, s.status, s.completion_date, s.acceptance_date,
+                        getattr(s, "delivery_user", "") or "", "", i,
+                        json.dumps({"t0_date": s.t0_date, "t0_months": s.t0_months}),
+                    ),
+                )
                 sid=self.db.conn.execute("SELECT last_insert_rowid()").fetchone()[0]
                 for cname,qty in (s.components or {}).items(): self.db.conn.execute("INSERT INTO system_components(system_id,component_name,qty) VALUES(?,?,?)",(sid,cname,float(qty or 0)))
             for sys_name, dlist in (deliveries or {}).items():
@@ -413,15 +483,26 @@ class STSStore:
         self._log("contract_updated" if row else "contract_created", entity_type="contract", entity_id=cid, platform=str(ci.platform or ""), contract_no=str(ci.no or ""), payload={"system_count": len(systems or []), "delivery_count": sum(len(v or []) for v in (deliveries or {}).values()), "component_count": sum(len((x.components or {})) for x in (systems or []))}, actor=self.current_actor())
         return cid
 
-    def load_contract_structure(self, platform, contract_no, start_row=None):
-        r=self.db.conn.execute("SELECT * FROM contracts WHERE platform=? AND contract_no=? ORDER BY id LIMIT 1",(platform,contract_no)).fetchone()
+    def load_contract_structure(self, platform, contract_no, start_row=None, contract_type=None):
+        if contract_type is None and start_row is not None and not str(start_row).isdigit():
+            contract_type = str(start_row)
+            start_row = None
+        r = None
+        if start_row is not None and str(start_row).isdigit():
+            r = self.db.conn.execute("SELECT * FROM contracts WHERE id=? LIMIT 1", (int(start_row),)).fetchone()
+        if not r and contract_type:
+            r = self.db.conn.execute("SELECT * FROM contracts WHERE platform=? AND contract_no=? AND contract_type=? ORDER BY id LIMIT 1",(platform,contract_no,contract_type)).fetchone()
+        if not r:
+            r=self.db.conn.execute("SELECT * FROM contracts WHERE platform=? AND contract_no=? ORDER BY id LIMIT 1",(platform,contract_no)).fetchone()
         if not r: raise ValueError("contract not found")
-        ci=ContractInfo(no=r['contract_no'],platform=r['platform'],user=r['user_name'] or "",yi_yd=r['yi_yd'] or "Yİ",contract_type=r['contract_type'] or "",signature_date=r['signed_date'] or "",t0_date=r['t0_date'] or "",t0_months=int(r['t0_months'] or 0),completion_date=r['completion_date'] or "",status=r['status'] or "PLAN",note=r['note'] or "",acceptance_date=r['acceptance_date'] or "",entry_start_row=int(r['id']))
+        users = self._decode_user_names(r["user_names"], r["user_name"] or "")
+        user_display = self._user_display(users, r["user_name"] or "")
+        ci=ContractInfo(no=r['contract_no'],platform=r['platform'],user=user_display,yi_yd=r['yi_yd'] or "Yİ",contract_type=r['contract_type'] or "",signature_date=r['signed_date'] or "",t0_date=r['t0_date'] or "",t0_months=int(r['t0_months'] or 0),completion_date=r['completion_date'] or "",status=r['status'] or "PLAN",note=r['note'] or "",acceptance_date=r['acceptance_date'] or "",entry_start_row=int(r['id']),users=users)
         systems=[]; deliveries={}
         for s in self.db.conn.execute("SELECT * FROM systems WHERE contract_id=? ORDER BY sort_order,id",(r['id'],)):
             comps={x[0]:float(x[1] or 0) for x in self.db.conn.execute("SELECT component_name,qty FROM system_components WHERE system_id=?",(s['id'],))}
             payload=json.loads(s['payload_json'] or "{}")
-            si=SystemInfo(name=s['name'],components=comps,t0_date=payload.get('t0_date',''),t0_months=int(payload.get('t0_months',0) or 0),completion_date=s['completion_date'] or "",status=s['status'] or "Başlanmadı",acceptance_date=s['acceptance_date'] or "")
+            si=SystemInfo(name=s['name'],components=comps,t0_date=payload.get('t0_date',''),t0_months=int(payload.get('t0_months',0) or 0),completion_date=s['completion_date'] or "",status=s['status'] or "Başlanmadı",acceptance_date=s['acceptance_date'] or "",delivery_user=s["delivery_user"] or "")
             systems.append(si)
         for d in self.db.conn.execute("SELECT * FROM deliveries WHERE contract_id=? ORDER BY system_name,sort_order,id",(r['id'],)):
             payload=json.loads(d['payload_json'] or "{}")
