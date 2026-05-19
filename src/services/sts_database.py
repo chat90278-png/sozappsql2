@@ -56,11 +56,6 @@ CREATE TABLE IF NOT EXISTS deliveries(id INTEGER PRIMARY KEY AUTOINCREMENT,contr
 CREATE TABLE IF NOT EXISTS delivery_components(id INTEGER PRIMARY KEY AUTOINCREMENT,delivery_id INTEGER NOT NULL,component_name TEXT NOT NULL,planned REAL DEFAULT 0,delivered REAL DEFAULT 0,UNIQUE(delivery_id,component_name),FOREIGN KEY(delivery_id) REFERENCES deliveries(id) ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS contract_tags(id INTEGER PRIMARY KEY AUTOINCREMENT,contract_id INTEGER NOT NULL,tag_name TEXT NOT NULL,UNIQUE(contract_id,tag_name),FOREIGN KEY(contract_id) REFERENCES contracts(id) ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS activity_logs(id INTEGER PRIMARY KEY AUTOINCREMENT,created_at TEXT NOT NULL,actor TEXT,action TEXT NOT NULL,entity_type TEXT,entity_id TEXT,entity_key TEXT,platform TEXT,contract_no TEXT,message TEXT,before_json TEXT,after_json TEXT,payload_json TEXT);
-CREATE INDEX IF NOT EXISTS idx_logs_created_at ON activity_logs(created_at);
-CREATE INDEX IF NOT EXISTS idx_logs_action ON activity_logs(action);
-CREATE INDEX IF NOT EXISTS idx_logs_entity_type ON activity_logs(entity_type);
-CREATE INDEX IF NOT EXISTS idx_logs_platform ON activity_logs(platform);
-CREATE INDEX IF NOT EXISTS idx_logs_contract_no ON activity_logs(contract_no);
 """
         )
         # migration-safe columns
@@ -70,8 +65,16 @@ CREATE INDEX IF NOT EXISTS idx_logs_contract_no ON activity_logs(contract_no);
         self._ensure_column("activity_logs", "entity_id", "TEXT")
         self._ensure_column("activity_logs", "platform", "TEXT")
         self._ensure_column("activity_logs", "contract_no", "TEXT")
+        self._ensure_column("activity_logs", "message", "TEXT")
         self._ensure_column("activity_logs", "before_json", "TEXT")
         self._ensure_column("activity_logs", "after_json", "TEXT")
+        self._ensure_column("activity_logs", "payload_json", "TEXT")
+
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_logs_created_at ON activity_logs(created_at)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_logs_action ON activity_logs(action)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_logs_entity_type ON activity_logs(entity_type)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_logs_platform ON activity_logs(platform)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_logs_contract_no ON activity_logs(contract_no)")
         self.conn.commit()
 
     def add_log(self, action: str, entity_type: str = "", entity_key: str = "", message: str = "", payload: dict | None = None,
