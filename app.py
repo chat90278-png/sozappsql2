@@ -5967,7 +5967,7 @@ class MainWindow(QMainWindow):
         if cur:
             active_platform = str(cur.data(Qt.UserRole) or "")
         from src.ui.dialogs.excel_export_options import ExcelExportDialog
-        dlg = ExcelExportDialog(self.store, self, active_platform=active_platform)
+        dlg = ExcelExportDialog(self.store, self, active_platform=active_platform, contract_index=getattr(self, "contract_index", None))
         if not dlg.exec() or not dlg.result_options:
             return
         opts = dict(dlg.result_options)
