@@ -127,18 +127,50 @@ class STSStore:
         ).fetchall()
         return [str(r[0]) for r in fb if str(r[0] or "").strip()]
 
-    def load_tags(self): return [TagDef(name=r[0], color=r[1] or "#3B82F6") for r in self.db.conn.execute("SELECT name,color FROM tags ORDER BY name")]
-    load_tag_defs = load_tags
+    def _tag_name_of(self, tag) -> str:
+        if isinstance(tag, str):
+            return str(tag).strip()
+        if isinstance(tag, dict):
+            return str(tag.get("name") or "").strip()
+        return str(getattr(tag, "name", "") or "").strip()
+
+    def load_tags(self, active_only: bool = True):
+        rows = self.db.conn.execute(
+            "SELECT DISTINCT name, color, kind FROM tags WHERE COALESCE(name, '') <> '' ORDER BY name"
+        ).fetchall()
+        out: List[TagDef] = []
+        for r in rows:
+            out.append(TagDef(name=str(r[0]).strip(), color=str(r[1] or "#3B82F6").strip() or "#3B82F6", note="", active=True))
+        return out
+
+    def load_tag_defs(self, active_only: bool = True):
+        return self.load_tags(active_only=active_only)
+
     def write_tags(self, tags, actor=None):
-        ts=now_iso();
+        ts = now_iso()
         with self.db.tx():
             self.db.conn.execute("DELETE FROM tags")
-            for t in tags: self.db.conn.execute("INSERT INTO tags(name,color,created_at,updated_at) VALUES(?,?,?,?)",(t.name,t.color,ts,ts))
+            seen = set()
+            for t in list(tags or []):
+                name = self._tag_name_of(t)
+                if not name:
+                    continue
+                key = self._normalize_label(name)
+                if key in seen:
+                    continue
+                seen.add(key)
+                color = str((t.get("color") if isinstance(t, dict) else getattr(t, "color", "#3B82F6")) or "#3B82F6")
+                kind = str((t.get("kind") if isinstance(t, dict) else getattr(t, "kind", "contract")) or "contract")
+                self.db.conn.execute(
+                    "INSERT INTO tags(name,color,kind,created_at,updated_at) VALUES(?,?,?,?,?)",
+                    (name, color, kind, ts, ts),
+                )
+
     write_tag_defs = write_tags
 
     def upsert_tag_def(self, tag):
         ts = now_iso()
-        name = str((tag.get("name") if isinstance(tag, dict) else getattr(tag, "name", "")) or "").strip()
+        name = self._tag_name_of(tag)
         if not name:
             return
         color = str((tag.get("color") if isinstance(tag, dict) else getattr(tag, "color", "#3B82F6")) or "#3B82F6")
@@ -150,36 +182,90 @@ class STSStore:
             else:
                 self.db.conn.execute("INSERT INTO tags(name,color,kind,created_at,updated_at) VALUES(?,?,?,?,?)", (name, color, kind, ts, ts))
 
-    def delete_tag_def(self, name: str):
-        nm = str(name or "").strip()
+    def delete_tag_def(self, tag_or_name):
+        nm = self._tag_name_of(tag_or_name)
         if not nm:
             return
         with self.db.tx():
             self.db.conn.execute("DELETE FROM tags WHERE name=?", (nm,))
             self.db.conn.execute("DELETE FROM contract_tags WHERE tag_name=?", (nm,))
+
     def load_tag_snapshot(self):
-        return self.load_tags(), self.all_contract_tags_map()
+        return self.load_tag_defs(active_only=False), self.all_contract_tags_map()
+
     def write_tag_snapshot(self, tags, assignments_by_key, actor=None):
         self.write_tags(tags, actor=actor)
         for key, vals in (assignments_by_key or {}).items():
-            p,no,ctype = key if isinstance(key, tuple) else key.split("|")
-            self.save_contract_tags(p,no,ctype,[v.get("name") if isinstance(v,dict) else v for v in vals],actor=actor)
+            p, no, ctype = key if isinstance(key, tuple) else key.split("|")
+            self.save_contract_tags(p, no, ctype, vals or [], actor=actor)
+
     def all_contract_tags_map(self):
-        out={}
-        for r in self.db.conn.execute("SELECT c.platform,c.contract_no,c.contract_type,t.tag_name FROM contract_tags t JOIN contracts c ON c.id=t.contract_id"):
-            out.setdefault((r[0],r[1],r[2]),[]).append(r[3])
+        out = {}
+        rows = self.db.conn.execute(
+            "SELECT c.platform,c.contract_no,c.contract_type,t.tag_name FROM contract_tags t JOIN contracts c ON c.id=t.contract_id ORDER BY c.platform,c.contract_no,c.contract_type,t.tag_name"
+        ).fetchall()
+        for r in rows:
+            out.setdefault((str(r[0] or ""), str(r[1] or ""), str(r[2] or "")), []).append(str(r[3] or ""))
         return out
+
+    def _find_contract_id(self, platform, contract_no, contract_type):
+        p = str(platform or "").strip()
+        no = str(contract_no or "").strip()
+        ct = str(contract_type or "").strip()
+        row = None
+        if ct:
+            row = self.db.conn.execute(
+                "SELECT id FROM contracts WHERE platform=? AND contract_no=? AND contract_type=? ORDER BY id LIMIT 1",
+                (p, no, ct),
+            ).fetchone()
+        if not row:
+            row = self.db.conn.execute(
+                "SELECT id FROM contracts WHERE platform=? AND contract_no=? ORDER BY id LIMIT 1",
+                (p, no),
+            ).fetchone()
+        return int(row[0]) if row else 0
+
     def load_contract_tags(self, platform, contract_no, contract_type):
-        row=self.db.conn.execute("SELECT id FROM contracts WHERE platform=? AND contract_no=? AND contract_type=?",(platform,contract_no,contract_type)).fetchone()
-        if not row: return []
-        return [{"name":r[0]} for r in self.db.conn.execute("SELECT tag_name FROM contract_tags WHERE contract_id=? ORDER BY tag_name",(row[0],))]
+        cid = self._find_contract_id(platform, contract_no, contract_type)
+        if not cid:
+            return []
+        rows = self.db.conn.execute(
+            "SELECT ct.tag_name, t.color, t.kind FROM contract_tags ct LEFT JOIN tags t ON t.name=ct.tag_name WHERE ct.contract_id=? ORDER BY ct.tag_name",
+            (cid,),
+        ).fetchall()
+        out = []
+        for r in rows:
+            name = str(r[0] or "").strip()
+            if not name:
+                continue
+            out.append({"name": name, "color": str(r[1] or "#3B82F6"), "kind": str(r[2] or "contract")})
+        return out
+
     def save_contract_tags(self, platform, contract_no, contract_type, tags, actor=None):
-        row=self.db.conn.execute("SELECT id FROM contracts WHERE platform=? AND contract_no=? AND contract_type=?",(platform,contract_no,contract_type)).fetchone()
-        if not row: return
-        cid=row[0]
+        cid = self._find_contract_id(platform, contract_no, contract_type)
+        if not cid:
+            return
+        names = []
+        seen = set()
+        for t in list(tags or []):
+            nm = self._tag_name_of(t)
+            if not nm:
+                continue
+            key = self._normalize_label(nm)
+            if key in seen:
+                continue
+            seen.add(key)
+            names.append((nm, t))
+        ts = now_iso()
         with self.db.tx():
-            self.db.conn.execute("DELETE FROM contract_tags WHERE contract_id=?",(cid,))
-            for t in tags: self.db.conn.execute("INSERT OR IGNORE INTO contract_tags(contract_id,tag_name) VALUES(?,?)",(cid, t.get("name") if isinstance(t,dict) else str(t)))
+            self.db.conn.execute("DELETE FROM contract_tags WHERE contract_id=?", (cid,))
+            for nm, t in names:
+                row = self.db.conn.execute("SELECT id FROM tags WHERE name=?", (nm,)).fetchone()
+                if not row:
+                    color = str((t.get("color") if isinstance(t, dict) else getattr(t, "color", "#3B82F6")) or "#3B82F6")
+                    kind = str((t.get("kind") if isinstance(t, dict) else getattr(t, "kind", "contract")) or "contract")
+                    self.db.conn.execute("INSERT INTO tags(name,color,kind,created_at,updated_at) VALUES(?,?,?,?,?)", (nm, color, kind, ts, ts))
+                self.db.conn.execute("INSERT OR IGNORE INTO contract_tags(contract_id,tag_name) VALUES(?,?)", (cid, nm))
 
     def list_main_contracts(self, platform, tags_map=None):
         rows=[]; tags_map = tags_map or self.all_contract_tags_map()

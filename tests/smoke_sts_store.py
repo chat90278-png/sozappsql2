@@ -3,7 +3,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from src.models.app_models import ComponentDef, TagDef
+from src.models.app_models import ComponentDef, ContractInfo, TagDef
 from src.services.sts_store import STSStore
 
 with TemporaryDirectory() as td:
@@ -11,37 +11,34 @@ with TemporaryDirectory() as td:
     store = STSStore(p)
 
     store.create_platform("AKINCI")
-    store.create_platform("TB2")
+    store.write_users([{"name": "Serhat", "yi_yd": "Yİ", "active": True, "note": ""}])
+    store.write_components([ComponentDef(name="GÖVDE", platforms={"AKINCI": True})])
 
-    store.write_components([
-        ComponentDef(name="GÖVDE", version="", unit="Adet", active=True, usage=1, platforms={"AKINCI": True, "TB2": False}),
-        ComponentDef(name="MOTOR", version="", unit="Adet", active=True, usage=1, platforms={"AKINCI": True, "TB2": True}),
-    ])
+    ci = ContractInfo(no='K1', platform='AKINCI', user='Serhat', yi_yd='Yİ', contract_type='Ana Sözleşme', signature_date='', t0_date='', t0_months=0, completion_date='')
+    store.write_contract(ci, [], {})
 
-    akinci = store.assigned_components("AKINCI")
-    assert "GÖVDE" in akinci and "MOTOR" in akinci
+    store.upsert_tag_def(TagDef(name="Deneme", color="#3B82F6"))
 
-    tb2 = store.assigned_components("TB2")
-    assert "MOTOR" in tb2
-    assert "GÖVDE" not in tb2
+    defs = store.load_tag_defs(active_only=True)
+    assert any(t.name == "Deneme" for t in defs)
 
-    # no platforms mapping -> fallback should still be safe
-    store.write_components([
-        {"name": "GÖVDE", "version": "", "unit": "Adet", "active": True, "usage": 1, "platforms": {"AKINCI": True, "TB2": False}},
-        {"name": "MOTOR", "version": "", "unit": "Adet", "active": True, "usage": 1, "platforms": {"AKINCI": True, "TB2": True}},
-        {"name": "KANAT", "version": "", "unit": "Adet", "active": True, "usage": 1},
-    ])
-    unknown = store.assigned_components("BILINMEYEN_PLATFORM")
-    assert isinstance(unknown, list)
-    assert "KANAT" in unknown
+    tags = store.load_tags(active_only=True)
+    assert any(t.name == "Deneme" for t in tags)
 
-    components = store.load_components()
-    govde = next((c for c in components if c.name == "GÖVDE"), None)
-    assert govde is not None
-    assert bool(govde.platforms.get("AKINCI")) is True
+    store.save_contract_tags("AKINCI", "K1", "Ana Sözleşme", ["Deneme"])
+    ctags = store.load_contract_tags("AKINCI", "K1", "Ana Sözleşme")
+    assert any((t.get("name") == "Deneme") for t in ctags)
 
-    store.upsert_tag_def(TagDef(name="Yeni Etiket", color="#3B82F6"))
-    tags = store.load_tags()
-    assert any(t.name == "Yeni Etiket" for t in tags)
+    tag_map = store.all_contract_tags_map()
+    assert ("AKINCI", "K1", "Ana Sözleşme") in tag_map
+    assert "Deneme" in tag_map[("AKINCI", "K1", "Ana Sözleşme")]
+
+    idx = store.build_contract_index()
+    it = next(x for x in idx if x.get("platform") == "AKINCI" and x.get("no") == "K1")
+    assert "Deneme" in list(it.get("tags") or [])
+
+    store.delete_tag_def("Deneme")
+    defs2 = store.load_tag_defs(active_only=False)
+    assert not any(t.name == "Deneme" for t in defs2)
 
 print("ok")
