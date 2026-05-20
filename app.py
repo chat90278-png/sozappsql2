@@ -1392,36 +1392,6 @@ class ComponentManagerDialog(StyledDialog):
 
 from src.ui.dialogs.platforms import PlatformManagerDialog, PlatformDialog
 
-class MultiUserPickerDialog(QDialog):
-    def __init__(self, available: List[str], selected: List[str], parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Kullanıcı Seç")
-        self.resize(420, 380)
-        self._checks: Dict[str, QCheckBox] = {}
-        lay = QVBoxLayout(self)
-        for n in available:
-            name = str(n or "").strip()
-            if not name:
-                continue
-            cb = QCheckBox(name)
-            cb.setChecked(name in selected)
-            lay.addWidget(cb)
-            self._checks[name] = cb
-        lay.addStretch()
-        row = QHBoxLayout()
-        row.addStretch()
-        ok = QPushButton("Tamam")
-        ok.clicked.connect(self.accept)
-        cancel = QPushButton("İptal")
-        cancel.setObjectName("secondary")
-        cancel.clicked.connect(self.reject)
-        row.addWidget(cancel)
-        row.addWidget(ok)
-        lay.addLayout(row)
-
-    def selected_users(self) -> List[str]:
-        return [n for n, cb in self._checks.items() if cb.isChecked()]
-
 class MultiUserSelectWidget(QWidget):
     changed = Signal()
     def __init__(self, parent=None):
@@ -1430,13 +1400,12 @@ class MultiUserSelectWidget(QWidget):
         self._selected: List[str] = []
         lay = QHBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
-        self.display = QLineEdit()
-        self.display.setReadOnly(True)
-        self.btn = QPushButton("Seç")
-        self.btn.setObjectName("secondary")
-        self.btn.clicked.connect(self.open_picker)
-        lay.addWidget(self.display, 1)
-        lay.addWidget(self.btn, 0)
+        self.combo = QComboBox(self)
+        self.combo.setEditable(True)
+        self.combo.lineEdit().setReadOnly(True)
+        self.combo.lineEdit().setPlaceholderText("Kullanıcı seçiniz...")
+        self.combo.view().pressed.connect(self._on_item_pressed)
+        lay.addWidget(self.combo, 1)
         self._sync()
 
     def set_available_users(self, user_names: List[str]):
@@ -1453,6 +1422,7 @@ class MultiUserSelectWidget(QWidget):
             vals.append(n)
         self._available = vals
         self._selected = [x for x in self._selected if x in self._available]
+        self._rebuild_items()
         self._sync()
 
     def set_users(self, user_names: List[str]):
@@ -1468,6 +1438,7 @@ class MultiUserSelectWidget(QWidget):
             seen.add(k)
             vals.append(n)
         self._selected = vals
+        self._rebuild_items()
         self._sync()
         self.changed.emit()
 
@@ -1476,14 +1447,34 @@ class MultiUserSelectWidget(QWidget):
 
     def _sync(self):
         txt = ", ".join(self._selected)
-        self.display.setText(txt)
-        self.display.setToolTip(txt)
+        self.combo.lineEdit().setText(txt)
+        self.combo.setToolTip(txt)
 
-    def open_picker(self):
-        dlg = MultiUserPickerDialog(self._available, self._selected, self)
-        if not dlg.exec():
+    def _rebuild_items(self):
+        self.combo.blockSignals(True)
+        self.combo.clear()
+        for name in self._available:
+            self.combo.addItem(name)
+            it = self.combo.model().item(self.combo.count() - 1, 0)
+            if it is None:
+                continue
+            it.setFlags(Qt.ItemIsEnabled | Qt.ItemIsUserCheckable)
+            it.setData(Qt.Checked if name in self._selected else Qt.Unchecked, Qt.CheckStateRole)
+        self.combo.blockSignals(False)
+
+    def _on_item_pressed(self, idx):
+        it = self.combo.model().itemFromIndex(idx)
+        if it is None:
             return
-        self._selected = dlg.selected_users()
+        checked = it.data(Qt.CheckStateRole) == Qt.Checked
+        it.setData(Qt.Unchecked if checked else Qt.Checked, Qt.CheckStateRole)
+        name = str(it.text() or "").strip()
+        if not name:
+            return
+        if checked:
+            self._selected = [x for x in self._selected if x != name]
+        elif name not in self._selected:
+            self._selected.append(name)
         self._sync()
         self.changed.emit()
 
@@ -4522,6 +4513,7 @@ class ContractWorkWindow(QDialog):
         top_row.addWidget(system_metric_card("completion", "Termin Tarihi"), 0)
         top_row.addWidget(system_metric_card("days", "Kalan Gün"), 0)
         top_row.addWidget(system_metric_card("acceptance", "Kabul Tarihi"), 0)
+        top_row.addWidget(system_metric_card("delivery_user", "Teslim Edilecek Kullanıcı"), 0)
         top_row.addStretch(1)
         self.edit_system_btn = QPushButton("✎ Sistemi Düzenle")
         self.edit_system_btn.setObjectName("secondary")
@@ -5124,6 +5116,7 @@ class ContractWorkWindow(QDialog):
         current.completion_date = updated.completion_date
         current.status = updated.status
         current.acceptance_date = updated.acceptance_date
+        current.delivery_user = str(getattr(updated, "delivery_user", "") or "")
 
         # Sistem adı değiştiyse teslimat anahtarını da taşı.
         if old_name != new_name:
