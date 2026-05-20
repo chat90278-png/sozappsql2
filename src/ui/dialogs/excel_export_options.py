@@ -9,16 +9,75 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
-    QListWidget,
-    QListWidgetItem,
     QMessageBox,
     QPushButton,
     QScrollArea,
     QSizePolicy,
     QVBoxLayout,
+    QWidget,
 )
 
 from src.ui.theme import STYLE
+
+
+class PlatformRow(QFrame):
+    def __init__(self, platform_name: str, contract_count: int, on_changed):
+        super().__init__()
+        self.platform_name = platform_name
+        self._on_changed = on_changed
+        self.setObjectName("platformRow")
+        self.setStyleSheet("""
+QFrame#platformRow { border:1px solid #e2e8f0; border-radius:10px; background:#ffffff; }
+QFrame#platformRow:hover { border:1px solid #93c5fd; background:#f7fbff; }
+QFrame#platformRow[checked='true'] { border:1px solid #3b82f6; background:#f0f6ff; }
+QFrame#platformRow[disabled='true'] { border:1px solid #dbe5f1; background:#f8fafc; }
+QLabel#platformName { color:#0f172a; font-weight:800; }
+QLabel#platformBadge { color:#35506d; background:#eaf1ff; border-radius:9px; padding:3px 8px; font-weight:700; }
+""")
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(10, 8, 10, 8)
+        lay.setSpacing(8)
+        self.checkbox = QCheckBox()
+        self.checkbox.toggled.connect(self._emit_changed)
+        name = QLabel(platform_name)
+        name.setObjectName("platformName")
+        badge = QLabel(f"{contract_count} sözleşme")
+        badge.setObjectName("platformBadge")
+        lay.addWidget(self.checkbox)
+        lay.addWidget(name, 1)
+        lay.addWidget(badge)
+        self.set_interactive(True)
+
+    def _emit_changed(self):
+        self.setProperty("checked", self.checkbox.isChecked())
+        self.style().unpolish(self); self.style().polish(self)
+        self._on_changed()
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton and self.checkbox.isEnabled():
+            if self.childAt(event.position().toPoint()) is not self.checkbox:
+                self.checkbox.toggle()
+                event.accept()
+                return
+        super().mousePressEvent(event)
+
+    def is_checked(self) -> bool:
+        return self.checkbox.isChecked()
+
+    def set_checked(self, checked: bool, silent: bool = False):
+        if silent:
+            self.checkbox.blockSignals(True)
+            self.checkbox.setChecked(checked)
+            self.checkbox.blockSignals(False)
+            self.setProperty("checked", self.checkbox.isChecked())
+            self.style().unpolish(self); self.style().polish(self)
+        else:
+            self.checkbox.setChecked(checked)
+
+    def set_interactive(self, enabled: bool):
+        self.checkbox.setEnabled(enabled)
+        self.setProperty("disabled", not enabled)
+        self.style().unpolish(self); self.style().polish(self)
 
 
 class ExcelExportDialog(QDialog):
@@ -31,6 +90,7 @@ class ExcelExportDialog(QDialog):
         self.contract_index = list(contract_index or [])
         self.result_options = None
         self._updating_ui = False
+        self.platform_rows = []
 
         self._platform_counts = Counter()
         for it in self.contract_index:
@@ -137,25 +197,16 @@ QDialog#excelExportDialog QLabel, QDialog#excelExportDialog QCheckBox, QDialog#e
         ph = QHBoxLayout()
         ph.addWidget(QLabel("Platformlar", objectName="exportCardHeader")); ph.addStretch(1)
         pl.addLayout(ph)
-        self.platform_list = QListWidget()
-        self.platform_list.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-
-        self.platform_list.setStyleSheet("""
-QListWidget { border:none; background:#ffffff; padding:4px; }
-QListWidget::item { border:1px solid #e2e8f0; border-radius:10px; padding:10px 12px; margin:4px 2px; background:#ffffff; color:#0f172a; font-weight:800; }
-QListWidget::item:selected { background:#eff6ff; border:1px solid #93c5fd; color:#0f172a; }
-QListWidget::indicator { width:16px; height:16px; }
-QListWidget::indicator:unchecked { border:1px solid #94a3b8; border-radius:4px; background:#ffffff; }
-QListWidget::indicator:checked { border:1px solid #2563eb; border-radius:4px; background:#2563eb; }
-""")
+        self.platform_container = QWidget()
+        self.platform_layout = QVBoxLayout(self.platform_container)
+        self.platform_layout.setContentsMargins(8, 8, 8, 8)
+        self.platform_layout.setSpacing(6)
         for p in (self.store.platform_names() if hasattr(self.store, "platform_names") else []):
             c = self._platform_counts.get(str(p), 0)
-            it = QListWidgetItem(f"{p}    {c} sözleşme")
-            it.setData(Qt.UserRole, str(p))
-            it.setFlags(it.flags() | Qt.ItemIsUserCheckable)
-            it.setCheckState(Qt.Unchecked)
-            self.platform_list.addItem(it)
-        self.platform_list.itemChanged.connect(self._on_platform_item_changed)
+            row = PlatformRow(str(p), c, self._on_platform_item_changed)
+            self.platform_rows.append(row)
+            self.platform_layout.addWidget(row)
+        self.platform_layout.addStretch(1)
         self.platform_scroll = QScrollArea()
         self.platform_scroll.setObjectName("platformScroll")
         self.platform_scroll.setWidgetResizable(True)
@@ -165,7 +216,7 @@ QListWidget::indicator:checked { border:1px solid #2563eb; border-radius:4px; ba
         self.platform_scroll.setMinimumHeight(180)
         self.platform_scroll.setMaximumHeight(260)
         self.platform_scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.platform_scroll.setWidget(self.platform_list)
+        self.platform_scroll.setWidget(self.platform_container)
         pl.addWidget(self.platform_scroll, 1)
         left_col.addWidget(platform_card, 1)
 
@@ -208,22 +259,13 @@ QListWidget::indicator:checked { border:1px solid #2563eb; border-radius:4px; ba
         return val
 
     def _selected_platforms(self):
-        out = []
-        for i in range(self.platform_list.count()):
-            it = self.platform_list.item(i)
-            if it.checkState() == Qt.Checked:
-                out.append(str(it.data(Qt.UserRole) or ""))
-        return out
+        return [r.platform_name for r in self.platform_rows if r.is_checked()]
 
     def _set_platform_checks(self, checked: bool):
-        self.platform_list.blockSignals(True)
-        try:
-            for i in range(self.platform_list.count()):
-                self.platform_list.item(i).setCheckState(Qt.Checked if checked else Qt.Unchecked)
-        finally:
-            self.platform_list.blockSignals(False)
+        for row in self.platform_rows:
+            row.set_checked(checked, silent=True)
 
-    def _on_platform_item_changed(self, _item):
+    def _on_platform_item_changed(self):
         if self._updating_ui:
             return
         self._refresh_summary()
@@ -235,25 +277,22 @@ QListWidget::indicator:checked { border:1px solid #2563eb; border-radius:4px; ba
         try:
             scope = self._scope_value()
 
-            self.platform_list.blockSignals(True)
-            try:
-                if scope == "all":
-                    self._set_platform_checks(True)
-                    self.platform_list.setEnabled(False)
-                elif scope == "active":
-                    self._set_platform_checks(False)
-                    for i in range(self.platform_list.count()):
-                        it = self.platform_list.item(i)
-                        if str(it.data(Qt.UserRole) or "") == self.active_platform:
-                            it.setCheckState(Qt.Checked)
-                    self.platform_list.setEnabled(False)
-                elif scope == "summary_only":
-                    self._set_platform_checks(False)
-                    self.platform_list.setEnabled(False)
-                else:
-                    self.platform_list.setEnabled(True)
-            finally:
-                self.platform_list.blockSignals(False)
+            if scope == "all":
+                self._set_platform_checks(True)
+                for row in self.platform_rows:
+                    row.set_interactive(False)
+            elif scope == "active":
+                self._set_platform_checks(False)
+                for row in self.platform_rows:
+                    row.set_checked(row.platform_name == self.active_platform, silent=True)
+                    row.set_interactive(False)
+            elif scope == "summary_only":
+                self._set_platform_checks(False)
+                for row in self.platform_rows:
+                    row.set_interactive(False)
+            else:
+                for row in self.platform_rows:
+                    row.set_interactive(True)
 
             self.custom_wrap.setVisible(self.content_combo.currentText() == "Özel seçim")
             self._apply_content_preset()
