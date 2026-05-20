@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, List, Tuple
+import re
+import time
+from typing import Dict, List, Tuple, Optional
 
 from PySide6.QtCore import Qt, QRectF, QTimer
 from PySide6.QtGui import QColor, QPen, QPainter
@@ -23,6 +25,8 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMessageBox,
     QPushButton,
+    QPlainTextEdit,
+    QSplitter,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -86,6 +90,31 @@ class SchemaView(QGraphicsView):
         super().wheelEvent(event)
 
 
+class SchemaCardProxy(QGraphicsProxyWidget):
+    def __init__(self, table_name: str, dialog: "DatabaseManagementDialog"):
+        super().__init__()
+        self.table_name = table_name
+        self.dialog = dialog
+        self.setFlag(QGraphicsProxyWidget.ItemIsMovable, True)
+        self.setFlag(QGraphicsProxyWidget.ItemIsSelectable, True)
+        self.setFlag(QGraphicsProxyWidget.ItemSendsGeometryChanges, True)
+        self.setCursor(Qt.OpenHandCursor)
+        self.setZValue(1)
+
+    def itemChange(self, change, value):
+        if change == QGraphicsProxyWidget.ItemPositionChange and self.scene():
+            rect = self.scene().sceneRect()
+            br = self.boundingRect()
+            x = min(max(value.x(), rect.left()), rect.right() - br.width())
+            y = min(max(value.y(), rect.top()), rect.bottom() - br.height())
+            return super().itemChange(change, value.__class__(x, y))
+        if change == QGraphicsProxyWidget.ItemPositionHasChanged:
+            self.dialog._update_relation_lines_for_table(self.table_name)
+        if change == QGraphicsProxyWidget.ItemSelectedHasChanged:
+            self.dialog._update_card_visual_state(self.table_name)
+        return super().itemChange(change, value)
+
+
 class DatabaseManagementDialog(QDialog):
     def __init__(self, store, parent=None):
         super().__init__(parent)
@@ -101,6 +130,7 @@ class DatabaseManagementDialog(QDialog):
         self.table_names: List[str] = []
         self.active_table: str = ""
         self.schema_cards: Dict[str, QGraphicsProxyWidget] = {}
+        self.schema_rel_lines = []
 
         self.setStyleSheet(STYLE + self._local_style())
         self._build()
@@ -172,6 +202,8 @@ QLabel#fkTag { color:#4f46e5; font-weight:800; }
         self.schema_page = self._build_schema_page()
         self.main_stack.addWidget(self.tables_page)
         self.main_stack.addWidget(self.schema_page)
+        self.sql_page = self._build_sql_page()
+        self.main_stack.addWidget(self.sql_page)
         self._set_page("tables")
 
     def _build_topbar(self):
@@ -199,9 +231,14 @@ QLabel#fkTag { color:#4f46e5; font-weight:800; }
         rail = QFrame(); rail.setObjectName("iconRail"); rail.setFixedWidth(64)
         lay = QVBoxLayout(rail); lay.setContentsMargins(8, 12, 8, 12); lay.setSpacing(8)
         self.rail_tables = QPushButton("▦"); self.rail_tables.setObjectName("railBtn"); self.rail_tables.clicked.connect(lambda: self._set_page("tables"))
-        self.rail_schema = QPushButton("⟲"); self.rail_schema.setObjectName("railBtn"); self.rail_schema.clicked.connect(lambda: self._set_page("schema"))
+        self.rail_schema = QPushButton("⌁"); self.rail_schema.setObjectName("railBtn"); self.rail_schema.clicked.connect(lambda: self._set_page("schema"))
+        self.rail_sql = QPushButton("⌘"); self.rail_sql.setObjectName("railBtn"); self.rail_sql.clicked.connect(lambda: self._set_page("sql"))
+        self.rail_tables.setToolTip("Tablolar")
+        self.rail_schema.setToolTip("Şema Görselleştirici")
+        self.rail_sql.setToolTip("SQL Terminal")
         lay.addWidget(self.rail_tables)
         lay.addWidget(self.rail_schema)
+        lay.addWidget(self.rail_sql)
         lay.addStretch(1)
         return rail
 
@@ -250,9 +287,8 @@ QLabel#fkTag { color:#4f46e5; font-weight:800; }
         self.rel_combo = QComboBox(); self.rel_combo.addItems(["Tüm ilişkiler", "Sadece seçili tablo", "Kritik ilişkiler"])
         self.schema_search = QLineEdit(); self.schema_search.setPlaceholderText("Tablo veya kolon ara..."); self.schema_search.textChanged.connect(self._highlight_schema)
         self.auto_btn = QPushButton("Otomatik Yerleştir"); self.auto_btn.setObjectName("softBtn"); self.auto_btn.clicked.connect(self._layout_schema)
-        self.zoom_btn = QPushButton("Yakınlaştır"); self.zoom_btn.setObjectName("softBtn"); self.zoom_btn.clicked.connect(self._zoom_schema)
         self.schema_refresh_btn = QPushButton("Yenile"); self.schema_refresh_btn.setObjectName("primaryBtn"); self.schema_refresh_btn.clicked.connect(self._render_schema)
-        for w in [self.schema_combo, self.rel_combo, self.schema_search, self.auto_btn, self.zoom_btn, self.schema_refresh_btn]:
+        for w in [self.schema_combo, self.rel_combo, self.schema_search, self.auto_btn, self.schema_refresh_btn]:
             tlay.addWidget(w)
         tlay.setStretch(3, 1)
         lay.addWidget(tb)
@@ -264,14 +300,51 @@ QLabel#fkTag { color:#4f46e5; font-weight:800; }
         lay.addWidget(wrap, 1)
         return page
 
+    def _build_sql_page(self):
+        page = QWidget()
+        lay = QVBoxLayout(page)
+        lay.setSpacing(8)
+
+        splitter = QSplitter(Qt.Vertical)
+        self.sql_editor = QPlainTextEdit()
+        self.sql_editor.setPlaceholderText("SELECT * FROM contracts LIMIT 100;")
+        self.sql_editor.setStyleSheet("QPlainTextEdit { font-family: Consolas, 'Courier New', monospace; font-size: 13px; }")
+        splitter.addWidget(self.sql_editor)
+
+        result_wrap = QWidget()
+        rlay = QVBoxLayout(result_wrap)
+        self.sql_result = QTableWidget(0, 0)
+        self.sql_result.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.sql_result.verticalHeader().setVisible(False)
+        self.sql_result.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        self.sql_result.setAlternatingRowColors(True)
+        rlay.addWidget(self.sql_result, 1)
+        splitter.addWidget(result_wrap)
+        splitter.setSizes([260, 340])
+        lay.addWidget(splitter, 1)
+
+        bl = QHBoxLayout()
+        self.sql_status_lbl = QLabel("")
+        self.sql_status_lbl.setStyleSheet("color:#1f3b58;")
+        bl.addWidget(self.sql_status_lbl, 1)
+        self.sql_clear_btn = QPushButton("Temizle"); self.sql_clear_btn.setObjectName("softBtn"); self.sql_clear_btn.clicked.connect(self._clear_sql_terminal)
+        self.sql_run_btn = QPushButton("Çalıştır"); self.sql_run_btn.setObjectName("primaryBtn"); self.sql_run_btn.clicked.connect(self._run_sql_terminal)
+        bl.addWidget(self.sql_clear_btn)
+        bl.addWidget(self.sql_run_btn)
+        lay.addLayout(bl)
+        return page
+
     def _set_page(self, page: str):
         self.tables_page.setVisible(page == "tables")
         self.schema_page.setVisible(page == "schema")
+        self.sql_page.setVisible(page == "sql")
         self.sidebar.setVisible(page == "tables")
         self.rail_tables.setProperty("active", page == "tables")
         self.rail_schema.setProperty("active", page == "schema")
+        self.rail_sql.setProperty("active", page == "sql")
         self.rail_tables.style().unpolish(self.rail_tables); self.rail_tables.style().polish(self.rail_tables)
         self.rail_schema.style().unpolish(self.rail_schema); self.rail_schema.style().polish(self.rail_schema)
+        self.rail_sql.style().unpolish(self.rail_sql); self.rail_sql.style().polish(self.rail_sql)
 
     def refresh_all(self):
         self.stats = self.store.database_stats()
@@ -391,23 +464,13 @@ QLabel#fkTag { color:#4f46e5; font-weight:800; }
             x = 40 + col * (w + x_gap)
             y = 30 + row * (h + y_gap)
             card = self._build_schema_card_widget(t, int(counts.get(t, 0)))
-            proxy = scene.addWidget(card)
+            proxy = SchemaCardProxy(t, self)
+            proxy.setWidget(card)
+            scene.addItem(proxy)
             proxy.setPos(x, y)
             self.schema_cards[t] = proxy
 
-        for (src_t, src_c, dst_t, dst_c) in self._schema_relations():
-            if src_t not in self.schema_cards or dst_t not in self.schema_cards:
-                continue
-            a = self.schema_cards[src_t].sceneBoundingRect()
-            b = self.schema_cards[dst_t].sceneBoundingRect()
-            p1 = a.center(); p1.setX(a.right())
-            p2 = b.center(); p2.setX(b.left())
-            path = self._relation_path(p1, p2)
-            line = QGraphicsPathItem(path)
-            pen = QPen(QColor("#8aa7cc"), 1.6, Qt.DashLine)
-            line.setPen(pen)
-            line.setZValue(-1)
-            scene.addItem(line)
+        self._build_relation_lines()
 
         scene.setSceneRect(QRectF(0, 0, 1400, max(900, (len(tables)//col_count + 1) * (h + y_gap))))
 
@@ -485,8 +548,120 @@ QLabel#fkTag { color:#4f46e5; font-weight:800; }
     def _layout_schema(self):
         self._render_schema()
 
-    def _zoom_schema(self):
-        self.schema_view.zoom_in()
+    def _build_relation_lines(self):
+        scene = self.schema_view.scene()
+        self.schema_rel_lines = []
+        for (src_t, src_c, dst_t, dst_c) in self._schema_relations():
+            if src_t not in self.schema_cards or dst_t not in self.schema_cards:
+                continue
+            line = QGraphicsPathItem()
+            pen = QPen(QColor("#8aa7cc"), 1.6, Qt.DashLine)
+            line.setPen(pen)
+            line.setZValue(-1)
+            scene.addItem(line)
+            rec = {"src": src_t, "dst": dst_t, "line": line}
+            self.schema_rel_lines.append(rec)
+            self._update_relation_line(rec)
+
+    def _update_relation_line(self, rel):
+        a = self.schema_cards[rel["src"]].sceneBoundingRect()
+        b = self.schema_cards[rel["dst"]].sceneBoundingRect()
+        p1 = a.center(); p1.setX(a.right())
+        p2 = b.center(); p2.setX(b.left())
+        rel["line"].setPath(self._relation_path(p1, p2))
+
+    def _update_relation_lines_for_table(self, table: str):
+        for rel in self.schema_rel_lines:
+            if rel["src"] == table or rel["dst"] == table:
+                self._update_relation_line(rel)
+
+    def _update_card_visual_state(self, table: str):
+        proxy = self.schema_cards.get(table)
+        if not proxy:
+            return
+        w = proxy.widget()
+        if proxy.isSelected():
+            w.setStyleSheet("border:2px solid #3b82f6; border-radius:10px;")
+        elif not self.schema_search.text().strip():
+            w.setStyleSheet("")
+        else:
+            self._highlight_schema()
+
+    def _clear_sql_terminal(self):
+        self.sql_editor.clear()
+        self.sql_result.setRowCount(0)
+        self.sql_result.setColumnCount(0)
+        self.sql_status_lbl.setText("")
+
+    def _run_sql_terminal(self):
+        sql = self.sql_editor.toPlainText().strip()
+        if not sql:
+            return
+        if not self._is_single_statement(sql):
+            self._set_sql_status("Lütfen tek SQL komutu çalıştırın.", error=True)
+            return
+        op = self._sql_operation(sql)
+        if not self._confirm_sql_operation(op):
+            return
+        conn = getattr(getattr(self.store, "db", None), "conn", None)
+        if conn is None:
+            self._set_sql_status("SQL hatası: Veritabanı bağlantısı yok.", error=True)
+            return
+        started = time.perf_counter()
+        changed = op not in {"SELECT", "PRAGMA", "WITH", "EXPLAIN"}
+        try:
+            cursor = conn.execute(sql)
+            if op in {"SELECT", "PRAGMA", "WITH", "EXPLAIN"}:
+                rows = cursor.fetchmany(1000)
+                cols = [d[0] for d in (cursor.description or [])]
+                self._show_sql_result(cols, rows)
+                ms = int((time.perf_counter() - started) * 1000)
+                self._set_sql_status(f"Çalışma süresi: {ms} ms | Satır: {len(rows)}")
+                row_count = len(rows)
+            else:
+                conn.commit()
+                row_count = cursor.rowcount if cursor.rowcount is not None and cursor.rowcount >= 0 else 0
+                ms = int((time.perf_counter() - started) * 1000)
+                self.sql_result.setRowCount(0); self.sql_result.setColumnCount(0)
+                self._set_sql_status(f"Sorgu tamamlandı. Etkilenen satır: {row_count} | Çalışma süresi: {ms} ms")
+                self.refresh_all()
+            self.store._log("sql_query_executed", message="SQL Terminal sorgusu çalıştırıldı", payload={"operation": op, "duration_ms": ms, "changed": changed, "row_count": row_count})
+        except Exception as exc:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            self._set_sql_status(f"SQL hatası: {exc}", error=True)
+
+    def _show_sql_result(self, cols, rows):
+        self.sql_result.setRowCount(len(rows))
+        self.sql_result.setColumnCount(len(cols))
+        self.sql_result.setHorizontalHeaderLabels([str(c) for c in cols])
+        for r, row in enumerate(rows):
+            for c, col in enumerate(cols):
+                txt = str(row[col] if isinstance(row, dict) else row[c])
+                self.sql_result.setItem(r, c, QTableWidgetItem(txt))
+
+    def _is_single_statement(self, sql: str) -> bool:
+        chunks = [s.strip() for s in sql.split(";") if s.strip()]
+        return len(chunks) == 1
+
+    def _sql_operation(self, sql: str) -> str:
+        cleaned = re.sub(r"^\s*(--[^\n]*\n|/\*.*?\*/\s*)*", "", sql, flags=re.S).strip()
+        token = cleaned.split(None, 1)[0].upper() if cleaned else ""
+        return token
+
+    def _confirm_sql_operation(self, op: str) -> bool:
+        if op in {"SELECT", "PRAGMA", "WITH", "EXPLAIN"}:
+            return True
+        msg = "Bu işlem veriyi değiştirebilir. Devam edilsin mi?"
+        if op in {"DROP", "ALTER", "VACUUM", "ATTACH", "DETACH", "REINDEX"}:
+            msg = "Bu işlem veritabanı yapısını/veriyi değiştirebilir. Devam edilsin mi?"
+        return QMessageBox.question(self, "SQL Terminal Onayı", msg) == QMessageBox.Yes
+
+    def _set_sql_status(self, text: str, error: bool = False):
+        self.sql_status_lbl.setText(text)
+        self.sql_status_lbl.setStyleSheet("color:#dc2626;" if error else "color:#1f3b58;")
 
     def run_backup(self):
         base = Path(str(getattr(self.store, "path", "database.sts")))
