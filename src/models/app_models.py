@@ -32,6 +32,7 @@ class ContractInfo:
     sd_anchor_end_row: int = 0
     sd_anchor_platform: str = ""
     sd_anchor_no: str = ""
+    users: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -43,6 +44,7 @@ class SystemInfo:
     completion_date: str = ""
     status: str = "Başlanmadı"
     acceptance_date: str = ""
+    delivery_user: str = ""
 
 
 @dataclass
