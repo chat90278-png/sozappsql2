@@ -30,6 +30,7 @@ def update_system_metric_cards(self, sys_info):
         "completion": completion or "-",
         "days": days,
         "acceptance": acceptance or "-",
+        "delivery_user": str(getattr(sys_info, "delivery_user", "") or "-") if sys_info else "-",
     }
     for key, label in self.system_metric_labels.items():
         label.setText(values.get(key, "-"))

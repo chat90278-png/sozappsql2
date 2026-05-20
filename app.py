@@ -71,7 +71,7 @@ from PySide6.QtWidgets import (
     QLabel, QPushButton, QListWidget, QListWidgetItem, QTableWidget, QTableWidgetItem,
     QDialog, QLineEdit, QComboBox, QDateEdit, QSpinBox, QDoubleSpinBox,
     QMessageBox, QFileDialog, QFrame, QScrollArea, QCheckBox, QHeaderView,
-    QSizePolicy, QProgressBar, QStyledItemDelegate, QTextEdit,
+    QSizePolicy, QProgressBar, QProgressDialog, QStyledItemDelegate, QTextEdit,
     QToolButton, QMenu, QInputDialog, QWidgetAction
 )
 
@@ -271,6 +271,7 @@ class ElidedLabel(QLabel):
 
 
 from src.services.excel_store import ExcelStore
+from src.services.sts_store import STSStore
 from src.workers import ExcelLoadWorker, ComponentSaveWorker, UserSaveWorker, ContractSaveWorker, AnalyzeDialog
 
 
@@ -889,6 +890,15 @@ class UserManagerDialog(StyledDialog):
                 "note": (self.table.item(r, 3).text() if self.table.item(r, 3) else ""),
             })
         self._save_payload = list(result)
+        if _is_sts_store(self.store):
+            try:
+                self.set_busy(True, "Kullanıcılar kaydediliyor...", 25)
+                self.store.write_users(self._save_payload, actor=self.store.current_actor())
+                self.store.save()
+                self.on_save_finished()
+            except Exception as exc:
+                self.on_save_failed(str(exc))
+            return
         self._start_async_save()
 
     def _start_async_save(self):
@@ -1323,6 +1333,15 @@ class ComponentManagerDialog(StyledDialog):
                 "platforms": dict(comp.platforms or {}),
             })
         self._save_payload = payload
+        if _is_sts_store(self.store):
+            try:
+                self.set_busy(True, "Bileşenler kaydediliyor...", 25)
+                self.store.write_components(result, actor=self.store.current_actor())
+                self.store.save()
+                self.on_save_finished({})
+            except Exception as exc:
+                self.on_save_failed(str(exc))
+            return
         self._start_async_save()
 
     def _start_async_save(self):
@@ -1372,6 +1391,92 @@ class ComponentManagerDialog(StyledDialog):
 
 
 from src.ui.dialogs.platforms import PlatformManagerDialog, PlatformDialog
+
+class MultiUserSelectWidget(QWidget):
+    changed = Signal()
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._available: List[str] = []
+        self._selected: List[str] = []
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        self.combo = QComboBox(self)
+        self.combo.setEditable(True)
+        self.combo.lineEdit().setReadOnly(True)
+        self.combo.lineEdit().setPlaceholderText("Kullanıcı seçiniz...")
+        self.combo.view().pressed.connect(self._on_item_pressed)
+        lay.addWidget(self.combo, 1)
+        self._sync()
+
+    def set_available_users(self, user_names: List[str]):
+        seen = set()
+        vals = []
+        for u in list(user_names or []):
+            n = str(u or "").strip()
+            if not n:
+                continue
+            k = n.casefold()
+            if k in seen:
+                continue
+            seen.add(k)
+            vals.append(n)
+        self._available = vals
+        self._selected = [x for x in self._selected if x in self._available]
+        self._rebuild_items()
+        self._sync()
+
+    def set_users(self, user_names: List[str]):
+        seen = set()
+        vals = []
+        for u in list(user_names or []):
+            n = str(u or "").strip()
+            if not n:
+                continue
+            k = n.casefold()
+            if k in seen:
+                continue
+            seen.add(k)
+            vals.append(n)
+        self._selected = vals
+        self._rebuild_items()
+        self._sync()
+        self.changed.emit()
+
+    def selected_users(self) -> List[str]:
+        return list(self._selected)
+
+    def _sync(self):
+        txt = ", ".join(self._selected)
+        self.combo.lineEdit().setText(txt)
+        self.combo.setToolTip(txt)
+
+    def _rebuild_items(self):
+        self.combo.blockSignals(True)
+        self.combo.clear()
+        for name in self._available:
+            self.combo.addItem(name)
+            it = self.combo.model().item(self.combo.count() - 1, 0)
+            if it is None:
+                continue
+            it.setFlags(Qt.ItemIsEnabled | Qt.ItemIsUserCheckable)
+            it.setData(Qt.Checked if name in self._selected else Qt.Unchecked, Qt.CheckStateRole)
+        self.combo.blockSignals(False)
+
+    def _on_item_pressed(self, idx):
+        it = self.combo.model().itemFromIndex(idx)
+        if it is None:
+            return
+        checked = it.data(Qt.CheckStateRole) == Qt.Checked
+        it.setData(Qt.Unchecked if checked else Qt.Checked, Qt.CheckStateRole)
+        name = str(it.text() or "").strip()
+        if not name:
+            return
+        if checked:
+            self._selected = [x for x in self._selected if x != name]
+        elif name not in self._selected:
+            self._selected.append(name)
+        self._sync()
+        self.changed.emit()
 
 class ContractDialog(StyledDialog):
     def __init__(self, store: ExcelStore, parent=None):
@@ -1423,7 +1528,10 @@ class ContractDialog(StyledDialog):
         no_container_lay.addWidget(self.no_dup_warn)
 
         self.platform = QComboBox(); self.platform.addItems(self.store.platform_names())
-        self.user = QComboBox(); self.user.addItems([u.get("name", "") for u in self.user_records])
+        self.user = MultiUserSelectWidget(self)
+        self.user.set_available_users([u.get("name", "") for u in self.user_records])
+        if self.user_records:
+            self.user.set_users([self.user_records[0].get("name", "")])
         self.yi_yd = QLineEdit(); self.yi_yd.setReadOnly(True); self.yi_yd.setText("Yİ")
         self.ctype = QComboBox(); self.ctype.addItems(["Ana Sözleşme"])
         self.sd_code = QLineEdit(); self.sd_code.setPlaceholderText("SD-1"); self.sd_code.setEnabled(False)
@@ -1436,7 +1544,7 @@ class ContractDialog(StyledDialog):
 
         self.t0.textChanged.connect(self.update_completion_date)
         self.months.valueChanged.connect(self.update_completion_date)
-        self.user.currentTextChanged.connect(self.update_user_yi_yd)
+        self.user.changed.connect(self.update_user_yi_yd)
         self.ctype.currentTextChanged.connect(self.on_contract_type_changed)
         self.verify_btn.clicked.connect(lambda: self.verify_sd_reference(show_message=False))
         self.platform.currentTextChanged.connect(self.on_sd_ref_changed)
@@ -1544,9 +1652,10 @@ class ContractDialog(StyledDialog):
     def _set_user_from_main_contract(self, info: dict):
         target_user = str(info.get("user", "") or "").strip()
         if target_user:
-            if self.user.findText(target_user, Qt.MatchExactly) < 0:
-                self.user.addItem(target_user)
-            self.user.setCurrentText(target_user)
+            cur = self.user.selected_users()
+            if target_user not in cur:
+                cur = [target_user]
+            self.user.set_users(cur)
         yi_yd = str(info.get("yi_yd", "Yİ") or "Yİ").strip().upper()
         self.yi_yd.setText("YD" if yi_yd == "YD" else "Yİ")
 
@@ -1616,7 +1725,7 @@ class ContractDialog(StyledDialog):
         if self.is_sd_mode() and self._sd_verified_info:
             self._set_user_from_main_contract(self._sd_verified_info)
             return
-        selected = self.user.currentText().strip()
+        selected = (self.user.selected_users() or [""])[0].strip()
         yi_yd = self.user_to_yi_yd.get(selected, "Yİ")
         self.yi_yd.setText("YD" if str(yi_yd).upper() == "YD" else "Yİ")
 
@@ -1681,7 +1790,8 @@ class ContractDialog(StyledDialog):
         if self.is_sd_mode() and not self.verify_sd_reference(show_message=False):
             QMessageBox.warning(self, "Doğrulama", "Sözleşme Değişikliği için önce geçerli kontrat no doğrulaması gerekir.")
             return
-        if not self.user.currentText():
+        sel_users = self.user.selected_users()
+        if not sel_users:
             QMessageBox.warning(self, "Eksik", "Önce Kullanıcı Yönetimi ekranından kullanıcı tanımlayın.")
             return
         # Zorunlu tarih ve ay alanları
@@ -1737,10 +1847,12 @@ class ContractDialog(StyledDialog):
             pass  # Kontrol başarısız olursa devam et
 
         self.update_completion_date()
+        users = self.user.selected_users()
+        user_display = ", ".join(users)
         self.result = ContractInfo(
             no=self.no.text().strip(),
             platform=self.platform.currentText(),
-            user=self.user.currentText().strip(),
+            user=user_display,
             yi_yd=self.yi_yd.text().strip() or "Yİ",
             contract_type=contract_type,
             signature_date=iso_or_blank(self.sig.text()),
@@ -1754,6 +1866,7 @@ class ContractDialog(StyledDialog):
             sd_anchor_end_row=self._sd_anchor_end_row if self.is_sd_mode() else 0,
             sd_anchor_platform=self._sd_anchor_platform if self.is_sd_mode() else "",
             sd_anchor_no=self._sd_anchor_no if self.is_sd_mode() else "",
+            users=users,
         )
         self.accept()
 
@@ -1838,9 +1951,12 @@ class ContractEditDialog(StyledDialog):
         self._no_dup_warn.setVisible(self._is_sd_contract)
 
         # ── Düzenlenebilir alanlar ────────────────────────────────────
-        self.user = QComboBox()
-        self.user.addItems([u.get("name", "") for u in self.user_records])
-        self.user.setCurrentText(str(self.ci.user or ""))
+        self.user = MultiUserSelectWidget(self)
+        self.user.set_available_users([u.get("name", "") for u in self.user_records])
+        init_users = list(getattr(self.ci, "users", []) or [])
+        if not init_users and str(self.ci.user or "").strip():
+            init_users = [x.strip() for x in str(self.ci.user or "").split(",") if x.strip()]
+        self.user.set_users(init_users)
 
         self.yi_yd = QLineEdit()
         self.yi_yd.setReadOnly(True)
@@ -1871,7 +1987,7 @@ class ContractEditDialog(StyledDialog):
 
         self.t0.textChanged.connect(self._recalc)
         self.months.valueChanged.connect(self._recalc)
-        self.user.currentTextChanged.connect(self.update_user_yi_yd)
+        self.user.changed.connect(self.update_user_yi_yd)
         self.update_user_yi_yd()
         self._recalc()
 
@@ -1924,7 +2040,7 @@ class ContractEditDialog(StyledDialog):
         root.addLayout(btn_row)
 
     def update_user_yi_yd(self):
-        selected = self.user.currentText().strip()
+        selected = (self.user.selected_users() or [""])[0].strip()
         yi_yd = self.user_to_yi_yd.get(selected, "Yİ")
         self.yi_yd.setText("YD" if str(yi_yd).upper() == "YD" else "Yİ")
 
@@ -2077,7 +2193,12 @@ class ContractEditDialog(StyledDialog):
         self._recalc()
         new_ci = copy.copy(self.ci)
         new_ci.no              = new_no_text
-        new_ci.user            = self.user.currentText().strip()
+        selected_users = self.user.selected_users()
+        if not selected_users:
+            QMessageBox.warning(self, "Zorunlu Alan", "En az bir kullanıcı seçmelisiniz.")
+            return
+        new_ci.users           = selected_users
+        new_ci.user            = ", ".join(selected_users)
         new_ci.yi_yd           = self.yi_yd.text().strip() or "Yİ"
         new_ci.signature_date  = iso_or_blank(sig_text)
         new_ci.t0_date         = iso_or_blank(t0_text)
@@ -2652,6 +2773,20 @@ class SystemDialog(StyledDialog):
         self.name.setText(self.default_name)
         self.name.selectAll()
         root.addWidget(self.name)
+        root.addWidget(form_label("Teslim Edilecek Kullanıcı"))
+        self.delivery_user_combo = QComboBox()
+        self.delivery_user_combo.addItem("Seçiniz...")
+        user_names = [u.get("name", "") for u in self.store.load_users(active_only=True) if str(u.get("name", "")).strip()]
+        for un in user_names:
+            self.delivery_user_combo.addItem(un)
+        initial_delivery = str(getattr(self.existing_system, "delivery_user", "") or "").strip()
+        if initial_delivery:
+            idx_du = self.delivery_user_combo.findText(initial_delivery, Qt.MatchExactly)
+            if idx_du < 0:
+                self.delivery_user_combo.addItem(initial_delivery)
+                idx_du = self.delivery_user_combo.findText(initial_delivery, Qt.MatchExactly)
+            self.delivery_user_combo.setCurrentIndex(max(0, idx_du))
+        root.addWidget(self.delivery_user_combo)
 
         date_card = QFrame()
         date_card.setObjectName("systemFormCard")
@@ -3014,6 +3149,7 @@ class SystemDialog(StyledDialog):
             completion_date=self.completion_date.text().strip(),
             status=getattr(self.existing_system, "status", "Başlanmadı") or "Başlanmadı",
             acceptance_date=getattr(self.existing_system, "acceptance_date", "") or "",
+            delivery_user="" if self.delivery_user_combo.currentIndex() <= 0 else self.delivery_user_combo.currentText().strip(),
         )
         self.result.removed_components = set(removed)
         self.accept()
@@ -3129,6 +3265,15 @@ class MultiSystemDialog(StyledDialog):
         self.name_edit = QLineEdit()
         self.name_edit.textChanged.connect(self.on_name_changed)
         mid.addWidget(self.name_edit)
+        mid.addWidget(form_label("Teslim Edilecek Kullanıcı"))
+        self.delivery_user_combo = QComboBox()
+        self.delivery_user_combo.addItem("Seçiniz...")
+        for u in self.store.load_users(active_only=True):
+            uname = str(u.get("name", "")).strip()
+            if uname:
+                self.delivery_user_combo.addItem(uname)
+        self.delivery_user_combo.currentTextChanged.connect(self.on_delivery_user_changed)
+        mid.addWidget(self.delivery_user_combo)
 
         date_strip = QFrame()
         date_strip.setObjectName("dateStrip")
@@ -3288,6 +3433,7 @@ class MultiSystemDialog(StyledDialog):
             "completion_date": completion,
             "system_type": "",
             "components": {},
+            "delivery_user": "",
         }
 
     def add_blank_system(self, select: bool = True):
@@ -3353,6 +3499,10 @@ class MultiSystemDialog(StyledDialog):
         month_lbl.setObjectName("miniPillOrange")
         meta.addWidget(typ_lbl, 0)
         meta.addWidget(month_lbl, 0)
+        if str(draft.get("delivery_user") or "").strip():
+            du_lbl = QLabel(f"Teslim: {str(draft.get('delivery_user') or '').strip()}")
+            du_lbl.setObjectName("miniPill")
+            meta.addWidget(du_lbl, 0)
         meta.addStretch()
         lay.addLayout(meta)
         return card
@@ -3376,6 +3526,9 @@ class MultiSystemDialog(StyledDialog):
             self.t0_date_edit.setText(str(draft.get("t0_date") or ""))
             self.months_spin.setValue(int(draft.get("t0_months") or 0))
             self.completion_edit.setText(str(draft.get("completion_date") or ""))
+            delivery_user = str(draft.get("delivery_user") or "").strip()
+            idx_du = self.delivery_user_combo.findText(delivery_user, Qt.MatchExactly) if delivery_user else 0
+            self.delivery_user_combo.setCurrentIndex(max(0, idx_du))
             typ = str(draft.get("system_type") or "")
             idx = self.type_combo.findText(typ) if typ else 0
             self.type_combo.setCurrentIndex(idx if idx >= 0 else 0)
@@ -3409,6 +3562,12 @@ class MultiSystemDialog(StyledDialog):
             return
         self.current_draft()["t0_months"] = int(value)
         self.recalc_current_completion()
+        self.refresh_system_list(keep_row=self.current_index, reload_form=False)
+
+    def on_delivery_user_changed(self, _text: str):
+        if self._loading:
+            return
+        self.current_draft()["delivery_user"] = "" if self.delivery_user_combo.currentIndex() <= 0 else self.delivery_user_combo.currentText().strip()
         self.refresh_system_list(keep_row=self.current_index, reload_form=False)
 
     def set_custom_type(self):
@@ -3670,6 +3829,7 @@ class MultiSystemDialog(StyledDialog):
                 completion_date=completion,
                 status="Başlanmadı",
                 acceptance_date="",
+                delivery_user=str(draft.get("delivery_user") or ""),
             ))
         self.result = out
         self.accept()
@@ -4353,6 +4513,7 @@ class ContractWorkWindow(QDialog):
         top_row.addWidget(system_metric_card("completion", "Termin Tarihi"), 0)
         top_row.addWidget(system_metric_card("days", "Kalan Gün"), 0)
         top_row.addWidget(system_metric_card("acceptance", "Kabul Tarihi"), 0)
+        top_row.addWidget(system_metric_card("delivery_user", "Teslim Edilecek Kullanıcı"), 0)
         top_row.addStretch(1)
         self.edit_system_btn = QPushButton("✎ Sistemi Düzenle")
         self.edit_system_btn.setObjectName("secondary")
@@ -4955,6 +5116,7 @@ class ContractWorkWindow(QDialog):
         current.completion_date = updated.completion_date
         current.status = updated.status
         current.acceptance_date = updated.acceptance_date
+        current.delivery_user = str(getattr(updated, "delivery_user", "") or "")
 
         # Sistem adı değiştiyse teslimat anahtarını da taşı.
         if old_name != new_name:
@@ -5232,6 +5394,7 @@ class ContractWorkWindow(QDialog):
             no=no,
             platform=platform,
             user=str((main_info or {}).get("user") or getattr(source_ci, "user", "") or ""),
+            users=list(getattr(source_ci, "users", []) or []),
             yi_yd=str((main_info or {}).get("yi_yd") or getattr(source_ci, "yi_yd", "Yİ") or "Yİ"),
             contract_type=sd_code,
             signature_date="",
@@ -5856,6 +6019,16 @@ class ContractWorkWindow(QDialog):
 
 
 
+
+
+def _is_sts_store(store) -> bool:
+    return bool(
+        store is not None
+        and hasattr(store, "db")
+        and hasattr(store, "write_users")
+        and hasattr(store, "write_components")
+    )
+
 def section_label(text):
     l = QLabel(text)
     l.setObjectName("sectionTitle")
@@ -5916,7 +6089,7 @@ class MainWindow(QMainWindow):
         if self.store:
             if not self.contract_index:
                 # UI thread'i bloklamamak için hazır store olsa bile indeksleme yükünü worker'a bırak.
-                self.start_excel_load(self.store.path)
+                self.start_sts_load(self.store.path) if str(self.store.path).lower().endswith(".sts") else self.start_excel_load(self.store.path)
             else:
                 self.refresh(rebuild_index=False)
                 self._apply_version_to_ui()
@@ -5924,6 +6097,97 @@ class MainWindow(QMainWindow):
         else:
             self.set_empty_state()
             self.connection_label.setText("Excel bağlı değil")
+
+
+    def export_sts_to_excel(self):
+        if not self.store:
+            QMessageBox.information(self, "Veri dosyası gerekli", "Önce bir STS veri dosyası açın.")
+            return
+        if not hasattr(self.store, "export_to_excel"):
+            QMessageBox.information(self, "Excel’e Aktar", "Excel’e aktarım yalnızca STS veri dosyalarında desteklenir.")
+            return
+        active_platform = ""
+        cur = self.platform_list.currentItem() if hasattr(self, "platform_list") else None
+        if cur:
+            active_platform = str(cur.data(Qt.UserRole) or "")
+        from src.ui.dialogs.excel_export_options import ExcelExportDialog
+        dlg = ExcelExportDialog(self.store, self, active_platform=active_platform, contract_index=getattr(self, "contract_index", None))
+        if not dlg.exec() or not dlg.result_options:
+            return
+        opts = dict(dlg.result_options)
+        out, _ = QFileDialog.getSaveFileName(self, "Excel’e Aktar", str(Path(self.path).with_suffix('.xlsx')), "Excel (*.xlsx)")
+        if not out:
+            return
+        from src.workers.export_workers import ExcelExportWorker
+        self._export_progress = QProgressDialog("Excel dosyası hazırlanıyor...", "", 0, 100, self)
+        self._export_progress.setWindowTitle("Excel’e Aktar")
+        self._export_progress.setLabelText("Excel dosyası hazırlanıyor...")
+        self._export_progress.setCancelButton(None)
+        self._export_progress.setMinimumDuration(0)
+        self._export_progress.setAutoClose(False)
+        self._export_progress.setAutoReset(False)
+        self._export_progress.setValue(0)
+        self._export_progress.show()
+
+        self._export_thread = QThread(self)
+        self._export_worker = ExcelExportWorker(self.store, out, opts)
+        self._export_worker.moveToThread(self._export_thread)
+        self._export_thread.started.connect(self._export_worker.run)
+        self._export_worker.progress.connect(lambda p, m: (self._export_progress.setLabelText(str(m)), self._export_progress.setValue(int(max(0,min(100,p))))))
+        def _done(_res):
+            self._export_progress.setValue(100)
+            self._export_progress.close()
+            QMessageBox.information(self, "Excel’e Aktar", "Excel dosyası oluşturuldu.")
+        def _fail(msg):
+            self._export_progress.close()
+            QMessageBox.critical(self, "Excel’e Aktar", str(msg))
+        self._export_worker.finished.connect(_done)
+        self._export_worker.failed.connect(_fail)
+        self._export_worker.finished.connect(self._export_thread.quit)
+        self._export_worker.failed.connect(self._export_thread.quit)
+        self._export_thread.finished.connect(self._export_worker.deleteLater)
+        self._export_thread.finished.connect(self._export_thread.deleteLater)
+        self._export_thread.start()
+
+    def open_database_management(self):
+        if not self.store:
+            QMessageBox.information(self, "Veri dosyası gerekli", "Önce bir STS veri dosyası açın.")
+            return
+        if not hasattr(self.store, "database_stats"):
+            QMessageBox.information(self, "Database Yönetimi", "Database yönetimi yalnızca STS veri dosyalarında desteklenir.")
+            return
+        from src.ui.dialogs.database_management import DatabaseManagementDialog
+        dlg = DatabaseManagementDialog(self.store, self)
+        dlg.exec()
+
+
+    def open_performance_tracking(self):
+        if not self.store:
+            QMessageBox.information(self, "Veri dosyası gerekli", "Önce bir STS veri dosyası açın.")
+            return
+
+        if not hasattr(self.store, "performance_stats"):
+            QMessageBox.information(
+                self,
+                "Performans Takip",
+                "Performans takip ekranı yalnızca STS veri dosyalarında desteklenir."
+            )
+            return
+
+        from src.ui.dialogs.performance_tracking import PerformanceTrackingDialog
+        dlg = PerformanceTrackingDialog(self.store, self)
+        dlg.exec()
+
+    def open_activity_logs(self):
+        if not self.store:
+            QMessageBox.information(self, "Veri dosyası gerekli", "Önce bir STS veri dosyası açın.")
+            return
+        if not hasattr(self.store, "list_logs"):
+            QMessageBox.information(self, "İşlem Geçmişi", "İşlem geçmişi yalnızca STS veri dosyalarında desteklenir.")
+            return
+        from src.ui.dialogs.activity_logs import ActivityLogDialog
+        dlg = ActivityLogDialog(self.store, self)
+        dlg.exec()
 
     def open_usage_guide(self):
         try:
@@ -5957,12 +6221,16 @@ class MainWindow(QMainWindow):
         self.top_actions_btn.setPopupMode(QToolButton.InstantPopup)
         self.top_actions_menu = QMenu(self.top_actions_btn)
         self.top_actions_menu.setObjectName("topActionsMenu")
-        self.top_actions_menu.addAction("Excel Dosyası Değiştir", self.open_file)
+        self.top_actions_menu.addAction("Veri Dosyası Değiştir", self.open_file)
+        self.top_actions_menu.addAction("Excel’e Aktar", self.export_sts_to_excel)
+        self.top_actions_menu.addAction("Database Yönetimi", self.open_database_management)
+        self.top_actions_menu.addAction("Performans Takip", self.open_performance_tracking)
         self.top_actions_menu.addAction("Platform Yönetimi", self.manage_platforms)
         self.top_actions_menu.addSeparator()
         self.top_actions_menu.addAction("Kullanıcı Yönetimi", self.manage_users)
         self.top_actions_menu.addAction("Etiket Yönetimi", self.manage_tags)
         self.top_actions_menu.addAction("Bileşen Yönetimi", self.manage_components)
+        self.top_actions_menu.addAction("İşlem Geçmişi", self.open_activity_logs)
         self.top_actions_menu.addSeparator()
         self.top_actions_menu.addAction("📘 Kullanım Kılavuzu", self.open_usage_guide)
         self.top_actions_btn.setMenu(self.top_actions_menu)
@@ -6621,6 +6889,25 @@ class MainWindow(QMainWindow):
         self._loader_thread.finished.connect(self._clear_loader_refs)
         self._loader_thread.start()
 
+
+    def start_sts_load(self, path: Path):
+        self.path = Path(path)
+        self.store = STSStore(self.path)
+        self.contract_index = self.store.build_contract_index()
+        self._tag_color_map_cache = None
+        self._set_platform_items(self.store.platform_names())
+        self.update_alert_strip()
+        if self.platform_list.count():
+            self.platform_list.setCurrentRow(0)
+        self.connection_label.setText("✓ STS veri dosyası bağlı")
+
+    def is_sts_mode(self) -> bool:
+        return (
+            self.store is not None
+            and self.path is not None
+            and str(self.path).lower().endswith(".sts")
+        )
+
     def _clear_loader_refs(self):
         self._loader_worker = None
         self._loader_thread = None
@@ -6704,6 +6991,17 @@ class MainWindow(QMainWindow):
             return
         kind = str(scope or "all").strip().lower()
         if kind == "all":
+            if self.is_sts_mode():
+                self.contract_index = self.store.build_contract_index()
+                self._set_platform_items(self.store.platform_names())
+                self.update_alert_strip()
+                self.refresh_open_calendar()
+                if select_platform:
+                    self.select_platform(select_platform)
+                elif self.platform_list.count() and self.platform_list.currentRow() < 0:
+                    self.platform_list.setCurrentRow(0)
+                self.connection_label.setText("✓ STS veri dosyası bağlı")
+                return
             self._pending_select_platform = select_platform
             self.start_excel_load(self.path)
             return
@@ -6852,7 +7150,11 @@ class MainWindow(QMainWindow):
     def open_file(self):
         dlg = WorkbookStartDialog(self)
         if dlg.exec() and dlg.selected_path:
-            self.start_excel_load(dlg.selected_path)
+            sel = Path(dlg.selected_path)
+            if sel.suffix.lower() == ".sts":
+                self.start_sts_load(sel)
+            else:
+                self.start_excel_load(sel)
 
     def show_contract_summary(self, row: int, item: dict):
         if not self.store:
@@ -6996,6 +7298,8 @@ class MainWindow(QMainWindow):
         # Kayıttan sonra indeks tek seferde yenilenir; arama bu indeks üzerinden yapılır.
         if rebuild_index:
             self.contract_index = self.store.build_contract_index()
+        if self.is_sts_mode():
+            self.connection_label.setText("✓ STS veri dosyası bağlı")
         platforms = self.store.platform_names()
         self._set_platform_items(platforms)
         self.update_query_logo_background(None)
