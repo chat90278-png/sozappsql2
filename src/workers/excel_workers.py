@@ -203,6 +203,8 @@ class ExcelLoadWorker(QObject):
 
     def run(self):
         try:
+            if str(self.path).lower().endswith(".sts"):
+                raise RuntimeError("STS dosyası Excel worker ile açılamaz; STSStore kullanılmalı.")
             total_start = time.perf_counter()
             self.progress.emit(5, "Excel hızlı okunuyor...")
             platforms, index, timings = self._build_read_only_index()
@@ -274,6 +276,8 @@ class ComponentSaveWorker(QObject):
 
     def run(self):
         try:
+            if str(self.path).lower().endswith(".sts"):
+                raise RuntimeError("STS dosyası Excel worker ile açılamaz; STSStore kullanılmalı.")
             self.progress.emit(8, "Excel açılıyor...")
             store = ExcelStore(self.path)
             with store.batch_save():
@@ -335,6 +339,8 @@ class UserSaveWorker(QObject):
 
     def run(self):
         try:
+            if str(self.path).lower().endswith(".sts"):
+                raise RuntimeError("STS dosyası Excel worker ile açılamaz; STSStore kullanılmalı.")
             self.progress.emit(10, "Excel açılıyor...")
             store = ExcelStore(self.path)
             with store.batch_save():
@@ -389,6 +395,10 @@ class ContractSaveWorker(QObject):
         Yoksa yeni ExcelStore aç (yavaş yol — sadece ilk kayıtta).
         """
         s = self._store
+        if str(self.path).lower().endswith(".sts"):
+            if s is not None:
+                return s, False
+            raise RuntimeError("STS dosyası Excel worker ile açılamaz; STSStore kullanılmalı.")
         if s is not None and getattr(s, 'wb', None) is not None:
             return s, False  # (store, opened_new=False)
         return ExcelStore(self.path), True
@@ -512,6 +522,8 @@ class AnalyzeDialog(QDialog):
     def run(self):
         self.show()
         QApplication.processEvents()
+        if str(self.path).lower().endswith(".sts"):
+            raise RuntimeError("STS dosyası Excel worker ile açılamaz; STSStore kullanılmalı.")
         self.store = ExcelStore(self.path)
         self.index = self.store.build_contract_index()
         QApplication.processEvents()
