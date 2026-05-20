@@ -1,17 +1,20 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, List, Tuple
+import re
+import time
+from typing import Dict, List, Tuple, Optional
 
 from PySide6.QtCore import Qt, QRectF, QTimer
-from PySide6.QtGui import QColor, QPen, QPainter
+from PySide6.QtGui import QColor, QPen, QPainter, QCursor, QLinearGradient, QBrush, QFontMetrics
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
     QFileDialog,
     QFrame,
     QGraphicsPathItem,
-    QGraphicsProxyWidget,
+    QGraphicsItem,
+    QGraphicsObject,
     QGraphicsScene,
     QGraphicsView,
     QGridLayout,
@@ -23,6 +26,8 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMessageBox,
     QPushButton,
+    QPlainTextEdit,
+    QSplitter,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -49,9 +54,13 @@ TABLE_INFO = {
 FALLBACK_RELATIONS = [
     ("contracts", "id", "systems", "contract_id"),
     ("contracts", "id", "deliveries", "contract_id"),
+    ("contracts", "id", "contract_tags", "contract_id"),
     ("systems", "id", "system_components", "system_id"),
     ("deliveries", "id", "delivery_components", "delivery_id"),
-    ("contracts", "id", "contract_tags", "contract_id"),
+    ("tags", "name", "contract_tags", "tag_name"),
+    ("platforms", "name", "contracts", "platform"),
+    ("components", "name", "system_components", "component_name"),
+    ("components", "name", "delivery_components", "component_name"),
 ]
 
 
@@ -86,6 +95,88 @@ class SchemaView(QGraphicsView):
         super().wheelEvent(event)
 
 
+class SchemaTableItem(QGraphicsObject):
+    def __init__(self, table_name: str, count: int, cols: List[Tuple[str, str, bool, bool]], dialog: "DatabaseManagementDialog"):
+        super().__init__()
+        self.table_name = table_name
+        self.count = count
+        self.cols = cols
+        self.dialog = dialog
+        self.card_width = 320
+        self.header_height = 36
+        self.row_height = 20
+        visible_rows = max(1, len(cols))
+        self.card_height = 14 + self.header_height + (visible_rows * self.row_height) + 14
+        self.setFlag(QGraphicsItem.ItemIsMovable, True)
+        self.setFlag(QGraphicsItem.ItemIsSelectable, True)
+        self.setFlag(QGraphicsItem.ItemSendsGeometryChanges, True)
+        self.setAcceptedMouseButtons(Qt.LeftButton)
+        self.setCursor(Qt.OpenHandCursor)
+        self.setZValue(10)
+
+    def boundingRect(self):
+        return QRectF(0, 0, self.card_width, self.card_height)
+
+    def paint(self, painter: QPainter, option, widget=None):
+        rect = self.boundingRect()
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.setPen(QPen(QColor("#bdd0ea"), 1.1))
+        painter.setBrush(QColor("#ffffff"))
+        painter.drawRoundedRect(rect, 14, 14)
+        header_rect = QRectF(8, 8, rect.width() - 16, self.header_height)
+        grad = QLinearGradient(header_rect.topLeft(), header_rect.topRight())
+        grad.setColorAt(0.0, QColor("#2563eb"))
+        grad.setColorAt(1.0, QColor("#0f9f6e"))
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QBrush(grad))
+        painter.drawRoundedRect(header_rect, 10, 10)
+        painter.setPen(Qt.white)
+        painter.drawText(QRectF(header_rect.left() + 10, header_rect.top(), header_rect.width() - 120, header_rect.height()), Qt.AlignVCenter | Qt.AlignLeft, self.table_name)
+        badge_rect = QRectF(header_rect.right() - 82, header_rect.top() + 7, 72, 22)
+        painter.setBrush(QColor("#e6f9ef"))
+        painter.drawRoundedRect(badge_rect, 10, 10)
+        painter.setPen(QColor("#0f5132"))
+        painter.drawText(badge_rect, Qt.AlignCenter, self.dialog._fmt_count(self.count))
+        y = self.header_height + 16
+        painter.setPen(QColor("#1f3b58"))
+        fm = QFontMetrics(painter.font())
+        for col_name, col_type, pk, fk in self.cols:
+            badge = "PK" if pk else ("FK" if fk else "•")
+            painter.setPen(QColor("#0f9f6e") if pk else (QColor("#4f46e5") if fk else QColor("#1f3b58")))
+            painter.drawText(QRectF(14, y, 24, 18), Qt.AlignVCenter | Qt.AlignLeft, badge)
+            painter.setPen(QColor("#1f3b58"))
+            painter.drawText(QRectF(38, y, 180, 18), Qt.AlignVCenter | Qt.AlignLeft, fm.elidedText(col_name, Qt.ElideRight, 170))
+            painter.setPen(QColor("#6b7f98"))
+            painter.drawText(QRectF(rect.width() - 110, y, 96, 18), Qt.AlignVCenter | Qt.AlignRight, fm.elidedText(col_type, Qt.ElideRight, 92))
+            y += self.row_height
+        if self.isSelected():
+            painter.setPen(QPen(QColor("#3b82f6"), 2))
+            painter.setBrush(Qt.NoBrush)
+            painter.drawRoundedRect(rect.adjusted(1, 1, -1, -1), 14, 14)
+
+    def itemChange(self, change, value):
+        if change == QGraphicsItem.ItemPositionChange and self.scene():
+            rect = self.scene().sceneRect()
+            br = self.boundingRect()
+            x = min(max(value.x(), rect.left()), rect.right() - br.width())
+            y = min(max(value.y(), rect.top()), rect.bottom() - br.height())
+            return super().itemChange(change, value.__class__(x, y))
+        if change == QGraphicsItem.ItemPositionHasChanged:
+            if not getattr(self.dialog, "_schema_rendering", False):
+                self.dialog._update_relation_lines_for_table(self.table_name)
+        if change == QGraphicsItem.ItemSelectedHasChanged:
+            self.update()
+        return super().itemChange(change, value)
+
+    def mousePressEvent(self, event):
+        self.setCursor(QCursor(Qt.ClosedHandCursor))
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        self.setCursor(QCursor(Qt.OpenHandCursor))
+        super().mouseReleaseEvent(event)
+
+
 class DatabaseManagementDialog(QDialog):
     def __init__(self, store, parent=None):
         super().__init__(parent)
@@ -100,7 +191,13 @@ class DatabaseManagementDialog(QDialog):
         self.stats: Dict = {}
         self.table_names: List[str] = []
         self.active_table: str = ""
-        self.schema_cards: Dict[str, QGraphicsProxyWidget] = {}
+        self._current_rows: List[dict] = []
+        self._current_columns: List[str] = []
+        self._sort_column: Optional[str] = None
+        self._sort_ascending: bool = True
+        self.schema_cards: Dict[str, SchemaTableItem] = {}
+        self.schema_rel_lines = []
+        self._schema_rendering = False
 
         self.setStyleSheet(STYLE + self._local_style())
         self._build()
@@ -116,7 +213,7 @@ QLabel#topTitle { color:#0f2742; font-size:15px; font-weight:800; }
 QLabel#connOk { background:#dcfce7; color:#166534; border:1px solid #bbf7d0; border-radius:10px; padding:6px 10px; font-weight:700; }
 
 QFrame#iconRail, QFrame#sidePanel, QFrame#mainPanel, QFrame#toolbarCard { background:#ffffff; border:1px solid #d8e4f2; border-radius:12px; }
-QPushButton#railBtn { background:transparent; border:none; border-radius:10px; padding:10px; color:#4b607a; font-weight:700; }
+QPushButton#railBtn { background:transparent; border:1px solid transparent; border-radius:10px; min-width:48px; min-height:48px; padding:8px; color:#2d4a6b; font-weight:900; font-size:12px; }
 QPushButton#railBtn[active='true'] { background:#2563eb; color:white; }
 
 QLabel { background:transparent; }
@@ -135,9 +232,9 @@ QTableWidget { background:#ffffff; border:1px solid #d8e4f2; border-radius:10px;
 QHeaderView::section { background:#edf3ff; border:none; border-right:1px solid #d8e4f2; padding:6px; color:#264463; font-weight:700; }
 
 QFrame#schemaCanvasWrap { background:#f2f6fc; border:1px solid #d8e4f2; border-radius:10px; }
-QFrame#schemaCard { background:#ffffff; border:1px solid #cfdcf0; border-radius:14px; }
-QLabel#schemaCardTitle { color:white; border-radius:8px; padding:5px 8px; font-weight:800; }
-QLabel#schemaCol { color:#1f3b58; font-size:11px; background:transparent; }
+QFrame#schemaCard { background:#ffffff; border:1px solid #bdd0ea; border-radius:14px; }
+QLabel#schemaCardTitle { color:white; border-radius:8px; padding:6px 10px; font-size:13px; font-weight:800; }
+QLabel#schemaCol { color:#1f3b58; font-size:12px; background:transparent; }
 QLabel#pkTag { color:#0f9f6e; font-weight:800; }
 QLabel#fkTag { color:#4f46e5; font-weight:800; }
 """
@@ -172,6 +269,8 @@ QLabel#fkTag { color:#4f46e5; font-weight:800; }
         self.schema_page = self._build_schema_page()
         self.main_stack.addWidget(self.tables_page)
         self.main_stack.addWidget(self.schema_page)
+        self.sql_page = self._build_sql_page()
+        self.main_stack.addWidget(self.sql_page)
         self._set_page("tables")
 
     def _build_topbar(self):
@@ -191,17 +290,21 @@ QLabel#fkTag { color:#4f46e5; font-weight:800; }
 
         self.backup_btn = QPushButton("Yedek Al"); self.backup_btn.setObjectName("softBtn"); self.backup_btn.clicked.connect(self.run_backup)
         self.opt_btn = QPushButton("Optimize"); self.opt_btn.setObjectName("softBtn"); self.opt_btn.clicked.connect(self.run_optimize)
-        self.refresh_btn = QPushButton("Yenile"); self.refresh_btn.setObjectName("primaryBtn"); self.refresh_btn.clicked.connect(self.refresh_all)
-        lay.addWidget(self.backup_btn); lay.addWidget(self.opt_btn); lay.addWidget(self.refresh_btn)
+        lay.addWidget(self.backup_btn); lay.addWidget(self.opt_btn)
         return bar
 
     def _build_rail(self):
-        rail = QFrame(); rail.setObjectName("iconRail"); rail.setFixedWidth(64)
+        rail = QFrame(); rail.setObjectName("iconRail"); rail.setFixedWidth(72)
         lay = QVBoxLayout(rail); lay.setContentsMargins(8, 12, 8, 12); lay.setSpacing(8)
-        self.rail_tables = QPushButton("▦"); self.rail_tables.setObjectName("railBtn"); self.rail_tables.clicked.connect(lambda: self._set_page("tables"))
-        self.rail_schema = QPushButton("⟲"); self.rail_schema.setObjectName("railBtn"); self.rail_schema.clicked.connect(lambda: self._set_page("schema"))
+        self.rail_tables = QPushButton("TAB"); self.rail_tables.setObjectName("railBtn"); self.rail_tables.clicked.connect(lambda: self._set_page("tables"))
+        self.rail_schema = QPushButton("REL"); self.rail_schema.setObjectName("railBtn"); self.rail_schema.clicked.connect(lambda: self._set_page("schema"))
+        self.rail_sql = QPushButton("SQL"); self.rail_sql.setObjectName("railBtn"); self.rail_sql.clicked.connect(lambda: self._set_page("sql"))
+        self.rail_tables.setToolTip("Tablolar")
+        self.rail_schema.setToolTip("Şema Görselleştirici")
+        self.rail_sql.setToolTip("SQL Terminal")
         lay.addWidget(self.rail_tables)
         lay.addWidget(self.rail_schema)
+        lay.addWidget(self.rail_sql)
         lay.addStretch(1)
         return rail
 
@@ -223,12 +326,10 @@ QLabel#fkTag { color:#4f46e5; font-weight:800; }
         self.row_search = QLineEdit(); self.row_search.setPlaceholderText("Satır ara / filtrele..."); self.row_search.textChanged.connect(self._apply_table_filters)
         self.limit_combo = QComboBox(); self.limit_combo.addItems(["100", "500", "1000"]); self.limit_combo.setCurrentText("100"); self.limit_combo.currentTextChanged.connect(self._refresh_active_table)
         self.platform_filter = QComboBox(); self.platform_filter.addItem("Tümü"); self.platform_filter.currentTextChanged.connect(self._apply_table_filters)
-        self.filter_btn = QPushButton("Filtre"); self.filter_btn.setObjectName("softBtn"); self.filter_btn.clicked.connect(self._apply_table_filters)
+        self.filter_btn = QPushButton("Filtrele"); self.filter_btn.setObjectName("softBtn"); self.filter_btn.clicked.connect(self._apply_table_filters)
         self.sort_btn = QPushButton("Sırala"); self.sort_btn.setObjectName("softBtn"); self.sort_btn.clicked.connect(self._sort_table)
-        self.table_refresh_btn = QPushButton("Yenile"); self.table_refresh_btn.setObjectName("softBtn"); self.table_refresh_btn.clicked.connect(self._refresh_active_table)
-        self.cols_btn = QPushButton("Kolonlar"); self.cols_btn.setObjectName("softBtn"); self.cols_btn.clicked.connect(self._show_columns)
-        self.add_btn = QPushButton("+ Satır Ekle"); self.add_btn.setObjectName("warnBtn"); self.add_btn.clicked.connect(lambda: QMessageBox.information(self, "Bilgi", "Düzenleme modu sonraki aşamada eklenecek."))
-        for w in [self.row_search, self.limit_combo, self.platform_filter, self.filter_btn, self.sort_btn, self.table_refresh_btn, self.cols_btn, self.add_btn]:
+        self.row_search.returnPressed.connect(self._apply_table_filters)
+        for w in [self.row_search, self.limit_combo, self.platform_filter, self.filter_btn, self.sort_btn]:
             tlay.addWidget(w)
         tlay.setStretch(0, 1)
         lay.addWidget(tb)
@@ -250,9 +351,7 @@ QLabel#fkTag { color:#4f46e5; font-weight:800; }
         self.rel_combo = QComboBox(); self.rel_combo.addItems(["Tüm ilişkiler", "Sadece seçili tablo", "Kritik ilişkiler"])
         self.schema_search = QLineEdit(); self.schema_search.setPlaceholderText("Tablo veya kolon ara..."); self.schema_search.textChanged.connect(self._highlight_schema)
         self.auto_btn = QPushButton("Otomatik Yerleştir"); self.auto_btn.setObjectName("softBtn"); self.auto_btn.clicked.connect(self._layout_schema)
-        self.zoom_btn = QPushButton("Yakınlaştır"); self.zoom_btn.setObjectName("softBtn"); self.zoom_btn.clicked.connect(self._zoom_schema)
-        self.schema_refresh_btn = QPushButton("Yenile"); self.schema_refresh_btn.setObjectName("primaryBtn"); self.schema_refresh_btn.clicked.connect(self._render_schema)
-        for w in [self.schema_combo, self.rel_combo, self.schema_search, self.auto_btn, self.zoom_btn, self.schema_refresh_btn]:
+        for w in [self.schema_combo, self.rel_combo, self.schema_search, self.auto_btn]:
             tlay.addWidget(w)
         tlay.setStretch(3, 1)
         lay.addWidget(tb)
@@ -264,14 +363,51 @@ QLabel#fkTag { color:#4f46e5; font-weight:800; }
         lay.addWidget(wrap, 1)
         return page
 
+    def _build_sql_page(self):
+        page = QWidget()
+        lay = QVBoxLayout(page)
+        lay.setSpacing(8)
+
+        splitter = QSplitter(Qt.Vertical)
+        self.sql_editor = QPlainTextEdit()
+        self.sql_editor.setPlaceholderText("SELECT * FROM contracts LIMIT 100;")
+        self.sql_editor.setStyleSheet("QPlainTextEdit { font-family: Consolas, 'Courier New', monospace; font-size: 13px; }")
+        splitter.addWidget(self.sql_editor)
+
+        result_wrap = QWidget()
+        rlay = QVBoxLayout(result_wrap)
+        self.sql_result = QTableWidget(0, 0)
+        self.sql_result.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.sql_result.verticalHeader().setVisible(False)
+        self.sql_result.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        self.sql_result.setAlternatingRowColors(True)
+        rlay.addWidget(self.sql_result, 1)
+        splitter.addWidget(result_wrap)
+        splitter.setSizes([260, 340])
+        lay.addWidget(splitter, 1)
+
+        bl = QHBoxLayout()
+        self.sql_status_lbl = QLabel("")
+        self.sql_status_lbl.setStyleSheet("color:#1f3b58;")
+        bl.addWidget(self.sql_status_lbl, 1)
+        self.sql_clear_btn = QPushButton("Temizle"); self.sql_clear_btn.setObjectName("softBtn"); self.sql_clear_btn.clicked.connect(self._clear_sql_terminal)
+        self.sql_run_btn = QPushButton("Çalıştır"); self.sql_run_btn.setObjectName("primaryBtn"); self.sql_run_btn.clicked.connect(self._run_sql_terminal)
+        bl.addWidget(self.sql_clear_btn)
+        bl.addWidget(self.sql_run_btn)
+        lay.addLayout(bl)
+        return page
+
     def _set_page(self, page: str):
         self.tables_page.setVisible(page == "tables")
         self.schema_page.setVisible(page == "schema")
+        self.sql_page.setVisible(page == "sql")
         self.sidebar.setVisible(page == "tables")
         self.rail_tables.setProperty("active", page == "tables")
         self.rail_schema.setProperty("active", page == "schema")
+        self.rail_sql.setProperty("active", page == "sql")
         self.rail_tables.style().unpolish(self.rail_tables); self.rail_tables.style().polish(self.rail_tables)
         self.rail_schema.style().unpolish(self.rail_schema); self.rail_schema.style().polish(self.rail_schema)
+        self.rail_sql.style().unpolish(self.rail_sql); self.rail_sql.style().polish(self.rail_sql)
 
     def refresh_all(self):
         self.stats = self.store.database_stats()
@@ -315,15 +451,11 @@ QLabel#fkTag { color:#4f46e5; font-weight:800; }
             limit = 100
         rows = self.store.preview_table(self.active_table, limit)
         cols = list(rows[0].keys()) if rows else self._table_columns(self.active_table)
-        self.grid.setRowCount(len(rows))
-        self.grid.setColumnCount(len(cols))
-        self.grid.setHorizontalHeaderLabels(cols)
-        for r, row in enumerate(rows):
-            for c, col in enumerate(cols):
-                txt = str(row.get(col, ""))
-                it = QTableWidgetItem(txt)
-                it.setToolTip(txt)
-                self.grid.setItem(r, c, it)
+        self._current_rows = list(rows or [])
+        self._current_columns = list(cols or [])
+        self._sort_column = None
+        self._sort_ascending = True
+        self._fill_table_grid(self._current_rows, self._current_columns)
         self._fill_platform_filter(cols, rows)
         self._apply_table_filters()
 
@@ -344,29 +476,51 @@ QLabel#fkTag { color:#4f46e5; font-weight:800; }
     def _apply_table_filters(self):
         q = self.row_search.text().strip().lower()
         pflt = self.platform_filter.currentText().strip()
-        has_platform = self.grid.columnCount() and any(self.grid.horizontalHeaderItem(i).text() == "platform" for i in range(self.grid.columnCount()))
-        pcol = -1
-        if has_platform:
-            for i in range(self.grid.columnCount()):
-                if self.grid.horizontalHeaderItem(i).text() == "platform":
-                    pcol = i
-                    break
-        for r in range(self.grid.rowCount()):
-            show = True
-            if q:
-                row_txt = " | ".join((self.grid.item(r, c).text() if self.grid.item(r, c) else "") for c in range(self.grid.columnCount())).lower()
-                show = q in row_txt
-            if show and has_platform and pflt and pflt != "Tümü" and pcol >= 0:
-                pv = self.grid.item(r, pcol).text() if self.grid.item(r, pcol) else ""
-                show = pv == pflt
-            self.grid.setRowHidden(r, not show)
+        rows = list(self._current_rows)
+        has_platform = "platform" in self._current_columns
+        if q:
+            rows = [r for r in rows if q in " | ".join(str(r.get(c, "")) for c in self._current_columns).lower()]
+        if has_platform and pflt and pflt != "Tümü":
+            rows = [r for r in rows if str(r.get("platform", "")) == pflt]
+        if self._sort_column:
+            rows = self._sorted_rows(rows, self._sort_column, self._sort_ascending)
+        self._fill_table_grid(rows, self._current_columns)
 
     def _sort_table(self):
-        self.grid.sortItems(0, Qt.AscendingOrder)
+        if not self._current_columns:
+            return
+        current_idx = self.grid.currentColumn()
+        if 0 <= current_idx < len(self._current_columns):
+            target_col = self._current_columns[current_idx]
+        else:
+            target_col = "id" if "id" in self._current_columns else self._current_columns[0]
+        if self._sort_column == target_col:
+            self._sort_ascending = not self._sort_ascending
+        else:
+            self._sort_column = target_col
+            self._sort_ascending = True
+        self._apply_table_filters()
 
-    def _show_columns(self):
-        cols = [self.grid.horizontalHeaderItem(i).text() for i in range(self.grid.columnCount())]
-        QMessageBox.information(self, "Kolonlar", "\n".join(cols) if cols else "Kolon bulunamadı.")
+    def _fill_table_grid(self, rows: List[dict], cols: List[str]):
+        self.grid.setRowCount(len(rows))
+        self.grid.setColumnCount(len(cols))
+        self.grid.setHorizontalHeaderLabels(cols)
+        for r, row in enumerate(rows):
+            for c, col in enumerate(cols):
+                txt = str(row.get(col, ""))
+                it = QTableWidgetItem(txt)
+                it.setToolTip(txt)
+                self.grid.setItem(r, c, it)
+
+    @staticmethod
+    def _sorted_rows(rows: List[dict], column: str, ascending: bool) -> List[dict]:
+        def _key(row: dict):
+            raw = str(row.get(column, "")).strip()
+            try:
+                return (0, float(raw.replace(",", ".")))
+            except Exception:
+                return (1, raw.lower())
+        return sorted(rows, key=_key, reverse=not ascending)
 
     def _table_columns(self, table: str) -> List[str]:
         conn = getattr(getattr(self.store, "db", None), "conn", None)
@@ -377,65 +531,46 @@ QLabel#fkTag { color:#4f46e5; font-weight:800; }
 
     def _render_schema(self):
         scene = self.schema_view.scene()
-        scene.clear()
-        self.schema_cards.clear()
-        counts = self.stats.get("table_counts") or {}
-        tables = self.table_names
+        self._schema_rendering = True
+        try:
+            scene.clear()
+            self.schema_cards.clear()
+            self.schema_rel_lines = []
+            counts = self.stats.get("table_counts") or {}
+            tables = list(self.table_names)
 
-        col_count = 3
-        w, h = 300, 220
-        x_gap, y_gap = 60, 50
-        for i, t in enumerate(tables):
-            row = i // col_count
-            col = i % col_count
-            x = 40 + col * (w + x_gap)
-            y = 30 + row * (h + y_gap)
-            card = self._build_schema_card_widget(t, int(counts.get(t, 0)))
-            proxy = scene.addWidget(card)
-            proxy.setPos(x, y)
-            self.schema_cards[t] = proxy
+            col_count = 4
+            x_start, y_start = 40, 30
+            x_step = 340
+            y_gap = 52
+            row_heights: List[float] = []
+            max_x = 0.0
+            max_y = 0.0
 
-        for (src_t, src_c, dst_t, dst_c) in self._schema_relations():
-            if src_t not in self.schema_cards or dst_t not in self.schema_cards:
-                continue
-            a = self.schema_cards[src_t].sceneBoundingRect()
-            b = self.schema_cards[dst_t].sceneBoundingRect()
-            p1 = a.center(); p1.setX(a.right())
-            p2 = b.center(); p2.setX(b.left())
-            path = self._relation_path(p1, p2)
-            line = QGraphicsPathItem(path)
-            pen = QPen(QColor("#8aa7cc"), 1.6, Qt.DashLine)
-            line.setPen(pen)
-            line.setZValue(-1)
-            scene.addItem(line)
+            for t in tables:
+                cols = self._schema_columns(t)
+                card_item = SchemaTableItem(t, int(counts.get(t, 0)), cols, self)
+                scene.addItem(card_item)
+                self.schema_cards[t] = card_item
 
-        scene.setSceneRect(QRectF(0, 0, 1400, max(900, (len(tables)//col_count + 1) * (h + y_gap))))
+            for idx, t in enumerate(tables):
+                card_item = self.schema_cards[t]
+                row = idx // col_count
+                col = idx % col_count
+                while len(row_heights) <= row:
+                    row_heights.append(0.0)
+                row_heights[row] = max(row_heights[row], card_item.boundingRect().height())
+                y = y_start + sum(row_heights[:row]) + (row * y_gap)
+                x = x_start + (col * x_step)
+                card_item.setPos(x, y)
+                max_x = max(max_x, x + card_item.boundingRect().width())
+                max_y = max(max_y, y + card_item.boundingRect().height())
+        finally:
+            self._schema_rendering = False
 
-    def _build_schema_card_widget(self, table: str, count: int) -> QWidget:
-        w = QFrame(); w.setObjectName("schemaCard"); w.setFixedWidth(320)
-        lay = QVBoxLayout(w); lay.setContentsMargins(8, 8, 8, 8); lay.setSpacing(5)
-        header = QFrame()
-        header.setStyleSheet("QFrame{border-radius:10px; background:qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #2563eb, stop:1 #0f9f6e);}")
-        hl = QHBoxLayout(header); hl.setContentsMargins(10, 4, 10, 4)
-        t = QLabel(table); t.setObjectName("schemaCardTitle")
-        c = QLabel(self._fmt_count(count)); c.setStyleSheet("background:#e6f9ef; color:#0f5132; border-radius:10px; padding:2px 8px; font-weight:800;")
-        hl.addWidget(t); hl.addStretch(1); hl.addWidget(c)
-        lay.addWidget(header)
-        cols = self._schema_columns(table)
-        for col_name, col_type, pk, fk in cols[:10]:
-            row = QHBoxLayout()
-            badge = QLabel("PK" if pk else ("FK" if fk else "•"))
-            badge.setObjectName("pkTag" if pk else ("fkTag" if fk else "schemaCol"))
-            txt = QLabel(col_name); txt.setObjectName("schemaCol")
-            typ = QLabel(col_type); typ.setObjectName("schemaCol"); typ.setStyleSheet("color:#6b7f98;")
-            row.addWidget(badge); row.addWidget(txt, 1); row.addWidget(typ)
-            lay.addLayout(row)
-        if len(cols) > 10:
-            more = QLabel(f"+ {len(cols)-10} kolon")
-            more.setObjectName("schemaCol")
-            more.setStyleSheet("color:#6b7f98; font-style:italic;")
-            lay.addWidget(more)
-        return w
+        self._build_relation_lines()
+        self._update_all_relation_lines()
+        scene.setSceneRect(QRectF(0, 0, max(3000, max_x + 600), max(2200, max_y + 500)))
 
     def _schema_columns(self, table: str) -> List[Tuple[str, str, bool, bool]]:
         conn = getattr(getattr(self.store, "db", None), "conn", None)
@@ -457,8 +592,15 @@ QLabel#fkTag { color:#4f46e5; font-weight:800; }
                     rows = []
                 for r in rows:
                     rels.add((str(r[2]), str(r[4]), t, str(r[3])))
-        if not rels:
-            rels.update(FALLBACK_RELATIONS)
+        rels.update(FALLBACK_RELATIONS)
+        if "component_platforms" in self.table_names:
+            cols = {name for (name, _, _, _) in self._schema_columns("component_platforms")}
+            if "component_id" in cols:
+                rels.add(("components", "id", "component_platforms", "component_id"))
+            if "component_name" in cols:
+                rels.add(("components", "name", "component_platforms", "component_name"))
+            if "platform_name" in cols:
+                rels.add(("platforms", "name", "component_platforms", "platform_name"))
         return sorted(rels)
 
     def _relation_path(self, p1, p2):
@@ -471,22 +613,136 @@ QLabel#fkTag { color:#4f46e5; font-weight:800; }
     def _highlight_schema(self):
         q = self.schema_search.text().strip().lower()
         selected = self.active_table
-        for t, proxy in self.schema_cards.items():
-            w = proxy.widget()
+        for t, card_item in self.schema_cards.items():
+            card_item.setOpacity(1.0)
             if not q:
-                w.setStyleSheet("")
+                card_item.update()
                 continue
             cols = [c[0].lower() for c in self._schema_columns(t)]
             hit = q in t.lower() or any(q in c for c in cols)
             if selected and self.rel_combo.currentText() == "Sadece seçili tablo" and t != selected and hit:
                 hit = False
-            w.setStyleSheet("border:2px solid #2563eb; border-radius:10px;" if hit or t == selected else "")
+            if not (hit or t == selected):
+                card_item.setOpacity(0.35)
+            card_item.update()
 
     def _layout_schema(self):
         self._render_schema()
 
-    def _zoom_schema(self):
-        self.schema_view.zoom_in()
+    def _build_relation_lines(self):
+        scene = self.schema_view.scene()
+        self.schema_rel_lines = []
+        for (src_t, src_c, dst_t, dst_c) in self._schema_relations():
+            if src_t not in self.schema_cards or dst_t not in self.schema_cards:
+                continue
+            line = QGraphicsPathItem()
+            pen = QPen(QColor("#8aa7cc"), 2.0, Qt.DashLine)
+            line.setPen(pen)
+            line.setZValue(-10)
+            scene.addItem(line)
+            rec = {"src": src_t, "dst": dst_t, "line": line}
+            self.schema_rel_lines.append(rec)
+            self._update_relation_line(rec)
+
+    def _update_relation_line(self, rel):
+        if rel["src"] not in self.schema_cards or rel["dst"] not in self.schema_cards:
+            return
+        a = self.schema_cards[rel["src"]].sceneBoundingRect()
+        b = self.schema_cards[rel["dst"]].sceneBoundingRect()
+        p1 = a.center()
+        p2 = b.center()
+        if a.center().x() <= b.center().x():
+            p1.setX(a.right())
+            p2.setX(b.left())
+        else:
+            p1.setX(a.left())
+            p2.setX(b.right())
+        rel["line"].setPath(self._relation_path(p1, p2))
+
+    def _update_relation_lines_for_table(self, table: str):
+        for rel in self.schema_rel_lines:
+            if rel["src"] == table or rel["dst"] == table:
+                self._update_relation_line(rel)
+
+    def _update_all_relation_lines(self):
+        for rel in self.schema_rel_lines:
+            self._update_relation_line(rel)
+
+    def _clear_sql_terminal(self):
+        self.sql_editor.clear()
+        self.sql_result.setRowCount(0)
+        self.sql_result.setColumnCount(0)
+        self.sql_status_lbl.setText("")
+
+    def _run_sql_terminal(self):
+        sql = self.sql_editor.toPlainText().strip()
+        if not sql:
+            return
+        if not self._is_single_statement(sql):
+            self._set_sql_status("Lütfen tek SQL komutu çalıştırın.", error=True)
+            return
+        op = self._sql_operation(sql)
+        if not self._confirm_sql_operation(op):
+            return
+        conn = getattr(getattr(self.store, "db", None), "conn", None)
+        if conn is None:
+            self._set_sql_status("SQL hatası: Veritabanı bağlantısı yok.", error=True)
+            return
+        started = time.perf_counter()
+        changed = op not in {"SELECT", "PRAGMA", "WITH", "EXPLAIN"}
+        try:
+            cursor = conn.execute(sql)
+            if op in {"SELECT", "PRAGMA", "WITH", "EXPLAIN"}:
+                rows = cursor.fetchmany(1000)
+                cols = [d[0] for d in (cursor.description or [])]
+                self._show_sql_result(cols, rows)
+                ms = int((time.perf_counter() - started) * 1000)
+                self._set_sql_status(f"Çalışma süresi: {ms} ms | Satır: {len(rows)}")
+                row_count = len(rows)
+            else:
+                conn.commit()
+                row_count = cursor.rowcount if cursor.rowcount is not None and cursor.rowcount >= 0 else 0
+                ms = int((time.perf_counter() - started) * 1000)
+                self.sql_result.setRowCount(0); self.sql_result.setColumnCount(0)
+                self._set_sql_status(f"Sorgu tamamlandı. Etkilenen satır: {row_count} | Çalışma süresi: {ms} ms")
+                self.refresh_all()
+            self.store._log("sql_query_executed", message="SQL Terminal sorgusu çalıştırıldı", payload={"operation": op, "duration_ms": ms, "changed": changed, "row_count": row_count})
+        except Exception as exc:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            self._set_sql_status(f"SQL hatası: {exc}", error=True)
+
+    def _show_sql_result(self, cols, rows):
+        self.sql_result.setRowCount(len(rows))
+        self.sql_result.setColumnCount(len(cols))
+        self.sql_result.setHorizontalHeaderLabels([str(c) for c in cols])
+        for r, row in enumerate(rows):
+            for c, col in enumerate(cols):
+                txt = str(row[col] if isinstance(row, dict) else row[c])
+                self.sql_result.setItem(r, c, QTableWidgetItem(txt))
+
+    def _is_single_statement(self, sql: str) -> bool:
+        chunks = [s.strip() for s in sql.split(";") if s.strip()]
+        return len(chunks) == 1
+
+    def _sql_operation(self, sql: str) -> str:
+        cleaned = re.sub(r"^\s*(--[^\n]*\n|/\*.*?\*/\s*)*", "", sql, flags=re.S).strip()
+        token = cleaned.split(None, 1)[0].upper() if cleaned else ""
+        return token
+
+    def _confirm_sql_operation(self, op: str) -> bool:
+        if op in {"SELECT", "PRAGMA", "WITH", "EXPLAIN"}:
+            return True
+        msg = "Bu işlem veriyi değiştirebilir. Devam edilsin mi?"
+        if op in {"DROP", "ALTER", "VACUUM", "ATTACH", "DETACH", "REINDEX"}:
+            msg = "Bu işlem veritabanı yapısını/veriyi değiştirebilir. Devam edilsin mi?"
+        return QMessageBox.question(self, "SQL Terminal Onayı", msg) == QMessageBox.Yes
+
+    def _set_sql_status(self, text: str, error: bool = False):
+        self.sql_status_lbl.setText(text)
+        self.sql_status_lbl.setStyleSheet("color:#dc2626;" if error else "color:#1f3b58;")
 
     def run_backup(self):
         base = Path(str(getattr(self.store, "path", "database.sts")))
