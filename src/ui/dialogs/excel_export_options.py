@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
     QVBoxLayout,
 )
@@ -39,7 +40,7 @@ class ExcelExportDialog(QDialog):
 
         self.setWindowTitle("Excel’e Aktar - STS")
         self.resize(920, 560)
-        self.setMinimumSize(820, 500)
+        self.setMinimumSize(820, 520)
         self.setStyleSheet(STYLE + self._local_style())
         self.build()
 
@@ -48,7 +49,7 @@ class ExcelExportDialog(QDialog):
 QFrame#exportHero { background:#10263f; border-radius:14px; }
 QLabel#exportHeroTitle { color:#ffffff; font-size:24px; font-weight:900; background:transparent; }
 QLabel#exportHeroDesc { color:#c8d8ea; font-size:12px; background:transparent; }
-QLabel#exportBadge { color:#173b73; background:#eaf1ff; border-radius:12px; padding:8px 12px; font-weight:900; }
+QLabel#exportBadge { color:#f8fbff; background:rgba(255,255,255,0.14); border:1px solid rgba(255,255,255,0.28); border-radius:12px; padding:8px 12px; font-weight:950; }
 
 QFrame#exportCard { background:#ffffff; border:1px solid #dbe5f1; border-radius:14px; }
 QLabel#exportCardHeader { color:#12345a; font-size:15px; font-weight:800; }
@@ -64,12 +65,18 @@ QPushButton#exportSecondaryButton { background:#ffffff; color:#244767; border:1p
 QFrame#summaryStatCard { background:#ffffff; border:1px solid #e2e8f0; border-radius:10px; padding:8px 10px; }
 QLabel#summaryStatTitle { color:#64748b; font-size:11px; }
 QLabel#summaryStatValue { color:#12345a; font-size:16px; font-weight:900; }
-QLabel#exportWarning { background:#fff7df; color:#7c4a03; border:1px solid #f7d48a; border-radius:12px; padding:10px 12px; font-weight:700; }
+QLabel#exportWarning { background:#fff7e6; color:#92400e; border:1px solid #f3c37b; border-radius:12px; padding:10px 12px; font-weight:800; }
+QScrollArea#platformScroll { border:1px solid #dbe5f1; border-radius:10px; background:#ffffff; }
+QScrollArea#platformScroll QScrollBar:vertical { width:10px; background:#f5f8fc; margin:8px 2px; border-radius:5px; }
+QScrollArea#platformScroll QScrollBar::handle:vertical { background:#b4c6de; border-radius:5px; min-height:28px; }
+QScrollArea#platformScroll QScrollBar::add-line:vertical, QScrollArea#platformScroll QScrollBar::sub-line:vertical { height:0; }
 QDialog#excelExportDialog QLabel, QDialog#excelExportDialog QCheckBox, QDialog#excelExportDialog QRadioButton { background: transparent; }
 """
 
     def build(self):
         root = QVBoxLayout(self)
+        root.setContentsMargins(12, 12, 12, 12)
+        root.setSpacing(10)
 
         hero = QFrame(); hero.setObjectName("exportHero")
         hl = QHBoxLayout(hero); hl.setContentsMargins(18, 16, 18, 16)
@@ -82,7 +89,7 @@ QDialog#excelExportDialog QLabel, QDialog#excelExportDialog QCheckBox, QDialog#e
         hl.addWidget(QLabel("STS → XLSX", objectName="exportBadge"), 0, Qt.AlignTop)
         root.addWidget(hero)
 
-        mid = QHBoxLayout(); root.addLayout(mid, 1)
+        mid = QHBoxLayout(); mid.setSpacing(10); root.addLayout(mid, 1)
         left_col = QVBoxLayout(); mid.addLayout(left_col, 3)
         right_col = QVBoxLayout(); mid.addLayout(right_col, 2)
 
@@ -131,10 +138,10 @@ QDialog#excelExportDialog QLabel, QDialog#excelExportDialog QCheckBox, QDialog#e
         ph.addWidget(QLabel("Platformlar", objectName="exportCardHeader")); ph.addStretch(1)
         pl.addLayout(ph)
         self.platform_list = QListWidget()
-        self.platform_list.setMaximumHeight(230)
+        self.platform_list.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
 
         self.platform_list.setStyleSheet("""
-QListWidget { border:1px solid #dbe5f1; border-radius:10px; background:#ffffff; padding:4px; }
+QListWidget { border:none; background:#ffffff; padding:4px; }
 QListWidget::item { border:1px solid #e2e8f0; border-radius:10px; padding:10px 12px; margin:4px 2px; background:#ffffff; color:#0f172a; font-weight:800; }
 QListWidget::item:selected { background:#eff6ff; border:1px solid #93c5fd; color:#0f172a; }
 QListWidget::indicator { width:16px; height:16px; }
@@ -149,7 +156,17 @@ QListWidget::indicator:checked { border:1px solid #2563eb; border-radius:4px; ba
             it.setCheckState(Qt.Unchecked)
             self.platform_list.addItem(it)
         self.platform_list.itemChanged.connect(self._on_platform_item_changed)
-        pl.addWidget(self.platform_list)
+        self.platform_scroll = QScrollArea()
+        self.platform_scroll.setObjectName("platformScroll")
+        self.platform_scroll.setWidgetResizable(True)
+        self.platform_scroll.setFrameShape(QFrame.NoFrame)
+        self.platform_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.platform_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.platform_scroll.setMinimumHeight(180)
+        self.platform_scroll.setMaximumHeight(260)
+        self.platform_scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.platform_scroll.setWidget(self.platform_list)
+        pl.addWidget(self.platform_scroll, 1)
         left_col.addWidget(platform_card, 1)
 
         summary_card = QFrame(); summary_card.setObjectName("exportCard")
@@ -272,8 +289,10 @@ QListWidget::indicator:checked { border:1px solid #2563eb; border-radius:4px; ba
 
         if scope == "all" and self.cb_delivery.isChecked() and self.cb_comp.isChecked():
             self.warn.setText("Büyük veri setlerinde tüm platformlar, kabul satırları ve bileşen kolonlarıyla export işlemi birkaç dakika sürebilir.")
+            self.warn.setVisible(True)
         else:
-            self.warn.setText("")
+            self.warn.setText("Seçili kapsama göre export süresi kısa olacaktır.")
+            self.warn.setVisible(True)
 
     def _scope_value(self):
         return {
