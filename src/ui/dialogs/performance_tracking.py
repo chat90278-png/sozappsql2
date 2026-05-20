@@ -1,7 +1,7 @@
 from __future__ import annotations
+
 import json
 import time
-from pathlib import Path
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
@@ -12,8 +12,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QMessageBox,
-    QPushButton,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -24,15 +22,16 @@ from src.ui.theme import STYLE
 
 class PerformanceTrackingDialog(QDialog):
     DIALOG_ID = "performanceTrackingDialog"
+
     def __init__(self, store, parent=None):
         super().__init__(parent)
         self.store = store
         self.setObjectName(self.DIALOG_ID)
         self.stats = {}
         self.logs = []
-        self.setWindowTitle("Performans Takip")
-        self.setMinimumSize(1100, 700)
-        self.resize(1160, 720)
+        self.setWindowTitle("Performans Takip - STS")
+        self.setMinimumSize(1000, 620)
+        self.resize(1180, 680)
         self.setStyleSheet(STYLE + self._local_style())
         self._build()
         self.refresh_all()
@@ -40,249 +39,249 @@ class PerformanceTrackingDialog(QDialog):
     def _local_style(self):
         return """
 QFrame#perfHero { background:#10263f; border-radius:14px; }
-QLabel#perfHeroTitle { color:#fff; font-size:25px; font-weight:900; }
+QLabel#perfHeroTitle { color:#fff; font-size:24px; font-weight:900; }
 QLabel#perfHeroDesc { color:#c8d8ea; font-size:12px; }
-QLabel#perfBadge { background:#123c24; color:#b9f7ce; border:1px solid rgba(185,247,206,0.3); border-radius:12px; padding:8px 12px; font-weight:800; }
 QFrame#perfCard { background:#fff; border:1px solid #d6e2f0; border-radius:14px; }
 QLabel#perfCardTitle { color:#12345a; font-size:15px; font-weight:800; }
 QLabel#perfMuted { color:#667995; font-size:12px; }
-QPushButton#perfPrimary { background:#2563eb; color:white; border:none; border-radius:10px; padding:8px 14px; font-weight:800; }
-QPushButton#perfSoft { background:#eef5ff; color:#1d4ed8; border:1px solid #cfe1fb; border-radius:10px; padding:7px 12px; font-weight:800; }
 QDialog#performanceTrackingDialog QLabel, QDialog#performanceTrackingDialog QCheckBox, QDialog#performanceTrackingDialog QRadioButton { background: transparent; }
+QLineEdit, QComboBox { background:#fff; border:1px solid #d6e2f0; border-radius:8px; padding:6px 8px; }
+QTableWidget { background:#fff; border:1px solid #d6e2f0; border-radius:10px; gridline-color:#e5edf8; }
+QHeaderView::section { background:#edf3ff; border:none; padding:6px; color:#264463; font-weight:700; }
 """
 
     def _build(self):
         root = QVBoxLayout(self)
+
         hero = QFrame(); hero.setObjectName("perfHero")
         hl = QHBoxLayout(hero)
         tbox = QVBoxLayout()
         t = QLabel("Performans Takip"); t.setObjectName("perfHeroTitle")
-        d = QLabel("STS veri dosyasının hız, veri boyutu ve temel işlem sürelerini izleyin."); d.setObjectName("perfHeroDesc")
+        d = QLabel("Uygulama açılışı, kayıt, cevap ve sorgu sürelerini sade şekilde izleyin.")
+        d.setObjectName("perfHeroDesc")
         tbox.addWidget(t); tbox.addWidget(d)
         hl.addLayout(tbox, 1)
-        self.btn_measure = QPushButton("Ölçüm Yap"); self.btn_measure.setObjectName("perfSoft"); self.btn_measure.clicked.connect(self.refresh_all)
-        hl.addWidget(self.btn_measure)
-        hl.addWidget(QLabel("• STS performansı izleniyor", objectName="perfBadge"))
         root.addWidget(hero)
 
         body = QHBoxLayout(); root.addLayout(body, 1)
-        left = QVBoxLayout(); right = QVBoxLayout(); body.addLayout(left, 0); body.addLayout(right, 1)
+        left = QVBoxLayout(); right = QVBoxLayout()
+        body.addLayout(left, 0); body.addLayout(right, 1)
 
-        self.file_card = self._card(left, "Veri Dosyası")
-        self.file_info = QLabel(""); self.file_info.setWordWrap(True); self.file_info.setObjectName("perfMuted")
-        self.file_card.layout().addWidget(self.file_info)
+        # Left - Veri Hacmi
+        vcard = QFrame(); vcard.setObjectName("perfCard")
+        vl = QVBoxLayout(vcard)
+        head = QHBoxLayout()
+        head.addWidget(QLabel("Veri Hacmi", objectName="perfCardTitle"))
+        head.addStretch(1)
+        head.addWidget(QLabel("son okuma", objectName="perfMuted"))
+        vl.addLayout(head)
 
-        self.volume_card = self._card(left, "Veri Hacmi")
         vg = QGridLayout()
-        self.v_total = QLabel(); self.v_contract = QLabel(); self.v_system = QLabel(); self.v_delivery = QLabel()
-        for i,(k,w) in enumerate([("Toplam Kayıt",self.v_total),("Sözleşme",self.v_contract),("Sistem",self.v_system),("Kabul",self.v_delivery)]):
-            f=QFrame(); f.setObjectName("perfCard"); l=QVBoxLayout(f); l.addWidget(QLabel(k, objectName="perfMuted")); l.addWidget(w)
-            vg.addWidget(f, i//2, i%2)
-        self.volume_card.layout().addLayout(vg)
+        self.v_size = QLabel(); self.v_total = QLabel(); self.v_contract = QLabel(); self.v_system = QLabel(); self.v_delivery = QLabel(); self.v_big = QLabel()
+        items = [
+            ("Dosya Boyutu", self.v_size),
+            ("Toplam Kayıt", self.v_total),
+            ("Sözleşme", self.v_contract),
+            ("Sistem", self.v_system),
+            ("Kabul", self.v_delivery),
+            ("En Büyük Tablo", self.v_big),
+        ]
+        for i, (k, w) in enumerate(items):
+            f = QFrame(); f.setObjectName("perfCard")
+            l = QVBoxLayout(f)
+            l.addWidget(QLabel(k, objectName="perfMuted"))
+            w.setStyleSheet("font-size:26px;font-weight:900;color:#0f2f58;")
+            l.addWidget(w)
+            vg.addWidget(f, i, 0)
+        vl.addLayout(vg)
+        left.addWidget(vcard)
+        left.addStretch(1)
 
-        self.status_card = self._card(left, "Durum")
-        self.status_labels = {}
-        for key in ["Dosya açılışı", "Liste yenileme", "Detay açma", "Excel export"]:
-            row = QHBoxLayout(); a = QLabel(key); b = QLabel("Ölçülmedi")
-            row.addWidget(a); row.addStretch(1); row.addWidget(b)
-            self.status_card.layout().addLayout(row); self.status_labels[key]=b
-
+        # Right - KPI cards
         metric_wrap = QGridLayout(); right.addLayout(metric_wrap)
         self.metric_labels = {}
-        for i,(title,desc,key) in enumerate([
-            ("Açılış Süresi","STS dosyasının arayüze yüklenme süresi.","sts_opened"),
-            ("Platform Seçimi","Platform seçimi sonrası liste yenileme.","platform_refresh"),
-            ("Detay Açma","Sözleşme detay verilerinin okunma süresi.","contract_detail_open"),
-            ("Excel Export","Tam veri seti için Excel oluşturma süresi.","excel_exported"),
+        for i, (title, desc, key) in enumerate([
+            ("Uygulama Açılışı", "Ana ekranın hazır olma süresi.", "sts_opened"),
+            ("Kayıt Süresi", "SQLite kayıt işlemi ortalaması.", "contract_saved"),
+            ("Cevap Süresi", "Arayüz tepki süresi.", "platform_refresh"),
+            ("Sorgu Süresi", "Filtre ve özet sorguları ortalaması.", "contract_detail_open"),
         ]):
-            c=QFrame(); c.setObjectName("perfCard"); l=QVBoxLayout(c)
-            l.addWidget(QLabel(title, objectName="perfCardTitle")); v=QLabel("-"); v.setStyleSheet("font-size:28px;font-weight:900;color:#102f58;")
-            l.addWidget(v); l.addWidget(QLabel(desc, objectName="perfMuted")); self.metric_labels[key]=v
-            metric_wrap.addWidget(c,0,i)
+            c = QFrame(); c.setObjectName("perfCard")
+            l = QVBoxLayout(c)
+            l.addWidget(QLabel(title, objectName="perfCardTitle"))
+            v = QLabel("-")
+            v.setStyleSheet("font-size:36px;font-weight:900;color:#102f58;")
+            l.addWidget(v)
+            l.addWidget(QLabel(desc, objectName="perfMuted"))
+            self.metric_labels[key] = v
+            metric_wrap.addWidget(c, 0, i)
 
-        mid = QHBoxLayout(); right.addLayout(mid,1)
-        table_card = self._card_layout("Son Ölçülen İşlemler")
-        mid.addWidget(table_card[0],1)
-        table_l = table_card[1]
-        tb = QHBoxLayout(); self.search=QLineEdit(); self.search.setPlaceholderText("İşlem ara");
-        self.range=QComboBox(); self.range.addItems(["Son 50","Son 100","Bugün"]); fb=QPushButton("Filtrele"); fb.setObjectName("perfPrimary"); fb.clicked.connect(self.apply_filter)
-        rb=QPushButton("Yenile"); rb.setObjectName("perfSoft"); rb.clicked.connect(self.refresh_all)
-        tb.addWidget(self.search,1); tb.addWidget(self.range); tb.addWidget(fb); tb.addWidget(rb); table_l.addLayout(tb)
-        self.table=QTableWidget(0,5); self.table.setHorizontalHeaderLabels(["İşlem","Süre","Veri","Durum","Zaman"]); self.table.horizontalHeader().setStretchLastSection(True)
-        table_l.addWidget(self.table)
+        # Son Ölçümler
+        list_card = QFrame(); list_card.setObjectName("perfCard")
+        ll = QVBoxLayout(list_card)
+        title_row = QHBoxLayout()
+        title_row.addWidget(QLabel("Son Ölçümler", objectName="perfCardTitle"))
+        title_row.addStretch(1)
+        self.search = QLineEdit(); self.search.setPlaceholderText("İşlem ara..."); self.search.textChanged.connect(self.apply_filter)
+        self.range = QComboBox(); self.range.addItems(["Son 20", "Son 50", "Bugün"]); self.range.currentIndexChanged.connect(self.apply_filter)
+        title_row.addWidget(self.search); title_row.addWidget(self.range)
+        ll.addLayout(title_row)
 
-        summary = self._card(right, "Veri Özeti")
-        self.summary = QLabel(""); self.summary.setWordWrap(True)
-        summary.layout().addWidget(self.summary)
-
-        tests = self._card(right, "Hızlı Performans Testleri")
-        tr=QHBoxLayout(); tests.layout().addLayout(tr)
-        for title,desc,fn in [
-            ("Liste Yenileme","Aktif platform listesini ölçer.",self.measure_platform_refresh),
-            ("Detay Açma","Örnek sözleşme detayını ölçer.",self.measure_detail_open),
-            ("Database Kontrol","Sağlık kontrol süresini ölçer.",self.measure_db_check),
-        ]:
-            c=QFrame(); c.setObjectName("perfCard"); l=QVBoxLayout(c); l.addWidget(QLabel(title, objectName="perfCardTitle")); l.addWidget(QLabel(desc, objectName="perfMuted")); b=QPushButton("Ölç"); b.setObjectName("perfPrimary"); b.clicked.connect(fn); l.addWidget(b,0,Qt.AlignRight); tr.addWidget(c)
-
-    def _card(self, parent_layout, title):
-        f=QFrame(); f.setObjectName("perfCard"); l=QVBoxLayout(f); l.addWidget(QLabel(title, objectName="perfCardTitle")); parent_layout.addWidget(f); return f
-
-    def _card_layout(self, title):
-        f=QFrame(); f.setObjectName("perfCard"); l=QVBoxLayout(f); l.addWidget(QLabel(title, objectName="perfCardTitle")); return f,l
+        self.table = QTableWidget(0, 4)
+        self.table.setHorizontalHeaderLabels(["Saat", "İşlem", "Detay", "Süre"])
+        self.table.verticalHeader().setVisible(False)
+        self.table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.table.horizontalHeader().setStretchLastSection(False)
+        self.table.horizontalHeader().setSectionResizeMode(2, self.table.horizontalHeader().Stretch)
+        self.table.setColumnWidth(0, 90)
+        self.table.setColumnWidth(1, 250)
+        self.table.setColumnWidth(3, 110)
+        ll.addWidget(self.table)
+        right.addWidget(list_card, 1)
 
     def refresh_all(self):
         self.stats = self.store.performance_stats()
         self.logs = self.store.recent_performance_logs(limit=100)
-        p = Path(str(self.stats.get("path") or ""))
-        self.file_info.setText(f"{p.name}\n{p}\nBoyut: {self.stats.get('file_size_mb',0):.1f} MB")
-        self.file_info.setToolTip(str(p))
-        self.v_total.setText(self._format_count(int(self.stats.get("total_records",0))))
-        self.v_contract.setText(self._format_count(int(self.stats.get("contract_count",0))))
-        self.v_system.setText(self._format_count(int(self.stats.get("system_count",0))))
-        self.v_delivery.setText(self._format_count(int(self.stats.get("delivery_count",0))))
 
-        recent = self.stats.get("recent_metrics",{})
+        self.v_size.setText(f"{self.stats.get('file_size_mb', 0):.1f} MB")
+        self.v_total.setText(self._format_count(int(self.stats.get("total_records", 0))))
+        self.v_contract.setText(self._format_count(int(self.stats.get("contract_count", 0))))
+        self.v_system.setText(self._format_count(int(self.stats.get("system_count", 0))))
+        self.v_delivery.setText(self._format_count(int(self.stats.get("delivery_count", 0))))
+        counts = self.stats.get("table_counts", {})
+        self.v_big.setText(max(counts.items(), key=lambda kv: kv[1])[0] if counts else "-")
+
+        recent = self.stats.get("recent_metrics", {})
         for key, lbl in self.metric_labels.items():
-            payload = recent.get(key) or recent.get("excel_exported" if key=="excel_exported" else "") or {}
-            lbl.setText(self._format_duration(payload))
-
-        self.status_labels["Dosya açılışı"].setText(self._status_from_metric(recent.get("sts_opened")))
-        self.status_labels["Liste yenileme"].setText(self._status_from_metric(recent.get("platform_refresh")))
-        self.status_labels["Detay açma"].setText(self._status_from_metric(recent.get("contract_detail_open")))
-        self.status_labels["Excel export"].setText(self._status_from_metric(recent.get("excel_exported"), export=True))
+            lbl.setText(self._format_duration(recent.get(key) or {}))
+            lbl.setStyleSheet(f"font-size:36px;font-weight:900;color:{self._duration_color(recent.get(key) or {})};")
 
         self.apply_filter()
-        counts=self.stats.get("table_counts",{})
-        biggest = max(counts.items(), key=lambda kv: kv[1])[0] if counts else "-"
-        last_maint = "-"
-        for it in self.logs:
-            if it.get("action") in {"database_optimize_completed", "database_vacuum_completed"}:
-                last_maint = str(it.get("created_at") or "-")
-                break
-        self.summary.setText(
-            f"En büyük tablo: {biggest}\n"
-            f"Tablo sayısı: {len(counts)}\n"
-            f"Platform: {self.stats.get('platform_count',0)}\n"
-            f"Bileşen: {self.stats.get('component_count',0)}\n"
-            f"Son bakım: {last_maint}"
-        )
 
     def apply_filter(self):
-        q=self.search.text().strip().lower()
-        rows=self.logs
-        if self.range.currentText()=="Son 50": rows=rows[:50]
-        elif self.range.currentText()=="Bugün":
-            today=time.strftime("%Y-%m-%d")
-            rows=[r for r in rows if str(r.get("created_at",""))[:10]==today]
-        out=[]
+        q = self.search.text().strip().lower()
+        rows = self.logs
+        if self.range.currentText() == "Son 20":
+            rows = rows[:20]
+        elif self.range.currentText() == "Son 50":
+            rows = rows[:50]
+        elif self.range.currentText() == "Bugün":
+            today = time.strftime("%Y-%m-%d")
+            rows = [r for r in rows if str(r.get("created_at", ""))[:10] == today]
+
+        out = []
         for it in rows:
-            action=str(it.get("action") or "")
-            payload={}
-            raw=it.get("payload_json")
+            action = str(it.get("action") or "")
+            payload = {}
+            raw = it.get("payload_json")
             if raw:
-                try: payload=json.loads(raw)
-                except Exception: payload={}
-            txt=f"{action} {payload}"
+                try:
+                    payload = json.loads(raw)
+                except Exception:
+                    payload = {}
+            txt = f"{action} {payload}"
             if q and q not in txt.lower():
                 continue
-            out.append((action,payload,str(it.get("created_at") or "")))
+            out.append((str(it.get("created_at") or ""), action, payload))
+
         self.table.setRowCount(len(out))
-        for r,(action,payload,created) in enumerate(out):
-            self.table.setItem(r,0,QTableWidgetItem(action))
-            self.table.setItem(r,1,QTableWidgetItem(self._format_duration(payload)))
-            data = payload.get("platform") or payload.get("contract_count") or payload.get("table_counts") or "-"
-            self.table.setItem(r,2,QTableWidgetItem(str(data)))
-            self.table.setItem(r,3,QTableWidgetItem(self._status_from_metric(payload)))
-            self.table.setItem(r,4,QTableWidgetItem(created))
-
-    def measure_platform_refresh(self):
-        t=time.perf_counter(); idx=self.store.build_contract_index(); ms=(time.perf_counter()-t)*1000
-        self.store.add_performance_log("platform_refresh", duration_ms=ms, payload={"contract_count": len(idx)})
-        self.refresh_all()
-
-    def _find_sample_contract_for_measurement(self):
-        idx = self.store.build_contract_index() or []
-        if not idx:
-            return None
-        for item in idx:
-            platform = item.get("platform")
-            no = item.get("contract_no") or item.get("no") or item.get("contract")
-            if platform and no:
-                return item
-        return None
-
-    def measure_detail_open(self):
-        item = self._find_sample_contract_for_measurement()
-        if not item:
-            QMessageBox.information(self, "Performans Takip", "Ölçüm yapılacak uygun sözleşme bulunamadı.")
-            return
-        platform = item.get("platform")
-        contract_no = item.get("contract_no") or item.get("no") or item.get("contract")
-        contract_types = [item.get("contract_type"), item.get("type"), item.get("sözleşme_türü"), item.get("type_display"), "Ana Sözleşme", ""]
-        seen = set(); contract_types = [x for x in contract_types if not (x in seen or seen.add(x))]
-        t0 = time.perf_counter()
-        last_err = None
-        ok = False
-        for ctype in contract_types:
-            try:
-                self.store.load_contract_structure(platform, contract_no, ctype)
-                ok = True
-                break
-            except ValueError as e:
-                last_err = e
-                continue
-            except Exception as e:
-                QMessageBox.warning(self, "Performans Takip", f"Detay açma ölçümü yapılamadı:\n{e}")
-                self.store.add_performance_log("contract_detail_open", payload={"error": str(e), "platform": platform, "contract_no": contract_no})
-                return
-        if not ok:
-            QMessageBox.warning(self, "Performans Takip", "Ölçüm yapılacak uygun sözleşme bulunamadı.")
-            self.store.add_performance_log("contract_detail_open", payload={"error": str(last_err or 'contract not found'), "platform": platform, "contract_no": contract_no})
-            return
-        ms = (time.perf_counter() - t0) * 1000
-        self.store.add_performance_log("contract_detail_open", duration_ms=ms, payload={"platform": platform, "contract_no": contract_no})
-        self.refresh_all()
-
-    def measure_db_check(self):
-        t=time.perf_counter(); self.store.integrity_check(); ms=(time.perf_counter()-t)*1000
-        self.store.add_performance_log("database_check", duration_ms=ms)
-        self.refresh_all()
+        for r, (created, action, payload) in enumerate(out):
+            hhmmss = created.split(" ")[-1] if " " in created else created
+            op = self._pretty_action(action, payload)
+            detail = self._detail_text(payload)
+            dur = self._format_duration(payload)
+            self.table.setItem(r, 0, QTableWidgetItem(hhmmss))
+            self.table.setItem(r, 1, QTableWidgetItem(op))
+            self.table.setItem(r, 2, QTableWidgetItem(detail))
+            d_it = QTableWidgetItem(dur)
+            d_it.setForeground(Qt.darkGreen if self._is_good_duration(payload) else Qt.darkYellow)
+            self.table.setItem(r, 3, d_it)
 
     @staticmethod
-    def _format_count(v:int)->str:
-        if v>=1_000_000: return f"{v/1_000_000:.2f}M"
-        if v>=1_000: return f"{v/1_000:.0f}K"
+    def _format_count(v: int) -> str:
+        if v >= 1_000_000:
+            return f"{v / 1_000_000:.2f}M"
+        if v >= 1_000:
+            return f"{v / 1_000:.0f}K"
         return str(v)
 
     @staticmethod
-    def _format_duration(payload)->str:
-        if not payload: return "-"
+    def _format_duration(payload) -> str:
+        if not payload:
+            return "-"
         if "duration_ms" in payload:
-            ms=float(payload.get("duration_ms") or 0)
-            if ms<1000: return f"{ms:.0f} ms"
-            return f"{ms/1000:.1f} sn"
+            ms = float(payload.get("duration_ms") or 0)
+            if ms < 1000:
+                return f"{ms:.0f} ms"
+            return f"{ms / 1000:.1f} sn"
         if "elapsed_ms" in payload:
-            ms=float(payload.get("elapsed_ms") or 0)
-            if ms<1000: return f"{ms:.0f} ms"
-            return f"{ms/1000:.1f} sn"
+            ms = float(payload.get("elapsed_ms") or 0)
+            if ms < 1000:
+                return f"{ms:.0f} ms"
+            return f"{ms / 1000:.1f} sn"
         if "duration_sec" in payload:
-            sec=float(payload.get("duration_sec") or 0)
-            if sec>=144: return f"{sec/60:.1f} dk"
+            sec = float(payload.get("duration_sec") or 0)
+            if sec >= 144:
+                return f"{sec / 60:.1f} dk"
             return f"{sec:.1f} sn"
         return "-"
 
     @staticmethod
-    def _status_from_metric(payload, export=False)->str:
-        if not payload: return "Ölçülmedi"
-        ms=None
-        if "duration_ms" in payload: ms=float(payload.get("duration_ms") or 0)
-        elif "elapsed_ms" in payload: ms=float(payload.get("elapsed_ms") or 0)
-        elif "duration_sec" in payload: ms=float(payload.get("duration_sec") or 0)*1000
-        if ms is None: return "Ölçülmedi"
-        if export:
-            if ms < 5000: return "Çok iyi"
-            if ms < 30000: return "İyi"
-            return "Ağır"
-        if ms < 100: return "Çok iyi"
-        if ms < 1000: return "İyi"
-        return "Ağır"
+    def _duration_ms(payload) -> float | None:
+        if not payload:
+            return None
+        if "duration_ms" in payload:
+            return float(payload.get("duration_ms") or 0)
+        if "elapsed_ms" in payload:
+            return float(payload.get("elapsed_ms") or 0)
+        if "duration_sec" in payload:
+            return float(payload.get("duration_sec") or 0) * 1000
+        return None
+
+    @classmethod
+    def _duration_color(cls, payload) -> str:
+        ms = cls._duration_ms(payload)
+        if ms is None:
+            return "#64748b"
+        if ms < 100:
+            return "#16a34a"
+        if ms < 1000:
+            return "#0f766e"
+        return "#d97706"
+
+    @classmethod
+    def _is_good_duration(cls, payload) -> bool:
+        ms = cls._duration_ms(payload)
+        return ms is not None and ms < 1000
+
+    @staticmethod
+    def _pretty_action(action: str, payload: dict) -> str:
+        mapping = {
+            "sts_opened": "Uygulama açıldı",
+            "platform_refresh": "Platform listesi yenilendi",
+            "contract_detail_open": "Sözleşme detayı açıldı",
+            "contract_saved": "Kayıt tamamlandı",
+            "excel_exported": "Excel export tamamlandı",
+            "database_optimize_completed": "Database optimize",
+            "database_vacuum_completed": "Database vacuum",
+            "performance_measurement": "Arama cevabı",
+        }
+        op = str(payload.get("operation") or payload.get("metric") or "").strip()
+        if op == "query":
+            return "Büyük tablo sorgusu"
+        return mapping.get(action, action)
+
+    @staticmethod
+    def _detail_text(payload: dict) -> str:
+        parts = []
+        if payload.get("platform"):
+            parts.append(str(payload.get("platform")))
+        if payload.get("context"):
+            parts.append(str(payload.get("context")))
+        if payload.get("row_count"):
+            parts.append(f"{payload.get('row_count')} satır")
+        if payload.get("contract_count"):
+            parts.append(f"{payload.get('contract_count')} sözleşme")
+        if payload.get("table_counts"):
+            parts.append("tablo sayımları")
+        return " · ".join(parts) if parts else "-"
