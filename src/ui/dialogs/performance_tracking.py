@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
+    QHeaderView,
 )
 
 from src.ui.theme import STYLE
@@ -132,7 +133,7 @@ QHeaderView::section { background:#edf3ff; border:none; padding:6px; color:#2644
         self.table.verticalHeader().setVisible(False)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.table.horizontalHeader().setStretchLastSection(False)
-        self.table.horizontalHeader().setSectionResizeMode(2, self.table.horizontalHeader().Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
         self.table.setColumnWidth(0, 90)
         self.table.setColumnWidth(1, 250)
         self.table.setColumnWidth(3, 110)

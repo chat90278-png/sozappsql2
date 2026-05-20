@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Dict, List, Tuple
 
-from PySide6.QtCore import Qt, QRectF
+from PySide6.QtCore import Qt, QRectF, QTimer
 from PySide6.QtGui import QColor, QPen, QPainter
 from PySide6.QtWidgets import (
     QComboBox,
@@ -72,6 +72,19 @@ class SchemaView(QGraphicsView):
         self._zoom = 1.0
         self.resetTransform()
 
+    def wheelEvent(self, event):
+        if event.modifiers() & Qt.ControlModifier:
+            delta = event.angleDelta().y()
+            step = 0.1 if delta > 0 else -0.1
+            nz = max(0.5, min(2.0, self._zoom + step))
+            if abs(nz - self._zoom) > 1e-9:
+                self._zoom = nz
+                self.resetTransform()
+                self.scale(self._zoom, self._zoom)
+            event.accept()
+            return
+        super().wheelEvent(event)
+
 
 class DatabaseManagementDialog(QDialog):
     def __init__(self, store, parent=None):
@@ -81,6 +94,8 @@ class DatabaseManagementDialog(QDialog):
         self.setWindowTitle("Database Yönetimi - STS")
         self.resize(1400, 820)
         self.setMinimumSize(1100, 680)
+        self.setWindowFlags(Qt.Window | Qt.WindowMinMaxButtonsHint | Qt.WindowCloseButtonHint)
+        self.setWindowState(self.windowState() | Qt.WindowMaximized)
 
         self.stats: Dict = {}
         self.table_names: List[str] = []
@@ -89,6 +104,7 @@ class DatabaseManagementDialog(QDialog):
 
         self.setStyleSheet(STYLE + self._local_style())
         self._build()
+        QTimer.singleShot(0, self.showMaximized)
         self.refresh_all()
 
     def _local_style(self) -> str:
@@ -97,7 +113,6 @@ QDialog#databaseEditorDialog { background:#eef4fb; }
 QFrame#topBar { background:#ffffff; border:1px solid #d8e4f2; border-radius:12px; }
 QLabel#titleBadge { background:#2563eb; color:white; border-radius:10px; padding:4px 8px; font-weight:800; }
 QLabel#topTitle { color:#0f2742; font-size:15px; font-weight:800; }
-QLabel#pathLabel { color:#6b7f98; font-size:12px; background:transparent; }
 QLabel#connOk { background:#dcfce7; color:#166534; border:1px solid #bbf7d0; border-radius:10px; padding:6px 10px; font-weight:700; }
 
 QFrame#iconRail, QFrame#sidePanel, QFrame#mainPanel, QFrame#toolbarCard { background:#ffffff; border:1px solid #d8e4f2; border-radius:12px; }
@@ -119,9 +134,9 @@ QListWidget#tableList::item:selected { background:#eaf1ff; border:1px solid #8bb
 QTableWidget { background:#ffffff; border:1px solid #d8e4f2; border-radius:10px; gridline-color:#e5edf8; alternate-background-color:#f8fbff; }
 QHeaderView::section { background:#edf3ff; border:none; border-right:1px solid #d8e4f2; padding:6px; color:#264463; font-weight:700; }
 
-QFrame#schemaCanvasWrap { background:#edf3fa; border:1px solid #d8e4f2; border-radius:10px; }
-QFrame#schemaCard { background:#ffffff; border:1px solid #cfdcf0; border-radius:10px; }
-QLabel#schemaCardTitle { background:#2563eb; color:white; border-radius:8px; padding:5px 8px; font-weight:800; }
+QFrame#schemaCanvasWrap { background:#f2f6fc; border:1px solid #d8e4f2; border-radius:10px; }
+QFrame#schemaCard { background:#ffffff; border:1px solid #cfdcf0; border-radius:14px; }
+QLabel#schemaCardTitle { color:white; border-radius:8px; padding:5px 8px; font-weight:800; }
 QLabel#schemaCol { color:#1f3b58; font-size:11px; background:transparent; }
 QLabel#pkTag { color:#0f9f6e; font-weight:800; }
 QLabel#fkTag { color:#4f46e5; font-weight:800; }
@@ -168,10 +183,7 @@ QLabel#fkTag { color:#4f46e5; font-weight:800; }
         left.addWidget(b); left.addWidget(self.top_title)
         lay.addLayout(left)
 
-        self.path_lbl = QLabel("-")
-        self.path_lbl.setObjectName("pathLabel")
-        self.path_lbl.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        lay.addWidget(self.path_lbl, 1)
+        lay.addStretch(1)
 
         self.conn_lbl = QLabel("● SQLite bağlantısı aktif")
         self.conn_lbl.setObjectName("connOk")
@@ -255,6 +267,7 @@ QLabel#fkTag { color:#4f46e5; font-weight:800; }
     def _set_page(self, page: str):
         self.tables_page.setVisible(page == "tables")
         self.schema_page.setVisible(page == "schema")
+        self.sidebar.setVisible(page == "tables")
         self.rail_tables.setProperty("active", page == "tables")
         self.rail_schema.setProperty("active", page == "schema")
         self.rail_tables.style().unpolish(self.rail_tables); self.rail_tables.style().polish(self.rail_tables)
@@ -262,9 +275,7 @@ QLabel#fkTag { color:#4f46e5; font-weight:800; }
 
     def refresh_all(self):
         self.stats = self.store.database_stats()
-        path = Path(str(self.stats.get("path", "database.sts")))
-        self.path_lbl.setText(f"{path.name}   {path}")
-        self.path_lbl.setToolTip(str(path))
+        _path = Path(str(self.stats.get("path", "database.sts")))
         self.table_names = sorted(list((self.stats.get("table_counts") or {}).keys()))
         self._refresh_sidebar()
         if not self.active_table and self.table_names:
@@ -393,34 +404,47 @@ QLabel#fkTag { color:#4f46e5; font-weight:800; }
             p2 = b.center(); p2.setX(b.left())
             path = self._relation_path(p1, p2)
             line = QGraphicsPathItem(path)
-            pen = QPen(QColor("#8ca0bf"), 1.6, Qt.DashLine)
+            pen = QPen(QColor("#8aa7cc"), 1.6, Qt.DashLine)
             line.setPen(pen)
+            line.setZValue(-1)
             scene.addItem(line)
 
         scene.setSceneRect(QRectF(0, 0, 1400, max(900, (len(tables)//col_count + 1) * (h + y_gap))))
 
     def _build_schema_card_widget(self, table: str, count: int) -> QWidget:
-        w = QFrame(); w.setObjectName("schemaCard"); w.setFixedWidth(290)
-        lay = QVBoxLayout(w); lay.setContentsMargins(8, 8, 8, 8); lay.setSpacing(4)
-        t = QLabel(f"{table}   ({self._fmt_count(count)})"); t.setObjectName("schemaCardTitle")
-        lay.addWidget(t)
-        for col_name, pk, fk in self._schema_columns(table)[:10]:
+        w = QFrame(); w.setObjectName("schemaCard"); w.setFixedWidth(320)
+        lay = QVBoxLayout(w); lay.setContentsMargins(8, 8, 8, 8); lay.setSpacing(5)
+        header = QFrame()
+        header.setStyleSheet("QFrame{border-radius:10px; background:qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #2563eb, stop:1 #0f9f6e);}")
+        hl = QHBoxLayout(header); hl.setContentsMargins(10, 4, 10, 4)
+        t = QLabel(table); t.setObjectName("schemaCardTitle")
+        c = QLabel(self._fmt_count(count)); c.setStyleSheet("background:#e6f9ef; color:#0f5132; border-radius:10px; padding:2px 8px; font-weight:800;")
+        hl.addWidget(t); hl.addStretch(1); hl.addWidget(c)
+        lay.addWidget(header)
+        cols = self._schema_columns(table)
+        for col_name, col_type, pk, fk in cols[:10]:
             row = QHBoxLayout()
             badge = QLabel("PK" if pk else ("FK" if fk else "•"))
             badge.setObjectName("pkTag" if pk else ("fkTag" if fk else "schemaCol"))
             txt = QLabel(col_name); txt.setObjectName("schemaCol")
-            row.addWidget(badge); row.addWidget(txt, 1)
+            typ = QLabel(col_type); typ.setObjectName("schemaCol"); typ.setStyleSheet("color:#6b7f98;")
+            row.addWidget(badge); row.addWidget(txt, 1); row.addWidget(typ)
             lay.addLayout(row)
+        if len(cols) > 10:
+            more = QLabel(f"+ {len(cols)-10} kolon")
+            more.setObjectName("schemaCol")
+            more.setStyleSheet("color:#6b7f98; font-style:italic;")
+            lay.addWidget(more)
         return w
 
-    def _schema_columns(self, table: str) -> List[Tuple[str, bool, bool]]:
+    def _schema_columns(self, table: str) -> List[Tuple[str, str, bool, bool]]:
         conn = getattr(getattr(self.store, "db", None), "conn", None)
         if conn is None:
             return []
         cols = conn.execute(f"PRAGMA table_info({table})").fetchall()
         fk_rows = conn.execute(f"PRAGMA foreign_key_list({table})").fetchall()
         fk_names = {str(r[3]) for r in fk_rows}
-        return [(str(c[1]), bool(c[5]), str(c[1]) in fk_names) for c in cols]
+        return [(str(c[1]), str(c[2]), bool(c[5]), str(c[1]) in fk_names) for c in cols]
 
     def _schema_relations(self):
         rels = set()
