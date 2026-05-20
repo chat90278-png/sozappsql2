@@ -6,14 +6,15 @@ import time
 from typing import Dict, List, Tuple, Optional
 
 from PySide6.QtCore import Qt, QRectF, QTimer
-from PySide6.QtGui import QColor, QPen, QPainter, QCursor
+from PySide6.QtGui import QColor, QPen, QPainter, QCursor, QLinearGradient, QBrush, QFontMetrics
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
     QFileDialog,
     QFrame,
     QGraphicsPathItem,
-    QGraphicsProxyWidget,
+    QGraphicsItem,
+    QGraphicsObject,
     QGraphicsScene,
     QGraphicsView,
     QGridLayout,
@@ -94,29 +95,81 @@ class SchemaView(QGraphicsView):
         super().wheelEvent(event)
 
 
-class SchemaCardProxy(QGraphicsProxyWidget):
-    def __init__(self, table_name: str, dialog: "DatabaseManagementDialog"):
+class SchemaTableItem(QGraphicsObject):
+    def __init__(self, table_name: str, count: int, cols: List[Tuple[str, str, bool, bool]], dialog: "DatabaseManagementDialog"):
         super().__init__()
         self.table_name = table_name
+        self.count = count
+        self.cols = cols
         self.dialog = dialog
-        self.setFlag(QGraphicsProxyWidget.ItemIsMovable, True)
-        self.setFlag(QGraphicsProxyWidget.ItemIsSelectable, True)
-        self.setFlag(QGraphicsProxyWidget.ItemSendsGeometryChanges, True)
+        self.card_width = 320
+        self.header_height = 36
+        self.row_height = 20
+        self.max_rows = 10
+        visible_rows = min(len(cols), self.max_rows)
+        extra = 24 if len(cols) > self.max_rows else 0
+        self.card_height = 14 + self.header_height + (visible_rows * self.row_height) + extra + 14
+        self.setFlag(QGraphicsItem.ItemIsMovable, True)
+        self.setFlag(QGraphicsItem.ItemIsSelectable, True)
+        self.setFlag(QGraphicsItem.ItemSendsGeometryChanges, True)
         self.setAcceptedMouseButtons(Qt.LeftButton)
         self.setCursor(Qt.OpenHandCursor)
         self.setZValue(10)
 
+    def boundingRect(self):
+        return QRectF(0, 0, self.card_width, self.card_height)
+
+    def paint(self, painter: QPainter, option, widget=None):
+        rect = self.boundingRect()
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.setPen(QPen(QColor("#bdd0ea"), 1.1))
+        painter.setBrush(QColor("#ffffff"))
+        painter.drawRoundedRect(rect, 14, 14)
+        header_rect = QRectF(8, 8, rect.width() - 16, self.header_height)
+        grad = QLinearGradient(header_rect.topLeft(), header_rect.topRight())
+        grad.setColorAt(0.0, QColor("#2563eb"))
+        grad.setColorAt(1.0, QColor("#0f9f6e"))
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QBrush(grad))
+        painter.drawRoundedRect(header_rect, 10, 10)
+        painter.setPen(Qt.white)
+        painter.drawText(QRectF(header_rect.left() + 10, header_rect.top(), header_rect.width() - 120, header_rect.height()), Qt.AlignVCenter | Qt.AlignLeft, self.table_name)
+        badge_rect = QRectF(header_rect.right() - 82, header_rect.top() + 7, 72, 22)
+        painter.setBrush(QColor("#e6f9ef"))
+        painter.drawRoundedRect(badge_rect, 10, 10)
+        painter.setPen(QColor("#0f5132"))
+        painter.drawText(badge_rect, Qt.AlignCenter, self.dialog._fmt_count(self.count))
+        y = self.header_height + 16
+        painter.setPen(QColor("#1f3b58"))
+        fm = QFontMetrics(painter.font())
+        for col_name, col_type, pk, fk in self.cols[: self.max_rows]:
+            badge = "PK" if pk else ("FK" if fk else "•")
+            painter.setPen(QColor("#0f9f6e") if pk else (QColor("#4f46e5") if fk else QColor("#1f3b58")))
+            painter.drawText(QRectF(14, y, 24, 18), Qt.AlignVCenter | Qt.AlignLeft, badge)
+            painter.setPen(QColor("#1f3b58"))
+            painter.drawText(QRectF(38, y, 180, 18), Qt.AlignVCenter | Qt.AlignLeft, fm.elidedText(col_name, Qt.ElideRight, 170))
+            painter.setPen(QColor("#6b7f98"))
+            painter.drawText(QRectF(rect.width() - 110, y, 96, 18), Qt.AlignVCenter | Qt.AlignRight, fm.elidedText(col_type, Qt.ElideRight, 92))
+            y += self.row_height
+        if len(self.cols) > self.max_rows:
+            painter.setPen(QColor("#6b7f98"))
+            painter.drawText(QRectF(14, y + 2, rect.width() - 30, 18), Qt.AlignLeft | Qt.AlignVCenter, f"+ {len(self.cols) - self.max_rows} kolon")
+        if self.isSelected():
+            painter.setPen(QPen(QColor("#3b82f6"), 2))
+            painter.setBrush(Qt.NoBrush)
+            painter.drawRoundedRect(rect.adjusted(1, 1, -1, -1), 14, 14)
+
     def itemChange(self, change, value):
-        if change == QGraphicsProxyWidget.ItemPositionChange and self.scene():
+        if change == QGraphicsItem.ItemPositionChange and self.scene():
             rect = self.scene().sceneRect()
             br = self.boundingRect()
             x = min(max(value.x(), rect.left()), rect.right() - br.width())
             y = min(max(value.y(), rect.top()), rect.bottom() - br.height())
             return super().itemChange(change, value.__class__(x, y))
-        if change == QGraphicsProxyWidget.ItemPositionHasChanged:
+        if change == QGraphicsItem.ItemPositionHasChanged:
             self.dialog._update_relation_lines_for_table(self.table_name)
-        if change == QGraphicsProxyWidget.ItemSelectedHasChanged:
-            self.dialog._update_card_visual_state(self.table_name)
+        if change == QGraphicsItem.ItemSelectedHasChanged:
+            self.update()
         return super().itemChange(change, value)
 
     def mousePressEvent(self, event):
@@ -142,7 +195,7 @@ class DatabaseManagementDialog(QDialog):
         self.stats: Dict = {}
         self.table_names: List[str] = []
         self.active_table: str = ""
-        self.schema_cards: Dict[str, QGraphicsProxyWidget] = {}
+        self.schema_cards: Dict[str, SchemaTableItem] = {}
         self.schema_rel_lines = []
 
         self.setStyleSheet(STYLE + self._local_style())
@@ -476,42 +529,15 @@ QLabel#fkTag { color:#4f46e5; font-weight:800; }
             col = i % col_count
             x = 40 + col * (w + x_gap)
             y = 30 + row * (h + y_gap)
-            card = self._build_schema_card_widget(t, int(counts.get(t, 0)))
-            proxy = SchemaCardProxy(t, self)
-            proxy.setWidget(card)
-            scene.addItem(proxy)
-            proxy.setPos(x, y)
-            self.schema_cards[t] = proxy
+            cols = self._schema_columns(t)
+            card_item = SchemaTableItem(t, int(counts.get(t, 0)), cols, self)
+            scene.addItem(card_item)
+            card_item.setPos(x, y)
+            self.schema_cards[t] = card_item
 
         self._build_relation_lines()
 
         scene.setSceneRect(QRectF(0, 0, 1400, max(900, (len(tables)//col_count + 1) * (h + y_gap))))
-
-    def _build_schema_card_widget(self, table: str, count: int) -> QWidget:
-        w = QFrame(); w.setObjectName("schemaCard"); w.setFixedWidth(320)
-        lay = QVBoxLayout(w); lay.setContentsMargins(8, 8, 8, 8); lay.setSpacing(5)
-        header = QFrame()
-        header.setStyleSheet("QFrame{border-radius:10px; background:qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #2563eb, stop:1 #0f9f6e);}")
-        hl = QHBoxLayout(header); hl.setContentsMargins(10, 4, 10, 4)
-        t = QLabel(table); t.setObjectName("schemaCardTitle")
-        c = QLabel(self._fmt_count(count)); c.setStyleSheet("background:#e6f9ef; color:#0f5132; border-radius:10px; padding:2px 8px; font-weight:800;")
-        hl.addWidget(t); hl.addStretch(1); hl.addWidget(c)
-        lay.addWidget(header)
-        cols = self._schema_columns(table)
-        for col_name, col_type, pk, fk in cols[:10]:
-            row = QHBoxLayout()
-            badge = QLabel("PK" if pk else ("FK" if fk else "•"))
-            badge.setObjectName("pkTag" if pk else ("fkTag" if fk else "schemaCol"))
-            txt = QLabel(col_name); txt.setObjectName("schemaCol")
-            typ = QLabel(col_type); typ.setObjectName("schemaCol"); typ.setStyleSheet("color:#6b7f98;")
-            row.addWidget(badge); row.addWidget(txt, 1); row.addWidget(typ)
-            lay.addLayout(row)
-        if len(cols) > 10:
-            more = QLabel(f"+ {len(cols)-10} kolon")
-            more.setObjectName("schemaCol")
-            more.setStyleSheet("color:#6b7f98; font-style:italic;")
-            lay.addWidget(more)
-        return w
 
     def _schema_columns(self, table: str) -> List[Tuple[str, str, bool, bool]]:
         conn = getattr(getattr(self.store, "db", None), "conn", None)
@@ -547,16 +573,18 @@ QLabel#fkTag { color:#4f46e5; font-weight:800; }
     def _highlight_schema(self):
         q = self.schema_search.text().strip().lower()
         selected = self.active_table
-        for t, proxy in self.schema_cards.items():
-            w = proxy.widget()
+        for t, card_item in self.schema_cards.items():
+            card_item.setOpacity(1.0)
             if not q:
-                w.setStyleSheet("")
+                card_item.update()
                 continue
             cols = [c[0].lower() for c in self._schema_columns(t)]
             hit = q in t.lower() or any(q in c for c in cols)
             if selected and self.rel_combo.currentText() == "Sadece seçili tablo" and t != selected and hit:
                 hit = False
-            w.setStyleSheet("border:2px solid #2563eb; border-radius:10px;" if hit or t == selected else "")
+            if not (hit or t == selected):
+                card_item.setOpacity(0.35)
+            card_item.update()
 
     def _layout_schema(self):
         self._render_schema()
@@ -587,18 +615,6 @@ QLabel#fkTag { color:#4f46e5; font-weight:800; }
         for rel in self.schema_rel_lines:
             if rel["src"] == table or rel["dst"] == table:
                 self._update_relation_line(rel)
-
-    def _update_card_visual_state(self, table: str):
-        proxy = self.schema_cards.get(table)
-        if not proxy:
-            return
-        w = proxy.widget()
-        if proxy.isSelected():
-            w.setStyleSheet("border:2px solid #3b82f6; border-radius:10px;")
-        elif not self.schema_search.text().strip():
-            w.setStyleSheet("")
-        else:
-            self._highlight_schema()
 
     def _clear_sql_terminal(self):
         self.sql_editor.clear()
