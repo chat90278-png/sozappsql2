@@ -3,81 +3,22 @@ from collections import Counter
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QButtonGroup,
     QCheckBox,
-    QComboBox,
     QDialog,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
+    QListWidget,
+    QListWidgetItem,
     QMessageBox,
     QPushButton,
-    QScrollArea,
-    QSizePolicy,
+    QRadioButton,
     QVBoxLayout,
-    QWidget,
 )
 
 from src.ui.theme import STYLE
-
-
-class PlatformRow(QFrame):
-    def __init__(self, platform_name: str, contract_count: int, on_changed):
-        super().__init__()
-        self.platform_name = platform_name
-        self._on_changed = on_changed
-        self.setObjectName("platformRow")
-        self.setStyleSheet("""
-QFrame#platformRow { border:1px solid #e2e8f0; border-radius:10px; background:#ffffff; }
-QFrame#platformRow:hover { border:1px solid #93c5fd; background:#f7fbff; }
-QFrame#platformRow[checked='true'] { border:1px solid #3b82f6; background:#f0f6ff; }
-QFrame#platformRow[disabled='true'] { border:1px solid #dbe5f1; background:#f8fafc; }
-QLabel#platformName { color:#0f172a; font-weight:800; }
-QLabel#platformBadge { color:#35506d; background:#eaf1ff; border-radius:9px; padding:3px 8px; font-weight:700; }
-""")
-        lay = QHBoxLayout(self)
-        lay.setContentsMargins(10, 8, 10, 8)
-        lay.setSpacing(8)
-        self.checkbox = QCheckBox()
-        self.checkbox.toggled.connect(self._emit_changed)
-        name = QLabel(platform_name)
-        name.setObjectName("platformName")
-        badge = QLabel(f"{contract_count} sözleşme")
-        badge.setObjectName("platformBadge")
-        lay.addWidget(self.checkbox)
-        lay.addWidget(name, 1)
-        lay.addWidget(badge)
-        self.set_interactive(True)
-
-    def _emit_changed(self):
-        self.setProperty("checked", self.checkbox.isChecked())
-        self.style().unpolish(self); self.style().polish(self)
-        self._on_changed()
-
-    def mousePressEvent(self, event):
-        if event.button() == Qt.LeftButton and self.checkbox.isEnabled():
-            if self.childAt(event.position().toPoint()) is not self.checkbox:
-                self.checkbox.toggle()
-                event.accept()
-                return
-        super().mousePressEvent(event)
-
-    def is_checked(self) -> bool:
-        return self.checkbox.isChecked()
-
-    def set_checked(self, checked: bool, silent: bool = False):
-        if silent:
-            self.checkbox.blockSignals(True)
-            self.checkbox.setChecked(checked)
-            self.checkbox.blockSignals(False)
-            self.setProperty("checked", self.checkbox.isChecked())
-            self.style().unpolish(self); self.style().polish(self)
-        else:
-            self.checkbox.setChecked(checked)
-
-    def set_interactive(self, enabled: bool):
-        self.checkbox.setEnabled(enabled)
-        self.setProperty("disabled", not enabled)
-        self.style().unpolish(self); self.style().polish(self)
 
 
 class ExcelExportDialog(QDialog):
@@ -90,7 +31,6 @@ class ExcelExportDialog(QDialog):
         self.contract_index = list(contract_index or [])
         self.result_options = None
         self._updating_ui = False
-        self.platform_rows = []
 
         self._platform_counts = Counter()
         for it in self.contract_index:
@@ -98,9 +38,9 @@ class ExcelExportDialog(QDialog):
             if p:
                 self._platform_counts[p] += 1
 
-        self.setWindowTitle("Excel’e Aktar - STS")
-        self.resize(920, 560)
-        self.setMinimumSize(820, 520)
+        self.setWindowTitle("Excel’e Aktar")
+        self.resize(920, 730)
+        self.setMinimumSize(860, 680)
         self.setStyleSheet(STYLE + self._local_style())
         self.build()
 
@@ -109,128 +49,111 @@ class ExcelExportDialog(QDialog):
 QFrame#exportHero { background:#10263f; border-radius:14px; }
 QLabel#exportHeroTitle { color:#ffffff; font-size:24px; font-weight:900; background:transparent; }
 QLabel#exportHeroDesc { color:#c8d8ea; font-size:12px; background:transparent; }
-QLabel#exportBadge { color:#f8fbff; background:rgba(255,255,255,0.14); border:1px solid rgba(255,255,255,0.28); border-radius:12px; padding:8px 12px; font-weight:950; }
+QLabel#exportBadge { color:#173b73; background:#eaf1ff; border-radius:12px; padding:8px 12px; font-weight:900; }
 
 QFrame#exportCard { background:#ffffff; border:1px solid #dbe5f1; border-radius:14px; }
 QLabel#exportCardHeader { color:#12345a; font-size:15px; font-weight:800; }
 QLabel#exportMuted { color:#64748b; font-size:11px; background:transparent; }
 
-QLabel#exportSectionTitle { color:#163b64; font-size:14px; font-weight:900; background:transparent; }
-QComboBox#exportCombo { background:#ffffff; border:1px solid #d6e2f0; border-radius:10px; padding:8px; min-height:36px; }
+QFrame#exportScopeOption { background:#ffffff; border:1px solid #edf2f7; border-radius:12px; }
+QFrame#exportScopeOptionActive { background:#eff6ff; border:1px solid #3b82f6; border-radius:12px; }
+QLabel#exportScopeTitle { color:#163b64; font-size:14px; font-weight:900; background:transparent; }
+QLabel#exportScopeBadge { color:#1d4ed8; border:1px solid #cfe1fb; border-radius:10px; padding:2px 7px; font-size:11px; font-weight:800; background:#ffffff; }
 
 QPushButton#exportLinkButton { background:transparent; color:#2563eb; border:none; padding:0; font-size:12px; font-weight:900; }
 QPushButton#exportPrimaryButton { background:#2563eb; color:white; border:none; border-radius:12px; padding:11px 16px; font-weight:900; min-width:140px; }
 QPushButton#exportSecondaryButton { background:#ffffff; color:#244767; border:1px solid #d6e2f0; border-radius:12px; padding:11px 16px; font-weight:800; min-width:120px; }
 
-QFrame#summaryStatCard { background:#ffffff; border:1px solid #e2e8f0; border-radius:10px; padding:8px 10px; }
-QLabel#summaryStatTitle { color:#64748b; font-size:11px; }
-QLabel#summaryStatValue { color:#12345a; font-size:16px; font-weight:900; }
-QLabel#exportWarning { background:#fff7e6; color:#92400e; border:1px solid #f3c37b; border-radius:12px; padding:10px 12px; font-weight:800; }
-QScrollArea#platformScroll { border:1px solid #dbe5f1; border-radius:10px; background:#ffffff; }
-QScrollArea#platformScroll QScrollBar:vertical { width:10px; background:#f5f8fc; margin:8px 2px; border-radius:5px; }
-QScrollArea#platformScroll QScrollBar::handle:vertical { background:#b4c6de; border-radius:5px; min-height:28px; }
-QScrollArea#platformScroll QScrollBar::add-line:vertical, QScrollArea#platformScroll QScrollBar::sub-line:vertical { height:0; }
+QLabel#exportSummaryRow { background:#ffffff; border:1px solid #e2e8f0; border-radius:10px; padding:8px 10px; }
+QLabel#exportWarning { background:#fff7df; color:#7c4a03; border:1px solid #f7d48a; border-radius:12px; padding:10px 12px; font-weight:700; }
 QDialog#excelExportDialog QLabel, QDialog#excelExportDialog QCheckBox, QDialog#excelExportDialog QRadioButton { background: transparent; }
 """
 
     def build(self):
         root = QVBoxLayout(self)
-        root.setContentsMargins(12, 12, 12, 12)
-        root.setSpacing(10)
 
         hero = QFrame(); hero.setObjectName("exportHero")
         hl = QHBoxLayout(hero); hl.setContentsMargins(18, 16, 18, 16)
         txt = QVBoxLayout()
         t = QLabel("Excel’e Aktar"); t.setObjectName("exportHeroTitle")
-        d = QLabel("STS verilerinden sade ve kontrollü Excel çıktısı oluşturun.")
+        d = QLabel("STS verilerinden Excel raporu oluşturun. Tüm veri yerine belirli platformları seçerek daha hızlı ve daha sade çıktı alabilirsiniz.")
         d.setObjectName("exportHeroDesc"); d.setWordWrap(True)
         txt.addWidget(t); txt.addWidget(d)
         hl.addLayout(txt, 1)
         hl.addWidget(QLabel("STS → XLSX", objectName="exportBadge"), 0, Qt.AlignTop)
         root.addWidget(hero)
 
-        mid = QHBoxLayout(); mid.setSpacing(10); root.addLayout(mid, 1)
-        left_col = QVBoxLayout(); mid.addLayout(left_col, 3)
-        right_col = QVBoxLayout(); mid.addLayout(right_col, 2)
+        mid = QHBoxLayout(); root.addLayout(mid, 1)
+        left_col = QVBoxLayout(); mid.addLayout(left_col, 1)
+        right_col = QVBoxLayout(); mid.addLayout(right_col, 1)
 
-        settings_card = QFrame(); settings_card.setObjectName("exportCard")
-        scl = QVBoxLayout(settings_card)
-        h = QHBoxLayout()
-        h.addWidget(QLabel("Aktarım Ayarları", objectName="exportCardHeader"))
-        h.addStretch(1)
-        h.addWidget(QLabel("zorunlu", objectName="exportMuted"))
-        scl.addLayout(h)
+        scope_card = QFrame(); scope_card.setObjectName("exportCard")
+        scl = QVBoxLayout(scope_card)
+        scl.addWidget(QLabel("Aktarım Kapsamı", objectName="exportCardHeader"))
+        self.rb_active = self._scope_row("Aktif platform", "Yalnızca şu anda seçili platformu aktarır.", "En hızlı")
+        self.rb_selected = self._scope_row("Seçili platformlar", "Bir veya daha fazla platform seçerek özel Excel çıktısı oluşturur.")
+        self.rb_all = self._scope_row("Tüm platformlar", "Tüm platformları tek Excel dosyasına aktarır.", "Kapsamlı")
+        self.rb_summary = self._scope_row("Sadece özet", "Platform sheetleri olmadan yalnızca özet rapor oluşturur.")
+        self.scope_rows = [self.rb_active, self.rb_selected, self.rb_all, self.rb_summary]
+        for w in self.scope_rows:
+            scl.addWidget(w)
+        g = QButtonGroup(self)
+        for row in self.scope_rows:
+            rb = row.findChild(QRadioButton)
+            g.addButton(rb)
+            rb.toggled.connect(self._update_state)
+        left_col.addWidget(scope_card)
 
-        combo_row = QHBoxLayout()
-        scope_wrap = QVBoxLayout()
-        scope_wrap.addWidget(QLabel("Aktarım Kapsamı", objectName="exportSectionTitle"))
-        self.scope_combo = QComboBox(); self.scope_combo.setObjectName("exportCombo")
-        self.scope_combo.addItems(["Aktif platform", "Seçili platformlar", "Tüm platformlar", "Sadece özet"])
-        self.scope_combo.currentTextChanged.connect(self._update_state)
-        scope_wrap.addWidget(self.scope_combo)
-        combo_row.addLayout(scope_wrap, 1)
-
-        content_wrap = QVBoxLayout()
-        content_wrap.addWidget(QLabel("Excel İçeriği", objectName="exportSectionTitle"))
-        self.content_combo = QComboBox(); self.content_combo.setObjectName("exportCombo")
-        self.content_combo.addItems(["Standart rapor", "Özet + sözleşme toplamı", "Sistem + kabul detaylı", "Tüm kolonlar", "Özel seçim"])
-        self.content_combo.currentTextChanged.connect(self._update_state)
-        content_wrap.addWidget(self.content_combo)
-        combo_row.addLayout(content_wrap, 1)
-        scl.addLayout(combo_row)
-
-        self.custom_wrap = QFrame(); self.custom_wrap.setObjectName("exportCard")
-        cwl = QVBoxLayout(self.custom_wrap)
-        cwl.addWidget(QLabel("İçerik Seçenekleri", objectName="exportSectionTitle"))
-        self.cb_summary = QCheckBox("Özet sheet"); self.cb_tags = QCheckBox("Etiketler")
-        self.cb_contract = QCheckBox("Sözleşme toplamı"); self.cb_system = QCheckBox("Sistem toplamı")
-        self.cb_delivery = QCheckBox("Kabul/Teslimat"); self.cb_comp = QCheckBox("Bileşen kolonları")
-        for cb in [self.cb_summary, self.cb_tags, self.cb_contract, self.cb_system, self.cb_delivery, self.cb_comp]:
-            cb.setChecked(True); cb.toggled.connect(self._update_state)
-            cwl.addWidget(cb)
-        self.custom_wrap.setVisible(False)
-        scl.addWidget(self.custom_wrap)
-        left_col.addWidget(settings_card)
+        content_card = QFrame(); content_card.setObjectName("exportCard")
+        cl = QVBoxLayout(content_card)
+        cl.addWidget(QLabel("Excel İçeriği", objectName="exportCardHeader"))
+        grid = QGridLayout()
+        self.cb_summary = self._opt_box("Özet sheet ekle", "Dosya geneli ve platform bazlı sayıları ekler.", True)
+        self.cb_tags = self._opt_box("Etiketleri dahil et", "Sözleşme etiketlerini Excel’e ekler.", True)
+        self.cb_contract = self._opt_box("Sözleşme toplamı", "Her sözleşme için genel toplam satırı oluşturur.", True)
+        self.cb_system = self._opt_box("Sistem toplamı", "Sistem bazlı toplam satırları ekler.", True)
+        self.cb_delivery = self._opt_box("Kabul/Teslimat", "Kabul bazlı planlanan/teslim edilen satırları ekler.", True)
+        self.cb_comp = self._opt_box("Bileşen kolonları", "Adet, teslim edilen ve kalan kolonlarını ekler.", True)
+        opts = [self.cb_summary, self.cb_tags, self.cb_contract, self.cb_system, self.cb_delivery, self.cb_comp]
+        for i, w in enumerate(opts):
+            grid.addWidget(w, i // 2, i % 2)
+        cl.addLayout(grid)
+        left_col.addWidget(content_card)
 
         platform_card = QFrame(); platform_card.setObjectName("exportCard")
         pl = QVBoxLayout(platform_card)
         ph = QHBoxLayout()
         ph.addWidget(QLabel("Platformlar", objectName="exportCardHeader")); ph.addStretch(1)
+        sel = QPushButton("Tümünü seç"); sel.setObjectName("exportLinkButton"); sel.clicked.connect(lambda: self._check_all(True))
+        clr = QPushButton("Seçimi temizle"); clr.setObjectName("exportLinkButton"); clr.clicked.connect(lambda: self._check_all(False))
+        ph.addWidget(sel); ph.addWidget(clr)
         pl.addLayout(ph)
-        self.platform_container = QWidget()
-        self.platform_layout = QVBoxLayout(self.platform_container)
-        self.platform_layout.setContentsMargins(8, 8, 8, 8)
-        self.platform_layout.setSpacing(6)
+        self.platform_list = QListWidget()
+
+        self.platform_list.setStyleSheet("""
+QListWidget { border:1px solid #dbe5f1; border-radius:10px; background:#ffffff; padding:4px; }
+QListWidget::item { border:1px solid #e2e8f0; border-radius:10px; padding:10px 12px; margin:4px 2px; background:#ffffff; color:#0f172a; font-weight:800; }
+QListWidget::item:selected { background:#eff6ff; border:1px solid #93c5fd; color:#0f172a; }
+QListWidget::indicator { width:16px; height:16px; }
+QListWidget::indicator:unchecked { border:1px solid #94a3b8; border-radius:4px; background:#ffffff; }
+QListWidget::indicator:checked { border:1px solid #2563eb; border-radius:4px; background:#2563eb; }
+""")
         for p in (self.store.platform_names() if hasattr(self.store, "platform_names") else []):
             c = self._platform_counts.get(str(p), 0)
-            row = PlatformRow(str(p), c, self._on_platform_item_changed)
-            self.platform_rows.append(row)
-            self.platform_layout.addWidget(row)
-        self.platform_layout.addStretch(1)
-        self.platform_scroll = QScrollArea()
-        self.platform_scroll.setObjectName("platformScroll")
-        self.platform_scroll.setWidgetResizable(True)
-        self.platform_scroll.setFrameShape(QFrame.NoFrame)
-        self.platform_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.platform_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self.platform_scroll.setMinimumHeight(180)
-        self.platform_scroll.setMaximumHeight(260)
-        self.platform_scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.platform_scroll.setWidget(self.platform_container)
-        pl.addWidget(self.platform_scroll, 1)
-        left_col.addWidget(platform_card, 1)
+            it = QListWidgetItem(f"{p}    {c} sözleşme")
+            it.setData(Qt.UserRole, str(p))
+            it.setFlags(it.flags() | Qt.ItemIsUserCheckable)
+            it.setCheckState(Qt.Unchecked)
+            self.platform_list.addItem(it)
+        self.platform_list.itemChanged.connect(self._on_platform_item_changed)
+        pl.addWidget(self.platform_list)
+        right_col.addWidget(platform_card, 1)
 
         summary_card = QFrame(); summary_card.setObjectName("exportCard")
         sl = QVBoxLayout(summary_card)
-        sh = QHBoxLayout()
-        sh.addWidget(QLabel("Seçim Özeti", objectName="exportCardHeader"))
-        sh.addStretch(1)
-        sh.addWidget(QLabel("canlı", objectName="exportMuted"))
-        sl.addLayout(sh)
-        self.summary_scope = self._summary_stat(sl, "Kapsam")
-        self.summary_platform_count = self._summary_stat(sl, "Platform Sayısı")
-        self.summary_contract_est = self._summary_stat(sl, "Tahmini Sözleşme")
-        self.summary_rows = self._summary_stat(sl, "Satır Kapsamı")
+        sl.addWidget(QLabel("Seçim Özeti", objectName="exportCardHeader"))
+        self.summary_label = QLabel(""); self.summary_label.setWordWrap(True); self.summary_label.setObjectName("exportSummaryRow"); self.summary_label.setTextFormat(Qt.RichText)
+        sl.addWidget(self.summary_label)
         right_col.addWidget(summary_card)
 
         self.warn = QLabel(""); self.warn.setObjectName("exportWarning"); self.warn.setWordWrap(True)
@@ -242,30 +165,59 @@ QDialog#excelExportDialog QLabel, QDialog#excelExportDialog QCheckBox, QDialog#e
         obtn = QPushButton("Excel Oluştur"); obtn.setObjectName("exportPrimaryButton"); obtn.clicked.connect(self.accept_options)
         foot.addWidget(cbtn); foot.addWidget(obtn)
 
+        for box in [self.cb_summary, self.cb_tags, self.cb_contract, self.cb_system, self.cb_delivery, self.cb_comp]:
+            box.findChild(QCheckBox).toggled.connect(self._update_state)
+
         if self.active_platform:
-            self.scope_combo.setCurrentText("Aktif platform")
+            self.rb_active.findChild(QRadioButton).setChecked(True)
         else:
-            self.scope_combo.setCurrentText("Tüm platformlar")
+            self.rb_all.findChild(QRadioButton).setChecked(True)
         self._update_state()
-    def _summary_stat(self, parent_layout, title):
-        card = QFrame(); card.setObjectName("summaryStatCard")
-        lay = QVBoxLayout(card)
-        lay.setContentsMargins(8, 8, 8, 8)
-        lay.addWidget(QLabel(title, objectName="summaryStatTitle"))
-        val = QLabel("-"); val.setObjectName("summaryStatValue")
-        val.setWordWrap(True); val.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
-        lay.addWidget(val)
-        parent_layout.addWidget(card)
-        return val
+
+    def _scope_row(self, title, desc, badge=None):
+        w = QFrame(); w.setObjectName("exportScopeOption")
+        l = QVBoxLayout(w); l.setContentsMargins(10, 8, 10, 8)
+        top = QHBoxLayout()
+        rb = QRadioButton(title); rb.setObjectName("exportScopeTitle")
+        top.addWidget(rb)
+        top.addStretch(1)
+        if badge:
+            top.addWidget(QLabel(badge, objectName="exportScopeBadge"))
+        md = QLabel(desc); md.setObjectName("exportMuted"); md.setWordWrap(True)
+        l.addLayout(top); l.addWidget(md)
+        return w
+
+    def _opt_box(self, title, desc, checked):
+        w = QFrame(); w.setObjectName("exportScopeOption")
+        l = QVBoxLayout(w); l.setContentsMargins(8, 6, 8, 6)
+        cb = QCheckBox(title); cb.setChecked(checked); cb.setStyleSheet("font-weight:800; background:transparent;")
+        md = QLabel(desc); md.setObjectName("exportMuted"); md.setWordWrap(True)
+        l.addWidget(cb); l.addWidget(md)
+        return w
 
     def _selected_platforms(self):
-        return [r.platform_name for r in self.platform_rows if r.is_checked()]
+        out = []
+        for i in range(self.platform_list.count()):
+            it = self.platform_list.item(i)
+            if it.checkState() == Qt.Checked:
+                out.append(str(it.data(Qt.UserRole) or ""))
+        return out
 
     def _set_platform_checks(self, checked: bool):
-        for row in self.platform_rows:
-            row.set_checked(checked, silent=True)
+        self.platform_list.blockSignals(True)
+        try:
+            for i in range(self.platform_list.count()):
+                self.platform_list.item(i).setCheckState(Qt.Checked if checked else Qt.Unchecked)
+        finally:
+            self.platform_list.blockSignals(False)
 
-    def _on_platform_item_changed(self):
+    def _check_all(self, checked: bool):
+        if self._updating_ui:
+            return
+        self._set_platform_checks(checked)
+        self._refresh_summary()
+
+    def _on_platform_item_changed(self, _item):
         if self._updating_ui:
             return
         self._refresh_summary()
@@ -275,87 +227,99 @@ QDialog#excelExportDialog QLabel, QDialog#excelExportDialog QCheckBox, QDialog#e
             return
         self._updating_ui = True
         try:
-            scope = self._scope_value()
+            rb_active = self.rb_active.findChild(QRadioButton).isChecked()
+            rb_selected = self.rb_selected.findChild(QRadioButton).isChecked()
+            rb_all = self.rb_all.findChild(QRadioButton).isChecked()
+            rb_summary = self.rb_summary.findChild(QRadioButton).isChecked()
 
-            if scope == "all":
-                self._set_platform_checks(True)
-                for row in self.platform_rows:
-                    row.set_interactive(False)
-            elif scope == "active":
-                self._set_platform_checks(False)
-                for row in self.platform_rows:
-                    row.set_checked(row.platform_name == self.active_platform, silent=True)
-                    row.set_interactive(False)
-            elif scope == "summary_only":
-                self._set_platform_checks(False)
-                for row in self.platform_rows:
-                    row.set_interactive(False)
-            else:
-                for row in self.platform_rows:
-                    row.set_interactive(True)
+            for row in self.scope_rows:
+                row.setObjectName("exportScopeOptionActive" if row.findChild(QRadioButton).isChecked() else "exportScopeOption")
+                row.style().unpolish(row); row.style().polish(row)
 
-            self.custom_wrap.setVisible(self.content_combo.currentText() == "Özel seçim")
-            self._apply_content_preset()
+            self.platform_list.blockSignals(True)
+            try:
+                if rb_all:
+                    self._set_platform_checks(True)
+                    self.platform_list.setEnabled(False)
+                elif rb_active:
+                    self._set_platform_checks(False)
+                    for i in range(self.platform_list.count()):
+                        it = self.platform_list.item(i)
+                        if str(it.data(Qt.UserRole) or "") == self.active_platform:
+                            it.setCheckState(Qt.Checked)
+                    self.platform_list.setEnabled(False)
+                elif rb_summary:
+                    self.platform_list.setEnabled(False)
+                else:
+                    self.platform_list.setEnabled(True)
+            finally:
+                self.platform_list.blockSignals(False)
+
+            summary_only = rb_summary
+            csum = self.cb_summary.findChild(QCheckBox)
+            if summary_only:
+                csum.setChecked(True)
+            csum.setEnabled(not summary_only)
+            for box in [self.cb_contract, self.cb_system, self.cb_delivery, self.cb_comp, self.cb_tags]:
+                box.findChild(QCheckBox).setEnabled(not summary_only)
         finally:
             self._updating_ui = False
 
         self._refresh_summary()
 
     def _refresh_summary(self):
-        scope = self._scope_value()
-        scope_name = self.scope_combo.currentText()
-        if scope in {"selected", "active"}:
+        rb_active = self.rb_active.findChild(QRadioButton).isChecked()
+        rb_selected = self.rb_selected.findChild(QRadioButton).isChecked()
+        rb_all = self.rb_all.findChild(QRadioButton).isChecked()
+        rb_summary = self.rb_summary.findChild(QRadioButton).isChecked()
+
+        scope_name = "Aktif platform" if rb_active else "Seçili platformlar" if rb_selected else "Tüm platformlar" if rb_all else "Sadece özet"
+        if rb_selected or rb_active:
             plats = self._selected_platforms()
-        elif scope == "all":
+        elif rb_all:
             plats = list(self.store.platform_names() if hasattr(self.store, "platform_names") else [])
         else:
             plats = []
 
         est = "-"
         if self._platform_counts:
-            est_val = sum(self._platform_counts.get(p, 0) for p in plats) if plats else (sum(self._platform_counts.values()) if scope == "all" else 0)
+            est_val = sum(self._platform_counts.get(p, 0) for p in plats) if plats else (sum(self._platform_counts.values()) if rb_all else 0)
             est = str(est_val)
 
         rows = []
-        if self.cb_contract.isChecked(): rows.append("Sözleşme")
-        if self.cb_system.isChecked(): rows.append("Sistem")
-        if self.cb_delivery.isChecked(): rows.append("Kabul")
+        if self.cb_contract.findChild(QCheckBox).isChecked(): rows.append("Sözleşme")
+        if self.cb_system.findChild(QCheckBox).isChecked(): rows.append("Sistem")
+        if self.cb_delivery.findChild(QCheckBox).isChecked(): rows.append("Kabul")
         rows_txt = " + ".join(rows) if rows else "-"
-        self.summary_scope.setText(scope_name)
-        self.summary_platform_count.setText(str(len(plats) if scope != "summary_only" else 0))
-        self.summary_contract_est.setText(est)
-        self.summary_rows.setText(rows_txt)
 
-        if scope == "all" and self.cb_delivery.isChecked() and self.cb_comp.isChecked():
-            self.warn.setText("Büyük veri setlerinde tüm platformlar, kabul satırları ve bileşen kolonlarıyla export işlemi birkaç dakika sürebilir.")
-            self.warn.setVisible(True)
+        self.summary_label.setText(
+            ""
+            f"<div style='line-height:1.55'>"
+            f"<div><span style='color:#64748b'>Kapsam</span> <b style='float:right'>{scope_name}</b></div>"
+            f"<div><span style='color:#64748b'>Platform sayısı</span> <b style='float:right'>{len(plats) if not rb_summary else 0}</b></div>"
+            f"<div><span style='color:#64748b'>Tahmini sözleşme</span> <b style='float:right'>{est}</b></div>"
+            f"<div><span style='color:#64748b'>Satır kapsamı</span> <b style='float:right'>{rows_txt}</b></div>"
+            f"<div><span style='color:#64748b'>Bileşen kolonları</span> <b style='float:right'>{'Açık' if self.cb_comp.findChild(QCheckBox).isChecked() else 'Kapalı'}</b></div>"
+            f"</div>"
+        )
+
+        if rb_all and self.cb_delivery.findChild(QCheckBox).isChecked() and self.cb_comp.findChild(QCheckBox).isChecked():
+            self.warn.setText("Bu seçim en kapsamlı ve en yavaş çıktıdır.")
         else:
-            self.warn.setText("Seçili kapsama göre export süresi kısa olacaktır.")
-            self.warn.setVisible(True)
-
-    def _scope_value(self):
-        return {
-            "Aktif platform": "active",
-            "Seçili platformlar": "selected",
-            "Tüm platformlar": "all",
-            "Sadece özet": "summary_only",
-        }.get(self.scope_combo.currentText(), "all")
-
-    def _apply_content_preset(self):
-        if self.content_combo.currentText() == "Özel seçim":
-            return
-        presets = {
-            "Standart rapor": (True, True, True, True, True, True),
-            "Özet + sözleşme toplamı": (True, True, True, False, False, False),
-            "Sistem + kabul detaylı": (True, True, True, True, True, False),
-            "Tüm kolonlar": (True, True, True, True, True, True),
-        }
-        vals = presets.get(self.content_combo.currentText(), presets["Standart rapor"])
-        for cb, v in zip([self.cb_summary, self.cb_tags, self.cb_contract, self.cb_system, self.cb_delivery, self.cb_comp], vals):
-            cb.blockSignals(True); cb.setChecked(v); cb.blockSignals(False)
+            self.warn.setText("Büyük veri setlerinde tüm platformlar, kabul satırları ve bileşen kolonlarıyla export işlemi birkaç dakika sürebilir.")
 
     def accept_options(self):
-        scope = self._scope_value()
+        rb_active = self.rb_active.findChild(QRadioButton).isChecked()
+        rb_selected = self.rb_selected.findChild(QRadioButton).isChecked()
+        rb_all = self.rb_all.findChild(QRadioButton).isChecked()
+
+        scope = "summary_only"
+        if rb_selected:
+            scope = "selected"
+        elif rb_active:
+            scope = "active"
+        elif rb_all:
+            scope = "all"
 
         plats = self._selected_platforms()
         if scope == "selected" and not plats:
@@ -368,11 +332,11 @@ QDialog#excelExportDialog QLabel, QDialog#excelExportDialog QCheckBox, QDialog#e
         self.result_options = {
             "scope": scope,
             "platforms": [self.active_platform] if scope == "active" else plats,
-            "include_summary": self.cb_summary.isChecked() or scope == "summary_only",
-            "include_contract_rows": self.cb_contract.isChecked(),
-            "include_system_rows": self.cb_system.isChecked(),
-            "include_delivery_rows": self.cb_delivery.isChecked(),
-            "include_component_columns": self.cb_comp.isChecked(),
-            "include_tags": self.cb_tags.isChecked(),
+            "include_summary": self.cb_summary.findChild(QCheckBox).isChecked() or scope == "summary_only",
+            "include_contract_rows": self.cb_contract.findChild(QCheckBox).isChecked(),
+            "include_system_rows": self.cb_system.findChild(QCheckBox).isChecked(),
+            "include_delivery_rows": self.cb_delivery.findChild(QCheckBox).isChecked(),
+            "include_component_columns": self.cb_comp.findChild(QCheckBox).isChecked(),
+            "include_tags": self.cb_tags.findChild(QCheckBox).isChecked(),
         }
         self.accept()
