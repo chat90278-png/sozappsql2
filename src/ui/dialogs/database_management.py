@@ -105,10 +105,8 @@ class SchemaTableItem(QGraphicsObject):
         self.card_width = 320
         self.header_height = 36
         self.row_height = 20
-        self.max_rows = 10
-        visible_rows = min(len(cols), self.max_rows)
-        extra = 24 if len(cols) > self.max_rows else 0
-        self.card_height = 14 + self.header_height + (visible_rows * self.row_height) + extra + 14
+        visible_rows = max(1, len(cols))
+        self.card_height = 14 + self.header_height + (visible_rows * self.row_height) + 14
         self.setFlag(QGraphicsItem.ItemIsMovable, True)
         self.setFlag(QGraphicsItem.ItemIsSelectable, True)
         self.setFlag(QGraphicsItem.ItemSendsGeometryChanges, True)
@@ -142,7 +140,7 @@ class SchemaTableItem(QGraphicsObject):
         y = self.header_height + 16
         painter.setPen(QColor("#1f3b58"))
         fm = QFontMetrics(painter.font())
-        for col_name, col_type, pk, fk in self.cols[: self.max_rows]:
+        for col_name, col_type, pk, fk in self.cols:
             badge = "PK" if pk else ("FK" if fk else "•")
             painter.setPen(QColor("#0f9f6e") if pk else (QColor("#4f46e5") if fk else QColor("#1f3b58")))
             painter.drawText(QRectF(14, y, 24, 18), Qt.AlignVCenter | Qt.AlignLeft, badge)
@@ -151,9 +149,6 @@ class SchemaTableItem(QGraphicsObject):
             painter.setPen(QColor("#6b7f98"))
             painter.drawText(QRectF(rect.width() - 110, y, 96, 18), Qt.AlignVCenter | Qt.AlignRight, fm.elidedText(col_type, Qt.ElideRight, 92))
             y += self.row_height
-        if len(self.cols) > self.max_rows:
-            painter.setPen(QColor("#6b7f98"))
-            painter.drawText(QRectF(14, y + 2, rect.width() - 30, 18), Qt.AlignLeft | Qt.AlignVCenter, f"+ {len(self.cols) - self.max_rows} kolon")
         if self.isSelected():
             painter.setPen(QPen(QColor("#3b82f6"), 2))
             painter.setBrush(Qt.NoBrush)
@@ -167,7 +162,8 @@ class SchemaTableItem(QGraphicsObject):
             y = min(max(value.y(), rect.top()), rect.bottom() - br.height())
             return super().itemChange(change, value.__class__(x, y))
         if change == QGraphicsItem.ItemPositionHasChanged:
-            self.dialog._update_relation_lines_for_table(self.table_name)
+            if not getattr(self.dialog, "_schema_rendering", False):
+                self.dialog._update_relation_lines_for_table(self.table_name)
         if change == QGraphicsItem.ItemSelectedHasChanged:
             self.update()
         return super().itemChange(change, value)
@@ -197,6 +193,7 @@ class DatabaseManagementDialog(QDialog):
         self.active_table: str = ""
         self.schema_cards: Dict[str, SchemaTableItem] = {}
         self.schema_rel_lines = []
+        self._schema_rendering = False
 
         self.setStyleSheet(STYLE + self._local_style())
         self._build()
@@ -212,7 +209,7 @@ QLabel#topTitle { color:#0f2742; font-size:15px; font-weight:800; }
 QLabel#connOk { background:#dcfce7; color:#166534; border:1px solid #bbf7d0; border-radius:10px; padding:6px 10px; font-weight:700; }
 
 QFrame#iconRail, QFrame#sidePanel, QFrame#mainPanel, QFrame#toolbarCard { background:#ffffff; border:1px solid #d8e4f2; border-radius:12px; }
-QPushButton#railBtn { background:transparent; border:1px solid transparent; border-radius:10px; padding:10px; color:#4b607a; font-weight:800; font-size:12px; }
+QPushButton#railBtn { background:transparent; border:1px solid transparent; border-radius:10px; min-width:48px; min-height:48px; padding:8px; color:#2d4a6b; font-weight:900; font-size:12px; }
 QPushButton#railBtn[active='true'] { background:#2563eb; color:white; }
 
 QLabel { background:transparent; }
@@ -296,7 +293,7 @@ QLabel#fkTag { color:#4f46e5; font-weight:800; }
     def _build_rail(self):
         rail = QFrame(); rail.setObjectName("iconRail"); rail.setFixedWidth(64)
         lay = QVBoxLayout(rail); lay.setContentsMargins(8, 12, 8, 12); lay.setSpacing(8)
-        self.rail_tables = QPushButton("▦"); self.rail_tables.setObjectName("railBtn"); self.rail_tables.clicked.connect(lambda: self._set_page("tables"))
+        self.rail_tables = QPushButton("TAB"); self.rail_tables.setObjectName("railBtn"); self.rail_tables.clicked.connect(lambda: self._set_page("tables"))
         self.rail_schema = QPushButton("REL"); self.rail_schema.setObjectName("railBtn"); self.rail_schema.clicked.connect(lambda: self._set_page("schema"))
         self.rail_sql = QPushButton("SQL"); self.rail_sql.setObjectName("railBtn"); self.rail_sql.clicked.connect(lambda: self._set_page("sql"))
         self.rail_tables.setToolTip("Tablolar")
@@ -516,28 +513,46 @@ QLabel#fkTag { color:#4f46e5; font-weight:800; }
 
     def _render_schema(self):
         scene = self.schema_view.scene()
-        scene.clear()
-        self.schema_cards.clear()
-        counts = self.stats.get("table_counts") or {}
-        tables = self.table_names
+        self._schema_rendering = True
+        try:
+            scene.clear()
+            self.schema_cards.clear()
+            self.schema_rel_lines = []
+            counts = self.stats.get("table_counts") or {}
+            tables = list(self.table_names)
 
-        col_count = 3
-        w, h = 300, 220
-        x_gap, y_gap = 90, 70
-        for i, t in enumerate(tables):
-            row = i // col_count
-            col = i % col_count
-            x = 40 + col * (w + x_gap)
-            y = 30 + row * (h + y_gap)
-            cols = self._schema_columns(t)
-            card_item = SchemaTableItem(t, int(counts.get(t, 0)), cols, self)
-            scene.addItem(card_item)
-            card_item.setPos(x, y)
-            self.schema_cards[t] = card_item
+            col_count = 4
+            x_start, y_start = 40, 30
+            x_step = 340
+            y_gap = 52
+            row_heights: List[float] = []
+            max_x = 0.0
+            max_y = 0.0
+
+            for t in tables:
+                cols = self._schema_columns(t)
+                card_item = SchemaTableItem(t, int(counts.get(t, 0)), cols, self)
+                scene.addItem(card_item)
+                self.schema_cards[t] = card_item
+
+            for idx, t in enumerate(tables):
+                card_item = self.schema_cards[t]
+                row = idx // col_count
+                col = idx % col_count
+                while len(row_heights) <= row:
+                    row_heights.append(0.0)
+                row_heights[row] = max(row_heights[row], card_item.boundingRect().height())
+                y = y_start + sum(row_heights[:row]) + (row * y_gap)
+                x = x_start + (col * x_step)
+                card_item.setPos(x, y)
+                max_x = max(max_x, x + card_item.boundingRect().width())
+                max_y = max(max_y, y + card_item.boundingRect().height())
+        finally:
+            self._schema_rendering = False
 
         self._build_relation_lines()
-
-        scene.setSceneRect(QRectF(0, 0, 1400, max(900, (len(tables)//col_count + 1) * (h + y_gap))))
+        self._update_all_relation_lines()
+        scene.setSceneRect(QRectF(0, 0, max(1600, max_x + 120), max(1000, max_y + 120)))
 
     def _schema_columns(self, table: str) -> List[Tuple[str, str, bool, bool]]:
         conn = getattr(getattr(self.store, "db", None), "conn", None)
@@ -559,8 +574,15 @@ QLabel#fkTag { color:#4f46e5; font-weight:800; }
                     rows = []
                 for r in rows:
                     rels.add((str(r[2]), str(r[4]), t, str(r[3])))
-        if not rels:
-            rels.update(FALLBACK_RELATIONS)
+        rels.update(FALLBACK_RELATIONS)
+        if "component_platforms" in self.table_names:
+            cols = {name for (name, _, _, _) in self._schema_columns("component_platforms")}
+            if "component_id" in cols:
+                rels.add(("components", "id", "component_platforms", "component_id"))
+            if "component_name" in cols:
+                rels.add(("components", "name", "component_platforms", "component_name"))
+            if "platform_name" in cols:
+                rels.add(("platforms", "name", "component_platforms", "platform_name"))
         return sorted(rels)
 
     def _relation_path(self, p1, p2):
@@ -596,7 +618,7 @@ QLabel#fkTag { color:#4f46e5; font-weight:800; }
             if src_t not in self.schema_cards or dst_t not in self.schema_cards:
                 continue
             line = QGraphicsPathItem()
-            pen = QPen(QColor("#8aa7cc"), 1.6, Qt.DashLine)
+            pen = QPen(QColor("#8aa7cc"), 2.0, Qt.DashLine)
             line.setPen(pen)
             line.setZValue(-10)
             scene.addItem(line)
@@ -605,16 +627,28 @@ QLabel#fkTag { color:#4f46e5; font-weight:800; }
             self._update_relation_line(rec)
 
     def _update_relation_line(self, rel):
+        if rel["src"] not in self.schema_cards or rel["dst"] not in self.schema_cards:
+            return
         a = self.schema_cards[rel["src"]].sceneBoundingRect()
         b = self.schema_cards[rel["dst"]].sceneBoundingRect()
-        p1 = a.center(); p1.setX(a.right())
-        p2 = b.center(); p2.setX(b.left())
+        p1 = a.center()
+        p2 = b.center()
+        if a.center().x() <= b.center().x():
+            p1.setX(a.right())
+            p2.setX(b.left())
+        else:
+            p1.setX(a.left())
+            p2.setX(b.right())
         rel["line"].setPath(self._relation_path(p1, p2))
 
     def _update_relation_lines_for_table(self, table: str):
         for rel in self.schema_rel_lines:
             if rel["src"] == table or rel["dst"] == table:
                 self._update_relation_line(rel)
+
+    def _update_all_relation_lines(self):
+        for rel in self.schema_rel_lines:
+            self._update_relation_line(rel)
 
     def _clear_sql_terminal(self):
         self.sql_editor.clear()
