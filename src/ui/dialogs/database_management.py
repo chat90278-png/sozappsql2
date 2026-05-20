@@ -191,6 +191,10 @@ class DatabaseManagementDialog(QDialog):
         self.stats: Dict = {}
         self.table_names: List[str] = []
         self.active_table: str = ""
+        self._current_rows: List[dict] = []
+        self._current_columns: List[str] = []
+        self._sort_column: Optional[str] = None
+        self._sort_ascending: bool = True
         self.schema_cards: Dict[str, SchemaTableItem] = {}
         self.schema_rel_lines = []
         self._schema_rendering = False
@@ -286,12 +290,11 @@ QLabel#fkTag { color:#4f46e5; font-weight:800; }
 
         self.backup_btn = QPushButton("Yedek Al"); self.backup_btn.setObjectName("softBtn"); self.backup_btn.clicked.connect(self.run_backup)
         self.opt_btn = QPushButton("Optimize"); self.opt_btn.setObjectName("softBtn"); self.opt_btn.clicked.connect(self.run_optimize)
-        self.refresh_btn = QPushButton("Yenile"); self.refresh_btn.setObjectName("primaryBtn"); self.refresh_btn.clicked.connect(self.refresh_all)
-        lay.addWidget(self.backup_btn); lay.addWidget(self.opt_btn); lay.addWidget(self.refresh_btn)
+        lay.addWidget(self.backup_btn); lay.addWidget(self.opt_btn)
         return bar
 
     def _build_rail(self):
-        rail = QFrame(); rail.setObjectName("iconRail"); rail.setFixedWidth(64)
+        rail = QFrame(); rail.setObjectName("iconRail"); rail.setFixedWidth(72)
         lay = QVBoxLayout(rail); lay.setContentsMargins(8, 12, 8, 12); lay.setSpacing(8)
         self.rail_tables = QPushButton("TAB"); self.rail_tables.setObjectName("railBtn"); self.rail_tables.clicked.connect(lambda: self._set_page("tables"))
         self.rail_schema = QPushButton("REL"); self.rail_schema.setObjectName("railBtn"); self.rail_schema.clicked.connect(lambda: self._set_page("schema"))
@@ -323,12 +326,10 @@ QLabel#fkTag { color:#4f46e5; font-weight:800; }
         self.row_search = QLineEdit(); self.row_search.setPlaceholderText("Satır ara / filtrele..."); self.row_search.textChanged.connect(self._apply_table_filters)
         self.limit_combo = QComboBox(); self.limit_combo.addItems(["100", "500", "1000"]); self.limit_combo.setCurrentText("100"); self.limit_combo.currentTextChanged.connect(self._refresh_active_table)
         self.platform_filter = QComboBox(); self.platform_filter.addItem("Tümü"); self.platform_filter.currentTextChanged.connect(self._apply_table_filters)
-        self.filter_btn = QPushButton("Filtre"); self.filter_btn.setObjectName("softBtn"); self.filter_btn.clicked.connect(self._apply_table_filters)
+        self.filter_btn = QPushButton("Filtrele"); self.filter_btn.setObjectName("softBtn"); self.filter_btn.clicked.connect(self._apply_table_filters)
         self.sort_btn = QPushButton("Sırala"); self.sort_btn.setObjectName("softBtn"); self.sort_btn.clicked.connect(self._sort_table)
-        self.table_refresh_btn = QPushButton("Yenile"); self.table_refresh_btn.setObjectName("softBtn"); self.table_refresh_btn.clicked.connect(self._refresh_active_table)
-        self.cols_btn = QPushButton("Kolonlar"); self.cols_btn.setObjectName("softBtn"); self.cols_btn.clicked.connect(self._show_columns)
-        self.add_btn = QPushButton("+ Satır Ekle"); self.add_btn.setObjectName("warnBtn"); self.add_btn.clicked.connect(lambda: QMessageBox.information(self, "Bilgi", "Düzenleme modu sonraki aşamada eklenecek."))
-        for w in [self.row_search, self.limit_combo, self.platform_filter, self.filter_btn, self.sort_btn, self.table_refresh_btn, self.cols_btn, self.add_btn]:
+        self.row_search.returnPressed.connect(self._apply_table_filters)
+        for w in [self.row_search, self.limit_combo, self.platform_filter, self.filter_btn, self.sort_btn]:
             tlay.addWidget(w)
         tlay.setStretch(0, 1)
         lay.addWidget(tb)
@@ -350,8 +351,7 @@ QLabel#fkTag { color:#4f46e5; font-weight:800; }
         self.rel_combo = QComboBox(); self.rel_combo.addItems(["Tüm ilişkiler", "Sadece seçili tablo", "Kritik ilişkiler"])
         self.schema_search = QLineEdit(); self.schema_search.setPlaceholderText("Tablo veya kolon ara..."); self.schema_search.textChanged.connect(self._highlight_schema)
         self.auto_btn = QPushButton("Otomatik Yerleştir"); self.auto_btn.setObjectName("softBtn"); self.auto_btn.clicked.connect(self._layout_schema)
-        self.schema_refresh_btn = QPushButton("Yenile"); self.schema_refresh_btn.setObjectName("primaryBtn"); self.schema_refresh_btn.clicked.connect(self._render_schema)
-        for w in [self.schema_combo, self.rel_combo, self.schema_search, self.auto_btn, self.schema_refresh_btn]:
+        for w in [self.schema_combo, self.rel_combo, self.schema_search, self.auto_btn]:
             tlay.addWidget(w)
         tlay.setStretch(3, 1)
         lay.addWidget(tb)
@@ -451,15 +451,11 @@ QLabel#fkTag { color:#4f46e5; font-weight:800; }
             limit = 100
         rows = self.store.preview_table(self.active_table, limit)
         cols = list(rows[0].keys()) if rows else self._table_columns(self.active_table)
-        self.grid.setRowCount(len(rows))
-        self.grid.setColumnCount(len(cols))
-        self.grid.setHorizontalHeaderLabels(cols)
-        for r, row in enumerate(rows):
-            for c, col in enumerate(cols):
-                txt = str(row.get(col, ""))
-                it = QTableWidgetItem(txt)
-                it.setToolTip(txt)
-                self.grid.setItem(r, c, it)
+        self._current_rows = list(rows or [])
+        self._current_columns = list(cols or [])
+        self._sort_column = None
+        self._sort_ascending = True
+        self._fill_table_grid(self._current_rows, self._current_columns)
         self._fill_platform_filter(cols, rows)
         self._apply_table_filters()
 
@@ -480,29 +476,51 @@ QLabel#fkTag { color:#4f46e5; font-weight:800; }
     def _apply_table_filters(self):
         q = self.row_search.text().strip().lower()
         pflt = self.platform_filter.currentText().strip()
-        has_platform = self.grid.columnCount() and any(self.grid.horizontalHeaderItem(i).text() == "platform" for i in range(self.grid.columnCount()))
-        pcol = -1
-        if has_platform:
-            for i in range(self.grid.columnCount()):
-                if self.grid.horizontalHeaderItem(i).text() == "platform":
-                    pcol = i
-                    break
-        for r in range(self.grid.rowCount()):
-            show = True
-            if q:
-                row_txt = " | ".join((self.grid.item(r, c).text() if self.grid.item(r, c) else "") for c in range(self.grid.columnCount())).lower()
-                show = q in row_txt
-            if show and has_platform and pflt and pflt != "Tümü" and pcol >= 0:
-                pv = self.grid.item(r, pcol).text() if self.grid.item(r, pcol) else ""
-                show = pv == pflt
-            self.grid.setRowHidden(r, not show)
+        rows = list(self._current_rows)
+        has_platform = "platform" in self._current_columns
+        if q:
+            rows = [r for r in rows if q in " | ".join(str(r.get(c, "")) for c in self._current_columns).lower()]
+        if has_platform and pflt and pflt != "Tümü":
+            rows = [r for r in rows if str(r.get("platform", "")) == pflt]
+        if self._sort_column:
+            rows = self._sorted_rows(rows, self._sort_column, self._sort_ascending)
+        self._fill_table_grid(rows, self._current_columns)
 
     def _sort_table(self):
-        self.grid.sortItems(0, Qt.AscendingOrder)
+        if not self._current_columns:
+            return
+        current_idx = self.grid.currentColumn()
+        if 0 <= current_idx < len(self._current_columns):
+            target_col = self._current_columns[current_idx]
+        else:
+            target_col = "id" if "id" in self._current_columns else self._current_columns[0]
+        if self._sort_column == target_col:
+            self._sort_ascending = not self._sort_ascending
+        else:
+            self._sort_column = target_col
+            self._sort_ascending = True
+        self._apply_table_filters()
 
-    def _show_columns(self):
-        cols = [self.grid.horizontalHeaderItem(i).text() for i in range(self.grid.columnCount())]
-        QMessageBox.information(self, "Kolonlar", "\n".join(cols) if cols else "Kolon bulunamadı.")
+    def _fill_table_grid(self, rows: List[dict], cols: List[str]):
+        self.grid.setRowCount(len(rows))
+        self.grid.setColumnCount(len(cols))
+        self.grid.setHorizontalHeaderLabels(cols)
+        for r, row in enumerate(rows):
+            for c, col in enumerate(cols):
+                txt = str(row.get(col, ""))
+                it = QTableWidgetItem(txt)
+                it.setToolTip(txt)
+                self.grid.setItem(r, c, it)
+
+    @staticmethod
+    def _sorted_rows(rows: List[dict], column: str, ascending: bool) -> List[dict]:
+        def _key(row: dict):
+            raw = str(row.get(column, "")).strip()
+            try:
+                return (0, float(raw.replace(",", ".")))
+            except Exception:
+                return (1, raw.lower())
+        return sorted(rows, key=_key, reverse=not ascending)
 
     def _table_columns(self, table: str) -> List[str]:
         conn = getattr(getattr(self.store, "db", None), "conn", None)
@@ -552,7 +570,7 @@ QLabel#fkTag { color:#4f46e5; font-weight:800; }
 
         self._build_relation_lines()
         self._update_all_relation_lines()
-        scene.setSceneRect(QRectF(0, 0, max(1600, max_x + 120), max(1000, max_y + 120)))
+        scene.setSceneRect(QRectF(0, 0, max(3000, max_x + 600), max(2200, max_y + 500)))
 
     def _schema_columns(self, table: str) -> List[Tuple[str, str, bool, bool]]:
         conn = getattr(getattr(self.store, "db", None), "conn", None)
