@@ -1392,6 +1392,101 @@ class ComponentManagerDialog(StyledDialog):
 
 from src.ui.dialogs.platforms import PlatformManagerDialog, PlatformDialog
 
+class MultiUserPickerDialog(QDialog):
+    def __init__(self, available: List[str], selected: List[str], parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Kullanıcı Seç")
+        self.resize(420, 380)
+        self._checks: Dict[str, QCheckBox] = {}
+        lay = QVBoxLayout(self)
+        for n in available:
+            name = str(n or "").strip()
+            if not name:
+                continue
+            cb = QCheckBox(name)
+            cb.setChecked(name in selected)
+            lay.addWidget(cb)
+            self._checks[name] = cb
+        lay.addStretch()
+        row = QHBoxLayout()
+        row.addStretch()
+        ok = QPushButton("Tamam")
+        ok.clicked.connect(self.accept)
+        cancel = QPushButton("İptal")
+        cancel.setObjectName("secondary")
+        cancel.clicked.connect(self.reject)
+        row.addWidget(cancel)
+        row.addWidget(ok)
+        lay.addLayout(row)
+
+    def selected_users(self) -> List[str]:
+        return [n for n, cb in self._checks.items() if cb.isChecked()]
+
+class MultiUserSelectWidget(QWidget):
+    changed = Signal()
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._available: List[str] = []
+        self._selected: List[str] = []
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        self.display = QLineEdit()
+        self.display.setReadOnly(True)
+        self.btn = QPushButton("Seç")
+        self.btn.setObjectName("secondary")
+        self.btn.clicked.connect(self.open_picker)
+        lay.addWidget(self.display, 1)
+        lay.addWidget(self.btn, 0)
+        self._sync()
+
+    def set_available_users(self, user_names: List[str]):
+        seen = set()
+        vals = []
+        for u in list(user_names or []):
+            n = str(u or "").strip()
+            if not n:
+                continue
+            k = n.casefold()
+            if k in seen:
+                continue
+            seen.add(k)
+            vals.append(n)
+        self._available = vals
+        self._selected = [x for x in self._selected if x in self._available]
+        self._sync()
+
+    def set_users(self, user_names: List[str]):
+        seen = set()
+        vals = []
+        for u in list(user_names or []):
+            n = str(u or "").strip()
+            if not n:
+                continue
+            k = n.casefold()
+            if k in seen:
+                continue
+            seen.add(k)
+            vals.append(n)
+        self._selected = vals
+        self._sync()
+        self.changed.emit()
+
+    def selected_users(self) -> List[str]:
+        return list(self._selected)
+
+    def _sync(self):
+        txt = ", ".join(self._selected)
+        self.display.setText(txt)
+        self.display.setToolTip(txt)
+
+    def open_picker(self):
+        dlg = MultiUserPickerDialog(self._available, self._selected, self)
+        if not dlg.exec():
+            return
+        self._selected = dlg.selected_users()
+        self._sync()
+        self.changed.emit()
+
 class ContractDialog(StyledDialog):
     def __init__(self, store: ExcelStore, parent=None):
         super().__init__("Yeni Sözleşme", parent)
@@ -1442,7 +1537,10 @@ class ContractDialog(StyledDialog):
         no_container_lay.addWidget(self.no_dup_warn)
 
         self.platform = QComboBox(); self.platform.addItems(self.store.platform_names())
-        self.user = QComboBox(); self.user.addItems([u.get("name", "") for u in self.user_records])
+        self.user = MultiUserSelectWidget(self)
+        self.user.set_available_users([u.get("name", "") for u in self.user_records])
+        if self.user_records:
+            self.user.set_users([self.user_records[0].get("name", "")])
         self.yi_yd = QLineEdit(); self.yi_yd.setReadOnly(True); self.yi_yd.setText("Yİ")
         self.ctype = QComboBox(); self.ctype.addItems(["Ana Sözleşme"])
         self.sd_code = QLineEdit(); self.sd_code.setPlaceholderText("SD-1"); self.sd_code.setEnabled(False)
@@ -1455,7 +1553,7 @@ class ContractDialog(StyledDialog):
 
         self.t0.textChanged.connect(self.update_completion_date)
         self.months.valueChanged.connect(self.update_completion_date)
-        self.user.currentTextChanged.connect(self.update_user_yi_yd)
+        self.user.changed.connect(self.update_user_yi_yd)
         self.ctype.currentTextChanged.connect(self.on_contract_type_changed)
         self.verify_btn.clicked.connect(lambda: self.verify_sd_reference(show_message=False))
         self.platform.currentTextChanged.connect(self.on_sd_ref_changed)
@@ -1563,9 +1661,10 @@ class ContractDialog(StyledDialog):
     def _set_user_from_main_contract(self, info: dict):
         target_user = str(info.get("user", "") or "").strip()
         if target_user:
-            if self.user.findText(target_user, Qt.MatchExactly) < 0:
-                self.user.addItem(target_user)
-            self.user.setCurrentText(target_user)
+            cur = self.user.selected_users()
+            if target_user not in cur:
+                cur = [target_user]
+            self.user.set_users(cur)
         yi_yd = str(info.get("yi_yd", "Yİ") or "Yİ").strip().upper()
         self.yi_yd.setText("YD" if yi_yd == "YD" else "Yİ")
 
@@ -1635,7 +1734,7 @@ class ContractDialog(StyledDialog):
         if self.is_sd_mode() and self._sd_verified_info:
             self._set_user_from_main_contract(self._sd_verified_info)
             return
-        selected = self.user.currentText().strip()
+        selected = (self.user.selected_users() or [""])[0].strip()
         yi_yd = self.user_to_yi_yd.get(selected, "Yİ")
         self.yi_yd.setText("YD" if str(yi_yd).upper() == "YD" else "Yİ")
 
@@ -1700,7 +1799,8 @@ class ContractDialog(StyledDialog):
         if self.is_sd_mode() and not self.verify_sd_reference(show_message=False):
             QMessageBox.warning(self, "Doğrulama", "Sözleşme Değişikliği için önce geçerli kontrat no doğrulaması gerekir.")
             return
-        if not self.user.currentText():
+        sel_users = self.user.selected_users()
+        if not sel_users:
             QMessageBox.warning(self, "Eksik", "Önce Kullanıcı Yönetimi ekranından kullanıcı tanımlayın.")
             return
         # Zorunlu tarih ve ay alanları
@@ -1756,10 +1856,12 @@ class ContractDialog(StyledDialog):
             pass  # Kontrol başarısız olursa devam et
 
         self.update_completion_date()
+        users = self.user.selected_users()
+        user_display = ", ".join(users)
         self.result = ContractInfo(
             no=self.no.text().strip(),
             platform=self.platform.currentText(),
-            user=self.user.currentText().strip(),
+            user=user_display,
             yi_yd=self.yi_yd.text().strip() or "Yİ",
             contract_type=contract_type,
             signature_date=iso_or_blank(self.sig.text()),
@@ -1773,6 +1875,7 @@ class ContractDialog(StyledDialog):
             sd_anchor_end_row=self._sd_anchor_end_row if self.is_sd_mode() else 0,
             sd_anchor_platform=self._sd_anchor_platform if self.is_sd_mode() else "",
             sd_anchor_no=self._sd_anchor_no if self.is_sd_mode() else "",
+            users=users,
         )
         self.accept()
 
@@ -1857,9 +1960,12 @@ class ContractEditDialog(StyledDialog):
         self._no_dup_warn.setVisible(self._is_sd_contract)
 
         # ── Düzenlenebilir alanlar ────────────────────────────────────
-        self.user = QComboBox()
-        self.user.addItems([u.get("name", "") for u in self.user_records])
-        self.user.setCurrentText(str(self.ci.user or ""))
+        self.user = MultiUserSelectWidget(self)
+        self.user.set_available_users([u.get("name", "") for u in self.user_records])
+        init_users = list(getattr(self.ci, "users", []) or [])
+        if not init_users and str(self.ci.user or "").strip():
+            init_users = [x.strip() for x in str(self.ci.user or "").split(",") if x.strip()]
+        self.user.set_users(init_users)
 
         self.yi_yd = QLineEdit()
         self.yi_yd.setReadOnly(True)
@@ -1890,7 +1996,7 @@ class ContractEditDialog(StyledDialog):
 
         self.t0.textChanged.connect(self._recalc)
         self.months.valueChanged.connect(self._recalc)
-        self.user.currentTextChanged.connect(self.update_user_yi_yd)
+        self.user.changed.connect(self.update_user_yi_yd)
         self.update_user_yi_yd()
         self._recalc()
 
@@ -1943,7 +2049,7 @@ class ContractEditDialog(StyledDialog):
         root.addLayout(btn_row)
 
     def update_user_yi_yd(self):
-        selected = self.user.currentText().strip()
+        selected = (self.user.selected_users() or [""])[0].strip()
         yi_yd = self.user_to_yi_yd.get(selected, "Yİ")
         self.yi_yd.setText("YD" if str(yi_yd).upper() == "YD" else "Yİ")
 
@@ -2096,7 +2202,12 @@ class ContractEditDialog(StyledDialog):
         self._recalc()
         new_ci = copy.copy(self.ci)
         new_ci.no              = new_no_text
-        new_ci.user            = self.user.currentText().strip()
+        selected_users = self.user.selected_users()
+        if not selected_users:
+            QMessageBox.warning(self, "Zorunlu Alan", "En az bir kullanıcı seçmelisiniz.")
+            return
+        new_ci.users           = selected_users
+        new_ci.user            = ", ".join(selected_users)
         new_ci.yi_yd           = self.yi_yd.text().strip() or "Yİ"
         new_ci.signature_date  = iso_or_blank(sig_text)
         new_ci.t0_date         = iso_or_blank(t0_text)
@@ -2671,6 +2782,20 @@ class SystemDialog(StyledDialog):
         self.name.setText(self.default_name)
         self.name.selectAll()
         root.addWidget(self.name)
+        root.addWidget(form_label("Teslim Edilecek Kullanıcı"))
+        self.delivery_user_combo = QComboBox()
+        self.delivery_user_combo.addItem("Seçiniz...")
+        user_names = [u.get("name", "") for u in self.store.load_users(active_only=True) if str(u.get("name", "")).strip()]
+        for un in user_names:
+            self.delivery_user_combo.addItem(un)
+        initial_delivery = str(getattr(self.existing_system, "delivery_user", "") or "").strip()
+        if initial_delivery:
+            idx_du = self.delivery_user_combo.findText(initial_delivery, Qt.MatchExactly)
+            if idx_du < 0:
+                self.delivery_user_combo.addItem(initial_delivery)
+                idx_du = self.delivery_user_combo.findText(initial_delivery, Qt.MatchExactly)
+            self.delivery_user_combo.setCurrentIndex(max(0, idx_du))
+        root.addWidget(self.delivery_user_combo)
 
         date_card = QFrame()
         date_card.setObjectName("systemFormCard")
@@ -3033,6 +3158,7 @@ class SystemDialog(StyledDialog):
             completion_date=self.completion_date.text().strip(),
             status=getattr(self.existing_system, "status", "Başlanmadı") or "Başlanmadı",
             acceptance_date=getattr(self.existing_system, "acceptance_date", "") or "",
+            delivery_user="" if self.delivery_user_combo.currentIndex() <= 0 else self.delivery_user_combo.currentText().strip(),
         )
         self.result.removed_components = set(removed)
         self.accept()
@@ -3148,6 +3274,15 @@ class MultiSystemDialog(StyledDialog):
         self.name_edit = QLineEdit()
         self.name_edit.textChanged.connect(self.on_name_changed)
         mid.addWidget(self.name_edit)
+        mid.addWidget(form_label("Teslim Edilecek Kullanıcı"))
+        self.delivery_user_combo = QComboBox()
+        self.delivery_user_combo.addItem("Seçiniz...")
+        for u in self.store.load_users(active_only=True):
+            uname = str(u.get("name", "")).strip()
+            if uname:
+                self.delivery_user_combo.addItem(uname)
+        self.delivery_user_combo.currentTextChanged.connect(self.on_delivery_user_changed)
+        mid.addWidget(self.delivery_user_combo)
 
         date_strip = QFrame()
         date_strip.setObjectName("dateStrip")
@@ -3307,6 +3442,7 @@ class MultiSystemDialog(StyledDialog):
             "completion_date": completion,
             "system_type": "",
             "components": {},
+            "delivery_user": "",
         }
 
     def add_blank_system(self, select: bool = True):
@@ -3372,6 +3508,10 @@ class MultiSystemDialog(StyledDialog):
         month_lbl.setObjectName("miniPillOrange")
         meta.addWidget(typ_lbl, 0)
         meta.addWidget(month_lbl, 0)
+        if str(draft.get("delivery_user") or "").strip():
+            du_lbl = QLabel(f"Teslim: {str(draft.get('delivery_user') or '').strip()}")
+            du_lbl.setObjectName("miniPill")
+            meta.addWidget(du_lbl, 0)
         meta.addStretch()
         lay.addLayout(meta)
         return card
@@ -3395,6 +3535,9 @@ class MultiSystemDialog(StyledDialog):
             self.t0_date_edit.setText(str(draft.get("t0_date") or ""))
             self.months_spin.setValue(int(draft.get("t0_months") or 0))
             self.completion_edit.setText(str(draft.get("completion_date") or ""))
+            delivery_user = str(draft.get("delivery_user") or "").strip()
+            idx_du = self.delivery_user_combo.findText(delivery_user, Qt.MatchExactly) if delivery_user else 0
+            self.delivery_user_combo.setCurrentIndex(max(0, idx_du))
             typ = str(draft.get("system_type") or "")
             idx = self.type_combo.findText(typ) if typ else 0
             self.type_combo.setCurrentIndex(idx if idx >= 0 else 0)
@@ -3428,6 +3571,12 @@ class MultiSystemDialog(StyledDialog):
             return
         self.current_draft()["t0_months"] = int(value)
         self.recalc_current_completion()
+        self.refresh_system_list(keep_row=self.current_index, reload_form=False)
+
+    def on_delivery_user_changed(self, _text: str):
+        if self._loading:
+            return
+        self.current_draft()["delivery_user"] = "" if self.delivery_user_combo.currentIndex() <= 0 else self.delivery_user_combo.currentText().strip()
         self.refresh_system_list(keep_row=self.current_index, reload_form=False)
 
     def set_custom_type(self):
@@ -3689,6 +3838,7 @@ class MultiSystemDialog(StyledDialog):
                 completion_date=completion,
                 status="Başlanmadı",
                 acceptance_date="",
+                delivery_user=str(draft.get("delivery_user") or ""),
             ))
         self.result = out
         self.accept()
@@ -5251,6 +5401,7 @@ class ContractWorkWindow(QDialog):
             no=no,
             platform=platform,
             user=str((main_info or {}).get("user") or getattr(source_ci, "user", "") or ""),
+            users=list(getattr(source_ci, "users", []) or []),
             yi_yd=str((main_info or {}).get("yi_yd") or getattr(source_ci, "yi_yd", "Yİ") or "Yİ"),
             contract_type=sd_code,
             signature_date="",
