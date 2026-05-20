@@ -6,7 +6,7 @@ import time
 from typing import Dict, List, Tuple, Optional
 
 from PySide6.QtCore import Qt, QRectF, QTimer
-from PySide6.QtGui import QColor, QPen, QPainter
+from PySide6.QtGui import QColor, QPen, QPainter, QCursor
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -53,9 +53,13 @@ TABLE_INFO = {
 FALLBACK_RELATIONS = [
     ("contracts", "id", "systems", "contract_id"),
     ("contracts", "id", "deliveries", "contract_id"),
+    ("contracts", "id", "contract_tags", "contract_id"),
     ("systems", "id", "system_components", "system_id"),
     ("deliveries", "id", "delivery_components", "delivery_id"),
-    ("contracts", "id", "contract_tags", "contract_id"),
+    ("tags", "name", "contract_tags", "tag_name"),
+    ("platforms", "name", "contracts", "platform"),
+    ("components", "name", "system_components", "component_name"),
+    ("components", "name", "delivery_components", "component_name"),
 ]
 
 
@@ -98,8 +102,9 @@ class SchemaCardProxy(QGraphicsProxyWidget):
         self.setFlag(QGraphicsProxyWidget.ItemIsMovable, True)
         self.setFlag(QGraphicsProxyWidget.ItemIsSelectable, True)
         self.setFlag(QGraphicsProxyWidget.ItemSendsGeometryChanges, True)
+        self.setAcceptedMouseButtons(Qt.LeftButton)
         self.setCursor(Qt.OpenHandCursor)
-        self.setZValue(1)
+        self.setZValue(10)
 
     def itemChange(self, change, value):
         if change == QGraphicsProxyWidget.ItemPositionChange and self.scene():
@@ -113,6 +118,14 @@ class SchemaCardProxy(QGraphicsProxyWidget):
         if change == QGraphicsProxyWidget.ItemSelectedHasChanged:
             self.dialog._update_card_visual_state(self.table_name)
         return super().itemChange(change, value)
+
+    def mousePressEvent(self, event):
+        self.setCursor(QCursor(Qt.ClosedHandCursor))
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        self.setCursor(QCursor(Qt.OpenHandCursor))
+        super().mouseReleaseEvent(event)
 
 
 class DatabaseManagementDialog(QDialog):
@@ -146,7 +159,7 @@ QLabel#topTitle { color:#0f2742; font-size:15px; font-weight:800; }
 QLabel#connOk { background:#dcfce7; color:#166534; border:1px solid #bbf7d0; border-radius:10px; padding:6px 10px; font-weight:700; }
 
 QFrame#iconRail, QFrame#sidePanel, QFrame#mainPanel, QFrame#toolbarCard { background:#ffffff; border:1px solid #d8e4f2; border-radius:12px; }
-QPushButton#railBtn { background:transparent; border:none; border-radius:10px; padding:10px; color:#4b607a; font-weight:700; }
+QPushButton#railBtn { background:transparent; border:1px solid transparent; border-radius:10px; padding:10px; color:#4b607a; font-weight:800; font-size:12px; }
 QPushButton#railBtn[active='true'] { background:#2563eb; color:white; }
 
 QLabel { background:transparent; }
@@ -165,9 +178,9 @@ QTableWidget { background:#ffffff; border:1px solid #d8e4f2; border-radius:10px;
 QHeaderView::section { background:#edf3ff; border:none; border-right:1px solid #d8e4f2; padding:6px; color:#264463; font-weight:700; }
 
 QFrame#schemaCanvasWrap { background:#f2f6fc; border:1px solid #d8e4f2; border-radius:10px; }
-QFrame#schemaCard { background:#ffffff; border:1px solid #cfdcf0; border-radius:14px; }
-QLabel#schemaCardTitle { color:white; border-radius:8px; padding:5px 8px; font-weight:800; }
-QLabel#schemaCol { color:#1f3b58; font-size:11px; background:transparent; }
+QFrame#schemaCard { background:#ffffff; border:1px solid #bdd0ea; border-radius:14px; }
+QLabel#schemaCardTitle { color:white; border-radius:8px; padding:6px 10px; font-size:13px; font-weight:800; }
+QLabel#schemaCol { color:#1f3b58; font-size:12px; background:transparent; }
 QLabel#pkTag { color:#0f9f6e; font-weight:800; }
 QLabel#fkTag { color:#4f46e5; font-weight:800; }
 """
@@ -231,8 +244,8 @@ QLabel#fkTag { color:#4f46e5; font-weight:800; }
         rail = QFrame(); rail.setObjectName("iconRail"); rail.setFixedWidth(64)
         lay = QVBoxLayout(rail); lay.setContentsMargins(8, 12, 8, 12); lay.setSpacing(8)
         self.rail_tables = QPushButton("▦"); self.rail_tables.setObjectName("railBtn"); self.rail_tables.clicked.connect(lambda: self._set_page("tables"))
-        self.rail_schema = QPushButton("⌁"); self.rail_schema.setObjectName("railBtn"); self.rail_schema.clicked.connect(lambda: self._set_page("schema"))
-        self.rail_sql = QPushButton("⌘"); self.rail_sql.setObjectName("railBtn"); self.rail_sql.clicked.connect(lambda: self._set_page("sql"))
+        self.rail_schema = QPushButton("REL"); self.rail_schema.setObjectName("railBtn"); self.rail_schema.clicked.connect(lambda: self._set_page("schema"))
+        self.rail_sql = QPushButton("SQL"); self.rail_sql.setObjectName("railBtn"); self.rail_sql.clicked.connect(lambda: self._set_page("sql"))
         self.rail_tables.setToolTip("Tablolar")
         self.rail_schema.setToolTip("Şema Görselleştirici")
         self.rail_sql.setToolTip("SQL Terminal")
@@ -457,7 +470,7 @@ QLabel#fkTag { color:#4f46e5; font-weight:800; }
 
         col_count = 3
         w, h = 300, 220
-        x_gap, y_gap = 60, 50
+        x_gap, y_gap = 90, 70
         for i, t in enumerate(tables):
             row = i // col_count
             col = i % col_count
@@ -557,7 +570,7 @@ QLabel#fkTag { color:#4f46e5; font-weight:800; }
             line = QGraphicsPathItem()
             pen = QPen(QColor("#8aa7cc"), 1.6, Qt.DashLine)
             line.setPen(pen)
-            line.setZValue(-1)
+            line.setZValue(-10)
             scene.addItem(line)
             rec = {"src": src_t, "dst": dst_t, "line": line}
             self.schema_rel_lines.append(rec)
