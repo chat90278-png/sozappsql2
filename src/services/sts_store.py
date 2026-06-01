@@ -526,8 +526,7 @@ class STSStore:
                 cid=self.db.conn.execute("SELECT last_insert_rowid()").fetchone()[0]
             system_ids = {}
             for i,system in enumerate(systems or []):
-                delivery_user_id = self.get_user_id(getattr(system, "delivery_user", ""), create=True)
-                self.db.conn.execute("INSERT INTO systems(contract_id,name,status,completion_date,acceptance_date,delivery_user_id,note,sort_order,payload_json) VALUES(?,?,?,?,?,?,?,?,?)",(cid,system.name,system.status,system.completion_date,system.acceptance_date,delivery_user_id,"",i,json.dumps({"t0_date":system.t0_date,"t0_months":system.t0_months})))
+                self.db.conn.execute("INSERT INTO systems(contract_id,name,status,completion_date,acceptance_date,delivery_user_id,note,sort_order,payload_json) VALUES(?,?,?,?,?,?,?,?,?)",(cid,system.name,system.status,system.completion_date,system.acceptance_date,None,"",i,json.dumps({"t0_date":system.t0_date,"t0_months":system.t0_months})))
                 sid=self.db.conn.execute("SELECT last_insert_rowid()").fetchone()[0]; system_ids[system.name]=sid
                 for cname, qty in (system.components or {}).items():
                     value=float(qty or 0)
@@ -535,7 +534,8 @@ class STSStore:
                         self.db.conn.execute("INSERT INTO system_components(system_id,component_id,qty) VALUES(?,?,?)",(sid,self.get_component_id(cname,create=True),value))
             for sys_name, dlist in (deliveries or {}).items():
                 for i,delivery in enumerate(dlist or []):
-                    self.db.conn.execute("INSERT INTO deliveries(contract_id,system_id,system_name,name,status,acceptance_date,note,sort_order,payload_json) VALUES(?,?,?,?,?,?,?,?,?)",(cid,system_ids.get(sys_name),sys_name,delivery.name,delivery.status,delivery.acceptance_date,delivery.note,i,json.dumps({"t0_date":delivery.t0_date,"t0_months":delivery.t0_months,"completion_date":delivery.completion_date})))
+                    delivery_user_id = self.get_user_id(getattr(delivery, "delivery_user", ""), create=True)
+                    self.db.conn.execute("INSERT INTO deliveries(contract_id,system_id,delivery_user_id,system_name,name,status,acceptance_date,note,sort_order,payload_json) VALUES(?,?,?,?,?,?,?,?,?,?)",(cid,system_ids.get(sys_name),delivery_user_id,sys_name,delivery.name,delivery.status,delivery.acceptance_date,delivery.note,i,json.dumps({"t0_date":delivery.t0_date,"t0_months":delivery.t0_months,"completion_date":delivery.completion_date})))
                     did=self.db.conn.execute("SELECT last_insert_rowid()").fetchone()[0]
                     names=set((delivery.planned or {})) | set((delivery.delivered or {}))
                     for cname in names:
@@ -566,11 +566,11 @@ class STSStore:
             payload=json.loads(s['payload_json'] or "{}")
             si=SystemInfo(name=s['name'],components=comps,t0_date=payload.get('t0_date',''),t0_months=int(payload.get('t0_months',0) or 0),completion_date=s['completion_date'] or "",status=s['status'] or "Başlanmadı",acceptance_date=s['acceptance_date'] or "",delivery_user=(self.db.conn.execute("SELECT name FROM users WHERE id=?", (s["delivery_user_id"],)).fetchone() or [""])[0])
             systems.append(si)
-        for d in self.db.conn.execute("SELECT * FROM deliveries WHERE contract_id=? ORDER BY system_name,sort_order,id",(r['id'],)):
+        for d in self.db.conn.execute("SELECT d.*,u.name AS delivery_user FROM deliveries d LEFT JOIN users u ON u.id=d.delivery_user_id WHERE d.contract_id=? ORDER BY d.system_name,d.sort_order,d.id",(r['id'],)):
             payload=json.loads(d['payload_json'] or "{}")
             rows=self.db.conn.execute("SELECT c.name,dc.planned,dc.delivered FROM delivery_components dc JOIN components c ON c.id=dc.component_id WHERE dc.delivery_id=?",(d['id'],)).fetchall()
             planned={x[0]:float(x[1] or 0) for x in rows}; delivered={x[0]:float(x[2] or 0) for x in rows}
-            di=DeliveryInfo(name=d['name'],status=d['status'] or "",acceptance_date=d['acceptance_date'] or "",note=d['note'] or "",planned=planned,delivered=delivered,t0_date=payload.get('t0_date',''),t0_months=int(payload.get('t0_months',0) or 0),completion_date=payload.get('completion_date',''))
+            di=DeliveryInfo(name=d['name'],status=d['status'] or "",acceptance_date=d['acceptance_date'] or "",note=d['note'] or "",planned=planned,delivered=delivered,t0_date=payload.get('t0_date',''),t0_months=int(payload.get('t0_months',0) or 0),completion_date=payload.get('completion_date',''),delivery_user=d['delivery_user'] or "")
             deliveries.setdefault(d['system_name'],[]).append(di)
         return ci, systems, deliveries
 

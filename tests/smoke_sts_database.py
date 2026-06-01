@@ -18,7 +18,7 @@ with TemporaryDirectory() as td:
         'contracts': {'platform_id', 'user_id'},
         'systems': {'contract_id', 'delivery_user_id'},
         'system_components': {'system_id', 'component_id', 'qty'},
-        'deliveries': {'contract_id', 'system_id'},
+        'deliveries': {'contract_id', 'system_id', 'delivery_user_id'},
         'delivery_components': {'delivery_id', 'component_id', 'planned', 'delivered'},
         'contract_tags': {'contract_id', 'tag_id'},
         'activity_logs': {'platform_id', 'entity_type', 'entity_id'},
@@ -39,7 +39,7 @@ with TemporaryDirectory() as td:
     expected_indexes = {
         'idx_contracts_platform_id', 'idx_contracts_platform_status', 'idx_contracts_completion_date',
         'idx_systems_contract_id', 'idx_systems_completion_date', 'idx_system_components_component_id',
-        'idx_deliveries_contract_id', 'idx_deliveries_system_id', 'idx_deliveries_contract_system',
+        'idx_deliveries_contract_id', 'idx_deliveries_system_id', 'idx_deliveries_delivery_user_id', 'idx_deliveries_contract_system',
         'idx_deliveries_acceptance_date', 'idx_delivery_components_component_id', 'idx_logs_created_at',
         'idx_logs_action', 'idx_logs_entity',
     }

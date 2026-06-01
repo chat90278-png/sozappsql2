@@ -8,7 +8,7 @@ from src.models.app_models import ComponentDef, ContractInfo, DeliveryInfo, Syst
 from src.services.sts_store import STSStore
 
 
-def delivery(name, planned, delivered):
+def delivery(name, planned, delivered, delivery_user=""):
     return DeliveryInfo(
         name=name,
         status="PLAN",
@@ -16,6 +16,7 @@ def delivery(name, planned, delivered):
         note="",
         planned=planned,
         delivered=delivered,
+        delivery_user=delivery_user,
     )
 
 
@@ -59,11 +60,11 @@ with TemporaryDirectory() as td:
     ]
     deliveries = {
         "Sistem-A": [
-            delivery("A-Kabul-1", {"GÖVDE": 1, "KANAT": 2, "SIFIR": 0}, {"GÖVDE": 1, "KANAT": 1, "SIFIR": 0}),
-            delivery("A-Kabul-2", {"GÖVDE": 1, "KANAT": 2}, {"GÖVDE": 0, "KANAT": 2}),
+            delivery("A-Kabul-1", {"GÖVDE": 1, "KANAT": 2, "SIFIR": 0}, {"GÖVDE": 1, "KANAT": 1, "SIFIR": 0}, "Ayşe"),
+            delivery("A-Kabul-2", {"GÖVDE": 1, "KANAT": 2}, {"GÖVDE": 0, "KANAT": 2}, "Mehmet"),
         ],
         "Sistem-B": [
-            delivery("B-Kabul-1", {"MOTOR": 1, "SIFIR": 0}, {"MOTOR": 1, "AVİYONİK": 2, "SIFIR": 0}),
+            delivery("B-Kabul-1", {"MOTOR": 1, "SIFIR": 0}, {"MOTOR": 1, "AVİYONİK": 2, "SIFIR": 0}, "Serhat"),
             delivery("B-Kabul-2", {"AVİYONİK": 1}, {"AVİYONİK": 1}),
         ],
     }
@@ -84,6 +85,7 @@ with TemporaryDirectory() as td:
         """
     ).fetchone()
     assert delivered_only[:] == (0.0, 2.0)
+    assert conn.execute("SELECT COUNT(*) FROM systems WHERE delivery_user_id IS NOT NULL").fetchone()[0] == 0
     assert store.db.foreign_key_check() == []
     assert store.db.integrity_check() == ["ok"]
 
@@ -98,7 +100,10 @@ with TemporaryDirectory() as td:
     }
     assert len(loaded_deliveries["Sistem-A"]) == 2
     assert len(loaded_deliveries["Sistem-B"]) == 2
+    loaded_a_users = {item.name: item.delivery_user for item in loaded_deliveries["Sistem-A"]}
+    assert loaded_a_users == {"A-Kabul-1": "Ayşe", "A-Kabul-2": "Mehmet"}
     loaded_b1 = next(item for item in loaded_deliveries["Sistem-B"] if item.name == "B-Kabul-1")
+    assert loaded_b1.delivery_user == "Serhat"
     assert loaded_b1.planned == {"MOTOR": 1.0, "AVİYONİK": 0.0}
     assert loaded_b1.delivered == {"MOTOR": 1.0, "AVİYONİK": 2.0}
     assert store.load_contract_tags("AKINCI", "AKN-001", "Ana Sözleşme") == [
