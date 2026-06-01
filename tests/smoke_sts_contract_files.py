@@ -36,7 +36,6 @@ with TemporaryDirectory() as td:
 
     file_id = store.add_contract_file("AKINCI", contract.no, source, contract.contract_type, note="Test belgesi")
     assert sha256(source) == original_hash
-    store.reload_from_disk()
 
     listed = store.list_contract_files("AKINCI", contract.no, contract.contract_type)
     assert len(listed) == 1

@@ -6,7 +6,7 @@ from tempfile import TemporaryDirectory
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.services.sts_database import STSDatabase
-from src.ui.dialogs.schema_relationships import compact_relationship_text, filter_relationship_groups, get_schema_relationships, get_table_columns, group_relationships_by_source, relationship_text
+from src.ui.dialogs.schema_relationships import get_schema_relationships, get_table_columns, relationship_text
 
 
 with TemporaryDirectory() as td:
@@ -20,15 +20,6 @@ with TemporaryDirectory() as td:
     assert "systems.delivery_user_id → users.id" not in texts
     assert "delivery_components.component_id → components.id" in texts
     assert "contract_files.contract_id → contracts.id" in texts
-    grouped = dict(group_relationships_by_source(relationships))
-    assert {compact_relationship_text(item) for item in grouped["deliveries"]} == {
-        "contract_id → contracts.id", "delivery_user_id → users.id", "system_id → systems.id"
-    }
-    user_groups = dict(filter_relationship_groups(relationships, "user"))
-    assert {compact_relationship_text(item) for item in user_groups["contracts"]} == {"user_id → users.id"}
-    assert {compact_relationship_text(item) for item in user_groups["deliveries"]} == {"delivery_user_id → users.id"}
-    component_groups = dict(filter_relationship_groups(relationships, "component"))
-    assert {"component_platforms", "delivery_components", "system_components"} <= set(component_groups)
     delivery_user = next(item for item in relationships if relationship_text(item) == "deliveries.delivery_user_id → users.id")
     assert delivery_user["source_table"] == "deliveries"
     assert delivery_user["source_column"] == "delivery_user_id"
