@@ -26,6 +26,18 @@ FALLBACK_RELATIONSHIPS = [
 ]
 
 
+RELATIONSHIP_GROUP_ORDER = (
+    "contracts",
+    "contract_files",
+    "deliveries",
+    "delivery_components",
+    "system_components",
+    "contract_tags",
+    "component_platforms",
+    "activity_logs",
+)
+
+
 def relationship_key(relationship: dict) -> tuple[str, str, str, str]:
     return (
         str(relationship["source_table"]),
@@ -40,6 +52,48 @@ def relationship_text(relationship: dict) -> str:
         f"{relationship['source_table']}.{relationship['source_column']}"
         f" → {relationship['target_table']}.{relationship['target_column']}"
     )
+
+
+def compact_relationship_text(relationship: dict) -> str:
+    return f"{relationship['source_column']} → {relationship['target_table']}.{relationship['target_column']}"
+
+
+def group_relationships_by_source(relationships: Iterable[dict]) -> dict[str, list[dict]]:
+    groups: dict[str, list[dict]] = {}
+    for relationship in relationships:
+        groups.setdefault(str(relationship["source_table"]), []).append(relationship)
+    fallback_order = {relationship: index for index, relationship in enumerate(FALLBACK_RELATIONSHIPS)}
+    for source_table, source_relationships in groups.items():
+        source_relationships.sort(
+            key=lambda relationship: (
+                fallback_order.get(relationship_key(relationship), len(fallback_order)),
+                relationship_key(relationship),
+            )
+        )
+    group_order = {source_table: index for index, source_table in enumerate(RELATIONSHIP_GROUP_ORDER)}
+    return dict(sorted(groups.items(), key=lambda item: (group_order.get(item[0], len(group_order)), item[0])))
+
+
+def filter_relationship_groups(groups: dict[str, list[dict]], query: str) -> dict[str, list[dict]]:
+    needle = str(query or "").strip().casefold()
+    if not needle:
+        return {source_table: list(relationships) for source_table, relationships in groups.items()}
+    filtered: dict[str, list[dict]] = {}
+    for source_table, relationships in groups.items():
+        if needle in source_table.casefold():
+            filtered[source_table] = list(relationships)
+            continue
+        matching = [
+            relationship
+            for relationship in relationships
+            if any(
+                needle in str(relationship[field]).casefold()
+                for field in ("source_table", "source_column", "target_table", "target_column")
+            )
+        ]
+        if matching:
+            filtered[source_table] = matching
+    return filtered
 
 
 def get_table_columns(conn, table: str) -> list[dict]:

@@ -6,7 +6,14 @@ from tempfile import TemporaryDirectory
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.services.sts_database import STSDatabase
-from src.ui.dialogs.schema_relationships import get_schema_relationships, get_table_columns, relationship_text
+from src.ui.dialogs.schema_relationships import (
+    compact_relationship_text,
+    filter_relationship_groups,
+    get_schema_relationships,
+    get_table_columns,
+    group_relationships_by_source,
+    relationship_text,
+)
 
 
 with TemporaryDirectory() as td:
@@ -20,6 +27,22 @@ with TemporaryDirectory() as td:
     assert "systems.delivery_user_id → users.id" not in texts
     assert "delivery_components.component_id → components.id" in texts
     assert "contract_files.contract_id → contracts.id" in texts
+    groups = group_relationships_by_source(relationships)
+    assert len(groups["deliveries"]) == 3
+    assert {compact_relationship_text(item) for item in groups["deliveries"]} == {
+        "contract_id → contracts.id",
+        "system_id → systems.id",
+        "delivery_user_id → users.id",
+    }
+    assert compact_relationship_text(next(item for item in groups["deliveries"] if item["source_column"] == "delivery_user_id")) == "delivery_user_id → users.id"
+    user_groups = filter_relationship_groups(groups, "user")
+    assert {relationship_text(item) for items in user_groups.values() for item in items} == {
+        "contracts.user_id → users.id",
+        "deliveries.delivery_user_id → users.id",
+    }
+    component_groups = filter_relationship_groups(groups, "component")
+    assert {"component_platforms", "system_components", "delivery_components"}.issubset(component_groups)
+    assert all("component" in relationship_text(item) for items in component_groups.values() for item in items)
     delivery_user = next(item for item in relationships if relationship_text(item) == "deliveries.delivery_user_id → users.id")
     assert delivery_user["source_table"] == "deliveries"
     assert delivery_user["source_column"] == "delivery_user_id"
