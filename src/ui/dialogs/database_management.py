@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
 import re
 import time
 from typing import Dict, List, Optional
@@ -10,7 +9,6 @@ from PySide6.QtGui import QColor, QPen, QPainter, QCursor, QFontMetrics, QKeySeq
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
-    QFileDialog,
     QFrame,
     QGraphicsPathItem,
     QGraphicsItem,
@@ -233,13 +231,9 @@ QFrame#topBar { background:#0f2340; border:0; }
 QLabel#titleBadge { background:#1f5be3; color:#ffffff; border-radius:7px; padding:6px 8px; font-size:11px; font-weight:800; }
 QLabel#topTitle { color:#c8ddf2; font-size:13px; font-weight:700; }
 QFrame#topSeparator { background:#1e3a5c; border:0; }
-QPushButton#topTab { background:transparent; border:0; border-bottom:2px solid transparent; border-radius:0; color:#4a7aaa; padding:0 16px; font-size:12px; font-weight:700; }
-QPushButton#topTab:hover { background:#17314f; color:#89b8e8; }
-QPushButton#topTab[active='true'] { color:#e2ecf8; border-bottom:2px solid #1f5be3; }
-QLabel#tabBadge { background:#1e3a5f; color:#6b94bc; border-radius:8px; padding:1px 6px; font-size:9px; font-weight:800; }
-QLabel#tabBadge[active='true'] { background:#1f5be3; color:#ffffff; }
-QPushButton#topAction { background:transparent; border:1px solid #274767; color:#89b8e8; border-radius:6px; padding:5px 9px; font-size:11px; }
-QPushButton#topAction:hover { background:#17314f; color:#e2ecf8; }
+QPushButton#topTab { background:transparent; border:0; border-bottom:3px solid transparent; border-radius:0; color:#6f9dca; padding:0 24px; font-size:14px; font-weight:800; }
+QPushButton#topTab:hover { background:#17314f; color:#b8d7f2; }
+QPushButton#topTab[active='true'] { color:#f1f7ff; border-bottom:3px solid #3b82f6; }
 QLabel { background:transparent; }
 QFrame#tableSidebar, QFrame#tableMain, QFrame#toolbarCard, QFrame#sqlResultPanel, QFrame#sqlFooter { background:#ffffff; border:0; }
 QFrame#tableSidebar { border-right:1px solid #e2e8f0; }
@@ -289,24 +283,17 @@ QLabel#sqlResultBadge { background:#d1fae5; color:#065f46; border-radius:5px; pa
         self.switch_database_tab("tables")
 
     def build_topbar(self):
-        bar = QFrame(); bar.setObjectName("topBar"); bar.setFixedHeight(52)
+        bar = QFrame(); bar.setObjectName("topBar"); bar.setFixedHeight(58)
         lay = QHBoxLayout(bar); lay.setContentsMargins(16, 0, 12, 0); lay.setSpacing(0)
         logo = QLabel("DB"); logo.setObjectName("titleBadge"); logo.setAlignment(Qt.AlignCenter); logo.setFixedSize(34, 34)
         title = QLabel("STS Database Editor"); title.setObjectName("topTitle")
-        sep = QFrame(); sep.setObjectName("topSeparator"); sep.setFixedSize(1, 22)
-        lay.addWidget(logo); lay.addSpacing(10); lay.addWidget(title); lay.addSpacing(16); lay.addWidget(sep); lay.addSpacing(2)
+        sep = QFrame(); sep.setObjectName("topSeparator"); sep.setFixedSize(1, 24)
+        lay.addWidget(logo); lay.addSpacing(10); lay.addWidget(title); lay.addSpacing(18); lay.addWidget(sep); lay.addSpacing(6)
         self.top_tabs = {}
-        self.top_tab_badges = {}
-        for name, label, badge in (("tables", "▦  Tablolar", "0"), ("schema", "⌘  İlişkiler", ""), ("sql", "▣  SQL Terminali", "")):
-            tab = QPushButton(label); tab.setObjectName("topTab"); tab.setFixedHeight(52); tab.clicked.connect(lambda _=False, page=name: self.switch_database_tab(page))
+        for name, label, width in (("tables", "▦   Tablolar", 150), ("schema", "⌘   İlişkiler", 158), ("sql", "▣   SQL Terminali", 190)):
+            tab = QPushButton(label); tab.setObjectName("topTab"); tab.setFixedHeight(58); tab.setMinimumWidth(width); tab.clicked.connect(lambda _=False, page=name: self.switch_database_tab(page))
             lay.addWidget(tab); self.top_tabs[name] = tab
-            if badge:
-                count = QLabel(badge); count.setObjectName("tabBadge"); count.setAlignment(Qt.AlignCenter); lay.addWidget(count); self.top_tab_badges[name] = count
-                lay.addSpacing(5)
         lay.addStretch(1)
-        self.backup_btn = QPushButton("Yedek Al"); self.backup_btn.setObjectName("topAction"); self.backup_btn.clicked.connect(self.run_backup)
-        self.opt_btn = QPushButton("Optimize"); self.opt_btn.setObjectName("topAction"); self.opt_btn.clicked.connect(self.run_optimize)
-        lay.addWidget(self.backup_btn); lay.addSpacing(6); lay.addWidget(self.opt_btn)
         return bar
 
     def _build_topbar(self):
@@ -393,18 +380,13 @@ QLabel#sqlResultBadge { background:#d1fae5; color:#065f46; border-radius:5px; pa
         self.page_stack.setCurrentIndex(indexes[page])
         for name, tab in self.top_tabs.items():
             active = name == page; tab.setProperty("active", active); tab.style().unpolish(tab); tab.style().polish(tab)
-        for name, badge in self.top_tab_badges.items():
-            badge.setProperty("active", name == page); badge.style().unpolish(badge); badge.style().polish(badge)
 
     def _set_page(self, page: str):
         self.switch_database_tab(page)
 
     def refresh_all(self):
         self.stats = self.store.database_stats()
-        _path = Path(str(self.stats.get("path", "database.sts")))
         self.table_names = sorted(list((self.stats.get("table_counts") or {}).keys()))
-        if "tables" in self.top_tab_badges:
-            self.top_tab_badges["tables"].setText(str(len(self.table_names)))
         if not self.active_table and self.table_names:
             self.active_table = self.table_names[0]
         self._refresh_sidebar()
@@ -833,21 +815,6 @@ QLabel#sqlResultBadge { background:#d1fae5; color:#065f46; border-radius:5px; pa
     def _set_sql_status(self, text: str, error: bool = False):
         self.sql_status_lbl.setText(text)
         self.sql_status_lbl.setStyleSheet("color:#dc2626;" if error else "color:#1f3b58;")
-
-    def run_backup(self):
-        base = Path(str(getattr(self.store, "path", "database.sts")))
-        p, _ = QFileDialog.getSaveFileName(self, "Yedek Al", str(base.with_name(f"{base.stem}_backup.sts")), "STS (*.sts)")
-        if not p:
-            return
-        res = self.store.backup_database(p)
-        QMessageBox.information(self, "Yedek", f"Yedek oluşturuldu:\n{res.get('target_path')}")
-
-    def run_optimize(self):
-        if QMessageBox.question(self, "Onay", "Optimize işlemi çalıştırılsın mı?") != QMessageBox.Yes:
-            return
-        self.store.vacuum()
-        self.store.optimize()
-        self.refresh_all()
 
     @staticmethod
     def _fmt_count(v: int) -> str:

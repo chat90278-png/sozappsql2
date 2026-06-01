@@ -68,7 +68,7 @@ from src.ui.kullanim_kilavuzu import UsageGuideDialog
 from PySide6.QtCore import Qt, QDate, QObject, QThread, Signal, QTimer, QPoint, QSize, QEvent, QPropertyAnimation, QEasingCurve, QUrl
 from PySide6.QtGui import QFont, QColor, QPixmap, QIcon, QPainter, QAction, QCursor, QCloseEvent, QDesktopServices
 from PySide6.QtWidgets import (
-    QApplication, QMainWindow, QWidget,QGraphicsOpacityEffect, QVBoxLayout, QHBoxLayout, QGridLayout,
+    QApplication, QMainWindow, QWidget,QGraphicsOpacityEffect, QGraphicsDropShadowEffect, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QPushButton, QListWidget, QListWidgetItem, QTableWidget, QTableWidgetItem,
     QDialog, QLineEdit, QComboBox, QDateEdit, QSpinBox, QDoubleSpinBox,
     QMessageBox, QFileDialog, QFrame, QScrollArea, QCheckBox, QHeaderView,
@@ -276,6 +276,16 @@ from src.services.sts_store import STSStore
 from src.workers import ExcelLoadWorker, ComponentSaveWorker, UserSaveWorker, ContractSaveWorker, AnalyzeDialog
 
 
+COL_PLATFORM = 0
+COL_TYPE = 1
+COL_CONTRACT_NO = 2
+COL_USER = 3
+COL_STATUS = 4
+COL_T_DATE = 5
+COL_REMAINING = 6
+COL_TAGS = 7
+COL_SUMMARY = 8
+
 
 class FilterableHeaderView(QHeaderView):
     """Excel gibi sutun filtresi destekleyen header.
@@ -326,14 +336,12 @@ class FilterableHeaderView(QHeaderView):
         # Tum satirlari tara (visible_rows varsa onu kullan)
         source = getattr(table, '_all_rows_for_filter', None)
         if source is not None:
-            col_keys = getattr(table, "_filter_col_keys", ["row_no", "platform", "type", "no", "user", "status", "date", "days", "tags", "summary"])
+            col_keys = getattr(table, "_filter_col_keys", ["platform", "type", "no", "user", "status", "date", "days", "tags", "summary"])
             if col < len(col_keys):
                 window = table.window()
                 for row_index, it in enumerate(source, start=1):
                     key = col_keys[col]
-                    if key == "row_no":
-                        v = str(row_index)
-                    elif key == "type":
+                    if key == "type":
                         v = str(it.get("type_display", it.get("type", "")) or "").strip()
                     elif key in {"status", "date", "days"} and hasattr(window, "_contract_health"):
                         _cls, st, days, dt = window._contract_health(it)
@@ -360,7 +368,7 @@ class FilterableHeaderView(QHeaderView):
 
     def _on_section_clicked(self, col: int):
         values = self._get_column_values(col)
-        if not values and col not in (6, 7):
+        if not values and col not in (COL_T_DATE, COL_REMAINING):
             return
         current_filter = self._col_filters.get(col)  # None = tumu
 
@@ -377,24 +385,24 @@ class FilterableHeaderView(QHeaderView):
         clear_action = popup.addAction("✕ Filtreyi Temizle")
         clear_action.setEnabled(current_filter is not None or col in self._date_ranges or col in self._day_ranges)
         popup.addSeparator()
-        # Kalan Gun (col 7) - siralama secenekleri ekle
+        # Kalan Gun sutunu - siralama secenekleri ekle
         sort_asc_action = None
         sort_desc_action = None
-        if col == 7:  # Kalan Gun sutunu
+        if col == COL_REMAINING:  # Kalan Gun sutunu
             sort_asc_action = popup.addAction("↑ Artan Sırala (Az → Çok)")
             sort_desc_action = popup.addAction("↓ Azalan Sırala (Çok → Az)")
             popup.addSeparator()
 
 
-        if col == 6:
+        if col == COL_T_DATE:
             self._add_date_range_controls(popup, col)
             popup.addSeparator()
-        elif col == 7:
+        elif col == COL_REMAINING:
             self._add_day_range_controls(popup, col)
             popup.addSeparator()
         # Her deger icin checkbox action
         check_actions: List[Tuple[QAction, str]] = []
-        if col not in (6, 7):
+        if col not in (COL_T_DATE, COL_REMAINING):
             for val in values:
                 icon_txt = "✔" if (current_filter is None or val in current_filter) else "□"
                 a = popup.addAction(f"{icon_txt}  {val}")
@@ -4373,9 +4381,6 @@ class ContractWorkWindow(QDialog):
         left_block_lay.setContentsMargins(0, 0, 0, 0)
         left_block_lay.setSpacing(10)
 
-        self._build_contract_side_panel(left_block_width)
-        left_block_lay.addWidget(self.contract_side_panel, 0)
-
         left_row = QHBoxLayout()
         left_row.setContentsMargins(0, 0, 0, 0)
         left_row.setSpacing(10)
@@ -4393,8 +4398,18 @@ class ContractWorkWindow(QDialog):
         vb.addWidget(self.add_sd_btn, 0)
         left_row.addWidget(version_bar, 0)
 
-        left = QFrame(); left.setObjectName("sidebar"); left.setFixedWidth(300)
-        lv = QVBoxLayout(left); lv.setContentsMargins(10, 12, 10, 12); lv.setSpacing(10)
+        self.side_meta_host = QWidget()
+        self.side_meta_host.setObjectName("sideMetaHost")
+        self.side_meta_host.setFixedWidth(300)
+        self.side_meta_host.installEventFilter(self)
+        left_content_layout = QVBoxLayout(self.side_meta_host)
+        left_content_layout.setContentsMargins(0, 0, 0, 0)
+        left_content_layout.setSpacing(10)
+        self.build_side_meta_popover_bar(300)
+        left_content_layout.addWidget(self.side_meta_bar, 0)
+
+        self.systems_panel = QFrame(); self.systems_panel.setObjectName("sidebar")
+        lv = QVBoxLayout(self.systems_panel); lv.setContentsMargins(10, 12, 10, 12); lv.setSpacing(10)
         top = QHBoxLayout(); lbl = QLabel("SİSTEMLER"); lbl.setObjectName("sideTitle"); top.addWidget(lbl); top.addStretch()
         add = QPushButton("+"); add.clicked.connect(self.add_system); add.setMinimumHeight(30); add.setMaximumWidth(34); top.addWidget(add); lv.addLayout(top)
         self.system_list = QListWidget(); self.system_list.setObjectName("systemList"); self.system_list.currentRowChanged.connect(self.select_system); lv.addWidget(self.system_list, 1)
@@ -4404,7 +4419,8 @@ class ContractWorkWindow(QDialog):
         delsys.setMinimumHeight(38)
         self.delete_system_btn = delsys
         lv.addWidget(delsys)
-        left_row.addWidget(left, 1)
+        left_content_layout.addWidget(self.systems_panel, 1)
+        left_row.addWidget(self.side_meta_host, 1)
         left_block_lay.addLayout(left_row, 1)
         body.addWidget(left_block, 0)
 
@@ -4561,6 +4577,8 @@ class ContractWorkWindow(QDialog):
         self.position_busy_overlay()
 
     def eventFilter(self, obj, event):
+        if obj is getattr(self, "side_meta_host", None) and event.type() in (QEvent.Resize, QEvent.Show):
+            self.position_side_meta_popover()
         file_id = obj.property("contractFileId") if hasattr(obj, "property") else None
         if file_id and event.type() == QEvent.MouseButtonDblClick:
             self.open_contract_file(int(file_id))
@@ -4797,71 +4815,170 @@ class ContractWorkWindow(QDialog):
     def _tag_key(self, name: str) -> str:
         return self.store._normalize_label(name)
 
-    def _build_contract_side_panel(self, panel_width: int):
-        self.contract_side_panel = QFrame()
-        self.contract_side_panel.setObjectName("contractSidePanel")
-        self.contract_side_panel.setFixedSize(panel_width, 246)
-        self.contract_side_panel.setStyleSheet(
-            "QFrame#contractSidePanel{background:#ffffff; border:1px solid #d7e3f1; border-radius:13px;}"
-            "QFrame#contractSideTabBar{background:#edf4fb; border:0; border-bottom:1px solid #d7e3f1; border-radius:12px 12px 0 0;}"
-            "QFrame[sideTab='true']{background:transparent; border:1px solid transparent; border-bottom:0; border-radius:9px 9px 0 0;}"
-            "QFrame[sideTabActive='true']{background:#ffffff; border:1px solid #d7e3f1; border-bottom:0; border-radius:9px 9px 0 0;}"
-            "QLabel#sideTabText{background:transparent; color:#31445f; font-size:12px; font-weight:900;}"
-            "QLabel#sideTabText[active='true']{color:#0f2d4a;}"
-            "QLabel#sideTabBadge{background:#dbeafe; color:#1d4ed8; border:0; border-radius:10px; padding:1px 6px; font-size:11px; font-weight:900;}"
-            "QLabel#sidePanelTitle{background:transparent; color:#48627f; font-size:11px; font-weight:900;}"
-            "QPushButton#sidePanelAdd{background:#2563eb; color:#ffffff; border:0; border-radius:11px; font-size:22px; font-weight:900; padding:0;}"
-            "QPushButton#sidePanelAdd:hover{background:#1d4ed8;}"
+    def build_side_meta_popover_bar(self, parent_width: int):
+        """Build the compact meta bar and its layout-independent floating popover."""
+        self._side_meta_open_panel = None
+        self._side_meta_last_panel = "files"
+        self._side_meta_files: List[dict] = []
+        self.side_meta_bar = QFrame()
+        self.side_meta_bar.setObjectName("sideMetaBar")
+        self.side_meta_bar.setFixedHeight(46)
+        self.side_meta_bar.setStyleSheet(
+            "QFrame#sideMetaBar{background:#ffffff; border:1px solid #d7e3f1; border-radius:13px;}"
+            "QPushButton#sideMetaPill{background:#f8fbff; border:1px solid #d3dfef; border-radius:16px; padding:6px 9px; color:#0d2744; font-size:12px; font-weight:800;}"
+            "QPushButton#sideMetaPill:checked{background:#eef5ff; border-color:#bcd1f2; color:#1d4ed8;}"
+            "QLabel#sideMetaBadge{background:#dbeafe; color:#1d4ed8; border:0; border-radius:9px; padding:2px 6px; font-size:11px; font-weight:800;}"
+            "QPushButton#sideMetaChevron{background:#ffffff; border:1px solid #d3dfef; border-radius:9px; color:#31516f; font-weight:900;}"
+        )
+        bar_layout = QHBoxLayout(self.side_meta_bar)
+        bar_layout.setContentsMargins(7, 6, 7, 6)
+        bar_layout.setSpacing(5)
+        self.side_btn_tags = QPushButton("Etiketler")
+        self.side_btn_files = QPushButton("Belgeler")
+        for panel, button in (("tags", self.side_btn_tags), ("files", self.side_btn_files)):
+            button.setObjectName("sideMetaPill")
+            button.setCheckable(True)
+            button.clicked.connect(lambda _checked=False, name=panel: self.toggle_side_meta_popover(name))
+            bar_layout.addWidget(button, 0)
+            badge = QLabel("0")
+            badge.setObjectName("sideMetaBadge")
+            badge.setAlignment(Qt.AlignCenter)
+            badge.setMinimumWidth(20)
+            bar_layout.addWidget(badge, 0)
+            if panel == "tags":
+                self.side_badge_tags = badge
+            else:
+                self.side_badge_files = badge
+        bar_layout.addStretch(1)
+        self.side_chevron = QPushButton("⌄")
+        self.side_chevron.setObjectName("sideMetaChevron")
+        self.side_chevron.setFixedSize(28, 28)
+        self.side_chevron.clicked.connect(self._toggle_side_meta_chevron)
+        bar_layout.addWidget(self.side_chevron, 0)
+
+        self.side_meta_popover = QFrame(self.side_meta_host)
+        self.side_meta_popover.setObjectName("sideMetaPopover")
+        self.side_meta_popover.setStyleSheet(
+            "QFrame#sideMetaPopover{background:#ffffff; border:1px solid #d5e0ed; border-radius:12px;}"
+            "QPushButton#sidePanelTextAdd{background:#f8fbff; color:#1d4ed8; border:1px dashed #b7ccef; border-radius:10px; padding:7px 10px; text-align:left; font-size:11px; font-weight:800;}"
+            "QPushButton#sidePanelTextAdd:hover{background:#eef5ff; border-color:#8fb0e5;}"
             "QPushButton#fileDropZone{background:#f1f7ff; color:#1e3a5f; border:1px dashed #a8bdd6; border-radius:11px; padding:7px 10px; text-align:left; font-size:11px; font-weight:700;}"
             "QPushButton#fileDropZone:hover{background:#e8f2ff; border-color:#7ca4d8;}"
             "QLabel#sidePanelEmpty{background:#f8fbff; color:#64748b; border:1px dashed #c7d6e8; border-radius:11px; padding:13px; font-size:12px;}"
             "QLabel#fileTotal{background:transparent; color:#64748b; border:0; font-size:11px;}"
         )
-        outer = QVBoxLayout(self.contract_side_panel)
-        outer.setContentsMargins(0, 0, 0, 0)
-        outer.setSpacing(0)
-        tab_bar = QFrame(); tab_bar.setObjectName("contractSideTabBar"); tab_bar.setFixedHeight(42)
-        tab_lay = QHBoxLayout(tab_bar); tab_lay.setContentsMargins(10, 7, 10, 0); tab_lay.setSpacing(6)
-        self.side_tab_frames = []
-        self.side_tab_badges = []
-        for index, title in enumerate(("Etiketler", "Belgeler")):
-            tab = QFrame(); tab.setProperty("sideTab", True); tab.setProperty("sideTabActive", index == 0)
-            tab.setCursor(Qt.PointingHandCursor); tab.setFixedHeight(35)
-            row = QHBoxLayout(tab); row.setContentsMargins(12, 0, 10, 0); row.setSpacing(7)
-            text = QLabel(title); text.setObjectName("sideTabText"); text.setProperty("active", index == 0)
-            badge = QLabel("0"); badge.setObjectName("sideTabBadge"); badge.setAlignment(Qt.AlignCenter); badge.setMinimumWidth(20)
-            row.addWidget(text); row.addWidget(badge)
-            switch_tab = lambda event, idx=index: self._set_contract_side_tab(idx)
-            tab.mousePressEvent = switch_tab; text.mousePressEvent = switch_tab; badge.mousePressEvent = switch_tab
-            self.side_tab_frames.append((tab, text))
-            self.side_tab_badges.append(badge)
-            tab_lay.addWidget(tab, 0)
-        tab_lay.addStretch()
-        outer.addWidget(tab_bar, 0)
-        self.contract_side_stack = QStackedWidget(); self.contract_side_stack.setStyleSheet("QStackedWidget{background:#ffffff; border:0;}")
-        self.tag_card = self._build_tag_panel_page()
-        self.documents_card = self._build_file_panel_page()
-        self.contract_side_stack.addWidget(self.tag_card)
-        self.contract_side_stack.addWidget(self.documents_card)
-        outer.addWidget(self.contract_side_stack, 1)
-        self._set_contract_side_tab(0)
+        shadow = QGraphicsDropShadowEffect(self.side_meta_popover)
+        shadow.setBlurRadius(22)
+        shadow.setOffset(0, 6)
+        shadow.setColor(QColor(15, 45, 74, 55))
+        self.side_meta_popover.setGraphicsEffect(shadow)
+        popover_layout = QVBoxLayout(self.side_meta_popover)
+        popover_layout.setContentsMargins(10, 8, 10, 8)
+        popover_layout.setSpacing(6)
+        self.side_meta_popover_body = QWidget()
+        self.side_meta_popover_body.setStyleSheet("background:transparent;")
+        self.side_meta_popover_body_layout = QVBoxLayout(self.side_meta_popover_body)
+        self.side_meta_popover_body_layout.setContentsMargins(0, 0, 0, 0)
+        self.side_meta_popover_body_layout.setSpacing(6)
+        popover_layout.addWidget(self.side_meta_popover_body, 1)
+        self.side_meta_popover.hide()
+        self.position_side_meta_popover()
 
-    def _set_contract_side_tab(self, index: int):
-        self.contract_side_stack.setCurrentIndex(index)
-        for current, (frame, label) in enumerate(self.side_tab_frames):
-            active = current == index
-            frame.setProperty("sideTabActive", active)
-            label.setProperty("active", active)
-            frame.style().unpolish(frame); frame.style().polish(frame)
-            label.style().unpolish(label); label.style().polish(label)
+    def position_side_meta_popover(self):
+        if not hasattr(self, "side_meta_popover") or not hasattr(self, "side_meta_host"):
+            return
+        self.side_meta_popover.setGeometry(0, self.side_meta_bar.height() + 8, max(180, self.side_meta_host.width()), 246)
+        if self.side_meta_popover.isVisible():
+            self.side_meta_popover.raise_()
 
-    def _panel_page_layout(self, page: QFrame, tooltip: str, callback):
-        layout = QVBoxLayout(page); layout.setContentsMargins(11, 7, 11, 7); layout.setSpacing(6)
-        head = QHBoxLayout(); head.setContentsMargins(0, 0, 0, 0)
-        add_btn = QPushButton("+"); add_btn.setObjectName("sidePanelAdd"); add_btn.setFixedSize(36, 32); add_btn.setToolTip(tooltip); add_btn.clicked.connect(callback)
-        head.addStretch(); head.addWidget(add_btn)
-        layout.addLayout(head)
-        return layout
+    def _toggle_side_meta_chevron(self):
+        if self._side_meta_open_panel:
+            self.close_side_meta_popover()
+        else:
+            self.toggle_side_meta_popover(self._side_meta_last_panel or "files")
+
+    def toggle_side_meta_popover(self, panel: str):
+        if panel not in {"tags", "files"}:
+            return
+        if self._side_meta_open_panel == panel and self.side_meta_popover.isVisible():
+            self.close_side_meta_popover()
+            return
+        self._side_meta_open_panel = panel
+        self._side_meta_last_panel = panel
+        self.update_side_meta_badges()
+        self.render_side_meta_popover_content(panel)
+        self._sync_side_meta_controls()
+        self.position_side_meta_popover()
+        self.side_meta_popover.show()
+        self.side_meta_popover.raise_()
+
+    def close_side_meta_popover(self):
+        self._side_meta_open_panel = None
+        if hasattr(self, "side_meta_popover"):
+            self.side_meta_popover.hide()
+        self._sync_side_meta_controls()
+
+    def _sync_side_meta_controls(self):
+        panel = self._side_meta_open_panel
+        for name, button in (("tags", self.side_btn_tags), ("files", self.side_btn_files)):
+            button.setChecked(name == panel)
+        self.side_chevron.setText("⌃" if panel else "⌄")
+
+    def _load_contract_files(self) -> List[dict]:
+        try:
+            return list(self.store.list_contract_files(self.ci.platform, self.ci.no, self.ci.contract_type))
+        except Exception:
+            return []
+
+    def _set_side_meta_badge_counts(self, tag_count: int, file_count: int):
+        self.side_badge_tags.setText(str(tag_count))
+        self.side_badge_files.setText(str(file_count))
+
+    def update_side_meta_badges(self):
+        self._side_meta_files = self._load_contract_files()
+        self._set_side_meta_badge_counts(len(self._ordered_contract_tags()), len(self._side_meta_files))
+
+    def _clear_side_meta_popover_body(self):
+        layout = self.side_meta_popover_body_layout
+        while layout.count():
+            item = layout.takeAt(0)
+            widget = item.widget()
+            child_layout = item.layout()
+            if widget is not None:
+                widget.deleteLater()
+            elif child_layout is not None:
+                while child_layout.count():
+                    child = child_layout.takeAt(0)
+                    if child.widget() is not None:
+                        child.widget().deleteLater()
+
+    def render_side_meta_popover_content(self, panel: str):
+        self._clear_side_meta_popover_body()
+        body = self.side_meta_popover_body_layout
+        if panel == "files":
+            drop = QPushButton("  +  Dosya ekle     PDF, Word, Excel, görsel veya TXT")
+            drop.setObjectName("fileDropZone"); drop.setCursor(Qt.PointingHandCursor); drop.clicked.connect(self.add_contract_file)
+            body.addWidget(drop, 0)
+        scroll, cards = self._make_card_scroll(); body.addWidget(scroll, 1)
+        if panel == "tags":
+            ordered = self._ordered_contract_tags()
+            if ordered:
+                for tag in ordered:
+                    cards.insertWidget(cards.count() - 1, self.create_tag_card(tag))
+            else:
+                empty = QLabel("Henüz etiket atanmadı."); empty.setObjectName("sidePanelEmpty"); empty.setAlignment(Qt.AlignCenter); cards.insertWidget(0, empty)
+            add_tag = QPushButton("+  Etiket Ekle")
+            add_tag.setObjectName("sidePanelTextAdd"); add_tag.setCursor(Qt.PointingHandCursor); add_tag.clicked.connect(self.open_tag_assign_dialog)
+            body.addWidget(add_tag, 0)
+        else:
+            files = list(self._side_meta_files)
+            if files:
+                for metadata in files:
+                    cards.insertWidget(cards.count() - 1, self.create_file_card(metadata))
+            else:
+                empty = QLabel("Henüz belge eklenmedi."); empty.setObjectName("sidePanelEmpty"); empty.setAlignment(Qt.AlignCenter); cards.insertWidget(0, empty)
+            total = QLabel(f"Toplam {self.format_file_size(sum(int(item.get('size_bytes', 0) or 0) for item in files))}")
+            total.setObjectName("fileTotal"); total.setAlignment(Qt.AlignRight | Qt.AlignVCenter); body.addWidget(total, 0)
 
     def _make_card_scroll(self):
         scroll = QScrollArea(); scroll.setWidgetResizable(True); scroll.setFrameShape(QFrame.NoFrame)
@@ -4872,35 +4989,11 @@ class ContractWorkWindow(QDialog):
         scroll.setWidget(host)
         return scroll, cards
 
-    def _build_tag_panel_page(self):
-        page = QFrame(); page.setStyleSheet("background:#ffffff; border:0;")
-        layout = self._panel_page_layout(page, "Etiket ekle", self.open_tag_assign_dialog)
-        scroll, self.tag_cards_layout = self._make_card_scroll(); layout.addWidget(scroll, 1)
-        return page
-
-    def _build_file_panel_page(self):
-        page = QFrame(); page.setStyleSheet("background:#ffffff; border:0;")
-        layout = self._panel_page_layout(page, "Dosya ekle", self.add_contract_file)
-        drop = QPushButton("  ↑    Dosya ekle\n       PDF, Word, Excel, görsel veya TXT · En fazla 25 MB")
-        drop.setObjectName("fileDropZone"); drop.setCursor(Qt.PointingHandCursor); drop.setToolTip("Dosya ekle"); drop.clicked.connect(self.add_contract_file)
-        layout.addWidget(drop, 0)
-        scroll, self.file_cards_layout = self._make_card_scroll(); layout.addWidget(scroll, 1)
-        self.file_total_label = QLabel("Toplam 0 B"); self.file_total_label.setObjectName("fileTotal"); self.file_total_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        layout.addWidget(self.file_total_label, 0)
-        return page
-
     def _ordered_contract_tags(self) -> List[dict]:
         return sorted(
             [dict(t) for t in self.contract_tags if str((t or {}).get("name") or "").strip()],
             key=lambda x: self._tag_key(str(x.get("name", ""))),
         )
-
-    def _clear_card_layout(self, layout):
-        while layout.count() > 1:
-            item = layout.takeAt(0)
-            widget = item.widget()
-            if widget:
-                widget.deleteLater()
 
     def create_tag_card(self, tag: dict) -> QFrame:
         name = str((tag or {}).get("name") or "").strip()
@@ -4918,21 +5011,12 @@ class ContractWorkWindow(QDialog):
         return card
 
     def refresh_contract_tags_panel(self):
-        if not hasattr(self, "tag_cards_layout"):
-            return
-        self._clear_card_layout(self.tag_cards_layout)
-        ordered = self._ordered_contract_tags()
-        self.side_tab_badges[0].setText(str(len(ordered)))
-        if not ordered:
-            empty = QLabel("Henüz etiket atanmadı."); empty.setObjectName("sidePanelEmpty"); empty.setAlignment(Qt.AlignCenter)
-            self.tag_cards_layout.insertWidget(0, empty)
-            return
-        for tag in ordered:
-            self.tag_cards_layout.insertWidget(self.tag_cards_layout.count() - 1, self.create_tag_card(tag))
+        self.update_side_meta_badges()
+        if self._side_meta_open_panel == "tags":
+            self.render_side_meta_popover_content("tags")
 
     def render_contract_tags(self):
         self.refresh_contract_tags_panel()
-        self.refresh_contract_files_panel()
 
     def render_contract_files(self):
         self.refresh_contract_files_panel()
@@ -4980,20 +5064,9 @@ class ContractWorkWindow(QDialog):
         return card
 
     def refresh_contract_files_panel(self):
-        if not hasattr(self, "file_cards_layout"):
-            return
-        try:
-            files = self.store.list_contract_files(self.ci.platform, self.ci.no, self.ci.contract_type)
-        except Exception:
-            files = []
-        self._clear_card_layout(self.file_cards_layout)
-        for metadata in files:
-            self.file_cards_layout.insertWidget(self.file_cards_layout.count() - 1, self.create_file_card(metadata))
-        if not files:
-            empty = QLabel("Henüz belge eklenmedi."); empty.setObjectName("sidePanelEmpty"); empty.setAlignment(Qt.AlignCenter)
-            self.file_cards_layout.insertWidget(0, empty)
-        self.side_tab_badges[1].setText(str(len(files)))
-        self.file_total_label.setText(f"Toplam {self.format_file_size(sum(int(item.get('size_bytes', 0) or 0) for item in files))}")
+        self.update_side_meta_badges()
+        if self._side_meta_open_panel == "files":
+            self.render_side_meta_popover_content("files")
 
     def add_contract_file(self):
         path, _ = QFileDialog.getOpenFileName(self, "Sözleşmeye Dosya Ekle", "", "PDF/Word/Excel/Resim/TXT (*.pdf *.doc *.docx *.xls *.xlsx *.png *.jpg *.jpeg *.txt)")
@@ -6367,7 +6440,7 @@ class MainWindow(QMainWindow):
         fb.addWidget(self.clear_filters_btn, 0)
         fb.addStretch()
         self.filter_bar.setVisible(False)
-        self.contract_table=QTableWidget(0,10)
+        self.contract_table=QTableWidget(0,9)
         self.contract_table.setObjectName("contractTable")
         # Yatay scroll yok — sütunlar her zaman tablo içinde kalır
         self.contract_table.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -6375,20 +6448,16 @@ class MainWindow(QMainWindow):
         self._filter_header = FilterableHeaderView(Qt.Horizontal, self.contract_table)
         self._filter_header.filterChanged.connect(self.schedule_apply_contract_filter)
         self.contract_table.setHorizontalHeader(self._filter_header)
-        self.contract_table.setHorizontalHeaderLabels(["Sıra/No", "Platform", "Sözleşme Türü", "Sözleşme No", "Kullanıcı", "Durum", "T. Tarihi", "Kalan Gün", "Etiketler", "Özet"])
-        self.contract_table._filter_col_keys = ["row_no", "platform", "type", "no", "user", "status", "date", "days", "tags", "summary"]
+        self.contract_table.setHorizontalHeaderLabels(["Platform", "Sözleşme Türü", "Sözleşme No", "Kullanıcı", "Durum", "T. Tarihi", "Kalan Gün", "Etiketler", "Özet"])
+        self.contract_table._filter_col_keys = ["platform", "type", "no", "user", "status", "date", "days", "tags", "summary"]
         self.contract_table._sort_mode = 'default'  # siralama modu
         # Tüm sütunlar Stretch — her zaman ekranı doldurur, yatay kaymaz.
-        # Özet (9) sabit 72px sağ kenarda.
+        # Özet sabit 72px sağ kenarda.
         _hh = self.contract_table.horizontalHeader()
         _hh.setSectionResizeMode(QHeaderView.Stretch)    # hepsi orantılı dolar
-        _hh.setSectionResizeMode(0, QHeaderView.Fixed)   # Sıra/No sabit
-        self.contract_table.setColumnWidth(0, 64)
-        _hh.setSectionResizeMode(9, QHeaderView.Fixed)   # Özet sabit
-        self.contract_table.setColumnWidth(9, 72)
-        vhh = self.contract_table.verticalHeader()
-        vhh.setMinimumWidth(62)
-        vhh.setDefaultAlignment(Qt.AlignCenter)
+        _hh.setSectionResizeMode(COL_SUMMARY, QHeaderView.Fixed)   # Özet sabit
+        self.contract_table.setColumnWidth(COL_SUMMARY, 72)
+        self.contract_table.verticalHeader().setVisible(False)
         self.contract_table.cellDoubleClicked.connect(self.open_selected_contract)
         self.contract_table.cellClicked.connect(self._on_contract_cell_clicked)
         self.contract_table.viewport().installEventFilter(self)
@@ -6812,7 +6881,7 @@ class MainWindow(QMainWindow):
                     item.setFlags(flags | Qt.ItemIsUserCheckable)
                     item.setCheckState(Qt.Checked if platform in self.selected_platforms else Qt.Unchecked)
                 else:
-                    item.setCheckState(Qt.Unchecked)
+                    item.setData(Qt.CheckStateRole, None)
                     item.setFlags(flags & ~Qt.ItemIsUserCheckable)
                 item.setSelected(platform in self.selected_platforms)
         finally:
@@ -7335,10 +7404,10 @@ class MainWindow(QMainWindow):
         return True
 
     def _on_contract_cell_clicked(self, row: int, col: int):
-        """Col 9 (Ozet) hucresine tiklayinca popup ac.
+        """Ozet hucresine tiklayinca popup ac.
         Col disi tiklama open_selected_contract ile cakismasin.
         """
-        if col != 9:
+        if col != COL_SUMMARY:
             return
         rows = getattr(self.contract_table, "_visible_rows", [])
         if row < 0 or row >= len(rows):
@@ -7614,7 +7683,7 @@ class MainWindow(QMainWindow):
             date_ranges = dict(getattr(self._filter_header, "_date_ranges", {}))
             day_ranges = dict(getattr(self._filter_header, "_day_ranges", {}))
         selected_platforms = set(getattr(self, "selected_platforms", set()))
-        for row_number, it in enumerate(getattr(self, "all_contract_rows", []), start=1):
+        for it in getattr(self, "all_contract_rows", []):
             if selected_platforms and str(it.get("platform", "")) not in selected_platforms:
                 continue
             hay = str(it.get("_search_norm") or "")
@@ -7636,22 +7705,21 @@ class MainWindow(QMainWindow):
                 continue
             if days_max is not None and (day_num is None or day_num > days_max):
                 continue
-            if 6 in date_ranges:
-                start_date, end_date = date_ranges.get(6, (None, None))
+            if COL_T_DATE in date_ranges:
+                start_date, end_date = date_ranges.get(COL_T_DATE, (None, None))
                 if start_date and (not completion or completion < start_date):
                     continue
                 if end_date and (not completion or completion > end_date):
                     continue
-            if 7 in day_ranges:
-                min_day, max_day = day_ranges.get(7, (None, None))
+            if COL_REMAINING in day_ranges:
+                min_day, max_day = day_ranges.get(COL_REMAINING, (None, None))
                 if min_day is not None and (day_num is None or day_num < min_day):
                     continue
                 if max_day is not None and (day_num is None or day_num > max_day):
                     continue
-            # Sutun bazli filtreler (0=Sira,1=Platform,2=Tur,3=No,4=User,5=Durum,6=Tarih,7=Gun,8=Etiketler,9=Ozet)
+            # Sutun bazli filtreler (0=Platform,1=Tur,2=No,3=User,4=Durum,5=Tarih,6=Gun,7=Etiketler,8=Ozet)
             tags_str = str(it.get("_tags_str") or "")
             col_vals = [
-                str(row_number),
                 str(it.get("platform", "") or ""),
                 str(it.get("type_display", it.get("type", "")) or ""),
                 str(it.get("no", "") or ""),
@@ -7669,7 +7737,7 @@ class MainWindow(QMainWindow):
 
                 # Etiketler kolonu için özel kontrol:
                 # seçilen etiketlerden en az biri satırdaki etiketlerde varsa geçir.
-                if ci == 8:
+                if ci == COL_TAGS:
                     row_tags = [str(t or "").strip() for t in list(it.get("tags", []) or []) if str(t or "").strip()]
                     if not any(tag in fset for tag in row_tags):
                         skip = True
@@ -7732,7 +7800,6 @@ class MainWindow(QMainWindow):
                     "contract_item": it,
                 }
                 vals=[
-                    r + 1,
                     it.get("platform", ""),
                     it.get("type_display", it.get("type", "")) or "",
                     it.get("no", ""),
@@ -7740,18 +7807,18 @@ class MainWindow(QMainWindow):
                     st_label,
                     tdate,
                     days_text,
-                    None,  # col 8: Etiketler widget
-                    None,  # col 9: Ozet butonu
+                    None,  # col 7: Etiketler widget
+                    None,  # col 8: Ozet butonu
                 ]
                 for c,v in enumerate(vals):
-                    if c == 8:
+                    if c == COL_TAGS:
                         # Etiketler: dikey sıralı renkli chip'ler
                         tags_list = list(it.get("tags", []) or [])
                         if not tags_list:
                             empty = QTableWidgetItem("")
                             empty.setFlags(empty.flags() & ~Qt.ItemIsEditable)
                             empty.setData(Qt.UserRole, payload)
-                            self.contract_table.setItem(r, 8, empty)
+                            self.contract_table.setItem(r, COL_TAGS, empty)
                             self.contract_table.setRowHeight(r, max(self.contract_table.rowHeight(r), 36))
                             continue
                         wrap = QWidget()
@@ -7775,15 +7842,15 @@ class MainWindow(QMainWindow):
                             wl.addWidget(chip)
                         placeholder = QTableWidgetItem("")
                         placeholder.setData(Qt.UserRole, payload)
-                        self.contract_table.setItem(r, 8, placeholder)
-                        self.contract_table.setCellWidget(r, 8, wrap)
+                        self.contract_table.setItem(r, COL_TAGS, placeholder)
+                        self.contract_table.setCellWidget(r, COL_TAGS, wrap)
                         # Satır yüksekliğini etiket sayısına göre ayarla
                         CHIP_H, CHIP_SP, PAD = 22, 3, 8
                         n = len(tags_list)
                         row_h = max(36, n * CHIP_H + max(0, n - 1) * CHIP_SP + PAD) if n > 0 else 36
                         self.contract_table.setRowHeight(r, max(self.contract_table.rowHeight(r), row_h))
                         continue
-                    if c == 9:
+                    if c == COL_SUMMARY:
                         lbl = QLabel("\U0001F50D")
                         lbl.setAlignment(Qt.AlignCenter)
                         lbl.setToolTip("Bileşen özetini gör")
@@ -7800,13 +7867,13 @@ class MainWindow(QMainWindow):
                         wl.addWidget(lbl)
                         placeholder = QTableWidgetItem("")
                         placeholder.setData(Qt.UserRole, payload)
-                        self.contract_table.setItem(r, 9, placeholder)
-                        self.contract_table.setCellWidget(r, 9, wrap)
+                        self.contract_table.setItem(r, COL_SUMMARY, placeholder)
+                        self.contract_table.setCellWidget(r, COL_SUMMARY, wrap)
                         continue
                     cell = QTableWidgetItem(str(v or ""))
                     cell.setFlags(cell.flags() & ~Qt.ItemIsEditable)
                     cell.setData(Qt.UserRole, payload)
-                    if c == 5:
+                    if c == COL_STATUS:
                         if cls == "geciken":
                             cell.setForeground(QColor("#dc2626"))
                         elif cls == "kritik":
@@ -7815,7 +7882,7 @@ class MainWindow(QMainWindow):
                             cell.setForeground(QColor("#047857"))
                         else:
                             cell.setForeground(QColor("#1f5be3"))
-                    if c == 7:
+                    if c == COL_REMAINING:
                         if str(v).startswith("-"):
                             cell.setForeground(QColor("#dc2626"))
                         elif str(v).endswith("gün"):
@@ -7889,7 +7956,7 @@ class MainWindow(QMainWindow):
         rows = getattr(self.contract_table, "_visible_rows", [])
         if row < 0 or row >= self.contract_table.rowCount():
             return
-        if col == 9:
+        if col == COL_SUMMARY:
             if row < len(rows):
                 self.show_contract_summary(row, rows[row])
             return
@@ -7906,9 +7973,9 @@ class MainWindow(QMainWindow):
         if row < len(rows):
             self.open_contract_item(rows[row])
             return
-        platform_item = self.contract_table.item(row, 1)
-        type_item = self.contract_table.item(row, 2)
-        no_item = self.contract_table.item(row, 3)
+        platform_item = self.contract_table.item(row, COL_PLATFORM)
+        type_item = self.contract_table.item(row, COL_TYPE)
+        no_item = self.contract_table.item(row, COL_CONTRACT_NO)
         self.open_contract_item({
             "platform": platform_item.text() if platform_item else "",
             "type": type_item.text() if type_item else "",
