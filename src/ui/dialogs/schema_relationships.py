@@ -3,11 +3,13 @@ from __future__ import annotations
 from typing import Iterable
 
 
+HIDDEN_SCHEMA_COLUMNS = {("systems", "delivery_user_id")}
+
+
 FALLBACK_RELATIONSHIPS = [
     ("contracts", "platform_id", "platforms", "id"),
     ("contracts", "user_id", "users", "id"),
     ("systems", "contract_id", "contracts", "id"),
-    ("systems", "delivery_user_id", "users", "id"),
     ("deliveries", "contract_id", "contracts", "id"),
     ("deliveries", "system_id", "systems", "id"),
     ("deliveries", "delivery_user_id", "users", "id"),
@@ -45,6 +47,7 @@ def get_table_columns(conn, table: str) -> list[dict]:
     return [
         {"name": str(row[1]), "type": str(row[2] or ""), "primary_key": bool(row[5])}
         for row in rows
+        if (str(table), str(row[1])) not in HIDDEN_SCHEMA_COLUMNS
     ]
 
 
@@ -58,6 +61,8 @@ def get_schema_relationships(conn, tables: Iterable[str], include_fallback: bool
     relationships: dict[tuple[str, str, str, str], dict] = {}
     for source_table in sorted(table_names):
         for row in conn.execute(f"PRAGMA foreign_key_list({source_table})").fetchall():
+            if (source_table, str(row[3])) in HIDDEN_SCHEMA_COLUMNS:
+                continue
             relationship = {
                 "source_table": source_table,
                 "source_column": str(row[3]),

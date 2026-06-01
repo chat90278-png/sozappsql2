@@ -16,7 +16,7 @@ with TemporaryDirectory() as td:
     expected_columns = {
         'component_platforms': {'component_id', 'platform_id'},
         'contracts': {'platform_id', 'user_id'},
-        'systems': {'contract_id', 'delivery_user_id'},
+        'systems': {'contract_id'},
         'system_components': {'system_id', 'component_id', 'qty'},
         'deliveries': {'contract_id', 'system_id', 'delivery_user_id'},
         'delivery_components': {'delivery_id', 'component_id', 'planned', 'delivered'},
@@ -29,7 +29,7 @@ with TemporaryDirectory() as td:
         assert columns <= actual, (table, columns - actual)
     forbidden_columns = {
         'component_platforms': {'platform_name'}, 'contracts': {'platform', 'user_name'},
-        'systems': {'delivery_user'}, 'system_components': {'component_name'},
+        'systems': {'delivery_user', 'delivery_user_id'}, 'system_components': {'component_name'},
         'delivery_components': {'component_name'}, 'contract_tags': {'tag_name'},
         'activity_logs': {'platform'},
     }
@@ -58,7 +58,7 @@ with TemporaryDirectory() as td:
     legacy.close()
 
     upgraded = STSDatabase(legacy_path)
-    assert 'delivery_user_id' in {r[1] for r in upgraded.conn.execute('PRAGMA table_info(systems)')}
+    assert 'delivery_user_id' not in {r[1] for r in upgraded.conn.execute('PRAGMA table_info(systems)')}
     assert 'delivery_user_id' in {r[1] for r in upgraded.conn.execute('PRAGMA table_info(deliveries)')}
     delivery_indexes = {r[1] for r in upgraded.conn.execute('PRAGMA index_list(deliveries)')}
     assert 'idx_deliveries_delivery_user_id' in delivery_indexes

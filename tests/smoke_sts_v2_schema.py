@@ -27,7 +27,7 @@ with TemporaryDirectory() as td:
     assert {r[0] for r in conn.execute('SELECT c.name FROM delivery_components dc JOIN components c ON c.id=dc.component_id')} == {'C1', 'C2'}
     assert conn.execute("SELECT dc.planned,dc.delivered FROM delivery_components dc JOIN components c ON c.id=dc.component_id WHERE c.name='C2'").fetchone()[:] == (0.0, 4.0)
     assert conn.execute('SELECT system_id FROM deliveries').fetchone()[0] is not None
-    assert conn.execute('SELECT delivery_user_id FROM systems').fetchone()[0] is None
+    assert 'delivery_user_id' not in {row[1] for row in conn.execute('PRAGMA table_info(systems)')}
     assert conn.execute('SELECT delivery_user_id FROM deliveries').fetchone()[0] == store.get_user_id('U1')
 
     loaded_ci, loaded_systems, loaded_deliveries = store.load_contract_structure('AKINCI', 'K1')

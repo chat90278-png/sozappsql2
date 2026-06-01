@@ -85,7 +85,7 @@ with TemporaryDirectory() as td:
         """
     ).fetchone()
     assert delivered_only[:] == (0.0, 2.0)
-    assert conn.execute("SELECT COUNT(*) FROM systems WHERE delivery_user_id IS NOT NULL").fetchone()[0] == 0
+    assert "delivery_user_id" not in {row[1] for row in conn.execute("PRAGMA table_info(systems)")}
     assert store.db.foreign_key_check() == []
     assert store.db.integrity_check() == ["ok"]
 

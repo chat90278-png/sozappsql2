@@ -44,7 +44,6 @@ class SystemInfo:
     completion_date: str = ""
     status: str = "Başlanmadı"
     acceptance_date: str = ""
-    delivery_user: str = ""
 
 
 @dataclass

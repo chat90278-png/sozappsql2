@@ -578,7 +578,7 @@ class STSStore:
                 cid=self.db.conn.execute("SELECT last_insert_rowid()").fetchone()[0]
             system_ids = {}
             for i,system in enumerate(systems or []):
-                self.db.conn.execute("INSERT INTO systems(contract_id,name,status,completion_date,acceptance_date,delivery_user_id,note,sort_order,payload_json) VALUES(?,?,?,?,?,?,?,?,?)",(cid,system.name,system.status,system.completion_date,system.acceptance_date,None,"",i,json.dumps({"t0_date":system.t0_date,"t0_months":system.t0_months})))
+                self.db.conn.execute("INSERT INTO systems(contract_id,name,status,completion_date,acceptance_date,note,sort_order,payload_json) VALUES(?,?,?,?,?,?,?,?)",(cid,system.name,system.status,system.completion_date,system.acceptance_date,"",i,json.dumps({"t0_date":system.t0_date,"t0_months":system.t0_months})))
                 sid=self.db.conn.execute("SELECT last_insert_rowid()").fetchone()[0]; system_ids[system.name]=sid
                 for cname, qty in (system.components or {}).items():
                     value=float(qty or 0)
@@ -616,7 +616,7 @@ class STSStore:
         for s in self.db.conn.execute("SELECT * FROM systems WHERE contract_id=? ORDER BY sort_order,id",(r['id'],)):
             comps={x[0]:float(x[1] or 0) for x in self.db.conn.execute("SELECT c.name,sc.qty FROM system_components sc JOIN components c ON c.id=sc.component_id WHERE sc.system_id=?",(s['id'],))}
             payload=json.loads(s['payload_json'] or "{}")
-            si=SystemInfo(name=s['name'],components=comps,t0_date=payload.get('t0_date',''),t0_months=int(payload.get('t0_months',0) or 0),completion_date=s['completion_date'] or "",status=s['status'] or "Başlanmadı",acceptance_date=s['acceptance_date'] or "",delivery_user=(self.db.conn.execute("SELECT name FROM users WHERE id=?", (s["delivery_user_id"],)).fetchone() or [""])[0])
+            si=SystemInfo(name=s['name'],components=comps,t0_date=payload.get('t0_date',''),t0_months=int(payload.get('t0_months',0) or 0),completion_date=s['completion_date'] or "",status=s['status'] or "Başlanmadı",acceptance_date=s['acceptance_date'] or "")
             systems.append(si)
         for d in self.db.conn.execute("SELECT d.*,u.name AS delivery_user FROM deliveries d LEFT JOIN users u ON u.id=d.delivery_user_id WHERE d.contract_id=? ORDER BY d.system_name,d.sort_order,d.id",(r['id'],)):
             payload=json.loads(d['payload_json'] or "{}")
