@@ -5044,6 +5044,97 @@ class ContractWorkWindow(QDialog):
         menu.addAction("Sil", lambda: self.delete_contract_file(file_id))
         menu.exec(button.mapToGlobal(QPoint(0, button.height())))
 
+    @staticmethod
+    def _format_file_size(size_bytes: int) -> str:
+        size = float(size_bytes or 0)
+        if size < 1024:
+            return f"{int(size)} B"
+        if size < 1024 * 1024:
+            return f"{size / 1024:.0f} KB"
+        return f"{size / (1024 * 1024):.1f} MB"
+
+    @staticmethod
+    def _contract_file_icon(ext: str) -> str:
+        extension = str(ext or "").lower()
+        if extension == "pdf": return "📄"
+        if extension in {"doc", "docx"}: return "📝"
+        if extension in {"xls", "xlsx"}: return "📊"
+        if extension in {"png", "jpg", "jpeg"}: return "🖼"
+        return "📎"
+
+    def render_contract_files(self):
+        if not hasattr(self, "contract_files_list"):
+            return
+        try:
+            files = self.store.list_contract_files(self.ci.platform, self.ci.no, self.ci.contract_type)
+        except Exception:
+            files = []
+        self.contract_files_list.clear()
+        for metadata in files:
+            ext = str(metadata.get("file_ext") or "").upper() or "DOSYA"
+            text = f"{self._contract_file_icon(ext)} {metadata.get('filename', '')}\n{ext} · {self._format_file_size(metadata.get('size_bytes', 0))}"
+            item = QListWidgetItem(text)
+            item.setData(Qt.UserRole, int(metadata["id"]))
+            item.setToolTip(str(metadata.get("filename") or ""))
+            self.contract_files_list.addItem(item)
+        if hasattr(self, "contract_side_tabs"):
+            self.contract_side_tabs.setTabText(self.documents_tab_index, f"Belgeler {len(files)}")
+
+    def add_contract_file(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Sözleşmeye Dosya Ekle", "", "PDF/Word/Excel/Resim/TXT (*.pdf *.doc *.docx *.xls *.xlsx *.png *.jpg *.jpeg *.txt)")
+        if not path:
+            return
+        try:
+            self.store.add_contract_file(self.ci.platform, self.ci.no, path, self.ci.contract_type)
+            self.render_contract_files()
+        except Exception as exc:
+            QMessageBox.warning(self, "Dosya eklenemedi", str(exc))
+
+    def open_contract_file(self, file_id: int):
+        try:
+            filename, _mime, content = self.store.get_contract_file_bytes(file_id)
+            suffix = Path(filename).suffix
+            temp = tempfile.NamedTemporaryFile(prefix="sts_contract_", suffix=suffix, delete=False)
+            try:
+                temp.write(content)
+            finally:
+                temp.close()
+            QDesktopServices.openUrl(QUrl.fromLocalFile(temp.name))
+        except Exception as exc:
+            QMessageBox.warning(self, "Belge açılamadı", str(exc))
+
+    def export_contract_file(self, file_id: int):
+        try:
+            filename, _mime, _content = self.store.get_contract_file_bytes(file_id)
+            target, _ = QFileDialog.getSaveFileName(self, "Belgeyi Dışa Aktar", filename)
+            if not target:
+                return
+            self.store.export_contract_file(file_id, target)
+            QMessageBox.information(self, "Belge dışa aktarıldı", "Belge başarıyla dışa aktarıldı.")
+        except Exception as exc:
+            QMessageBox.warning(self, "Belge dışa aktarılamadı", str(exc))
+
+    def delete_contract_file(self, file_id: int):
+        if QMessageBox.question(self, "Belgeyi Sil", "Belge STS dosyasından silinsin mi? Orijinal dosyaya dokunulmaz.") != QMessageBox.Yes:
+            return
+        try:
+            self.store.delete_contract_file(file_id)
+            self.render_contract_files()
+        except Exception as exc:
+            QMessageBox.warning(self, "Belge silinemedi", str(exc))
+
+    def show_contract_file_menu(self, pos):
+        item = self.contract_files_list.itemAt(pos)
+        if not item:
+            return
+        file_id = int(item.data(Qt.UserRole))
+        menu = QMenu(self)
+        menu.addAction("Aç", lambda: self.open_contract_file(file_id))
+        menu.addAction("Dışa Aktar", lambda: self.export_contract_file(file_id))
+        menu.addSeparator()
+        menu.addAction("Sil", lambda: self.delete_contract_file(file_id))
+        menu.exec(self.contract_files_list.mapToGlobal(pos))
+
     def open_tag_assign_dialog(self):
         dlg = TagAssignDialog(self.store, self.contract_tags, self)
         if not dlg.exec() or not dlg.result:
