@@ -33,6 +33,14 @@ class STSDatabase:
             self.conn.rollback()
             raise
 
+    def _table_columns(self, table: str) -> set[str]:
+        rows = self.conn.execute(f"PRAGMA table_info({table})").fetchall()
+        return {str(row[1]) for row in rows}
+
+    def _ensure_column(self, table: str, name: str, ddl: str):
+        if name not in self._table_columns(table):
+            self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
+
     def init_schema(self):
         self.conn.executescript(
             """
@@ -57,7 +65,6 @@ CREATE INDEX IF NOT EXISTS idx_systems_completion_date ON systems(completion_dat
 CREATE INDEX IF NOT EXISTS idx_system_components_component_id ON system_components(component_id);
 CREATE INDEX IF NOT EXISTS idx_deliveries_contract_id ON deliveries(contract_id);
 CREATE INDEX IF NOT EXISTS idx_deliveries_system_id ON deliveries(system_id);
-CREATE INDEX IF NOT EXISTS idx_deliveries_delivery_user_id ON deliveries(delivery_user_id);
 CREATE INDEX IF NOT EXISTS idx_deliveries_contract_system ON deliveries(contract_id,system_id);
 CREATE INDEX IF NOT EXISTS idx_deliveries_acceptance_date ON deliveries(acceptance_date);
 CREATE INDEX IF NOT EXISTS idx_delivery_components_component_id ON delivery_components(component_id);
@@ -66,6 +73,13 @@ CREATE INDEX IF NOT EXISTS idx_logs_action ON activity_logs(action);
 CREATE INDEX IF NOT EXISTS idx_logs_entity ON activity_logs(entity_type,entity_id);
             """
         )
+        # Existing v2 files may predate delivery-level responsibility. SQLite
+        # cannot add foreign-key constraints with ALTER TABLE, but adding the
+        # nullable columns keeps those files readable and writable. New files
+        # still receive the foreign keys from the CREATE TABLE definitions.
+        self._ensure_column("systems", "delivery_user_id", "INTEGER")
+        self._ensure_column("deliveries", "delivery_user_id", "INTEGER")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_deliveries_delivery_user_id ON deliveries(delivery_user_id)")
         self.conn.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version','2')")
         self.conn.commit()
 

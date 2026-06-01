@@ -47,5 +47,22 @@ with TemporaryDirectory() as td:
     assert expected_indexes <= actual_indexes, expected_indexes - actual_indexes
     assert db.integrity_check() == ['ok']
     assert db.foreign_key_check() == []
+    db.close()
+
+    legacy_path = Path(td) / 'legacy-v2.sts'
+    legacy = sqlite3.connect(legacy_path)
+    legacy.execute('CREATE TABLE systems(id INTEGER PRIMARY KEY AUTOINCREMENT,contract_id INTEGER NOT NULL,name TEXT NOT NULL,status TEXT,completion_date TEXT,acceptance_date TEXT,note TEXT,sort_order INTEGER DEFAULT 0,payload_json TEXT)')
+    legacy.execute('CREATE TABLE deliveries(id INTEGER PRIMARY KEY AUTOINCREMENT,contract_id INTEGER NOT NULL,system_id INTEGER,system_name TEXT NOT NULL,name TEXT NOT NULL,status TEXT,acceptance_date TEXT,note TEXT,sort_order INTEGER DEFAULT 0,payload_json TEXT)')
+    legacy.commit()
+    legacy.close()
+
+    upgraded = STSDatabase(legacy_path)
+    assert 'delivery_user_id' in {r[1] for r in upgraded.conn.execute('PRAGMA table_info(systems)')}
+    assert 'delivery_user_id' in {r[1] for r in upgraded.conn.execute('PRAGMA table_info(deliveries)')}
+    delivery_indexes = {r[1] for r in upgraded.conn.execute('PRAGMA index_list(deliveries)')}
+    assert 'idx_deliveries_delivery_user_id' in delivery_indexes
+    assert upgraded.foreign_key_check() == []
+    assert upgraded.integrity_check() == ['ok']
+    upgraded.close()
 
 print('ok')
