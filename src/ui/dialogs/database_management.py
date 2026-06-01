@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QPlainTextEdit,
     QSplitter,
+    QScrollArea,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -318,7 +319,7 @@ QListWidget#relationList::item:selected { background:#eaf1ff; border:1px solid #
         self.rail_schema = QPushButton("REL"); self.rail_schema.setObjectName("railBtn"); self.rail_schema.clicked.connect(lambda: self._set_page("schema"))
         self.rail_sql = QPushButton("SQL"); self.rail_sql.setObjectName("railBtn"); self.rail_sql.clicked.connect(lambda: self._set_page("sql"))
         self.rail_tables.setToolTip("Tablolar")
-        self.rail_schema.setToolTip("Şema Görselleştirici")
+        self.rail_schema.setToolTip("İlişkiler")
         self.rail_sql.setToolTip("SQL Terminal")
         lay.addWidget(self.rail_tables)
         lay.addWidget(self.rail_schema)
@@ -369,9 +370,8 @@ QListWidget#relationList::item:selected { background:#eaf1ff; border:1px solid #
         self.rel_combo = QComboBox(); self.rel_combo.addItems(["Tüm ilişkiler", "Sadece seçili tablo", "Kritik ilişkiler"]); self.rel_combo.currentTextChanged.connect(self._apply_schema_focus)
         self.schema_search = QLineEdit(); self.schema_search.setPlaceholderText("Tablo veya kolon ara..."); self.schema_search.textChanged.connect(self._highlight_schema)
         self.auto_btn = QPushButton("Otomatik Yerleştir"); self.auto_btn.setObjectName("softBtn"); self.auto_btn.clicked.connect(self._layout_schema)
-        for w in [self.schema_combo, self.rel_combo, self.schema_search, self.auto_btn]:
-            tlay.addWidget(w)
-        tlay.setStretch(3, 1)
+        tlay.addWidget(self.schema_search, 1)
+        tlay.addWidget(self.auto_btn, 0)
         lay.addWidget(tb)
 
         wrap = QFrame(); wrap.setObjectName("schemaCanvasWrap")
