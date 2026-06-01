@@ -6812,7 +6812,7 @@ class MainWindow(QMainWindow):
                     item.setFlags(flags | Qt.ItemIsUserCheckable)
                     item.setCheckState(Qt.Checked if platform in self.selected_platforms else Qt.Unchecked)
                 else:
-                    item.setData(Qt.CheckStateRole, None)
+                    item.setCheckState(Qt.Unchecked)
                     item.setFlags(flags & ~Qt.ItemIsUserCheckable)
                 item.setSelected(platform in self.selected_platforms)
         finally:
