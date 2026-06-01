@@ -10,6 +10,7 @@ import base64
 import copy
 import time
 import traceback
+import tempfile
 from pathlib import Path
 from datetime import date, datetime, timedelta
 from typing import Callable, Dict, List, Optional, Tuple
@@ -64,15 +65,15 @@ from src.ui.ozet import ContractSummaryDialog
 from src.ui.date_picker import build_date_input as _build_date_input
 from src.ui.kullanim_kilavuzu import UsageGuideDialog
 
-from PySide6.QtCore import Qt, QDate, QObject, QThread, Signal, QTimer, QPoint, QSize, QEvent, QPropertyAnimation, QEasingCurve
-from PySide6.QtGui import QFont, QColor, QPixmap, QIcon, QPainter, QAction, QCursor, QCloseEvent
+from PySide6.QtCore import Qt, QDate, QObject, QThread, Signal, QTimer, QPoint, QSize, QEvent, QPropertyAnimation, QEasingCurve, QUrl
+from PySide6.QtGui import QFont, QColor, QPixmap, QIcon, QPainter, QAction, QCursor, QCloseEvent, QDesktopServices
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget,QGraphicsOpacityEffect, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QPushButton, QListWidget, QListWidgetItem, QTableWidget, QTableWidgetItem,
     QDialog, QLineEdit, QComboBox, QDateEdit, QSpinBox, QDoubleSpinBox,
     QMessageBox, QFileDialog, QFrame, QScrollArea, QCheckBox, QHeaderView,
     QSizePolicy, QProgressBar, QProgressDialog, QStyledItemDelegate, QTextEdit,
-    QToolButton, QMenu, QInputDialog, QWidgetAction
+    QToolButton, QMenu, QInputDialog, QWidgetAction, QTabWidget
 )
 
 
@@ -2773,20 +2774,6 @@ class SystemDialog(StyledDialog):
         self.name.setText(self.default_name)
         self.name.selectAll()
         root.addWidget(self.name)
-        root.addWidget(form_label("Teslim Edilecek Kullanıcı"))
-        self.delivery_user_combo = QComboBox()
-        self.delivery_user_combo.addItem("Seçiniz...")
-        user_names = [u.get("name", "") for u in self.store.load_users(active_only=True) if str(u.get("name", "")).strip()]
-        for un in user_names:
-            self.delivery_user_combo.addItem(un)
-        initial_delivery = str(getattr(self.existing_system, "delivery_user", "") or "").strip()
-        if initial_delivery:
-            idx_du = self.delivery_user_combo.findText(initial_delivery, Qt.MatchExactly)
-            if idx_du < 0:
-                self.delivery_user_combo.addItem(initial_delivery)
-                idx_du = self.delivery_user_combo.findText(initial_delivery, Qt.MatchExactly)
-            self.delivery_user_combo.setCurrentIndex(max(0, idx_du))
-        root.addWidget(self.delivery_user_combo)
 
         date_card = QFrame()
         date_card.setObjectName("systemFormCard")
@@ -3149,7 +3136,6 @@ class SystemDialog(StyledDialog):
             completion_date=self.completion_date.text().strip(),
             status=getattr(self.existing_system, "status", "Başlanmadı") or "Başlanmadı",
             acceptance_date=getattr(self.existing_system, "acceptance_date", "") or "",
-            delivery_user="" if self.delivery_user_combo.currentIndex() <= 0 else self.delivery_user_combo.currentText().strip(),
         )
         self.result.removed_components = set(removed)
         self.accept()
@@ -3265,15 +3251,6 @@ class MultiSystemDialog(StyledDialog):
         self.name_edit = QLineEdit()
         self.name_edit.textChanged.connect(self.on_name_changed)
         mid.addWidget(self.name_edit)
-        mid.addWidget(form_label("Teslim Edilecek Kullanıcı"))
-        self.delivery_user_combo = QComboBox()
-        self.delivery_user_combo.addItem("Seçiniz...")
-        for u in self.store.load_users(active_only=True):
-            uname = str(u.get("name", "")).strip()
-            if uname:
-                self.delivery_user_combo.addItem(uname)
-        self.delivery_user_combo.currentTextChanged.connect(self.on_delivery_user_changed)
-        mid.addWidget(self.delivery_user_combo)
 
         date_strip = QFrame()
         date_strip.setObjectName("dateStrip")
@@ -3433,7 +3410,6 @@ class MultiSystemDialog(StyledDialog):
             "completion_date": completion,
             "system_type": "",
             "components": {},
-            "delivery_user": "",
         }
 
     def add_blank_system(self, select: bool = True):
@@ -3499,10 +3475,6 @@ class MultiSystemDialog(StyledDialog):
         month_lbl.setObjectName("miniPillOrange")
         meta.addWidget(typ_lbl, 0)
         meta.addWidget(month_lbl, 0)
-        if str(draft.get("delivery_user") or "").strip():
-            du_lbl = QLabel(f"Teslim: {str(draft.get('delivery_user') or '').strip()}")
-            du_lbl.setObjectName("miniPill")
-            meta.addWidget(du_lbl, 0)
         meta.addStretch()
         lay.addLayout(meta)
         return card
@@ -3526,9 +3498,6 @@ class MultiSystemDialog(StyledDialog):
             self.t0_date_edit.setText(str(draft.get("t0_date") or ""))
             self.months_spin.setValue(int(draft.get("t0_months") or 0))
             self.completion_edit.setText(str(draft.get("completion_date") or ""))
-            delivery_user = str(draft.get("delivery_user") or "").strip()
-            idx_du = self.delivery_user_combo.findText(delivery_user, Qt.MatchExactly) if delivery_user else 0
-            self.delivery_user_combo.setCurrentIndex(max(0, idx_du))
             typ = str(draft.get("system_type") or "")
             idx = self.type_combo.findText(typ) if typ else 0
             self.type_combo.setCurrentIndex(idx if idx >= 0 else 0)
@@ -3562,12 +3531,6 @@ class MultiSystemDialog(StyledDialog):
             return
         self.current_draft()["t0_months"] = int(value)
         self.recalc_current_completion()
-        self.refresh_system_list(keep_row=self.current_index, reload_form=False)
-
-    def on_delivery_user_changed(self, _text: str):
-        if self._loading:
-            return
-        self.current_draft()["delivery_user"] = "" if self.delivery_user_combo.currentIndex() <= 0 else self.delivery_user_combo.currentText().strip()
         self.refresh_system_list(keep_row=self.current_index, reload_form=False)
 
     def set_custom_type(self):
@@ -3829,7 +3792,6 @@ class MultiSystemDialog(StyledDialog):
                 completion_date=completion,
                 status="Başlanmadı",
                 acceptance_date="",
-                delivery_user=str(draft.get("delivery_user") or ""),
             ))
         self.result = out
         self.accept()
@@ -3848,6 +3810,7 @@ class DeliveryDialog(StyledDialog):
     ):
         super().__init__("Teslimat / Kabul Ekle", parent)
         self.system = system
+        self.store = getattr(parent, "store", None)
         self.default_name = default_name
         self.component_keys = list(component_keys or list(self.system.components.keys()))
         self.planned_assigned = dict(planned_assigned or {})
@@ -3919,6 +3882,13 @@ class DeliveryDialog(StyledDialog):
         self.t0_months_spin.setValue(int(getattr(self.system, "t0_months", 0) or 0))
         self.completion_date_edit = QLineEdit(str(getattr(self.system, "completion_date", "") or ""))
         self.note = QLineEdit(); self.note.setPlaceholderText("Not")
+        self.delivery_user_combo = QComboBox()
+        self.delivery_user_combo.addItem("Seçiniz...")
+        if self.store is not None:
+            for user in self.store.load_users(active_only=True):
+                name = str(user.get("name", "") or "").strip()
+                if name:
+                    self.delivery_user_combo.addItem(name)
         self.acceptance_date, self.acceptance_date_wrap = build_date_input(self, max_date=date.today(), events_provider=self.events_provider)
         grid.addWidget(form_label("Kabul Adı"), 0, 0)
         grid.addWidget(self.name, 1, 0)
@@ -3928,6 +3898,8 @@ class DeliveryDialog(StyledDialog):
         grid.addWidget(self.acceptance_date_wrap, 3, 0)
         grid.addWidget(form_label("Not"), 2, 1)
         grid.addWidget(self.note, 3, 1)
+        grid.addWidget(form_label("Teslim Edilecek Kullanıcı"), 4, 0)
+        grid.addWidget(self.delivery_user_combo, 5, 0)
         root.addLayout(grid)
 
         info_row = QHBoxLayout()
@@ -4229,6 +4201,7 @@ class DeliveryDialog(StyledDialog):
             t0_date=iso_or_blank(t0_text),
             t0_months=int(getattr(self.system, "t0_months", self.t0_months_spin.value()) or 0),
             completion_date=completion,
+            delivery_user="" if self.delivery_user_combo.currentIndex() <= 0 else self.delivery_user_combo.currentText().strip(),
         )
         self.accept()
 
@@ -4327,6 +4300,7 @@ class ContractWorkWindow(QDialog):
                             "status":          str(d.status or ""),
                             "acceptance_date": str(d.acceptance_date or ""),
                             "note":            str(d.note or ""),
+                            "delivery_user":   str(getattr(d, "delivery_user", "") or ""),
                             "planned":  {k: float(v) for k, v in sorted((d.planned or {}).items())},
                             "delivered":{k: float(v) for k, v in sorted((d.delivered or {}).items())},
                         }
@@ -4444,7 +4418,28 @@ class ContractWorkWindow(QDialog):
         self.tag_more_btn.setToolTip("Tüm etiketleri göster")
         self.tag_more_btn.clicked.connect(self.toggle_tag_overlay)
         self.tag_more_btn.raise_()
-        left_block_lay.addWidget(self.tag_card, 0)
+        self.contract_side_tabs = QTabWidget()
+        self.contract_side_tabs.setObjectName("contractSideTabs")
+        self.contract_side_tabs.setFixedHeight(178)
+        self.contract_side_tabs.addTab(self.tag_card, "Etiketler")
+        self.documents_card = QFrame()
+        self.documents_card.setObjectName("compactDocumentsPanel")
+        self.documents_card.setStyleSheet(
+            "QFrame#compactDocumentsPanel{background:#f8fbff; border:1px solid #c9d7ea; border-radius:12px;}"
+            "QListWidget#contractFilesList{background:transparent; border:0;}"
+            "QListWidget#contractFilesList::item{background:#ffffff; border:1px solid #d8e4f2; border-radius:7px; padding:5px; margin:2px;}"
+            "QListWidget#contractFilesList::item:selected{background:#eaf1ff; border-color:#8bb3ff;}"
+        )
+        documents_lay = QVBoxLayout(self.documents_card); documents_lay.setContentsMargins(8, 6, 8, 6); documents_lay.setSpacing(5)
+        self.contract_files_list = QListWidget(); self.contract_files_list.setObjectName("contractFilesList")
+        self.contract_files_list.itemDoubleClicked.connect(lambda item: self.open_contract_file(int(item.data(Qt.UserRole))))
+        self.contract_files_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.contract_files_list.customContextMenuRequested.connect(self.show_contract_file_menu)
+        documents_lay.addWidget(self.contract_files_list, 1)
+        add_file_btn = QPushButton("+ Dosya ekle"); add_file_btn.setObjectName("secondary"); add_file_btn.clicked.connect(self.add_contract_file)
+        documents_lay.addWidget(add_file_btn, 0)
+        self.documents_tab_index = self.contract_side_tabs.addTab(self.documents_card, "Belgeler 0")
+        left_block_lay.addWidget(self.contract_side_tabs, 0)
 
         left_row = QHBoxLayout()
         left_row.setContentsMargins(0, 0, 0, 0)
@@ -4513,7 +4508,7 @@ class ContractWorkWindow(QDialog):
         top_row.addWidget(system_metric_card("completion", "Termin Tarihi"), 0)
         top_row.addWidget(system_metric_card("days", "Kalan Gün"), 0)
         top_row.addWidget(system_metric_card("acceptance", "Kabul Tarihi"), 0)
-        top_row.addWidget(system_metric_card("delivery_user", "Teslim Edilecek Kullanıcı"), 0)
+        top_row.addWidget(system_metric_card("user", "Kullanıcı"), 0)
         top_row.addStretch(1)
         self.edit_system_btn = QPushButton("✎ Sistemi Düzenle")
         self.edit_system_btn.setObjectName("secondary")
@@ -4995,6 +4990,7 @@ class ContractWorkWindow(QDialog):
         self.tag_overlay.hide()
 
     def render_contract_tags(self):
+        self.render_contract_files()
         if not hasattr(self, "tag_chips_grid"):
             return
         self._clear_grid_layout(self.tag_chips_grid)
@@ -5030,6 +5026,97 @@ class ContractWorkWindow(QDialog):
                 self.tag_overlay.hide()
             elif self.tag_overlay.isVisible():
                 self.position_tag_overlay()
+
+    @staticmethod
+    def _format_file_size(size_bytes: int) -> str:
+        size = float(size_bytes or 0)
+        if size < 1024:
+            return f"{int(size)} B"
+        if size < 1024 * 1024:
+            return f"{size / 1024:.0f} KB"
+        return f"{size / (1024 * 1024):.1f} MB"
+
+    @staticmethod
+    def _contract_file_icon(ext: str) -> str:
+        extension = str(ext or "").lower()
+        if extension == "pdf": return "📄"
+        if extension in {"doc", "docx"}: return "📝"
+        if extension in {"xls", "xlsx"}: return "📊"
+        if extension in {"png", "jpg", "jpeg"}: return "🖼"
+        return "📎"
+
+    def render_contract_files(self):
+        if not hasattr(self, "contract_files_list"):
+            return
+        try:
+            files = self.store.list_contract_files(self.ci.platform, self.ci.no, self.ci.contract_type)
+        except Exception:
+            files = []
+        self.contract_files_list.clear()
+        for metadata in files:
+            ext = str(metadata.get("file_ext") or "").upper() or "DOSYA"
+            text = f"{self._contract_file_icon(ext)} {metadata.get('filename', '')}\n{ext} · {self._format_file_size(metadata.get('size_bytes', 0))}"
+            item = QListWidgetItem(text)
+            item.setData(Qt.UserRole, int(metadata["id"]))
+            item.setToolTip(str(metadata.get("filename") or ""))
+            self.contract_files_list.addItem(item)
+        if hasattr(self, "contract_side_tabs"):
+            self.contract_side_tabs.setTabText(self.documents_tab_index, f"Belgeler {len(files)}")
+
+    def add_contract_file(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Sözleşmeye Dosya Ekle", "", "PDF/Word/Excel/Resim/TXT (*.pdf *.doc *.docx *.xls *.xlsx *.png *.jpg *.jpeg *.txt)")
+        if not path:
+            return
+        try:
+            self.store.add_contract_file(self.ci.platform, self.ci.no, path, self.ci.contract_type)
+            self.render_contract_files()
+        except Exception as exc:
+            QMessageBox.warning(self, "Dosya eklenemedi", str(exc))
+
+    def open_contract_file(self, file_id: int):
+        try:
+            filename, _mime, content = self.store.get_contract_file_bytes(file_id)
+            suffix = Path(filename).suffix
+            temp = tempfile.NamedTemporaryFile(prefix="sts_contract_", suffix=suffix, delete=False)
+            try:
+                temp.write(content)
+            finally:
+                temp.close()
+            QDesktopServices.openUrl(QUrl.fromLocalFile(temp.name))
+        except Exception as exc:
+            QMessageBox.warning(self, "Belge açılamadı", str(exc))
+
+    def export_contract_file(self, file_id: int):
+        try:
+            filename, _mime, _content = self.store.get_contract_file_bytes(file_id)
+            target, _ = QFileDialog.getSaveFileName(self, "Belgeyi Dışa Aktar", filename)
+            if not target:
+                return
+            self.store.export_contract_file(file_id, target)
+            QMessageBox.information(self, "Belge dışa aktarıldı", "Belge başarıyla dışa aktarıldı.")
+        except Exception as exc:
+            QMessageBox.warning(self, "Belge dışa aktarılamadı", str(exc))
+
+    def delete_contract_file(self, file_id: int):
+        if QMessageBox.question(self, "Belgeyi Sil", "Belge STS dosyasından silinsin mi? Orijinal dosyaya dokunulmaz.") != QMessageBox.Yes:
+            return
+        try:
+            self.store.delete_contract_file(file_id)
+            self.render_contract_files()
+        except Exception as exc:
+            QMessageBox.warning(self, "Belge silinemedi", str(exc))
+
+    def show_contract_file_menu(self, pos):
+        item = self.contract_files_list.itemAt(pos)
+        if not item:
+            return
+        file_id = int(item.data(Qt.UserRole))
+        menu = QMenu(self)
+        menu.addAction("Aç", lambda: self.open_contract_file(file_id))
+        menu.addAction("Dışa Aktar", lambda: self.export_contract_file(file_id))
+        menu.addSeparator()
+        menu.addAction("Sil", lambda: self.delete_contract_file(file_id))
+        menu.exec(self.contract_files_list.mapToGlobal(pos))
 
     def open_tag_assign_dialog(self):
         dlg = TagAssignDialog(self.store, self.contract_tags, self)
@@ -5116,7 +5203,6 @@ class ContractWorkWindow(QDialog):
         current.completion_date = updated.completion_date
         current.status = updated.status
         current.acceptance_date = updated.acceptance_date
-        current.delivery_user = str(getattr(updated, "delivery_user", "") or "")
 
         # Sistem adı değiştiyse teslimat anahtarını da taşı.
         if old_name != new_name:

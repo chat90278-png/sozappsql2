@@ -3,6 +3,8 @@ from __future__ import annotations
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import QHeaderView, QTableWidgetItem, QWidget, QVBoxLayout, QLabel, QTableWidget, QFrame, QHBoxLayout, QPushButton
 
+from src.ui.contract.delivery_user_display import delivery_user_text
+
 
 def refresh_delivery_table(self):
     sys_info = self.current_system()
@@ -11,7 +13,7 @@ def refresh_delivery_table(self):
         self.pinned_delivery.clearContents()
         self.del_table.setRowCount(0)
         return
-    headers = ["", "Kabul Adı", "Durum", "Kabul Tarihi"]
+    headers = ["", "Kabul Adı", "Durum", "Kabul Tarihi", "Teslim Kullanıcısı"]
     self.del_table.clear()
     self.del_table.setColumnCount(len(headers))
     self.del_table.setHorizontalHeaderLabels(headers)
@@ -23,7 +25,7 @@ def refresh_delivery_table(self):
         r = self.del_table.rowCount()
         self.del_table.insertRow(r)
         self._delivery_row_map[r] = idx
-        vals = ["▶", d.name, d.status, d.acceptance_date]
+        vals = ["▶", d.name, d.status, d.acceptance_date, delivery_user_text(d)]
         for c, v in enumerate(vals):
             it = QTableWidgetItem(str(v))
             it.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
@@ -97,6 +99,13 @@ def edit_delivery(self, idx: int):
     dlg.status.setCurrentText(current.status or "PLAN")
     dlg.acceptance_date.setText(current.acceptance_date or "")
     dlg.note.setText(current.note or "")
+    delivery_user = str(getattr(current, "delivery_user", "") or "").strip()
+    if delivery_user:
+        idx_user = dlg.delivery_user_combo.findText(delivery_user, Qt.MatchExactly)
+        if idx_user < 0:
+            dlg.delivery_user_combo.addItem(delivery_user)
+            idx_user = dlg.delivery_user_combo.findText(delivery_user, Qt.MatchExactly)
+        dlg.delivery_user_combo.setCurrentIndex(max(0, idx_user))
 
     dlg._updating_qty = True
     for r, comp in enumerate(dlg.component_keys):
