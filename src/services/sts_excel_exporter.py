@@ -64,9 +64,9 @@ def export_sts_to_excel(db, output_path, options=None, progress_cb=None):
         summary.append(['Log sayısı', l_count]); summary.append([])
         summary.append(['Platform', 'Sözleşme Sayısı', 'Sistem Sayısı', 'Teslimat Sayısı'])
         for p in (platforms if platforms else all_platforms):
-            p_contracts = conn.execute('SELECT COUNT(*) FROM contracts WHERE platform=?', (p,)).fetchone()[0]
-            p_systems = conn.execute('SELECT COUNT(*) FROM systems s JOIN contracts c ON c.id=s.contract_id WHERE c.platform=?', (p,)).fetchone()[0]
-            p_delivs = conn.execute('SELECT COUNT(*) FROM deliveries d JOIN contracts c ON c.id=d.contract_id WHERE c.platform=?', (p,)).fetchone()[0]
+            p_contracts = conn.execute('SELECT COUNT(*) FROM contracts c JOIN platforms p ON p.id=c.platform_id WHERE p.name=?', (p,)).fetchone()[0]
+            p_systems = conn.execute('SELECT COUNT(*) FROM systems s JOIN contracts c ON c.id=s.contract_id JOIN platforms p ON p.id=c.platform_id WHERE p.name=?', (p,)).fetchone()[0]
+            p_delivs = conn.execute('SELECT COUNT(*) FROM deliveries d JOIN contracts c ON c.id=d.contract_id JOIN platforms p ON p.id=c.platform_id WHERE p.name=?', (p,)).fetchone()[0]
             summary.append([p, p_contracts, p_systems, p_delivs])
 
     if progress_cb: progress_cb(10, "Platformlar hazırlanıyor...")
@@ -86,26 +86,26 @@ def export_sts_to_excel(db, output_path, options=None, progress_cb=None):
         for c in comp_used: headers.extend([f'{c} Sözleşme Adedi', f'{c} Teslim Edilen', f'{c} Kalan'])
         ws.append(headers)
 
-        contracts = conn.execute("SELECT id,contract_type,contract_no,user_name,yi_yd,status,signed_date,t0_date,t0_months,completion_date,acceptance_date,note,content FROM contracts WHERE platform=? ORDER BY id", (p,)).fetchall()
+        contracts = conn.execute("SELECT c.id,c.contract_type,c.contract_no,u.name,c.yi_yd,c.status,c.signed_date,c.t0_date,c.t0_months,c.completion_date,c.acceptance_date,c.note,c.content FROM contracts c JOIN platforms p ON p.id=c.platform_id LEFT JOIN users u ON u.id=c.user_id WHERE p.name=? ORDER BY c.id", (p,)).fetchall()
         for c in contracts:
             cid = c[0]
-            tag_names = [r[0] for r in conn.execute('SELECT tag_name FROM contract_tags WHERE contract_id=? ORDER BY tag_name', (cid,)).fetchall()]
+            tag_names = [r[0] for r in conn.execute('SELECT t.name FROM contract_tags ct JOIN tags t ON t.id=ct.tag_id WHERE ct.contract_id=? ORDER BY t.name', (cid,)).fetchall()]
             tag_txt = ', '.join(tag_names)
             base = [c[1], c[2], c[3], c[4], c[5], c[6], c[7], c[8], c[9], c[10], c[12] or c[11]]
             if opts.get('include_tags', True): base.append(tag_txt)
             systems = conn.execute('SELECT id,name FROM systems WHERE contract_id=? ORDER BY sort_order,id', (cid,)).fetchall()
             if opts.get('include_contract_rows', True):
                 sys_qty = defaultdict(float); sys_del = defaultdict(float)
-                for r in conn.execute('SELECT sc.component_name,SUM(sc.qty) FROM system_components sc JOIN systems s ON s.id=sc.system_id WHERE s.contract_id=? GROUP BY sc.component_name', (cid,)).fetchall(): sys_qty[r[0]] = float(r[1] or 0)
-                for r in conn.execute('SELECT dc.component_name,SUM(dc.delivered) FROM delivery_components dc JOIN deliveries d ON d.id=dc.delivery_id WHERE d.contract_id=? GROUP BY dc.component_name', (cid,)).fetchall(): sys_del[r[0]] = float(r[1] or 0)
+                for r in conn.execute('SELECT c.name,SUM(sc.qty) FROM system_components sc JOIN components c ON c.id=sc.component_id JOIN systems s ON s.id=sc.system_id WHERE s.contract_id=? GROUP BY c.name', (cid,)).fetchall(): sys_qty[r[0]] = float(r[1] or 0)
+                for r in conn.execute('SELECT c.name,SUM(dc.delivered) FROM delivery_components dc JOIN components c ON c.id=dc.component_id JOIN deliveries d ON d.id=dc.delivery_id WHERE d.contract_id=? GROUP BY c.name', (cid,)).fetchall(): sys_del[r[0]] = float(r[1] or 0)
                 row = base + ['GENEL', 'Ana Sözleşme Toplamı', 'Sözleşme Toplamı']
                 for n in comp_used:
                     q = sys_qty.get(n, 0.0); d = sys_del.get(n, 0.0); row.extend([q,d,q-d])
                 ws.append(row)
 
             for sid, sname in systems:
-                qmap = {r[0]: float(r[1] or 0) for r in conn.execute('SELECT component_name,qty FROM system_components WHERE system_id=?', (sid,)).fetchall()}
-                dmap = {r[0]: float(r[1] or 0) for r in conn.execute('SELECT dc.component_name,SUM(dc.delivered) FROM delivery_components dc JOIN deliveries d ON d.id=dc.delivery_id WHERE d.system_id=? GROUP BY dc.component_name', (sid,)).fetchall()}
+                qmap = {r[0]: float(r[1] or 0) for r in conn.execute('SELECT c.name,sc.qty FROM system_components sc JOIN components c ON c.id=sc.component_id WHERE sc.system_id=?', (sid,)).fetchall()}
+                dmap = {r[0]: float(r[1] or 0) for r in conn.execute('SELECT c.name,SUM(dc.delivered) FROM delivery_components dc JOIN components c ON c.id=dc.component_id JOIN deliveries d ON d.id=dc.delivery_id WHERE d.system_id=? GROUP BY c.name', (sid,)).fetchall()}
                 if opts.get('include_system_rows', True):
                     row = base + [sname, 'Sistem Toplamı', 'Sistem Toplamı']
                     for n in comp_used:
@@ -114,7 +114,7 @@ def export_sts_to_excel(db, output_path, options=None, progress_cb=None):
                 if opts.get('include_delivery_rows', True):
                     dels = conn.execute('SELECT id,name FROM deliveries WHERE contract_id=? AND system_name=? ORDER BY sort_order,id', (cid, sname)).fetchall()
                     for did, dname in dels:
-                        mp = {r[0]: (float(r[1] or 0), float(r[2] or 0)) for r in conn.execute('SELECT component_name,planned,delivered FROM delivery_components WHERE delivery_id=?', (did,)).fetchall()}
+                        mp = {r[0]: (float(r[1] or 0), float(r[2] or 0)) for r in conn.execute('SELECT c.name,dc.planned,dc.delivered FROM delivery_components dc JOIN components c ON c.id=dc.component_id WHERE dc.delivery_id=?', (did,)).fetchall()}
                         row = base + [sname, dname, 'Kabul']
                         for n in comp_used:
                             pl, dl = mp.get(n, (0.0, 0.0)); row.extend([pl,dl,pl-dl])
