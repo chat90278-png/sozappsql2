@@ -2773,20 +2773,6 @@ class SystemDialog(StyledDialog):
         self.name.setText(self.default_name)
         self.name.selectAll()
         root.addWidget(self.name)
-        root.addWidget(form_label("Teslim Edilecek Kullanıcı"))
-        self.delivery_user_combo = QComboBox()
-        self.delivery_user_combo.addItem("Seçiniz...")
-        user_names = [u.get("name", "") for u in self.store.load_users(active_only=True) if str(u.get("name", "")).strip()]
-        for un in user_names:
-            self.delivery_user_combo.addItem(un)
-        initial_delivery = str(getattr(self.existing_system, "delivery_user", "") or "").strip()
-        if initial_delivery:
-            idx_du = self.delivery_user_combo.findText(initial_delivery, Qt.MatchExactly)
-            if idx_du < 0:
-                self.delivery_user_combo.addItem(initial_delivery)
-                idx_du = self.delivery_user_combo.findText(initial_delivery, Qt.MatchExactly)
-            self.delivery_user_combo.setCurrentIndex(max(0, idx_du))
-        root.addWidget(self.delivery_user_combo)
 
         date_card = QFrame()
         date_card.setObjectName("systemFormCard")
@@ -3149,7 +3135,6 @@ class SystemDialog(StyledDialog):
             completion_date=self.completion_date.text().strip(),
             status=getattr(self.existing_system, "status", "Başlanmadı") or "Başlanmadı",
             acceptance_date=getattr(self.existing_system, "acceptance_date", "") or "",
-            delivery_user="" if self.delivery_user_combo.currentIndex() <= 0 else self.delivery_user_combo.currentText().strip(),
         )
         self.result.removed_components = set(removed)
         self.accept()
@@ -3265,15 +3250,6 @@ class MultiSystemDialog(StyledDialog):
         self.name_edit = QLineEdit()
         self.name_edit.textChanged.connect(self.on_name_changed)
         mid.addWidget(self.name_edit)
-        mid.addWidget(form_label("Teslim Edilecek Kullanıcı"))
-        self.delivery_user_combo = QComboBox()
-        self.delivery_user_combo.addItem("Seçiniz...")
-        for u in self.store.load_users(active_only=True):
-            uname = str(u.get("name", "")).strip()
-            if uname:
-                self.delivery_user_combo.addItem(uname)
-        self.delivery_user_combo.currentTextChanged.connect(self.on_delivery_user_changed)
-        mid.addWidget(self.delivery_user_combo)
 
         date_strip = QFrame()
         date_strip.setObjectName("dateStrip")
@@ -3433,7 +3409,6 @@ class MultiSystemDialog(StyledDialog):
             "completion_date": completion,
             "system_type": "",
             "components": {},
-            "delivery_user": "",
         }
 
     def add_blank_system(self, select: bool = True):
@@ -3499,10 +3474,6 @@ class MultiSystemDialog(StyledDialog):
         month_lbl.setObjectName("miniPillOrange")
         meta.addWidget(typ_lbl, 0)
         meta.addWidget(month_lbl, 0)
-        if str(draft.get("delivery_user") or "").strip():
-            du_lbl = QLabel(f"Teslim: {str(draft.get('delivery_user') or '').strip()}")
-            du_lbl.setObjectName("miniPill")
-            meta.addWidget(du_lbl, 0)
         meta.addStretch()
         lay.addLayout(meta)
         return card
@@ -3526,9 +3497,6 @@ class MultiSystemDialog(StyledDialog):
             self.t0_date_edit.setText(str(draft.get("t0_date") or ""))
             self.months_spin.setValue(int(draft.get("t0_months") or 0))
             self.completion_edit.setText(str(draft.get("completion_date") or ""))
-            delivery_user = str(draft.get("delivery_user") or "").strip()
-            idx_du = self.delivery_user_combo.findText(delivery_user, Qt.MatchExactly) if delivery_user else 0
-            self.delivery_user_combo.setCurrentIndex(max(0, idx_du))
             typ = str(draft.get("system_type") or "")
             idx = self.type_combo.findText(typ) if typ else 0
             self.type_combo.setCurrentIndex(idx if idx >= 0 else 0)
@@ -3562,12 +3530,6 @@ class MultiSystemDialog(StyledDialog):
             return
         self.current_draft()["t0_months"] = int(value)
         self.recalc_current_completion()
-        self.refresh_system_list(keep_row=self.current_index, reload_form=False)
-
-    def on_delivery_user_changed(self, _text: str):
-        if self._loading:
-            return
-        self.current_draft()["delivery_user"] = "" if self.delivery_user_combo.currentIndex() <= 0 else self.delivery_user_combo.currentText().strip()
         self.refresh_system_list(keep_row=self.current_index, reload_form=False)
 
     def set_custom_type(self):
@@ -3829,7 +3791,6 @@ class MultiSystemDialog(StyledDialog):
                 completion_date=completion,
                 status="Başlanmadı",
                 acceptance_date="",
-                delivery_user=str(draft.get("delivery_user") or ""),
             ))
         self.result = out
         self.accept()
@@ -3848,6 +3809,7 @@ class DeliveryDialog(StyledDialog):
     ):
         super().__init__("Teslimat / Kabul Ekle", parent)
         self.system = system
+        self.store = getattr(parent, "store", None)
         self.default_name = default_name
         self.component_keys = list(component_keys or list(self.system.components.keys()))
         self.planned_assigned = dict(planned_assigned or {})
@@ -3919,6 +3881,13 @@ class DeliveryDialog(StyledDialog):
         self.t0_months_spin.setValue(int(getattr(self.system, "t0_months", 0) or 0))
         self.completion_date_edit = QLineEdit(str(getattr(self.system, "completion_date", "") or ""))
         self.note = QLineEdit(); self.note.setPlaceholderText("Not")
+        self.delivery_user_combo = QComboBox()
+        self.delivery_user_combo.addItem("Seçiniz...")
+        if self.store is not None:
+            for user in self.store.load_users(active_only=True):
+                name = str(user.get("name", "") or "").strip()
+                if name:
+                    self.delivery_user_combo.addItem(name)
         self.acceptance_date, self.acceptance_date_wrap = build_date_input(self, max_date=date.today(), events_provider=self.events_provider)
         grid.addWidget(form_label("Kabul Adı"), 0, 0)
         grid.addWidget(self.name, 1, 0)
@@ -3928,6 +3897,8 @@ class DeliveryDialog(StyledDialog):
         grid.addWidget(self.acceptance_date_wrap, 3, 0)
         grid.addWidget(form_label("Not"), 2, 1)
         grid.addWidget(self.note, 3, 1)
+        grid.addWidget(form_label("Teslim Edilecek Kullanıcı"), 4, 0)
+        grid.addWidget(self.delivery_user_combo, 5, 0)
         root.addLayout(grid)
 
         info_row = QHBoxLayout()
@@ -4229,6 +4200,7 @@ class DeliveryDialog(StyledDialog):
             t0_date=iso_or_blank(t0_text),
             t0_months=int(getattr(self.system, "t0_months", self.t0_months_spin.value()) or 0),
             completion_date=completion,
+            delivery_user="" if self.delivery_user_combo.currentIndex() <= 0 else self.delivery_user_combo.currentText().strip(),
         )
         self.accept()
 
@@ -4327,6 +4299,7 @@ class ContractWorkWindow(QDialog):
                             "status":          str(d.status or ""),
                             "acceptance_date": str(d.acceptance_date or ""),
                             "note":            str(d.note or ""),
+                            "delivery_user":   str(getattr(d, "delivery_user", "") or ""),
                             "planned":  {k: float(v) for k, v in sorted((d.planned or {}).items())},
                             "delivered":{k: float(v) for k, v in sorted((d.delivered or {}).items())},
                         }
@@ -4513,7 +4486,7 @@ class ContractWorkWindow(QDialog):
         top_row.addWidget(system_metric_card("completion", "Termin Tarihi"), 0)
         top_row.addWidget(system_metric_card("days", "Kalan Gün"), 0)
         top_row.addWidget(system_metric_card("acceptance", "Kabul Tarihi"), 0)
-        top_row.addWidget(system_metric_card("delivery_user", "Teslim Edilecek Kullanıcı"), 0)
+        top_row.addWidget(system_metric_card("user", "Kullanıcı"), 0)
         top_row.addStretch(1)
         self.edit_system_btn = QPushButton("✎ Sistemi Düzenle")
         self.edit_system_btn.setObjectName("secondary")
@@ -5116,7 +5089,6 @@ class ContractWorkWindow(QDialog):
         current.completion_date = updated.completion_date
         current.status = updated.status
         current.acceptance_date = updated.acceptance_date
-        current.delivery_user = str(getattr(updated, "delivery_user", "") or "")
 
         # Sistem adı değiştiyse teslimat anahtarını da taşı.
         if old_name != new_name:

@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 import re
 import time
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Optional
 
 from PySide6.QtCore import Qt, QRectF, QTimer
 from PySide6.QtGui import QColor, QPen, QPainter, QCursor, QLinearGradient, QBrush, QFontMetrics
@@ -15,9 +15,9 @@ from PySide6.QtWidgets import (
     QGraphicsPathItem,
     QGraphicsItem,
     QGraphicsObject,
+    QGraphicsTextItem,
     QGraphicsScene,
     QGraphicsView,
-    QGridLayout,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -35,6 +35,7 @@ from PySide6.QtWidgets import (
 )
 
 from src.ui.theme import STYLE
+from src.ui.dialogs.schema_relationships import get_schema_relationships as read_schema_relationships, get_table_columns as read_table_columns, relationship_key, relationship_text
 
 TABLE_INFO = {
     "contracts": "Ana sözleşme ve SD kayıtları",
@@ -51,22 +52,11 @@ TABLE_INFO = {
     "component_platforms": "Bileşen platform yetkileri",
 }
 
-FALLBACK_RELATIONS = [
-    ("contracts", "id", "systems", "contract_id"),
-    ("contracts", "id", "deliveries", "contract_id"),
-    ("contracts", "id", "contract_tags", "contract_id"),
-    ("systems", "id", "system_components", "system_id"),
-    ("deliveries", "id", "delivery_components", "delivery_id"),
-    ("tags", "name", "contract_tags", "tag_name"),
-    ("platforms", "name", "contracts", "platform"),
-    ("components", "name", "system_components", "component_name"),
-    ("components", "name", "delivery_components", "component_name"),
-]
-
 
 class SchemaView(QGraphicsView):
-    def __init__(self, parent=None):
+    def __init__(self, dialog, parent=None):
         super().__init__(parent)
+        self.dialog = dialog
         self.setRenderHints(QPainter.Antialiasing | QPainter.TextAntialiasing)
         self.setScene(QGraphicsScene(self))
         self.setDragMode(QGraphicsView.ScrollHandDrag)
@@ -80,6 +70,11 @@ class SchemaView(QGraphicsView):
     def reset_zoom(self):
         self._zoom = 1.0
         self.resetTransform()
+
+    def mousePressEvent(self, event):
+        if self.itemAt(event.pos()) is None:
+            self.dialog._clear_schema_selection()
+        super().mousePressEvent(event)
 
     def wheelEvent(self, event):
         if event.modifiers() & Qt.ControlModifier:
@@ -96,13 +91,13 @@ class SchemaView(QGraphicsView):
 
 
 class SchemaTableItem(QGraphicsObject):
-    def __init__(self, table_name: str, count: int, cols: List[Tuple[str, str, bool, bool]], dialog: "DatabaseManagementDialog"):
+    def __init__(self, table_name: str, count: int, cols: List[dict], dialog: "DatabaseManagementDialog"):
         super().__init__()
         self.table_name = table_name
         self.count = count
         self.cols = cols
         self.dialog = dialog
-        self.card_width = 320
+        self.card_width = 380
         self.header_height = 36
         self.row_height = 20
         visible_rows = max(1, len(cols))
@@ -120,7 +115,8 @@ class SchemaTableItem(QGraphicsObject):
     def paint(self, painter: QPainter, option, widget=None):
         rect = self.boundingRect()
         painter.setRenderHint(QPainter.Antialiasing, True)
-        painter.setPen(QPen(QColor("#bdd0ea"), 1.1))
+        state = self.dialog._schema_card_state(self.table_name)
+        painter.setPen(QPen(QColor("#3b82f6") if state == "focus" else QColor("#bdd0ea"), 2.2 if state == "focus" else 1.1))
         painter.setBrush(QColor("#ffffff"))
         painter.drawRoundedRect(rect, 14, 14)
         header_rect = QRectF(8, 8, rect.width() - 16, self.header_height)
@@ -140,14 +136,19 @@ class SchemaTableItem(QGraphicsObject):
         y = self.header_height + 16
         painter.setPen(QColor("#1f3b58"))
         fm = QFontMetrics(painter.font())
-        for col_name, col_type, pk, fk in self.cols:
+        for column in self.cols:
+            col_name = column["name"]
+            col_type = column["type"]
+            pk = column["primary_key"]
+            fk = column.get("foreign_key")
             badge = "PK" if pk else ("FK" if fk else "•")
             painter.setPen(QColor("#0f9f6e") if pk else (QColor("#4f46e5") if fk else QColor("#1f3b58")))
             painter.drawText(QRectF(14, y, 24, 18), Qt.AlignVCenter | Qt.AlignLeft, badge)
-            painter.setPen(QColor("#1f3b58"))
-            painter.drawText(QRectF(38, y, 180, 18), Qt.AlignVCenter | Qt.AlignLeft, fm.elidedText(col_name, Qt.ElideRight, 170))
+            label = col_name if not fk else f"{col_name} → {fk['target_table']}.{fk['target_column']}"
+            painter.setPen(QColor("#312e81") if fk else QColor("#1f3b58"))
+            painter.drawText(QRectF(38, y, 248, 18), Qt.AlignVCenter | Qt.AlignLeft, fm.elidedText(label, Qt.ElideRight, 244))
             painter.setPen(QColor("#6b7f98"))
-            painter.drawText(QRectF(rect.width() - 110, y, 96, 18), Qt.AlignVCenter | Qt.AlignRight, fm.elidedText(col_type, Qt.ElideRight, 92))
+            painter.drawText(QRectF(rect.width() - 86, y, 72, 18), Qt.AlignVCenter | Qt.AlignRight, fm.elidedText(col_type, Qt.ElideRight, 68))
             y += self.row_height
         if self.isSelected():
             painter.setPen(QPen(QColor("#3b82f6"), 2))
@@ -166,7 +167,15 @@ class SchemaTableItem(QGraphicsObject):
                 self.dialog._update_relation_lines_for_table(self.table_name)
         if change == QGraphicsItem.ItemSelectedHasChanged:
             self.update()
+            if bool(value) and not getattr(self.dialog, "_schema_rendering", False):
+                self.dialog._select_schema_table(self.table_name)
         return super().itemChange(change, value)
+
+    def column_scene_y(self, column_name: str):
+        for index, column in enumerate(self.cols):
+            if column["name"] == column_name:
+                return self.scenePos().y() + self.header_height + 16 + (index * self.row_height) + 9
+        return self.sceneBoundingRect().center().y()
 
     def mousePressEvent(self, event):
         self.setCursor(QCursor(Qt.ClosedHandCursor))
@@ -197,6 +206,9 @@ class DatabaseManagementDialog(QDialog):
         self._sort_ascending: bool = True
         self.schema_cards: Dict[str, SchemaTableItem] = {}
         self.schema_rel_lines = []
+        self.schema_relationships: List[dict] = []
+        self.selected_schema_table: str = ""
+        self.selected_relationship = None
         self._schema_rendering = False
 
         self.setStyleSheet(STYLE + self._local_style())
@@ -237,6 +249,11 @@ QLabel#schemaCardTitle { color:white; border-radius:8px; padding:6px 10px; font-
 QLabel#schemaCol { color:#1f3b58; font-size:12px; background:transparent; }
 QLabel#pkTag { color:#0f9f6e; font-weight:800; }
 QLabel#fkTag { color:#4f46e5; font-weight:800; }
+QFrame#relationPanel { background:#ffffff; border:1px solid #d8e4f2; border-radius:10px; }
+QLabel#relationTitle { color:#0f2742; font-size:14px; font-weight:800; }
+QListWidget#relationList { border:none; background:#ffffff; }
+QListWidget#relationList::item { border:1px solid #e1e9f5; border-radius:7px; margin:2px; padding:7px; color:#264463; }
+QListWidget#relationList::item:selected { background:#eaf1ff; border:1px solid #8bb3ff; color:#1d4ed8; }
 """
 
     def _build(self):
@@ -348,7 +365,7 @@ QLabel#fkTag { color:#4f46e5; font-weight:800; }
         tlay = QHBoxLayout(tb); tlay.setContentsMargins(8, 8, 8, 8); tlay.setSpacing(8)
         tlay.addWidget(QLabel("Şema Görselleştirici"))
         self.schema_combo = QComboBox(); self.schema_combo.addItem("schema = main")
-        self.rel_combo = QComboBox(); self.rel_combo.addItems(["Tüm ilişkiler", "Sadece seçili tablo", "Kritik ilişkiler"])
+        self.rel_combo = QComboBox(); self.rel_combo.addItems(["Tüm ilişkiler", "Sadece seçili tablo", "Kritik ilişkiler"]); self.rel_combo.currentTextChanged.connect(self._apply_schema_focus)
         self.schema_search = QLineEdit(); self.schema_search.setPlaceholderText("Tablo veya kolon ara..."); self.schema_search.textChanged.connect(self._highlight_schema)
         self.auto_btn = QPushButton("Otomatik Yerleştir"); self.auto_btn.setObjectName("softBtn"); self.auto_btn.clicked.connect(self._layout_schema)
         for w in [self.schema_combo, self.rel_combo, self.schema_search, self.auto_btn]:
@@ -358,9 +375,23 @@ QLabel#fkTag { color:#4f46e5; font-weight:800; }
 
         wrap = QFrame(); wrap.setObjectName("schemaCanvasWrap")
         wlay = QVBoxLayout(wrap); wlay.setContentsMargins(6, 6, 6, 6)
-        self.schema_view = SchemaView()
+        self.schema_view = SchemaView(self)
         wlay.addWidget(self.schema_view)
-        lay.addWidget(wrap, 1)
+
+        relation_panel = QFrame(); relation_panel.setObjectName("relationPanel"); relation_panel.setFixedWidth(390)
+        relation_lay = QVBoxLayout(relation_panel); relation_lay.setContentsMargins(10, 10, 10, 10); relation_lay.setSpacing(8)
+        relation_title = QLabel("İlişki Listesi"); relation_title.setObjectName("relationTitle")
+        relation_lay.addWidget(relation_title)
+        self.relation_search = QLineEdit(); self.relation_search.setPlaceholderText("İlişki ara..."); self.relation_search.textChanged.connect(self._refresh_relationship_list)
+        relation_lay.addWidget(self.relation_search)
+        self.relation_list = QListWidget(); self.relation_list.setObjectName("relationList"); self.relation_list.itemClicked.connect(self._on_relationship_selected)
+        relation_lay.addWidget(self.relation_list, 1)
+
+        schema_splitter = QSplitter(Qt.Horizontal)
+        schema_splitter.addWidget(wrap)
+        schema_splitter.addWidget(relation_panel)
+        schema_splitter.setSizes([1100, 390])
+        lay.addWidget(schema_splitter, 1)
         return page
 
     def _build_sql_page(self):
@@ -541,11 +572,12 @@ QLabel#fkTag { color:#4f46e5; font-weight:800; }
 
             col_count = 4
             x_start, y_start = 40, 30
-            x_step = 340
+            x_step = 410
             y_gap = 52
             row_heights: List[float] = []
             max_x = 0.0
             max_y = 0.0
+            self.schema_relationships = self.get_schema_relationships()
 
             for t in tables:
                 cols = self._schema_columns(t)
@@ -570,38 +602,32 @@ QLabel#fkTag { color:#4f46e5; font-weight:800; }
 
         self._build_relation_lines()
         self._update_all_relation_lines()
+        self._refresh_relationship_list()
+        self._apply_schema_focus()
         scene.setSceneRect(QRectF(0, 0, max(3000, max_x + 600), max(2200, max_y + 500)))
 
-    def _schema_columns(self, table: str) -> List[Tuple[str, str, bool, bool]]:
+    def get_table_columns(self, table: str) -> List[dict]:
         conn = getattr(getattr(self.store, "db", None), "conn", None)
         if conn is None:
             return []
-        cols = conn.execute(f"PRAGMA table_info({table})").fetchall()
-        fk_rows = conn.execute(f"PRAGMA foreign_key_list({table})").fetchall()
-        fk_names = {str(r[3]) for r in fk_rows}
-        return [(str(c[1]), str(c[2]), bool(c[5]), str(c[1]) in fk_names) for c in cols]
+        return read_table_columns(conn, table)
 
-    def _schema_relations(self):
-        rels = set()
+    def get_schema_relationships(self) -> List[dict]:
         conn = getattr(getattr(self.store, "db", None), "conn", None)
-        if conn is not None:
-            for t in self.table_names:
-                try:
-                    rows = conn.execute(f"PRAGMA foreign_key_list({t})").fetchall()
-                except Exception:
-                    rows = []
-                for r in rows:
-                    rels.add((str(r[2]), str(r[4]), t, str(r[3])))
-        rels.update(FALLBACK_RELATIONS)
-        if "component_platforms" in self.table_names:
-            cols = {name for (name, _, _, _) in self._schema_columns("component_platforms")}
-            if "component_id" in cols:
-                rels.add(("components", "id", "component_platforms", "component_id"))
-            if "component_name" in cols:
-                rels.add(("components", "name", "component_platforms", "component_name"))
-            if "platform_name" in cols:
-                rels.add(("platforms", "name", "component_platforms", "platform_name"))
-        return sorted(rels)
+        if conn is None:
+            return []
+        return read_schema_relationships(conn, self.table_names)
+
+    def _schema_columns(self, table: str) -> List[dict]:
+        by_source = {
+            relationship["source_column"]: relationship
+            for relationship in self.schema_relationships
+            if relationship["source_table"] == table
+        }
+        columns = self.get_table_columns(table)
+        for column in columns:
+            column["foreign_key"] = by_source.get(column["name"])
+        return columns
 
     def _relation_path(self, p1, p2):
         from PySide6.QtGui import QPainterPath
@@ -610,21 +636,87 @@ QLabel#fkTag { color:#4f46e5; font-weight:800; }
         path.cubicTo(cx, p1.y(), cx, p2.y(), p2.x(), p2.y())
         return path
 
-    def _highlight_schema(self):
-        q = self.schema_search.text().strip().lower()
-        selected = self.active_table
-        for t, card_item in self.schema_cards.items():
-            card_item.setOpacity(1.0)
-            if not q:
-                card_item.update()
+    def _schema_card_state(self, table: str) -> str:
+        if not self.selected_schema_table and not self.selected_relationship:
+            return "normal"
+        related = self._focused_tables()
+        return "focus" if table in related else "dim"
+
+    def _focused_tables(self) -> set[str]:
+        if self.selected_relationship:
+            return {self.selected_relationship["source_table"], self.selected_relationship["target_table"]}
+        if self.selected_schema_table:
+            related = {self.selected_schema_table}
+            for relationship in self.schema_relationships:
+                if relationship["source_table"] == self.selected_schema_table or relationship["target_table"] == self.selected_schema_table:
+                    related.update([relationship["source_table"], relationship["target_table"]])
+            return related
+        return set()
+
+    def _select_schema_table(self, table: str):
+        self.selected_schema_table = str(table or "")
+        self.selected_relationship = None
+        for name, card in self.schema_cards.items():
+            card.setSelected(name == self.selected_schema_table)
+        self._apply_schema_focus()
+
+    def _clear_schema_selection(self):
+        self.selected_schema_table = ""
+        self.selected_relationship = None
+        for card in self.schema_cards.values():
+            card.setSelected(False)
+        self.relation_list.clearSelection()
+        self._apply_schema_focus()
+
+    def _on_relationship_selected(self, item):
+        key = item.data(Qt.UserRole)
+        self.selected_relationship = next((rel for rel in self.schema_relationships if relationship_key(rel) == key), None)
+        self.selected_schema_table = ""
+        for card in self.schema_cards.values():
+            card.setSelected(False)
+        self._apply_schema_focus()
+
+    def _refresh_relationship_list(self):
+        if not hasattr(self, "relation_list"):
+            return
+        query = self.relation_search.text().strip().casefold()
+        selected_key = relationship_key(self.selected_relationship) if self.selected_relationship else None
+        self.relation_list.clear()
+        for relationship in self.schema_relationships:
+            text = relationship_text(relationship)
+            if query and query not in text.casefold():
                 continue
-            cols = [c[0].lower() for c in self._schema_columns(t)]
-            hit = q in t.lower() or any(q in c for c in cols)
-            if selected and self.rel_combo.currentText() == "Sadece seçili tablo" and t != selected and hit:
-                hit = False
-            if not (hit or t == selected):
-                card_item.setOpacity(0.35)
-            card_item.update()
+            item = QListWidgetItem(text)
+            item.setData(Qt.UserRole, relationship_key(relationship))
+            item.setToolTip(f"{text}\nON DELETE {relationship['on_delete']} | ON UPDATE {relationship['on_update']}")
+            self.relation_list.addItem(item)
+            if selected_key == relationship_key(relationship):
+                item.setSelected(True)
+
+    def _highlight_schema(self):
+        self._apply_schema_focus()
+
+    def _apply_schema_focus(self):
+        query = self.schema_search.text().strip().casefold() if hasattr(self, "schema_search") else ""
+        focused_tables = self._focused_tables()
+        relation_mode = self.rel_combo.currentText() if hasattr(self, "rel_combo") else "Tüm ilişkiler"
+        for table, card in self.schema_cards.items():
+            columns = [column["name"].casefold() for column in self._schema_columns(table)]
+            search_hit = not query or query in table.casefold() or any(query in column for column in columns)
+            focus_hit = not focused_tables or table in focused_tables
+            card.setOpacity(1.0 if search_hit and focus_hit else 0.25)
+            card.update()
+        for rec in self.schema_rel_lines:
+            relationship = rec["relationship"]
+            is_selected = bool(self.selected_relationship and relationship_key(relationship) == relationship_key(self.selected_relationship))
+            touches_table = bool(self.selected_schema_table and self.selected_schema_table in {relationship["source_table"], relationship["target_table"]})
+            strong = is_selected or touches_table
+            visible = relation_mode != "Sadece seçili tablo" or not focused_tables or strong
+            rec["line"].setVisible(visible)
+            rec["label"].setVisible(visible)
+            rec["line"].setPen(QPen(QColor("#2563eb") if strong else QColor("#9db2cf"), 3.0 if strong else 1.2, Qt.SolidLine if strong else Qt.DashLine))
+            rec["line"].setOpacity(1.0 if strong else (0.38 if focused_tables else 0.55))
+            rec["label"].setOpacity(1.0 if strong else (0.35 if focused_tables else 0.7))
 
     def _layout_schema(self):
         self._render_schema()
@@ -632,32 +724,43 @@ QLabel#fkTag { color:#4f46e5; font-weight:800; }
     def _build_relation_lines(self):
         scene = self.schema_view.scene()
         self.schema_rel_lines = []
-        for (src_t, src_c, dst_t, dst_c) in self._schema_relations():
-            if src_t not in self.schema_cards or dst_t not in self.schema_cards:
+        for relationship in self.schema_relationships:
+            source_table = relationship["source_table"]
+            target_table = relationship["target_table"]
+            if source_table not in self.schema_cards or target_table not in self.schema_cards:
                 continue
             line = QGraphicsPathItem()
-            pen = QPen(QColor("#8aa7cc"), 2.0, Qt.DashLine)
-            line.setPen(pen)
+            line.setPen(QPen(QColor("#9db2cf"), 1.2, Qt.DashLine))
             line.setZValue(-10)
             scene.addItem(line)
-            rec = {"src": src_t, "dst": dst_t, "line": line}
+            label = QGraphicsTextItem()
+            text = relationship_text(relationship)
+            label.setHtml(f"<div style='background:#ffffff;color:#31557b;font-size:9px;padding:2px;'>{text}</div>")
+            label.setToolTip(f"{text}\nON DELETE {relationship['on_delete']} | ON UPDATE {relationship['on_update']}")
+            label.setZValue(-5)
+            scene.addItem(label)
+            rec = {"src": source_table, "dst": target_table, "line": line, "label": label, "relationship": relationship}
             self.schema_rel_lines.append(rec)
             self._update_relation_line(rec)
 
     def _update_relation_line(self, rel):
+        relationship = rel["relationship"]
         if rel["src"] not in self.schema_cards or rel["dst"] not in self.schema_cards:
             return
-        a = self.schema_cards[rel["src"]].sceneBoundingRect()
-        b = self.schema_cards[rel["dst"]].sceneBoundingRect()
-        p1 = a.center()
-        p2 = b.center()
+        source_card = self.schema_cards[rel["src"]]
+        target_card = self.schema_cards[rel["dst"]]
+        a = source_card.sceneBoundingRect()
+        b = target_card.sceneBoundingRect()
+        p1 = a.center(); p1.setY(source_card.column_scene_y(relationship["source_column"]))
+        p2 = b.center(); p2.setY(target_card.column_scene_y(relationship["target_column"]))
         if a.center().x() <= b.center().x():
-            p1.setX(a.right())
-            p2.setX(b.left())
+            p1.setX(a.right()); p2.setX(b.left())
         else:
-            p1.setX(a.left())
-            p2.setX(b.right())
+            p1.setX(a.left()); p2.setX(b.right())
         rel["line"].setPath(self._relation_path(p1, p2))
+        bounds = rel["line"].path().boundingRect()
+        label_bounds = rel["label"].boundingRect()
+        rel["label"].setPos(bounds.center().x() - (label_bounds.width() / 2), bounds.center().y() - (label_bounds.height() / 2))
 
     def _update_relation_lines_for_table(self, table: str):
         for rel in self.schema_rel_lines:
