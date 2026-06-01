@@ -44,6 +44,7 @@ TABLE_INFO = {
     "system_components": "Sistem bileşen adetleri",
     "delivery_components": "Kabul bazlı plan/teslim",
     "contract_tags": "Sözleşme etiket bağlantıları",
+    "contract_files": "Sözleşmeye gömülü belgeler",
     "users": "Kullanıcı / kurum tanımları",
     "tags": "Etiket tanımları",
     "platforms": "Platform adları ve logolar",

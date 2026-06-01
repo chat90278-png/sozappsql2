@@ -469,6 +469,58 @@ class STSStore:
                 self.db.conn.execute("INSERT OR IGNORE INTO contract_tags(contract_id,tag_id) VALUES(?,?)", (cid, self.get_tag_id(nm)))
         self._log("contract_tags_updated", entity_type="contract", entity_id=cid, platform=str(platform or ""), contract_no=str(contract_no or ""), message="Sözleşme etiketleri güncellendi", payload={"count": len(names)}, actor=actor or self.current_actor())
 
+
+    def list_contract_files(self, platform, contract_no, contract_type=None):
+        cid = self._find_contract_id(platform, contract_no, contract_type)
+        if not cid:
+            return []
+        rows = self.db.conn.execute(
+            "SELECT id,filename,file_ext,mime_type,size_bytes,created_at,note FROM contract_files WHERE contract_id=? ORDER BY created_at,id",
+            (cid,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def add_contract_file(self, platform, contract_no, file_path, contract_type=None, note=""):
+        cid = self._find_contract_id(platform, contract_no, contract_type)
+        if not cid:
+            raise ValueError("Sözleşme bulunamadı. Önce sözleşmeyi kaydedin.")
+        source = Path(file_path)
+        ext = source.suffix.lower().lstrip(".")
+        allowed = {"pdf", "doc", "docx", "xls", "xlsx", "png", "jpg", "jpeg", "txt"}
+        blocked = {"exe", "bat", "cmd", "ps1", "sh", "msi", "dll", "com", "scr", "vbs", "js"}
+        if ext in blocked or ext not in allowed:
+            raise ValueError("Bu dosya türü desteklenmiyor.")
+        size = source.stat().st_size
+        if size > 25 * 1024 * 1024:
+            raise ValueError("Dosya boyutu 25 MB üstünde olamaz.")
+        content = source.read_bytes()
+        mime_type = mimetypes.guess_type(source.name)[0] or "application/octet-stream"
+        ts = now_iso()
+        with self.db.tx():
+            self.db.conn.execute(
+                "INSERT INTO contract_files(contract_id,filename,original_path,file_ext,mime_type,size_bytes,content_blob,note,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                (cid, source.name, str(source), ext, mime_type, len(content), content, str(note or ""), ts, ts),
+            )
+            file_id = int(self.db.conn.execute("SELECT last_insert_rowid()").fetchone()[0])
+        return file_id
+
+    def get_contract_file_bytes(self, file_id):
+        row = self.db.conn.execute("SELECT filename,mime_type,content_blob FROM contract_files WHERE id=?", (int(file_id),)).fetchone()
+        if not row:
+            raise ValueError("Belge bulunamadı.")
+        return str(row[0]), str(row[1] or "application/octet-stream"), bytes(row[2])
+
+    def export_contract_file(self, file_id, target_path):
+        filename, mime_type, content = self.get_contract_file_bytes(file_id)
+        target = Path(target_path)
+        target.write_bytes(content)
+        return {"filename": filename, "mime_type": mime_type, "target_path": str(target), "size_bytes": len(content)}
+
+    def delete_contract_file(self, file_id):
+        with self.db.tx():
+            cursor = self.db.conn.execute("DELETE FROM contract_files WHERE id=?", (int(file_id),))
+        return bool(cursor.rowcount)
+
     def list_main_contracts(self, platform, tags_map=None):
         rows=[]; tags_map = tags_map or self.all_contract_tags_map()
         for r in self.db.conn.execute("SELECT c.*,p.name AS platform,u.name AS user_name FROM contracts c JOIN platforms p ON p.id=c.platform_id LEFT JOIN users u ON u.id=c.user_id WHERE c.platform_id=? ORDER BY c.id",(self.get_platform_id(platform),)):

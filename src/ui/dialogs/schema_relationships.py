@@ -17,6 +17,7 @@ FALLBACK_RELATIONSHIPS = [
     ("delivery_components", "component_id", "components", "id"),
     ("contract_tags", "contract_id", "contracts", "id"),
     ("contract_tags", "tag_id", "tags", "id"),
+    ("contract_files", "contract_id", "contracts", "id"),
     ("component_platforms", "component_id", "components", "id"),
     ("component_platforms", "platform_id", "platforms", "id"),
     ("activity_logs", "platform_id", "platforms", "id"),

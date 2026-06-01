@@ -21,6 +21,7 @@ with TemporaryDirectory() as td:
         'deliveries': {'contract_id', 'system_id', 'delivery_user_id'},
         'delivery_components': {'delivery_id', 'component_id', 'planned', 'delivered'},
         'contract_tags': {'contract_id', 'tag_id'},
+        'contract_files': {'contract_id', 'filename', 'original_path', 'file_ext', 'mime_type', 'size_bytes', 'content_blob', 'note', 'created_at', 'updated_at'},
         'activity_logs': {'platform_id', 'entity_type', 'entity_id'},
     }
     for table, columns in expected_columns.items():
@@ -40,7 +41,7 @@ with TemporaryDirectory() as td:
         'idx_contracts_platform_id', 'idx_contracts_platform_status', 'idx_contracts_completion_date',
         'idx_systems_contract_id', 'idx_systems_completion_date', 'idx_system_components_component_id',
         'idx_deliveries_contract_id', 'idx_deliveries_system_id', 'idx_deliveries_delivery_user_id', 'idx_deliveries_contract_system',
-        'idx_deliveries_acceptance_date', 'idx_delivery_components_component_id', 'idx_logs_created_at',
+        'idx_deliveries_acceptance_date', 'idx_delivery_components_component_id', 'idx_contract_files_contract_id', 'idx_logs_created_at',
         'idx_logs_action', 'idx_logs_entity',
     }
     actual_indexes = {r[0] for r in db.conn.execute("SELECT name FROM sqlite_master WHERE type='index'")}

@@ -18,6 +18,7 @@ with TemporaryDirectory() as td:
     assert "contracts.user_id → users.id" in texts
     assert "deliveries.delivery_user_id → users.id" in texts
     assert "delivery_components.component_id → components.id" in texts
+    assert "contract_files.contract_id → contracts.id" in texts
     delivery_user = next(item for item in relationships if relationship_text(item) == "deliveries.delivery_user_id → users.id")
     assert delivery_user["source_table"] == "deliveries"
     assert delivery_user["source_column"] == "delivery_user_id"
@@ -31,9 +32,13 @@ with TemporaryDirectory() as td:
     legacy = sqlite3.connect(legacy_path)
     legacy.execute("CREATE TABLE users(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL)")
     legacy.execute("CREATE TABLE deliveries(id INTEGER PRIMARY KEY AUTOINCREMENT, delivery_user_id INTEGER)")
-    fallback_relationships = get_schema_relationships(legacy, ["users", "deliveries"])
+    legacy.execute("CREATE TABLE contracts(id INTEGER PRIMARY KEY AUTOINCREMENT)")
+    legacy.execute("CREATE TABLE contract_files(id INTEGER PRIMARY KEY AUTOINCREMENT, contract_id INTEGER)")
+    fallback_relationships = get_schema_relationships(legacy, ["users", "deliveries", "contracts", "contract_files"])
     fallback = next(item for item in fallback_relationships if relationship_text(item) == "deliveries.delivery_user_id → users.id")
     assert fallback["fallback"] is True
+    contract_file_fallback = next(item for item in fallback_relationships if relationship_text(item) == "contract_files.contract_id → contracts.id")
+    assert contract_file_fallback["fallback"] is True
     legacy.close()
 
 print("ok")

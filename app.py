@@ -10,6 +10,7 @@ import base64
 import copy
 import time
 import traceback
+import tempfile
 from pathlib import Path
 from datetime import date, datetime, timedelta
 from typing import Callable, Dict, List, Optional, Tuple
@@ -64,15 +65,15 @@ from src.ui.ozet import ContractSummaryDialog
 from src.ui.date_picker import build_date_input as _build_date_input
 from src.ui.kullanim_kilavuzu import UsageGuideDialog
 
-from PySide6.QtCore import Qt, QDate, QObject, QThread, Signal, QTimer, QPoint, QSize, QEvent, QPropertyAnimation, QEasingCurve
-from PySide6.QtGui import QFont, QColor, QPixmap, QIcon, QPainter, QAction, QCursor, QCloseEvent
+from PySide6.QtCore import Qt, QDate, QObject, QThread, Signal, QTimer, QPoint, QSize, QEvent, QPropertyAnimation, QEasingCurve, QUrl
+from PySide6.QtGui import QFont, QColor, QPixmap, QIcon, QPainter, QAction, QCursor, QCloseEvent, QDesktopServices
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget,QGraphicsOpacityEffect, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QPushButton, QListWidget, QListWidgetItem, QTableWidget, QTableWidgetItem,
     QDialog, QLineEdit, QComboBox, QDateEdit, QSpinBox, QDoubleSpinBox,
     QMessageBox, QFileDialog, QFrame, QScrollArea, QCheckBox, QHeaderView,
     QSizePolicy, QProgressBar, QProgressDialog, QStyledItemDelegate, QTextEdit,
-    QToolButton, QMenu, QInputDialog, QWidgetAction
+    QToolButton, QMenu, QInputDialog, QWidgetAction, QTabWidget
 )
 
 
@@ -4417,7 +4418,28 @@ class ContractWorkWindow(QDialog):
         self.tag_more_btn.setToolTip("Tüm etiketleri göster")
         self.tag_more_btn.clicked.connect(self.toggle_tag_overlay)
         self.tag_more_btn.raise_()
-        left_block_lay.addWidget(self.tag_card, 0)
+        self.contract_side_tabs = QTabWidget()
+        self.contract_side_tabs.setObjectName("contractSideTabs")
+        self.contract_side_tabs.setFixedHeight(178)
+        self.contract_side_tabs.addTab(self.tag_card, "Etiketler")
+        self.documents_card = QFrame()
+        self.documents_card.setObjectName("compactDocumentsPanel")
+        self.documents_card.setStyleSheet(
+            "QFrame#compactDocumentsPanel{background:#f8fbff; border:1px solid #c9d7ea; border-radius:12px;}"
+            "QListWidget#contractFilesList{background:transparent; border:0;}"
+            "QListWidget#contractFilesList::item{background:#ffffff; border:1px solid #d8e4f2; border-radius:7px; padding:5px; margin:2px;}"
+            "QListWidget#contractFilesList::item:selected{background:#eaf1ff; border-color:#8bb3ff;}"
+        )
+        documents_lay = QVBoxLayout(self.documents_card); documents_lay.setContentsMargins(8, 6, 8, 6); documents_lay.setSpacing(5)
+        self.contract_files_list = QListWidget(); self.contract_files_list.setObjectName("contractFilesList")
+        self.contract_files_list.itemDoubleClicked.connect(lambda item: self.open_contract_file(int(item.data(Qt.UserRole))))
+        self.contract_files_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.contract_files_list.customContextMenuRequested.connect(self.show_contract_file_menu)
+        documents_lay.addWidget(self.contract_files_list, 1)
+        add_file_btn = QPushButton("+ Dosya ekle"); add_file_btn.setObjectName("secondary"); add_file_btn.clicked.connect(self.add_contract_file)
+        documents_lay.addWidget(add_file_btn, 0)
+        self.documents_tab_index = self.contract_side_tabs.addTab(self.documents_card, "Belgeler 0")
+        left_block_lay.addWidget(self.contract_side_tabs, 0)
 
         left_row = QHBoxLayout()
         left_row.setContentsMargins(0, 0, 0, 0)
@@ -4968,6 +4990,7 @@ class ContractWorkWindow(QDialog):
         self.tag_overlay.hide()
 
     def render_contract_tags(self):
+        self.render_contract_files()
         if not hasattr(self, "tag_chips_grid"):
             return
         self._clear_grid_layout(self.tag_chips_grid)
@@ -5003,6 +5026,97 @@ class ContractWorkWindow(QDialog):
                 self.tag_overlay.hide()
             elif self.tag_overlay.isVisible():
                 self.position_tag_overlay()
+
+    @staticmethod
+    def _format_file_size(size_bytes: int) -> str:
+        size = float(size_bytes or 0)
+        if size < 1024:
+            return f"{int(size)} B"
+        if size < 1024 * 1024:
+            return f"{size / 1024:.0f} KB"
+        return f"{size / (1024 * 1024):.1f} MB"
+
+    @staticmethod
+    def _contract_file_icon(ext: str) -> str:
+        extension = str(ext or "").lower()
+        if extension == "pdf": return "📄"
+        if extension in {"doc", "docx"}: return "📝"
+        if extension in {"xls", "xlsx"}: return "📊"
+        if extension in {"png", "jpg", "jpeg"}: return "🖼"
+        return "📎"
+
+    def render_contract_files(self):
+        if not hasattr(self, "contract_files_list"):
+            return
+        try:
+            files = self.store.list_contract_files(self.ci.platform, self.ci.no, self.ci.contract_type)
+        except Exception:
+            files = []
+        self.contract_files_list.clear()
+        for metadata in files:
+            ext = str(metadata.get("file_ext") or "").upper() or "DOSYA"
+            text = f"{self._contract_file_icon(ext)} {metadata.get('filename', '')}\n{ext} · {self._format_file_size(metadata.get('size_bytes', 0))}"
+            item = QListWidgetItem(text)
+            item.setData(Qt.UserRole, int(metadata["id"]))
+            item.setToolTip(str(metadata.get("filename") or ""))
+            self.contract_files_list.addItem(item)
+        if hasattr(self, "contract_side_tabs"):
+            self.contract_side_tabs.setTabText(self.documents_tab_index, f"Belgeler {len(files)}")
+
+    def add_contract_file(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Sözleşmeye Dosya Ekle", "", "PDF/Word/Excel/Resim/TXT (*.pdf *.doc *.docx *.xls *.xlsx *.png *.jpg *.jpeg *.txt)")
+        if not path:
+            return
+        try:
+            self.store.add_contract_file(self.ci.platform, self.ci.no, path, self.ci.contract_type)
+            self.render_contract_files()
+        except Exception as exc:
+            QMessageBox.warning(self, "Dosya eklenemedi", str(exc))
+
+    def open_contract_file(self, file_id: int):
+        try:
+            filename, _mime, content = self.store.get_contract_file_bytes(file_id)
+            suffix = Path(filename).suffix
+            temp = tempfile.NamedTemporaryFile(prefix="sts_contract_", suffix=suffix, delete=False)
+            try:
+                temp.write(content)
+            finally:
+                temp.close()
+            QDesktopServices.openUrl(QUrl.fromLocalFile(temp.name))
+        except Exception as exc:
+            QMessageBox.warning(self, "Belge açılamadı", str(exc))
+
+    def export_contract_file(self, file_id: int):
+        try:
+            filename, _mime, _content = self.store.get_contract_file_bytes(file_id)
+            target, _ = QFileDialog.getSaveFileName(self, "Belgeyi Dışa Aktar", filename)
+            if not target:
+                return
+            self.store.export_contract_file(file_id, target)
+            QMessageBox.information(self, "Belge dışa aktarıldı", "Belge başarıyla dışa aktarıldı.")
+        except Exception as exc:
+            QMessageBox.warning(self, "Belge dışa aktarılamadı", str(exc))
+
+    def delete_contract_file(self, file_id: int):
+        if QMessageBox.question(self, "Belgeyi Sil", "Belge STS dosyasından silinsin mi? Orijinal dosyaya dokunulmaz.") != QMessageBox.Yes:
+            return
+        try:
+            self.store.delete_contract_file(file_id)
+            self.render_contract_files()
+        except Exception as exc:
+            QMessageBox.warning(self, "Belge silinemedi", str(exc))
+
+    def show_contract_file_menu(self, pos):
+        item = self.contract_files_list.itemAt(pos)
+        if not item:
+            return
+        file_id = int(item.data(Qt.UserRole))
+        menu = QMenu(self)
+        menu.addAction("Aç", lambda: self.open_contract_file(file_id))
+        menu.addAction("Dışa Aktar", lambda: self.export_contract_file(file_id))
+        menu.addSeparator()
+        menu.addAction("Sil", lambda: self.delete_contract_file(file_id))
+        menu.exec(self.contract_files_list.mapToGlobal(pos))
 
     def open_tag_assign_dialog(self):
         dlg = TagAssignDialog(self.store, self.contract_tags, self)
