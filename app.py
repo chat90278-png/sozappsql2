@@ -5052,9 +5052,7 @@ class ContractWorkWindow(QDialog):
         except Exception as exc:
             QMessageBox.warning(self, "Belge dışa aktarılamadı", str(exc))
 
-    def delete_contract_file(self, file_id: int):
-        if QMessageBox.question(self, "Belgeyi Sil", "Belge STS dosyasından silinsin mi? Orijinal dosyaya dokunulmaz.") != QMessageBox.Yes:
-            return
+    def refresh_contract_files_panel(self):
         try:
             self.store.delete_contract_file(file_id)
             self.render_contract_files()
@@ -6112,6 +6110,10 @@ class MainWindow(QMainWindow):
         self._version_baseline_signature = None
         self.calendar_window: Optional[ContractCalendarWindow] = None
         self._pending_select_platform: Optional[str] = None
+        self.selected_platforms: set[str] = set()
+        self.multi_platform_mode: bool = False
+        self._updating_platform_list = False
+        self._platform_checkbox_changed: Optional[str] = None
         self.setWindowTitle(APP_TITLE)
         icon_path = app_icon_path()
         if icon_path.exists():
@@ -6144,9 +6146,9 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Excel’e Aktar", "Excel’e aktarım yalnızca STS veri dosyalarında desteklenir.")
             return
         active_platform = ""
-        cur = self.platform_list.currentItem() if hasattr(self, "platform_list") else None
-        if cur:
-            active_platform = str(cur.data(Qt.UserRole) or "")
+        selected = set(getattr(self, "selected_platforms", set()))
+        if len(selected) == 1:
+            active_platform = next(iter(selected))
         from src.ui.dialogs.excel_export_options import ExcelExportDialog
         dlg = ExcelExportDialog(self.store, self, active_platform=active_platform, contract_index=getattr(self, "contract_index", None))
         if not dlg.exec() or not dlg.result_options:
@@ -6322,8 +6324,23 @@ class MainWindow(QMainWindow):
 
         body=QHBoxLayout(); body.setSpacing(8); main.addLayout(body,1)
         left=QFrame(); left.setObjectName("panel"); left.setFixedWidth(350); lv=QVBoxLayout(left); lv.setContentsMargins(0, 0, 0, 0); lv.setSpacing(0)
-        h=QLabel("Platformlar"); h.setObjectName("panelTitle"); lv.addWidget(h)
-        self.platform_list=QListWidget(); self.platform_list.currentRowChanged.connect(self.on_platform_row_changed); lv.addWidget(self.platform_list,1)
+        platform_head = QWidget(); ph = QHBoxLayout(platform_head); ph.setContentsMargins(12, 8, 12, 8); ph.setSpacing(6)
+        h=QLabel("Platformlar"); h.setObjectName("panelTitle"); ph.addWidget(h); ph.addStretch(1)
+        self.platform_selection_badge = QLabel(""); self.platform_selection_badge.setObjectName("platformSelectionBadge")
+        self.platform_selection_badge.setStyleSheet("QLabel{background:#dbeafe;color:#1d4ed8;border-radius:9px;padding:2px 7px;font-size:11px;font-weight:800;}")
+        self.platform_selection_badge.hide(); ph.addWidget(self.platform_selection_badge)
+        lv.addWidget(platform_head)
+        self.platform_list=QListWidget(); self.platform_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.platform_list.itemClicked.connect(self.on_platform_clicked)
+        self.platform_list.itemChanged.connect(self._on_platform_item_changed)
+        self.platform_list.customContextMenuRequested.connect(self._on_platform_context_menu_requested)
+        lv.addWidget(self.platform_list,1)
+        self.platform_info_bar = QFrame(); self.platform_info_bar.setObjectName("platformInfoBar")
+        self.platform_info_bar.setStyleSheet("QFrame#platformInfoBar{background:#f8fbff;border-top:1px solid #dbe7f5;} QLabel{color:#64748b;font-size:11px;} QPushButton{background:transparent;border:0;color:#1d4ed8;font-size:11px;font-weight:800;padding:2px 4px;}")
+        pi = QHBoxLayout(self.platform_info_bar); pi.setContentsMargins(10, 4, 8, 4); pi.setSpacing(4)
+        self.platform_info_label = QLabel(""); pi.addWidget(self.platform_info_label); pi.addStretch(1)
+        clear_platforms = QPushButton("temizle"); clear_platforms.clicked.connect(self.clear_platform_selection); pi.addWidget(clear_platforms)
+        self.platform_info_bar.hide(); lv.addWidget(self.platform_info_bar)
         new=QPushButton("+ Yeni Sözleşme"); new.clicked.connect(self.new_contract); new.setMinimumHeight(46); lv.addWidget(new)
         body.addWidget(left, 0)
 
@@ -6770,17 +6787,139 @@ class MainWindow(QMainWindow):
         self.position_query_logo_background()
 
     def _set_platform_items(self, platforms: List[str]):
-        self.platform_list.clear()
-        counts: Dict[str, int] = {}
-        for it in self.contract_index:
-            p = str(it.get("platform", ""))
-            counts[p] = counts.get(p, 0) + 1
-        for p in platforms:
-            cnt = counts.get(str(p), 0)
-            row = QListWidgetItem(f"{p}   ({cnt})")
-            row.setData(Qt.UserRole, p)
-            row.setSizeHint(QSize(0, 54))
-            self.platform_list.addItem(row)
+        available = {str(p) for p in platforms}
+        self.selected_platforms.intersection_update(available)
+        if not self.selected_platforms:
+            self.multi_platform_mode = False
+        self._updating_platform_list = True
+        try:
+            self.platform_list.clear()
+            counts: Dict[str, int] = {}
+            for it in self.contract_index:
+                p = str(it.get("platform", ""))
+                counts[p] = counts.get(p, 0) + 1
+            for p in platforms:
+                platform = str(p)
+                row = QListWidgetItem(f"{platform}   ({counts.get(platform, 0)})")
+                row.setData(Qt.UserRole, platform)
+                row.setSizeHint(QSize(0, 54))
+                self.platform_list.addItem(row)
+        finally:
+            self._updating_platform_list = False
+        self.refresh_platform_list_ui()
+
+    def _all_platform_names(self) -> List[str]:
+        return [
+            str(self.platform_list.item(i).data(Qt.UserRole) or "")
+            for i in range(self.platform_list.count())
+            if str(self.platform_list.item(i).data(Qt.UserRole) or "")
+        ]
+
+    def refresh_platform_list_ui(self):
+        self._updating_platform_list = True
+        try:
+            for i in range(self.platform_list.count()):
+                item = self.platform_list.item(i)
+                platform = str(item.data(Qt.UserRole) or "")
+                flags = item.flags()
+                if self.multi_platform_mode:
+                    item.setFlags(flags | Qt.ItemIsUserCheckable)
+                    item.setCheckState(Qt.Checked if platform in self.selected_platforms else Qt.Unchecked)
+                else:
+                    item.setFlags(flags & ~Qt.ItemIsUserCheckable)
+                item.setSelected(platform in self.selected_platforms)
+        finally:
+            self._updating_platform_list = False
+        count = len(self.selected_platforms)
+        self.platform_selection_badge.setText(f"{count} seçili")
+        self.platform_selection_badge.setVisible(count > 0)
+        self.platform_info_label.setText(f"{count} platform · sağ tık ile düzenle")
+        self.platform_info_bar.setVisible(count > 0)
+
+    def _apply_platform_selection(self):
+        selected = set(self.selected_platforms)
+        self.all_contract_rows = [
+            dict(it) for it in self.contract_index
+            if not selected or str(it.get("platform", "")) in selected
+        ]
+        self._prepare_contract_row_cache(self.all_contract_rows)
+        self._refresh_query_filters()
+        if not selected:
+            self.right_title.setText("Sözleşme Sorgulama")
+            self.update_query_logo_background(None)
+        elif len(selected) == 1:
+            platform = next(iter(selected))
+            self.right_title.setText(f"{platform} - Sözleşmeler")
+            self.update_query_logo_background(platform)
+        else:
+            self.right_title.setText(f"{len(selected)} Platform - Sözleşmeler")
+            self.update_query_logo_background(None)
+        self.refresh_platform_list_ui()
+        self.schedule_apply_contract_filter()
+
+    def on_platform_clicked(self, item: QListWidgetItem):
+        platform = str(item.data(Qt.UserRole) or "")
+        if not platform:
+            return
+        if self.multi_platform_mode:
+            if self._platform_checkbox_changed == platform:
+                self._platform_checkbox_changed = None
+            else:
+                self.toggle_platform_multi(platform)
+        elif self.selected_platforms == {platform}:
+            self.clear_platform_selection()
+        else:
+            self.selected_platforms = {platform}
+            self._apply_platform_selection()
+
+    def _on_platform_item_changed(self, item: QListWidgetItem):
+        if self._updating_platform_list or not self.multi_platform_mode:
+            return
+        platform = str(item.data(Qt.UserRole) or "")
+        checked = item.checkState() == Qt.Checked
+        if checked != (platform in self.selected_platforms):
+            self._platform_checkbox_changed = platform
+            QTimer.singleShot(0, lambda p=platform: self._clear_platform_checkbox_marker(p))
+            self.toggle_platform_multi(platform)
+
+    def _clear_platform_checkbox_marker(self, platform: str):
+        if self._platform_checkbox_changed == platform:
+            self._platform_checkbox_changed = None
+
+    def _on_platform_context_menu_requested(self, pos: QPoint):
+        item = self.platform_list.itemAt(pos)
+        if item:
+            self.show_platform_context_menu(str(item.data(Qt.UserRole) or ""), self.platform_list.viewport().mapToGlobal(pos))
+
+    def show_platform_context_menu(self, platform: str, global_pos: QPoint):
+        if not platform:
+            return
+        menu = QMenu(self)
+        label = "− Seçimden çıkar" if platform in self.selected_platforms else "+ Çoklu seçime ekle"
+        menu.addAction(label, lambda: self.toggle_platform_multi(platform))
+        menu.addAction("☑ Tümünü seç", self.select_all_platforms)
+        menu.addAction("× Seçimi temizle", self.clear_platform_selection)
+        menu.exec(global_pos)
+
+    def toggle_platform_multi(self, platform: str):
+        self.multi_platform_mode = True
+        if platform in self.selected_platforms:
+            self.selected_platforms.remove(platform)
+        else:
+            self.selected_platforms.add(platform)
+        if not self.selected_platforms:
+            self.multi_platform_mode = False
+        self._apply_platform_selection()
+
+    def select_all_platforms(self):
+        self.selected_platforms = set(self._all_platform_names())
+        self.multi_platform_mode = bool(self.selected_platforms)
+        self._apply_platform_selection()
+
+    def clear_platform_selection(self):
+        self.selected_platforms.clear()
+        self.multi_platform_mode = False
+        self._apply_platform_selection()
 
     def _clear_upcoming_layout(self):
         while self.upcoming_layout.count():
@@ -6829,18 +6968,12 @@ class MainWindow(QMainWindow):
             self.upcoming_layout.addWidget(b)
         self.upcoming_layout.addStretch()
 
-    def on_platform_row_changed(self, row: int):
-        if row < 0:
-            return
-        item = self.platform_list.item(row)
-        if not item:
-            return
-        platform = item.data(Qt.UserRole) or item.text()
-        self.update_query_logo_background(str(platform))
-        self.load_platform_contracts(str(platform))
-
     def set_empty_state(self):
         self.platform_list.clear()
+        self.selected_platforms.clear()
+        self.multi_platform_mode = False
+        if hasattr(self, "platform_selection_badge"):
+            self.refresh_platform_list_ui()
         self.all_contract_rows = []
         self.contract_table.setRowCount(0)
         self.set_index_progress_badge(False, 0)
@@ -6898,12 +7031,15 @@ class MainWindow(QMainWindow):
         self.store = None
         self.contract_index = []
         self.all_contract_rows = []
+        self.selected_platforms.clear()
+        self.multi_platform_mode = False
         self._store_loading = True
         self._index_ready_for_use = False
         self._last_load_timings = {}
         self._version_baseline_signature = None
         if hasattr(self, "platform_list"):
             self.platform_list.clear()
+            self.refresh_platform_list_ui()
         if hasattr(self, "contract_table"):
             self.contract_table.setRowCount(0)
         self._streaming_index = False
@@ -6934,8 +7070,7 @@ class MainWindow(QMainWindow):
         self._tag_color_map_cache = None
         self._set_platform_items(self.store.platform_names())
         self.update_alert_strip()
-        if self.platform_list.count():
-            self.platform_list.setCurrentRow(0)
+        self._apply_platform_selection()
         self.connection_label.setText("✓ STS veri dosyası bağlı")
 
     def is_sts_mode(self) -> bool:
@@ -7006,7 +7141,7 @@ class MainWindow(QMainWindow):
             if target:
                 self.select_platform(target)
             elif self.platform_list.count():
-                self.platform_list.setCurrentRow(0)
+                self._apply_platform_selection()
             else:
                 self.set_empty_state()
         finally:
@@ -7035,8 +7170,8 @@ class MainWindow(QMainWindow):
                 self.refresh_open_calendar()
                 if select_platform:
                     self.select_platform(select_platform)
-                elif self.platform_list.count() and self.platform_list.currentRow() < 0:
-                    self.platform_list.setCurrentRow(0)
+                else:
+                    self._apply_platform_selection()
                 self.connection_label.setText("✓ STS veri dosyası bağlı")
                 return
             self._pending_select_platform = select_platform
@@ -7052,10 +7187,8 @@ class MainWindow(QMainWindow):
                 self.refresh_open_calendar()
                 if select_platform:
                     self.select_platform(select_platform)
-                elif self.platform_list.count() and self.platform_list.currentRow() < 0:
-                    self.platform_list.setCurrentRow(0)
                 else:
-                    self.schedule_apply_contract_filter()
+                    self._apply_platform_selection()
             finally:
                 self.set_busy_overlay(False)
             return
@@ -7066,11 +7199,8 @@ class MainWindow(QMainWindow):
         self._set_platform_items(self.store.platform_names())
         self.update_alert_strip()
         self.refresh_open_calendar()
-        cur = self.platform_list.currentItem()
-        if cur:
-            self.load_platform_contracts(str(cur.data(Qt.UserRole) or ""))
-        elif self.platform_list.count():
-            self.platform_list.setCurrentRow(0)
+        if self.platform_list.count():
+            self._apply_platform_selection()
         else:
             self.set_empty_state()
 
@@ -7088,8 +7218,7 @@ class MainWindow(QMainWindow):
         platforms = self.store.platform_names()
         self._set_platform_items(platforms)
         self.update_alert_strip()
-        if self.platform_list.count() and self.platform_list.currentRow() < 0:
-            self.platform_list.setCurrentRow(0)
+        self._apply_platform_selection()
 
     def on_excel_index_batch(self, platform: str, rows, mapped_percent: int, message: str):
         new_rows = [dict(it) for it in list(rows or [])]
@@ -7100,10 +7229,7 @@ class MainWindow(QMainWindow):
         self.contract_index.extend(new_rows)
         self.connection_label.setText(f"Excel indeksleniyor %{int(mapped_percent or 0)}")
         if self.store:
-            cur_item = self.platform_list.currentItem()
-            cur_platform = str(cur_item.data(Qt.UserRole) or "") if cur_item else ""
-            if cur_platform and cur_platform == str(platform):
-                self.load_platform_contracts(cur_platform)
+            self._apply_platform_selection()
 
     def on_excel_index_ready(self, platforms, index, timings):
         self.contract_index = list(index or [])
@@ -7123,16 +7249,13 @@ class MainWindow(QMainWindow):
         self.refresh_open_calendar()
         if self._pending_select_platform:
             self.select_platform(self._pending_select_platform)
-        elif self.platform_list.count() and self.platform_list.currentRow() < 0:
-            self.platform_list.setCurrentRow(0)
-        elif not self.platform_list.count():
+        elif self.platform_list.count():
+            self._apply_platform_selection()
+        else:
             self.contract_table.setRowCount(0)
 
     def on_excel_loaded(self, store, index):
-        selected_platform = ""
-        cur = self.platform_list.currentItem() if hasattr(self, "platform_list") else None
-        if cur:
-            selected_platform = str(cur.data(Qt.UserRole) or "")
+        selected_platform = next(iter(self.selected_platforms)) if len(self.selected_platforms) == 1 else ""
         self.store = store
         self.contract_index = list(index or [])
         self.path = self.store.path
@@ -7342,23 +7465,17 @@ class MainWindow(QMainWindow):
         self.update_query_logo_background(None)
         self.update_alert_strip()
         self.refresh_open_calendar()
-        if self.platform_list.count():
-            self.platform_list.setCurrentRow(0)
+        self._apply_platform_selection()
 
-    def select_platform(self,p):
-        for i in range(self.platform_list.count()):
-            it = self.platform_list.item(i)
-            if str(it.data(Qt.UserRole) or "") == str(p):
-                self.platform_list.setCurrentRow(i)
-                return
+    def select_platform(self, p):
+        platform = str(p or "")
+        if platform and platform in self._all_platform_names():
+            self.selected_platforms = {platform}
+            self.multi_platform_mode = False
+            self._apply_platform_selection()
 
     def load_platform_contracts(self, platform):
-        if not platform: return
-        self.all_contract_rows = [dict(it) for it in self.contract_index if str(it.get("platform", "")) == str(platform)]
-        self._prepare_contract_row_cache(self.all_contract_rows)
-        self._refresh_query_filters()
-        self.right_title.setText(f"{platform} - Sözleşmeler")
-        self.schedule_apply_contract_filter()
+        self.select_platform(platform)
 
     def toggle_filter_bar(self):
         visible = not self.filter_bar.isVisible()
@@ -7501,7 +7618,10 @@ class MainWindow(QMainWindow):
             col_filters = dict(self._filter_header._col_filters)
             date_ranges = dict(getattr(self._filter_header, "_date_ranges", {}))
             day_ranges = dict(getattr(self._filter_header, "_day_ranges", {}))
+        selected_platforms = set(getattr(self, "selected_platforms", set()))
         for it in getattr(self, "all_contract_rows", []):
+            if selected_platforms and str(it.get("platform", "")) not in selected_platforms:
+                continue
             hay = str(it.get("_search_norm") or "")
             if q and q not in hay:
                 continue
@@ -7604,6 +7724,9 @@ class MainWindow(QMainWindow):
             self.contract_table.setRowCount(len(rows))
             self.contract_table._visible_rows = rows
             for r,it in enumerate(rows):
+                for c in range(self.contract_table.columnCount()):
+                    self.contract_table.removeCellWidget(r, c)
+                self.contract_table.setRowHeight(r, 36)
                 cls, st_label, days_text, tdate = self._contract_health(it)
                 vals=[
                     it.get("type_display", it.get("type", "")) or "",
@@ -7623,7 +7746,7 @@ class MainWindow(QMainWindow):
                             empty = QTableWidgetItem("")
                             empty.setFlags(empty.flags() & ~Qt.ItemIsEditable)
                             self.contract_table.setItem(r, 6, empty)
-                            self.contract_table.setRowHeight(r, 36)
+                            self.contract_table.setRowHeight(r, max(self.contract_table.rowHeight(r), 52 if len(self.selected_platforms) != 1 else 36))
                             continue
                         wrap = QWidget()
                         wrap.setStyleSheet("QWidget{background:transparent;border:0px;}")
@@ -7649,7 +7772,7 @@ class MainWindow(QMainWindow):
                         CHIP_H, CHIP_SP, PAD = 22, 3, 8
                         n = len(tags_list)
                         row_h = max(36, n * CHIP_H + max(0, n - 1) * CHIP_SP + PAD) if n > 0 else 36
-                        self.contract_table.setRowHeight(r, row_h)
+                        self.contract_table.setRowHeight(r, max(self.contract_table.rowHeight(r), row_h, 52 if len(self.selected_platforms) != 1 else 36))
                         continue
                     if c == 7:
                         lbl = QLabel("\U0001F50D")
@@ -7667,6 +7790,15 @@ class MainWindow(QMainWindow):
                         wl.setAlignment(Qt.AlignCenter)
                         wl.addWidget(lbl)
                         self.contract_table.setCellWidget(r, 7, wrap)
+                        continue
+                    if c == 1 and len(self.selected_platforms) != 1:
+                        wrap = QWidget(); wl = QVBoxLayout(wrap); wl.setContentsMargins(4, 3, 4, 3); wl.setSpacing(2)
+                        no_label = QLabel(str(v or "")); no_label.setStyleSheet("QLabel{color:#0f172a;font-size:12px;font-weight:700;}")
+                        platform_badge = QLabel(str(it.get("platform", "") or "")); platform_badge.setStyleSheet("QLabel{background:#e0ecff;color:#1d4ed8;border-radius:7px;padding:1px 5px;font-size:10px;font-weight:800;}")
+                        platform_badge.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
+                        wl.addWidget(no_label); wl.addWidget(platform_badge, 0, Qt.AlignLeft)
+                        self.contract_table.setCellWidget(r, c, wrap)
+                        self.contract_table.setRowHeight(r, max(self.contract_table.rowHeight(r), 52))
                         continue
                     cell = QTableWidgetItem(str(v or ""))
                     cell.setFlags(cell.flags() & ~Qt.ItemIsEditable)
@@ -7732,7 +7864,7 @@ class MainWindow(QMainWindow):
                     if str(platform or "") in platforms:
                         self.select_platform(platform)
                     elif self.platform_list.count():
-                        self.platform_list.setCurrentRow(0)
+                        self._apply_platform_selection()
                     else:
                         self.set_empty_state()
                 finally:
