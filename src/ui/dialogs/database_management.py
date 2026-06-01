@@ -52,15 +52,19 @@ TABLE_INFO = {
 }
 
 FALLBACK_RELATIONS = [
+    ("platforms", "id", "contracts", "platform_id"),
+    ("users", "id", "contracts", "user_id"),
     ("contracts", "id", "systems", "contract_id"),
+    ("users", "id", "systems", "delivery_user_id"),
     ("contracts", "id", "deliveries", "contract_id"),
+    ("systems", "id", "deliveries", "system_id"),
+    ("users", "id", "deliveries", "delivery_user_id"),
     ("contracts", "id", "contract_tags", "contract_id"),
+    ("tags", "id", "contract_tags", "tag_id"),
     ("systems", "id", "system_components", "system_id"),
+    ("components", "id", "system_components", "component_id"),
     ("deliveries", "id", "delivery_components", "delivery_id"),
-    ("tags", "name", "contract_tags", "tag_name"),
-    ("platforms", "name", "contracts", "platform"),
-    ("components", "name", "system_components", "component_name"),
-    ("components", "name", "delivery_components", "component_name"),
+    ("components", "id", "delivery_components", "component_id"),
 ]
 
 
