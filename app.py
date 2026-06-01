@@ -4795,30 +4795,102 @@ class ContractWorkWindow(QDialog):
     def _tag_key(self, name: str) -> str:
         return self.store._normalize_label(name)
 
-    def build_collapse_bar(self):
-        self._open_panel: Optional[str] = None
-        self._contract_files_cache: List[dict] = []
-        self.collapse_bar = QFrame(); self.collapse_bar.setObjectName("collapseBar"); self.collapse_bar.setFixedHeight(42)
-        self.collapse_bar.setStyleSheet(
-            "QFrame#collapseBar{background:#ffffff; border:0; border-bottom:1px solid #e2e8f0;}"
-            "QPushButton#collapseTabBtn{background:transparent; color:#64748b; border:0; border-bottom:2px solid transparent; border-radius:0; padding:8px 10px; font-size:12px; font-weight:800;}"
-            "QPushButton#collapseTabBtn:checked{color:#1e40af; border-bottom:2px solid #1f5be3;}"
-            "QLabel#countBadge{background:#dbeafe; color:#1d4ed8; border:0; border-radius:9px; padding:2px 6px; font-size:11px; font-weight:800;}"
-            "QLabel#collapseHint{background:transparent; color:#94a3b8; border:0; font-size:10px;}"
+    def _build_contract_side_panel(self, panel_width: int):
+        self.contract_side_panel = QFrame()
+        self.contract_side_panel.setObjectName("contractSidePanel")
+        self.contract_side_panel.setFixedSize(panel_width, 246)
+        self.contract_side_panel.setStyleSheet(
+            "QFrame#contractSidePanel{background:#ffffff; border:1px solid #d7e3f1; border-radius:13px;}"
+            "QFrame#contractSideTabBar{background:#edf4fb; border:0; border-bottom:1px solid #d7e3f1; border-radius:12px 12px 0 0;}"
+            "QFrame[sideTab='true']{background:transparent; border:1px solid transparent; border-bottom:0; border-radius:9px 9px 0 0;}"
+            "QFrame[sideTabActive='true']{background:#ffffff; border:1px solid #d7e3f1; border-bottom:0; border-radius:9px 9px 0 0;}"
+            "QLabel#sideTabText{background:transparent; color:#31445f; font-size:12px; font-weight:900;}"
+            "QLabel#sideTabText[active='true']{color:#0f2d4a;}"
+            "QLabel#sideTabBadge{background:#dbeafe; color:#1d4ed8; border:0; border-radius:10px; padding:1px 6px; font-size:11px; font-weight:900;}"
+            "QLabel#sidePanelTitle{background:transparent; color:#48627f; font-size:11px; font-weight:900;}"
+            "QPushButton#sidePanelAdd{background:#2563eb; color:#ffffff; border:0; border-radius:11px; font-size:22px; font-weight:900; padding:0;}"
+            "QPushButton#sidePanelAdd:hover{background:#1d4ed8;}"
+            "QPushButton#fileDropZone{background:#f1f7ff; color:#1e3a5f; border:1px dashed #a8bdd6; border-radius:11px; padding:7px 10px; text-align:left; font-size:11px; font-weight:700;}"
+            "QPushButton#fileDropZone:hover{background:#e8f2ff; border-color:#7ca4d8;}"
+            "QLabel#sidePanelEmpty{background:#f8fbff; color:#64748b; border:1px dashed #c7d6e8; border-radius:11px; padding:13px; font-size:12px;}"
+            "QLabel#fileTotal{background:transparent; color:#64748b; border:0; font-size:11px;}"
         )
-        bar = QHBoxLayout(self.collapse_bar); bar.setContentsMargins(0, 0, 6, 0); bar.setSpacing(3)
-        self.btn_tags = QPushButton(); self.btn_tags.setObjectName("collapseTabBtn"); self.btn_tags.setCheckable(True); self.btn_tags.clicked.connect(lambda: self.toggle_collapse("tags"))
-        self.badge_tags = QLabel("0"); self.badge_tags.setObjectName("countBadge"); self.badge_tags.setAlignment(Qt.AlignCenter)
-        self.btn_files = QPushButton(); self.btn_files.setObjectName("collapseTabBtn"); self.btn_files.setCheckable(True); self.btn_files.clicked.connect(lambda: self.toggle_collapse("files"))
-        self.badge_files = QLabel("0"); self.badge_files.setObjectName("countBadge"); self.badge_files.setAlignment(Qt.AlignCenter)
-        hint = QLabel("tıkla – açılır"); hint.setObjectName("collapseHint")
-        bar.addWidget(self.btn_tags); bar.addWidget(self.badge_tags); bar.addSpacing(5); bar.addWidget(self.btn_files); bar.addWidget(self.badge_files); bar.addStretch(); bar.addWidget(hint)
+        outer = QVBoxLayout(self.contract_side_panel)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        tab_bar = QFrame(); tab_bar.setObjectName("contractSideTabBar"); tab_bar.setFixedHeight(42)
+        tab_lay = QHBoxLayout(tab_bar); tab_lay.setContentsMargins(10, 7, 10, 0); tab_lay.setSpacing(6)
+        self.side_tab_frames = []
+        self.side_tab_badges = []
+        for index, title in enumerate(("Etiketler", "Belgeler")):
+            tab = QFrame(); tab.setProperty("sideTab", True); tab.setProperty("sideTabActive", index == 0)
+            tab.setCursor(Qt.PointingHandCursor); tab.setFixedHeight(35)
+            row = QHBoxLayout(tab); row.setContentsMargins(12, 0, 10, 0); row.setSpacing(7)
+            text = QLabel(title); text.setObjectName("sideTabText"); text.setProperty("active", index == 0)
+            badge = QLabel("0"); badge.setObjectName("sideTabBadge"); badge.setAlignment(Qt.AlignCenter); badge.setMinimumWidth(20)
+            row.addWidget(text); row.addWidget(badge)
+            switch_tab = lambda event, idx=index: self._set_contract_side_tab(idx)
+            tab.mousePressEvent = switch_tab; text.mousePressEvent = switch_tab; badge.mousePressEvent = switch_tab
+            self.side_tab_frames.append((tab, text))
+            self.side_tab_badges.append(badge)
+            tab_lay.addWidget(tab, 0)
+        tab_lay.addStretch()
+        outer.addWidget(tab_bar, 0)
+        self.contract_side_stack = QStackedWidget(); self.contract_side_stack.setStyleSheet("QStackedWidget{background:#ffffff; border:0;}")
+        self.tag_card = self._build_tag_panel_page()
+        self.documents_card = self._build_file_panel_page()
+        self.contract_side_stack.addWidget(self.tag_card)
+        self.contract_side_stack.addWidget(self.documents_card)
+        outer.addWidget(self.contract_side_stack, 1)
+        self._set_contract_side_tab(0)
 
-        self.collapse_panel = QFrame(); self.collapse_panel.setObjectName("collapsePanel"); self.collapse_panel.setMaximumHeight(0); self.collapse_panel.setMinimumHeight(0)
-        self.collapse_panel.setStyleSheet(
-            "QFrame#collapsePanel{background:#fafbff; border:0; border-bottom:1px solid #e8f0fb;}"
-            "QScrollArea{background:transparent; border:0;} QScrollArea > QWidget > QWidget{background:transparent;}"
-            "QScrollBar:horizontal{height:7px; background:transparent;} QScrollBar::handle:horizontal{background:#cbd5e1; border-radius:3px; min-width:24px;} QScrollBar::add-line:horizontal,QScrollBar::sub-line:horizontal{width:0;}"
+    def _set_contract_side_tab(self, index: int):
+        self.contract_side_stack.setCurrentIndex(index)
+        for current, (frame, label) in enumerate(self.side_tab_frames):
+            active = current == index
+            frame.setProperty("sideTabActive", active)
+            label.setProperty("active", active)
+            frame.style().unpolish(frame); frame.style().polish(frame)
+            label.style().unpolish(label); label.style().polish(label)
+
+    def _panel_page_layout(self, page: QFrame, tooltip: str, callback):
+        layout = QVBoxLayout(page); layout.setContentsMargins(11, 7, 11, 7); layout.setSpacing(6)
+        head = QHBoxLayout(); head.setContentsMargins(0, 0, 0, 0)
+        add_btn = QPushButton("+"); add_btn.setObjectName("sidePanelAdd"); add_btn.setFixedSize(36, 32); add_btn.setToolTip(tooltip); add_btn.clicked.connect(callback)
+        head.addStretch(); head.addWidget(add_btn)
+        layout.addLayout(head)
+        return layout
+
+    def _make_card_scroll(self):
+        scroll = QScrollArea(); scroll.setWidgetResizable(True); scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff); scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll.setStyleSheet("QScrollArea{background:transparent; border:0;} QScrollArea > QWidget > QWidget{background:transparent;} QScrollBar:vertical{width:8px; background:transparent;} QScrollBar::handle:vertical{background:#94a3b8; border-radius:4px; min-height:22px;} QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical{height:0;}")
+        host = QWidget(); host.setMinimumWidth(0); host.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred); host.setStyleSheet("background:transparent;")
+        cards = QVBoxLayout(host); cards.setContentsMargins(0, 0, 2, 0); cards.setSpacing(6); cards.addStretch()
+        scroll.setWidget(host)
+        return scroll, cards
+
+    def _build_tag_panel_page(self):
+        page = QFrame(); page.setStyleSheet("background:#ffffff; border:0;")
+        layout = self._panel_page_layout(page, "Etiket ekle", self.open_tag_assign_dialog)
+        scroll, self.tag_cards_layout = self._make_card_scroll(); layout.addWidget(scroll, 1)
+        return page
+
+    def _build_file_panel_page(self):
+        page = QFrame(); page.setStyleSheet("background:#ffffff; border:0;")
+        layout = self._panel_page_layout(page, "Dosya ekle", self.add_contract_file)
+        drop = QPushButton("  ↑    Dosya ekle\n       PDF, Word, Excel, görsel veya TXT · En fazla 25 MB")
+        drop.setObjectName("fileDropZone"); drop.setCursor(Qt.PointingHandCursor); drop.setToolTip("Dosya ekle"); drop.clicked.connect(self.add_contract_file)
+        layout.addWidget(drop, 0)
+        scroll, self.file_cards_layout = self._make_card_scroll(); layout.addWidget(scroll, 1)
+        self.file_total_label = QLabel("Toplam 0 B"); self.file_total_label.setObjectName("fileTotal"); self.file_total_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        layout.addWidget(self.file_total_label, 0)
+        return page
+
+    def _ordered_contract_tags(self) -> List[dict]:
+        return sorted(
+            [dict(t) for t in self.contract_tags if str((t or {}).get("name") or "").strip()],
+            key=lambda x: self._tag_key(str(x.get("name", ""))),
         )
         panel_layout = QVBoxLayout(self.collapse_panel); panel_layout.setContentsMargins(8, 7, 8, 5); panel_layout.setSpacing(3)
         self.collapse_scroll = QScrollArea(); self.collapse_scroll.setWidgetResizable(True); self.collapse_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded); self.collapse_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -4853,38 +4925,40 @@ class ContractWorkWindow(QDialog):
             if widget is not None:
                 widget.deleteLater()
 
-    def _render_collapse_content(self, panel: str):
-        self._clear_collapse_content()
-        if panel == "tags":
-            self.collapse_total.setText("")
-            for tag in self._ordered_contract_tags():
-                self.collapse_content_layout.insertWidget(self.collapse_content_layout.count() - 1, self.create_tag_card(tag))
-            add = QPushButton("+ Etiket Ekle"); add.setObjectName("collapseAddBtn"); add.clicked.connect(self.open_tag_assign_dialog)
-        else:
-            files = list(self._contract_files_cache)
-            for metadata in files:
-                self.collapse_content_layout.insertWidget(self.collapse_content_layout.count() - 1, self.create_file_card(metadata))
-            add = QPushButton("+ Dosya Ekle"); add.setObjectName("collapseAddBtn"); add.clicked.connect(self.add_contract_file)
-            self.collapse_total.setText(f"Toplam {self.format_file_size(sum(int(item.get('size_bytes', 0) or 0) for item in files))}")
-        add.setFixedHeight(38); add.setStyleSheet("QPushButton{background:#eff6ff; color:#1d4ed8; border:1px dashed #93c5fd; border-radius:8px; padding:6px 11px; font-size:11px; font-weight:800;} QPushButton:hover{background:#dbeafe;}")
-        self.collapse_content_layout.insertWidget(self.collapse_content_layout.count() - 1, add)
-
-    def _update_collapse_badges(self):
-        self.badge_tags.setText(str(len(self._ordered_contract_tags())))
-        self.badge_files.setText(str(len(self._contract_files_cache)))
-
-    def _ordered_contract_tags(self) -> List[dict]:
-        return sorted([dict(t) for t in self.contract_tags if str((t or {}).get("name") or "").strip()], key=lambda x: self._tag_key(str(x.get("name", ""))))
-
     def create_tag_card(self, tag: dict) -> QFrame:
-        name = str((tag or {}).get("name") or "").strip(); color = str((tag or {}).get("color") or "#3B82F6")
-        chip = QFrame(); chip.setFixedHeight(38); chip.setStyleSheet("QFrame{background:#ffffff; border:1px solid #dbe7f5; border-radius:9px;} QLabel{background:transparent; border:0;} QPushButton{background:transparent; color:#64748b; border:0; font-size:14px; font-weight:900;} QPushButton:hover{color:#dc2626; background:#fee2e2; border-radius:7px;}")
-        row = QHBoxLayout(chip); row.setContentsMargins(8, 4, 5, 4); row.setSpacing(5)
-        dot = QLabel("●"); dot.setStyleSheet(f"color:{color}; font-size:11px;")
-        title = ElidedLabel(name); title.setToolTip(name); title.setMaximumWidth(150); title.setStyleSheet("color:#10233d; font-size:11px; font-weight:800;")
-        remove = QPushButton("×"); remove.setFixedSize(24, 24); remove.setToolTip("Etiketi kaldır"); remove.clicked.connect(lambda _=False, nm=name: self.remove_contract_tag(nm))
-        row.addWidget(dot); row.addWidget(title); row.addWidget(remove)
-        return chip
+        name = str((tag or {}).get("name") or "").strip()
+        color = str((tag or {}).get("color") or "#3B82F6")
+        card = QFrame(); card.setObjectName("sideTagCard"); card.setMinimumWidth(0); card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed); card.setFixedHeight(52)
+        card.setStyleSheet("QFrame#sideTagCard{background:#f8fbff; border:1px solid #dbe7f5; border-radius:11px;} QFrame#sideTagCard:hover{background:#eef6ff; border-color:#b8cef0;} QLabel{background:transparent; border:0;} QPushButton{background:#ffffff; color:#334155; border:1px solid #d8e4f2; border-radius:8px; font-size:15px;} QPushButton:hover{background:#fee2e2; color:#b91c1c;}")
+        row = QHBoxLayout(card); row.setContentsMargins(9, 5, 9, 5); row.setSpacing(8)
+        dot = QLabel("●"); dot.setFixedWidth(10); dot.setStyleSheet(f"color:{color}; font-size:12px;")
+        middle = QWidget(); middle.setMinimumWidth(0); middle.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed); middle.setStyleSheet("background:transparent;"); column = QVBoxLayout(middle); column.setContentsMargins(0, 0, 0, 0); column.setSpacing(1)
+        title = ElidedLabel(name); title.setMinimumWidth(0); title.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed); title.setToolTip(name); title.setStyleSheet("color:#10233d; font-size:12px; font-weight:900;")
+        meta = QLabel("Sözleşmeye atanmış etiket"); meta.setStyleSheet("color:#64748b; font-size:10px;")
+        column.addWidget(title); column.addWidget(meta)
+        remove = QPushButton("×"); remove.setObjectName("tagRemoveButton"); remove.setFixedSize(29, 29); remove.setToolTip("Etiketi kaldır"); remove.clicked.connect(lambda _=False, nm=name: self.remove_contract_tag(nm))
+        row.addWidget(dot); row.addWidget(middle, 1); row.addWidget(remove)
+        return card
+
+    def refresh_contract_tags_panel(self):
+        if not hasattr(self, "tag_cards_layout"):
+            return
+        self._clear_card_layout(self.tag_cards_layout)
+        ordered = self._ordered_contract_tags()
+        self.side_tab_badges[0].setText(str(len(ordered)))
+        if not ordered:
+            empty = QLabel("Henüz etiket atanmadı."); empty.setObjectName("sidePanelEmpty"); empty.setAlignment(Qt.AlignCenter)
+            self.tag_cards_layout.insertWidget(0, empty)
+            return
+        for tag in ordered:
+            self.tag_cards_layout.insertWidget(self.tag_cards_layout.count() - 1, self.create_tag_card(tag))
+
+    def render_contract_tags(self):
+        self.refresh_contract_tags_panel()
+        self.refresh_contract_files_panel()
+
+    def render_contract_files(self):
+        self.refresh_contract_files_panel()
 
     @staticmethod
     def format_file_size(size_bytes: int) -> str:
@@ -4913,34 +4987,36 @@ class ContractWorkWindow(QDialog):
         return "TXT", "#64748b"
 
     def create_file_card(self, metadata: dict) -> QFrame:
-        file_id = int(metadata["id"]); filename = str(metadata.get("filename") or ""); ext = str(metadata.get("file_ext") or "").upper() or "DOSYA"; icon_text, icon_color = self.file_type_style(ext)
-        card = QFrame(); card.setFixedHeight(40); card.setMinimumWidth(190); card.setMaximumWidth(270); card.setProperty("contractFileId", file_id); card.installEventFilter(self)
-        card.setStyleSheet("QFrame{background:#ffffff; border:1px solid #dbe7f5; border-radius:9px;} QLabel{background:transparent; border:0;} QToolButton{background:transparent; color:#334155; border:0; font-size:15px; font-weight:900;} QToolButton:hover{background:#eff6ff; border-radius:7px;}")
-        row = QHBoxLayout(card); row.setContentsMargins(5, 4, 4, 4); row.setSpacing(5)
-        icon = QLabel(icon_text); icon.setFixedSize(31, 30); icon.setAlignment(Qt.AlignCenter); icon.setStyleSheet(f"background:{icon_color}; color:#ffffff; border-radius:7px; font-size:10px; font-weight:900;")
-        title = ElidedLabel(filename); title.setMinimumWidth(55); title.setToolTip(filename); title.setStyleSheet("color:#10233d; font-size:10px; font-weight:800;")
-        size = QLabel(self.format_file_size(metadata.get("size_bytes", 0))); size.setStyleSheet("color:#64748b; font-size:9px;")
-        menu_btn = QToolButton(); menu_btn.setText("⋯"); menu_btn.setFixedSize(24, 24); menu_btn.setToolTip("Menü"); menu_btn.clicked.connect(lambda _=False, fid=file_id, btn=menu_btn: self.show_contract_file_button_menu(fid, btn))
-        row.addWidget(icon); row.addWidget(title, 1); row.addWidget(size); row.addWidget(menu_btn)
+        file_id = int(metadata["id"]); filename = str(metadata.get("filename") or "")
+        ext = str(metadata.get("file_ext") or "").upper() or "DOSYA"
+        icon_text, icon_color = self.file_type_style(ext)
+        card = QFrame(); card.setObjectName("sideFileCard"); card.setMinimumWidth(0); card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed); card.setFixedHeight(56); card.setProperty("contractFileId", file_id); card.installEventFilter(self)
+        card.setStyleSheet("QFrame#sideFileCard{background:#f8fbff; border:1px solid #dbe7f5; border-radius:12px;} QFrame#sideFileCard:hover{background:#eef6ff; border-color:#b8cef0;} QLabel{background:transparent; border:0;} QToolButton{background:#ffffff; color:#334155; border:1px solid #d8e4f2; border-radius:8px; font-size:16px; font-weight:900;} QToolButton:hover{background:#eff6ff; border-color:#b8cef0;}")
+        row = QHBoxLayout(card); row.setContentsMargins(9, 7, 9, 7); row.setSpacing(8)
+        icon = QLabel(icon_text); icon.setFixedSize(36, 36); icon.setAlignment(Qt.AlignCenter); icon.setStyleSheet(f"background:{icon_color}; color:#ffffff; border-radius:11px; font-size:13px; font-weight:900;")
+        middle = QWidget(); middle.setMinimumWidth(0); middle.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed); middle.setStyleSheet("background:transparent;"); column = QVBoxLayout(middle); column.setContentsMargins(0, 0, 0, 0); column.setSpacing(2)
+        title = ElidedLabel(filename); title.setMinimumWidth(0); title.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed); title.setToolTip(filename); title.setStyleSheet("color:#10233d; font-size:12px; font-weight:900;")
+        meta = QLabel(f"{ext}  ·  {self.format_file_size(metadata.get('size_bytes', 0))}  ·  {self.format_file_date(metadata.get('created_at', ''))}"); meta.setMinimumWidth(0); meta.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed); meta.setStyleSheet("color:#64748b; font-size:10px;")
+        column.addWidget(title); column.addWidget(meta)
+        menu_btn = QToolButton(); menu_btn.setText("⋯"); menu_btn.setFixedSize(30, 30); menu_btn.setToolTip("Menü"); menu_btn.clicked.connect(lambda _=False, fid=file_id, btn=menu_btn: self.show_contract_file_button_menu(fid, btn))
+        row.addWidget(icon); row.addWidget(middle, 1); row.addWidget(menu_btn)
         return card
 
-    def refresh_contract_tags_panel(self):
-        self._update_collapse_badges()
-        if self._open_panel == "tags": self._render_collapse_content("tags")
-
     def refresh_contract_files_panel(self):
+        if not hasattr(self, "file_cards_layout"):
+            return
         try:
-            self._contract_files_cache = self.store.list_contract_files(self.ci.platform, self.ci.no, self.ci.contract_type)
+            files = self.store.list_contract_files(self.ci.platform, self.ci.no, self.ci.contract_type)
         except Exception:
-            self._contract_files_cache = []
-        self._update_collapse_badges()
-        if self._open_panel == "files": self._render_collapse_content("files")
-
-    def render_contract_tags(self):
-        self.refresh_contract_files_panel(); self.refresh_contract_tags_panel()
-
-    def render_contract_files(self):
-        self.refresh_contract_files_panel()
+            files = []
+        self._clear_card_layout(self.file_cards_layout)
+        for metadata in files:
+            self.file_cards_layout.insertWidget(self.file_cards_layout.count() - 1, self.create_file_card(metadata))
+        if not files:
+            empty = QLabel("Henüz belge eklenmedi."); empty.setObjectName("sidePanelEmpty"); empty.setAlignment(Qt.AlignCenter)
+            self.file_cards_layout.insertWidget(0, empty)
+        self.side_tab_badges[1].setText(str(len(files)))
+        self.file_total_label.setText(f"Toplam {self.format_file_size(sum(int(item.get('size_bytes', 0) or 0) for item in files))}")
 
     def add_contract_file(self):
         path, _ = QFileDialog.getOpenFileName(self, "Sözleşmeye Dosya Ekle", "", "PDF/Word/Excel/Resim/TXT (*.pdf *.doc *.docx *.xls *.xlsx *.png *.jpg *.jpeg *.txt)")
@@ -4965,7 +5041,7 @@ class ContractWorkWindow(QDialog):
         except Exception as exc:
             QMessageBox.warning(self, "Belge açılamadı", str(exc))
 
-    def export_contract_file(self, file_id: int):
+    def refresh_contract_files_panel(self):
         try:
             filename, _mime, _content = self.store.get_contract_file_bytes(file_id)
             target, _ = QFileDialog.getSaveFileName(self, "Belgeyi Dışa Aktar", filename)
@@ -4976,9 +5052,7 @@ class ContractWorkWindow(QDialog):
         except Exception as exc:
             QMessageBox.warning(self, "Belge dışa aktarılamadı", str(exc))
 
-    def delete_contract_file(self, file_id: int):
-        if QMessageBox.question(self, "Belgeyi Sil", "Belge STS dosyasından silinsin mi? Orijinal dosyaya dokunulmaz.") != QMessageBox.Yes:
-            return
+    def refresh_contract_files_panel(self):
         try:
             self.store.delete_contract_file(file_id)
             self.render_contract_files()

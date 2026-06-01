@@ -38,14 +38,14 @@ with TemporaryDirectory() as td:
     assert "content_blob" in EXPECTED_COLUMNS["contract_files"]
 
     stats = store.database_stats()
-    assert stats["table_counts"]["contract_files"] == 4
-    assert len(store.preview_table("contract_files")) == 4
+    assert stats["table_counts"]["contract_files"] == 3
+    assert len(store.preview_table("contract_files")) == 3
 
     source = root / "silme-akisi.txt"
     source_bytes = "BLOB ekleme, okuma, dışa aktarma ve silme testi\n".encode("utf-8")
     source.write_bytes(source_bytes)
     original_hash = hashlib.sha256(source_bytes).digest()
-    file_id = store.add_contract_file("TB2", "TB2-2026-005", source, "Ana Sözleşme", note="Silme akışı")
+    file_id = store.add_contract_file("AKINCI", "AKN-2026-002", source, "Ana Sözleşme", note="Silme akışı")
     source.unlink()
     filename, mime_type, content = store.get_contract_file_bytes(file_id)
     assert filename == "silme-akisi.txt"
@@ -59,9 +59,9 @@ with TemporaryDirectory() as td:
 
     cascade_source = root / "cascade.txt"
     cascade_source.write_text("cascade", encoding="utf-8")
-    cascade_id = store.add_contract_file("TB2", "TB2-2026-005", cascade_source, "Ana Sözleşme")
-    contract_id = store._find_contract_id("TB2", "TB2-2026-005", "Ana Sözleşme")
-    assert store.delete_contract("TB2", "TB2-2026-005")["deleted_rows"] == 1
+    cascade_id = store.add_contract_file("AKINCI", "AKN-2026-002", cascade_source, "Ana Sözleşme")
+    contract_id = store._find_contract_id("AKINCI", "AKN-2026-002", "Ana Sözleşme")
+    assert store.delete_contract("AKINCI", "AKN-2026-002")["deleted_rows"] == 1
     assert conn.execute("SELECT COUNT(*) FROM contract_files WHERE id=?", (cascade_id,)).fetchone()[0] == 0
     assert conn.execute("SELECT COUNT(*) FROM contract_files WHERE contract_id=?", (contract_id,)).fetchone()[0] == 0
 
