@@ -6,7 +6,7 @@ import time
 from typing import Dict, List, Optional
 
 from PySide6.QtCore import Qt, QRectF, QTimer
-from PySide6.QtGui import QColor, QPen, QPainter, QCursor, QLinearGradient, QBrush, QFontMetrics
+from PySide6.QtGui import QColor, QPen, QPainter, QCursor, QFontMetrics, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QPlainTextEdit,
     QSplitter,
+    QStackedWidget,
     QScrollArea,
     QTableWidget,
     QTableWidgetItem,
@@ -107,11 +108,11 @@ class SchemaTableItem(QGraphicsObject):
         self.count = count
         self.cols = cols
         self.dialog = dialog
-        self.card_width = 380
-        self.header_height = 36
+        self.card_width = 300
+        self.header_height = 32
         self.row_height = 20
         visible_rows = max(1, len(cols))
-        self.card_height = 14 + self.header_height + (visible_rows * self.row_height) + 14
+        self.card_height = 10 + self.header_height + (visible_rows * self.row_height) + 10
         self.setFlag(QGraphicsItem.ItemIsMovable, True)
         self.setFlag(QGraphicsItem.ItemIsSelectable, True)
         self.setFlag(QGraphicsItem.ItemSendsGeometryChanges, True)
@@ -126,22 +127,21 @@ class SchemaTableItem(QGraphicsObject):
         rect = self.boundingRect()
         painter.setRenderHint(QPainter.Antialiasing, True)
         state = self.dialog._schema_card_state(self.table_name)
-        painter.setPen(QPen(QColor("#3b82f6") if state == "focus" else QColor("#bdd0ea"), 2.2 if state == "focus" else 1.1))
+        painter.setPen(QPen(QColor("#3b82f6") if state == "focus" else QColor("#e2e8f0"), 2.0 if state == "focus" else 1.0))
         painter.setBrush(QColor("#ffffff"))
-        painter.drawRoundedRect(rect, 14, 14)
-        header_rect = QRectF(8, 8, rect.width() - 16, self.header_height)
-        grad = QLinearGradient(header_rect.topLeft(), header_rect.topRight())
-        grad.setColorAt(0.0, QColor("#2563eb"))
-        grad.setColorAt(1.0, QColor("#0f9f6e"))
+        painter.drawRoundedRect(rect, 8, 8)
+        header_rect = QRectF(1, 1, rect.width() - 2, self.header_height)
+        palette = ("#0f766e", "#1d4ed8", "#7c3aed", "#0369a1", "#047857")
+        header_color = QColor(palette[sum(ord(char) for char in self.table_name) % len(palette)])
         painter.setPen(Qt.NoPen)
-        painter.setBrush(QBrush(grad))
-        painter.drawRoundedRect(header_rect, 10, 10)
+        painter.setBrush(header_color)
+        painter.drawRoundedRect(header_rect, 7, 7)
         painter.setPen(Qt.white)
         painter.drawText(QRectF(header_rect.left() + 10, header_rect.top(), header_rect.width() - 120, header_rect.height()), Qt.AlignVCenter | Qt.AlignLeft, self.table_name)
-        badge_rect = QRectF(header_rect.right() - 82, header_rect.top() + 7, 72, 22)
-        painter.setBrush(QColor("#e6f9ef"))
-        painter.drawRoundedRect(badge_rect, 10, 10)
-        painter.setPen(QColor("#0f5132"))
+        badge_rect = QRectF(header_rect.right() - 48, header_rect.top() + 7, 38, 18)
+        painter.setBrush(QColor(255, 255, 255, 52))
+        painter.drawRoundedRect(badge_rect, 9, 9)
+        painter.setPen(QColor("#ffffff"))
         painter.drawText(badge_rect, Qt.AlignCenter, self.dialog._fmt_count(self.count))
         y = self.header_height + 16
         painter.setPen(QColor("#1f3b58"))
@@ -152,18 +152,18 @@ class SchemaTableItem(QGraphicsObject):
             pk = column["primary_key"]
             fk = column.get("foreign_key")
             badge = "PK" if pk else ("FK" if fk else "•")
-            painter.setPen(QColor("#0f9f6e") if pk else (QColor("#4f46e5") if fk else QColor("#1f3b58")))
+            painter.setPen(QColor("#f59e0b") if pk else (QColor("#3b82f6") if fk else QColor("#94a3b8")))
             painter.drawText(QRectF(14, y, 24, 18), Qt.AlignVCenter | Qt.AlignLeft, badge)
             label = col_name if not fk else f"{col_name} → {fk['target_table']}.{fk['target_column']}"
             painter.setPen(QColor("#312e81") if fk else QColor("#1f3b58"))
-            painter.drawText(QRectF(38, y, 248, 18), Qt.AlignVCenter | Qt.AlignLeft, fm.elidedText(label, Qt.ElideRight, 244))
-            painter.setPen(QColor("#6b7f98"))
-            painter.drawText(QRectF(rect.width() - 86, y, 72, 18), Qt.AlignVCenter | Qt.AlignRight, fm.elidedText(col_type, Qt.ElideRight, 68))
+            painter.drawText(QRectF(38, y, 184, 18), Qt.AlignVCenter | Qt.AlignLeft, fm.elidedText(label, Qt.ElideRight, 180))
+            painter.setPen(QColor("#94a3b8"))
+            painter.drawText(QRectF(rect.width() - 72, y, 62, 18), Qt.AlignVCenter | Qt.AlignRight, fm.elidedText(col_type, Qt.ElideRight, 58))
             y += self.row_height
         if self.isSelected():
             painter.setPen(QPen(QColor("#3b82f6"), 2))
             painter.setBrush(Qt.NoBrush)
-            painter.drawRoundedRect(rect.adjusted(1, 1, -1, -1), 14, 14)
+            painter.drawRoundedRect(rect.adjusted(1, 1, -1, -1), 8, 8)
 
     def itemChange(self, change, value):
         if change == QGraphicsItem.ItemPositionChange and self.scene():
@@ -226,241 +226,188 @@ class DatabaseManagementDialog(QDialog):
         QTimer.singleShot(0, self.showMaximized)
         self.refresh_all()
 
-    def _local_style(self) -> str:
+    def apply_database_editor_styles(self) -> str:
         return """
-QDialog#databaseEditorDialog { background:#eef4fb; }
-QFrame#topBar { background:#ffffff; border:1px solid #d8e4f2; border-radius:12px; }
-QLabel#titleBadge { background:#2563eb; color:white; border-radius:10px; padding:4px 8px; font-weight:800; }
-QLabel#topTitle { color:#0f2742; font-size:15px; font-weight:800; }
-QLabel#connOk { background:#dcfce7; color:#166534; border:1px solid #bbf7d0; border-radius:10px; padding:6px 10px; font-weight:700; }
-
-QFrame#iconRail, QFrame#sidePanel, QFrame#mainPanel, QFrame#toolbarCard { background:#ffffff; border:1px solid #d8e4f2; border-radius:12px; }
-QPushButton#railBtn { background:transparent; border:1px solid transparent; border-radius:10px; min-width:48px; min-height:48px; padding:8px; color:#2d4a6b; font-weight:900; font-size:12px; }
-QPushButton#railBtn[active='true'] { background:#2563eb; color:white; }
-
+QDialog#databaseEditorDialog { background:#f0f4f8; }
+QFrame#topBar { background:#0f2340; border:0; }
+QLabel#titleBadge { background:#1f5be3; color:#ffffff; border-radius:7px; padding:6px 8px; font-size:11px; font-weight:800; }
+QLabel#topTitle { color:#c8ddf2; font-size:13px; font-weight:700; }
+QFrame#topSeparator { background:#1e3a5c; border:0; }
+QPushButton#topTab { background:transparent; border:0; border-bottom:2px solid transparent; border-radius:0; color:#4a7aaa; padding:0 16px; font-size:12px; font-weight:700; }
+QPushButton#topTab:hover { background:#17314f; color:#89b8e8; }
+QPushButton#topTab[active='true'] { color:#e2ecf8; border-bottom:2px solid #1f5be3; }
+QLabel#tabBadge { background:#1e3a5f; color:#6b94bc; border-radius:8px; padding:1px 6px; font-size:9px; font-weight:800; }
+QLabel#tabBadge[active='true'] { background:#1f5be3; color:#ffffff; }
+QPushButton#topAction { background:transparent; border:1px solid #274767; color:#89b8e8; border-radius:6px; padding:5px 9px; font-size:11px; }
+QPushButton#topAction:hover { background:#17314f; color:#e2ecf8; }
 QLabel { background:transparent; }
-QCheckBox, QRadioButton { background:transparent; }
-
-QLineEdit, QComboBox { background:#ffffff; border:1px solid #d8e4f2; border-radius:8px; padding:7px 9px; }
-QPushButton#softBtn { background:#f1f5ff; border:1px solid #cddafb; color:#1d4ed8; border-radius:8px; padding:7px 11px; font-weight:700; }
-QPushButton#primaryBtn { background:#2563eb; border:none; color:white; border-radius:8px; padding:7px 11px; font-weight:800; }
-QPushButton#warnBtn { background:#eaf1ff; border:1px solid #cddafb; color:#1d4ed8; border-radius:8px; padding:7px 11px; font-weight:700; }
-
-QListWidget#tableList { background:transparent; border:none; }
-QListWidget#tableList::item { border:1px solid #d8e4f2; border-radius:10px; margin:4px 2px; padding:8px; background:#f8fbff; }
-QListWidget#tableList::item:selected { background:#eaf1ff; border:1px solid #8bb3ff; color:#0f2742; }
-
-QTableWidget { background:#ffffff; border:1px solid #d8e4f2; border-radius:10px; gridline-color:#e5edf8; alternate-background-color:#f8fbff; }
-QHeaderView::section { background:#edf3ff; border:none; border-right:1px solid #d8e4f2; padding:6px; color:#264463; font-weight:700; }
-
-QFrame#schemaCanvasWrap { background:#f2f6fc; border:1px solid #d8e4f2; border-radius:10px; }
-QFrame#schemaCard { background:#ffffff; border:1px solid #bdd0ea; border-radius:14px; }
-QLabel#schemaCardTitle { color:white; border-radius:8px; padding:6px 10px; font-size:13px; font-weight:800; }
-QLabel#schemaCol { color:#1f3b58; font-size:12px; background:transparent; }
-QLabel#pkTag { color:#0f9f6e; font-weight:800; }
-QLabel#fkTag { color:#4f46e5; font-weight:800; }
-QFrame#relationPanel { background:#ffffff; border:1px solid #d8e4f2; border-radius:10px; }
-QLabel#relationTitle { color:#0f2742; font-size:14px; font-weight:800; }
-QScrollArea#relationScroll { border:none; background:#ffffff; }
+QFrame#tableSidebar, QFrame#tableMain, QFrame#toolbarCard, QFrame#sqlResultPanel, QFrame#sqlFooter { background:#ffffff; border:0; }
+QFrame#tableSidebar { border-right:1px solid #e2e8f0; }
+QLineEdit, QComboBox { background:#f8fafc; border:1px solid #e2e8f0; border-radius:6px; padding:6px 9px; color:#374151; }
+QPushButton#softBtn { background:#ffffff; border:1px solid #e2e8f0; color:#64748b; border-radius:6px; padding:6px 10px; font-weight:700; }
+QPushButton#softBtn:hover { background:#f1f5f9; }
+QPushButton#primaryBtn { background:#1f5be3; border:0; color:#ffffff; border-radius:6px; padding:6px 13px; font-weight:800; }
+QListWidget#tableList { background:#ffffff; border:0; outline:0; }
+QListWidget#tableList::item { border:0; border-left:2px solid transparent; padding:7px 12px; color:#1e293b; }
+QListWidget#tableList::item:hover { background:#f8fafc; }
+QListWidget#tableList::item:selected { background:#eff6ff; border-left:2px solid #1f5be3; color:#1e40af; }
+QTableWidget { background:#ffffff; border:0; gridline-color:#e2e8f0; alternate-background-color:#f8faff; selection-background-color:#eff6ff; selection-color:#1e293b; }
+QHeaderView::section { background:#f8fafc; border:0; border-right:1px solid #e2e8f0; border-bottom:1px solid #e2e8f0; padding:6px; color:#64748b; font-weight:700; }
+QLabel#tableStatus, QLabel#sqlHint { color:#94a3b8; font-size:10px; }
+QFrame#schemaCanvasWrap { background:#f8fafc; border:0; }
+QFrame#relationPanel { background:#ffffff; border-left:1px solid #e2e8f0; }
+QLabel#relationTitle { color:#374151; font-size:12px; font-weight:800; }
+QScrollArea#relationScroll { border:0; background:#ffffff; }
 QWidget#relationScrollBody { background:#ffffff; }
-QFrame#relationGroupCard { background:#ffffff; border:1px solid #d8e4f2; border-radius:8px; }
-QPushButton#relationGroupHeader { background:#f1f5ff; border:none; border-radius:6px; color:#173b69; padding:6px 8px; text-align:left; font-weight:800; }
-QPushButton#relationGroupHeader[active='true'] { background:#dbeafe; color:#1d4ed8; }
-QPushButton#relationRow { background:transparent; border:none; border-radius:5px; color:#264463; padding:5px 8px; text-align:left; }
-QPushButton#relationRow:hover { background:#f8fbff; }
-QPushButton#relationRow[selected='true'] { background:#eaf1ff; border:1px solid #8bb3ff; color:#1d4ed8; }
+QFrame#relationGroupCard { background:#ffffff; border:0; border-bottom:1px solid #f1f5f9; }
+QPushButton#relationGroupHeader { background:transparent; border:0; color:#1e293b; padding:5px 3px; text-align:left; font-weight:800; }
+QPushButton#relationGroupHeader[active='true'] { color:#1d4ed8; }
+QPushButton#relationRow { background:transparent; border:0; color:#64748b; padding:3px 5px; text-align:left; font-size:10px; }
+QPushButton#relationRow:hover { background:#f8fafc; color:#1d4ed8; }
+QPushButton#relationRow[selected='true'] { background:#eff6ff; color:#1d4ed8; }
+QPlainTextEdit#sqlEditor { background:#f8fafc; border:0; border-bottom:1px solid #e2e8f0; padding:12px; color:#1e293b; font-family:Consolas, 'Courier New', monospace; font-size:13px; }
+QLabel#sqlResultTitle { color:#64748b; font-size:11px; font-weight:800; }
+QLabel#sqlResultBadge { background:#d1fae5; color:#065f46; border-radius:5px; padding:2px 7px; font-size:10px; }
 """
+
+    def _local_style(self) -> str:
+        return self.apply_database_editor_styles()
 
     def _build(self):
         root = QVBoxLayout(self)
-        root.setContentsMargins(14, 12, 14, 12)
-        root.setSpacing(10)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+        root.addWidget(self.build_topbar())
+        self.page_stack = QStackedWidget()
+        self.tables_page = self.build_tables_tab()
+        self.schema_page = self.build_relationships_tab()
+        self.sql_page = self.build_sql_tab()
+        self.page_stack.addWidget(self.tables_page)
+        self.page_stack.addWidget(self.schema_page)
+        self.page_stack.addWidget(self.sql_page)
+        root.addWidget(self.page_stack, 1)
+        self.switch_database_tab("tables")
 
-        root.addWidget(self._build_topbar())
-
-        body = QHBoxLayout()
-        body.setSpacing(10)
-        root.addLayout(body, 1)
-
-        self.rail = self._build_rail()
-        body.addWidget(self.rail)
-
-        self.sidebar = self._build_sidebar()
-        body.addWidget(self.sidebar)
-
-        self.main = QFrame()
-        self.main.setObjectName("mainPanel")
-        mlay = QVBoxLayout(self.main)
-        mlay.setContentsMargins(10, 10, 10, 10)
-        mlay.setSpacing(8)
-        self.main_stack = QVBoxLayout()
-        mlay.addLayout(self.main_stack, 1)
-        body.addWidget(self.main, 1)
-
-        self.tables_page = self._build_tables_page()
-        self.schema_page = self._build_schema_page()
-        self.main_stack.addWidget(self.tables_page)
-        self.main_stack.addWidget(self.schema_page)
-        self.sql_page = self._build_sql_page()
-        self.main_stack.addWidget(self.sql_page)
-        self._set_page("tables")
-
-    def _build_topbar(self):
-        bar = QFrame(); bar.setObjectName("topBar")
-        lay = QHBoxLayout(bar); lay.setContentsMargins(12, 8, 12, 8); lay.setSpacing(10)
-        left = QHBoxLayout()
-        b = QLabel("DB"); b.setObjectName("titleBadge")
-        self.top_title = QLabel("STS Database Editor"); self.top_title.setObjectName("topTitle")
-        left.addWidget(b); left.addWidget(self.top_title)
-        lay.addLayout(left)
-
+    def build_topbar(self):
+        bar = QFrame(); bar.setObjectName("topBar"); bar.setFixedHeight(52)
+        lay = QHBoxLayout(bar); lay.setContentsMargins(16, 0, 12, 0); lay.setSpacing(0)
+        logo = QLabel("DB"); logo.setObjectName("titleBadge"); logo.setAlignment(Qt.AlignCenter); logo.setFixedSize(34, 34)
+        title = QLabel("STS Database Editor"); title.setObjectName("topTitle")
+        sep = QFrame(); sep.setObjectName("topSeparator"); sep.setFixedSize(1, 22)
+        lay.addWidget(logo); lay.addSpacing(10); lay.addWidget(title); lay.addSpacing(16); lay.addWidget(sep); lay.addSpacing(2)
+        self.top_tabs = {}
+        self.top_tab_badges = {}
+        for name, label, badge in (("tables", "▦  Tablolar", "0"), ("schema", "⌘  İlişkiler", ""), ("sql", "▣  SQL Terminali", "")):
+            tab = QPushButton(label); tab.setObjectName("topTab"); tab.setFixedHeight(52); tab.clicked.connect(lambda _=False, page=name: self.switch_database_tab(page))
+            lay.addWidget(tab); self.top_tabs[name] = tab
+            if badge:
+                count = QLabel(badge); count.setObjectName("tabBadge"); count.setAlignment(Qt.AlignCenter); lay.addWidget(count); self.top_tab_badges[name] = count
+                lay.addSpacing(5)
         lay.addStretch(1)
-
-        self.conn_lbl = QLabel("● SQLite bağlantısı aktif")
-        self.conn_lbl.setObjectName("connOk")
-        lay.addWidget(self.conn_lbl)
-
-        self.backup_btn = QPushButton("Yedek Al"); self.backup_btn.setObjectName("softBtn"); self.backup_btn.clicked.connect(self.run_backup)
-        self.opt_btn = QPushButton("Optimize"); self.opt_btn.setObjectName("softBtn"); self.opt_btn.clicked.connect(self.run_optimize)
-        lay.addWidget(self.backup_btn); lay.addWidget(self.opt_btn)
+        self.backup_btn = QPushButton("Yedek Al"); self.backup_btn.setObjectName("topAction"); self.backup_btn.clicked.connect(self.run_backup)
+        self.opt_btn = QPushButton("Optimize"); self.opt_btn.setObjectName("topAction"); self.opt_btn.clicked.connect(self.run_optimize)
+        lay.addWidget(self.backup_btn); lay.addSpacing(6); lay.addWidget(self.opt_btn)
         return bar
 
-    def _build_rail(self):
-        rail = QFrame(); rail.setObjectName("iconRail"); rail.setFixedWidth(72)
-        lay = QVBoxLayout(rail); lay.setContentsMargins(8, 12, 8, 12); lay.setSpacing(8)
-        self.rail_tables = QPushButton("TAB"); self.rail_tables.setObjectName("railBtn"); self.rail_tables.clicked.connect(lambda: self._set_page("tables"))
-        self.rail_schema = QPushButton("REL"); self.rail_schema.setObjectName("railBtn"); self.rail_schema.clicked.connect(lambda: self._set_page("schema"))
-        self.rail_sql = QPushButton("SQL"); self.rail_sql.setObjectName("railBtn"); self.rail_sql.clicked.connect(lambda: self._set_page("sql"))
-        self.rail_tables.setToolTip("Tablolar")
-        self.rail_schema.setToolTip("İlişkiler")
-        self.rail_sql.setToolTip("SQL Terminal")
-        lay.addWidget(self.rail_tables)
-        lay.addWidget(self.rail_schema)
-        lay.addWidget(self.rail_sql)
-        lay.addStretch(1)
-        return rail
+    def _build_topbar(self):
+        return self.build_topbar()
 
-    def _build_sidebar(self):
-        w = QFrame(); w.setObjectName("sidePanel"); w.setFixedWidth(300)
-        lay = QVBoxLayout(w); lay.setContentsMargins(10, 10, 10, 10); lay.setSpacing(8)
-        lay.addWidget(QLabel("Tablolar"))
-        self.table_search = QLineEdit(); self.table_search.setPlaceholderText("Tablo ara..."); self.table_search.textChanged.connect(self._refresh_sidebar)
-        lay.addWidget(self.table_search)
-        self.table_list = QListWidget(); self.table_list.setObjectName("tableList"); self.table_list.itemSelectionChanged.connect(self._on_table_selected)
-        lay.addWidget(self.table_list, 1)
-        return w
-
-    def _build_tables_page(self):
-        page = QWidget(); lay = QVBoxLayout(page); lay.setSpacing(8)
-
-        tb = QFrame(); tb.setObjectName("toolbarCard")
-        tlay = QHBoxLayout(tb); tlay.setContentsMargins(8, 8, 8, 8); tlay.setSpacing(8)
-        self.row_search = QLineEdit(); self.row_search.setPlaceholderText("Satır ara / filtrele..."); self.row_search.textChanged.connect(self._apply_table_filters)
-        self.limit_combo = QComboBox(); self.limit_combo.addItems(["100", "500", "1000"]); self.limit_combo.setCurrentText("100"); self.limit_combo.currentTextChanged.connect(self._refresh_active_table)
+    def build_tables_tab(self):
+        page = QWidget(); body = QHBoxLayout(page); body.setContentsMargins(0, 0, 0, 0); body.setSpacing(0)
+        sidebar = QFrame(); sidebar.setObjectName("tableSidebar"); sidebar.setFixedWidth(220)
+        slay = QVBoxLayout(sidebar); slay.setContentsMargins(0, 0, 0, 0); slay.setSpacing(0)
+        search_wrap = QWidget(); sw = QVBoxLayout(search_wrap); sw.setContentsMargins(12, 10, 12, 10)
+        self.table_search = QLineEdit(); self.table_search.setPlaceholderText("Tablo ara..."); self.table_search.textChanged.connect(self._refresh_sidebar); sw.addWidget(self.table_search)
+        slay.addWidget(search_wrap)
+        self.table_list = QListWidget(); self.table_list.setObjectName("tableList"); self.table_list.itemSelectionChanged.connect(self._on_table_selected); slay.addWidget(self.table_list, 1)
+        body.addWidget(sidebar)
+        main = QFrame(); main.setObjectName("tableMain"); mlay = QVBoxLayout(main); mlay.setContentsMargins(0, 0, 0, 0); mlay.setSpacing(0)
+        tb = QFrame(); tb.setObjectName("toolbarCard"); tlay = QHBoxLayout(tb); tlay.setContentsMargins(14, 8, 14, 8); tlay.setSpacing(8)
+        self.row_search = QLineEdit(); self.row_search.setPlaceholderText("Satır ara / filtrele..."); self.row_search.textChanged.connect(self._apply_table_filters); self.row_search.returnPressed.connect(self._apply_table_filters)
+        self.limit_combo = QComboBox(); self.limit_combo.addItems(["100", "250", "500"]); self.limit_combo.currentTextChanged.connect(self._refresh_active_table)
         self.platform_filter = QComboBox(); self.platform_filter.addItem("Tümü"); self.platform_filter.currentTextChanged.connect(self._apply_table_filters)
         self.filter_btn = QPushButton("Filtrele"); self.filter_btn.setObjectName("softBtn"); self.filter_btn.clicked.connect(self._apply_table_filters)
         self.sort_btn = QPushButton("Sırala"); self.sort_btn.setObjectName("softBtn"); self.sort_btn.clicked.connect(self._sort_table)
-        self.row_search.returnPressed.connect(self._apply_table_filters)
-        for w in [self.row_search, self.limit_combo, self.platform_filter, self.filter_btn, self.sort_btn]:
-            tlay.addWidget(w)
-        tlay.setStretch(0, 1)
-        lay.addWidget(tb)
+        for widget in (self.row_search, self.limit_combo, self.platform_filter, self.filter_btn, self.sort_btn): tlay.addWidget(widget)
+        tlay.setStretch(0, 1); mlay.addWidget(tb)
+        self.grid = QTableWidget(0, 0); self.grid.setEditTriggers(QTableWidget.NoEditTriggers); self.grid.setAlternatingRowColors(True); self.grid.verticalHeader().setVisible(False); self.grid.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents); self.grid.setTextElideMode(Qt.ElideRight)
+        mlay.addWidget(self.grid, 1)
+        self.table_status_lbl = QLabel(""); self.table_status_lbl.setObjectName("tableStatus"); self.table_status_lbl.setContentsMargins(14, 5, 14, 5); mlay.addWidget(self.table_status_lbl)
+        body.addWidget(main, 1)
+        return page
 
-        self.grid = QTableWidget(0, 0)
-        self.grid.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.grid.setAlternatingRowColors(True)
-        self.grid.verticalHeader().setVisible(False)
-        self.grid.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
-        lay.addWidget(self.grid, 1)
+    def _build_tables_page(self):
+        return self.build_tables_tab()
+
+    def build_relationships_tab(self):
+        page = QWidget(); lay = QVBoxLayout(page); lay.setContentsMargins(0, 0, 0, 0); lay.setSpacing(0)
+        tb = QFrame(); tb.setObjectName("toolbarCard"); tlay = QHBoxLayout(tb); tlay.setContentsMargins(14, 8, 14, 8); tlay.setSpacing(8)
+        self.schema_search = QLineEdit(); self.schema_search.setPlaceholderText("Tablo, kolon veya ilişki ara..."); self.schema_search.textChanged.connect(self._on_schema_search_changed)
+        self.auto_btn = QPushButton("Otomatik Yerleştir"); self.auto_btn.setObjectName("primaryBtn"); self.auto_btn.clicked.connect(self._layout_schema)
+        tlay.addWidget(self.schema_search, 1); tlay.addWidget(self.auto_btn); lay.addWidget(tb)
+        wrap = QFrame(); wrap.setObjectName("schemaCanvasWrap"); wlay = QVBoxLayout(wrap); wlay.setContentsMargins(0, 0, 0, 0)
+        self.schema_view = SchemaView(self); wlay.addWidget(self.schema_view)
+        relation_panel = QFrame(); relation_panel.setObjectName("relationPanel"); relation_panel.setFixedWidth(230)
+        relation_lay = QVBoxLayout(relation_panel); relation_lay.setContentsMargins(10, 10, 10, 10); relation_lay.setSpacing(8)
+        relation_title = QLabel("İlişki Listesi"); relation_title.setObjectName("relationTitle"); relation_lay.addWidget(relation_title)
+        self.relation_search = QLineEdit(); self.relation_search.setPlaceholderText("İlişki ara..."); self.relation_search.textChanged.connect(self._refresh_relationship_list); relation_lay.addWidget(self.relation_search)
+        self.relation_scroll = QScrollArea(); self.relation_scroll.setObjectName("relationScroll"); self.relation_scroll.setWidgetResizable(True); self.relation_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.relation_scroll_body = QWidget(); self.relation_scroll_body.setObjectName("relationScrollBody")
+        self.relation_groups_layout = QVBoxLayout(self.relation_scroll_body); self.relation_groups_layout.setContentsMargins(0, 0, 0, 0); self.relation_groups_layout.setSpacing(2); self.relation_groups_layout.addStretch(1)
+        self.relation_scroll.setWidget(self.relation_scroll_body); relation_lay.addWidget(self.relation_scroll, 1)
+        splitter = QSplitter(Qt.Horizontal); splitter.addWidget(wrap); splitter.addWidget(relation_panel); splitter.setSizes([1180, 230]); lay.addWidget(splitter, 1)
         return page
 
     def _build_schema_page(self):
-        page = QWidget(); lay = QVBoxLayout(page); lay.setSpacing(8)
-        tb = QFrame(); tb.setObjectName("toolbarCard")
-        tlay = QHBoxLayout(tb); tlay.setContentsMargins(8, 8, 8, 8); tlay.setSpacing(8)
-        self.schema_search = QLineEdit(); self.schema_search.setPlaceholderText("Tablo, kolon veya ilişki ara..."); self.schema_search.textChanged.connect(self._on_schema_search_changed)
-        self.auto_btn = QPushButton("Otomatik Yerleştir"); self.auto_btn.setObjectName("softBtn"); self.auto_btn.clicked.connect(self._layout_schema)
-        tlay.addWidget(self.schema_search, 1)
-        tlay.addWidget(self.auto_btn, 0)
-        lay.addWidget(tb)
+        return self.build_relationships_tab()
 
-        wrap = QFrame(); wrap.setObjectName("schemaCanvasWrap")
-        wlay = QVBoxLayout(wrap); wlay.setContentsMargins(6, 6, 6, 6)
-        self.schema_view = SchemaView(self)
-        wlay.addWidget(self.schema_view)
-
-        relation_panel = QFrame(); relation_panel.setObjectName("relationPanel"); relation_panel.setFixedWidth(390)
-        relation_lay = QVBoxLayout(relation_panel); relation_lay.setContentsMargins(10, 10, 10, 10); relation_lay.setSpacing(8)
-        relation_title = QLabel("İlişki Listesi"); relation_title.setObjectName("relationTitle")
-        relation_lay.addWidget(relation_title)
-        self.relation_search = QLineEdit(); self.relation_search.setPlaceholderText("İlişki ara..."); self.relation_search.textChanged.connect(self._refresh_relationship_list)
-        relation_lay.addWidget(self.relation_search)
-        self.relation_scroll = QScrollArea(); self.relation_scroll.setObjectName("relationScroll"); self.relation_scroll.setWidgetResizable(True); self.relation_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.relation_scroll_body = QWidget(); self.relation_scroll_body.setObjectName("relationScrollBody")
-        self.relation_groups_layout = QVBoxLayout(self.relation_scroll_body); self.relation_groups_layout.setContentsMargins(0, 0, 0, 0); self.relation_groups_layout.setSpacing(6); self.relation_groups_layout.addStretch(1)
-        self.relation_scroll.setWidget(self.relation_scroll_body)
-        relation_lay.addWidget(self.relation_scroll, 1)
-
-        schema_splitter = QSplitter(Qt.Horizontal)
-        schema_splitter.addWidget(wrap)
-        schema_splitter.addWidget(relation_panel)
-        schema_splitter.setSizes([1100, 390])
-        lay.addWidget(schema_splitter, 1)
+    def build_sql_tab(self):
+        page = QWidget(); lay = QVBoxLayout(page); lay.setContentsMargins(0, 0, 0, 0); lay.setSpacing(0)
+        splitter = QSplitter(Qt.Vertical)
+        self.sql_editor = QPlainTextEdit(); self.sql_editor.setObjectName("sqlEditor"); self.sql_editor.setPlainText("SELECT * FROM contracts LIMIT 100;"); self.sql_editor.setMinimumHeight(210)
+        splitter.addWidget(self.sql_editor)
+        result_panel = QFrame(); result_panel.setObjectName("sqlResultPanel"); rlay = QVBoxLayout(result_panel); rlay.setContentsMargins(0, 0, 0, 0); rlay.setSpacing(0)
+        head = QWidget(); hlay = QHBoxLayout(head); hlay.setContentsMargins(14, 6, 14, 6)
+        title = QLabel("Sonuçlar"); title.setObjectName("sqlResultTitle"); self.sql_result_badge = QLabel("0 satır · 0ms"); self.sql_result_badge.setObjectName("sqlResultBadge")
+        hint = QLabel("Ctrl+Enter ile çalıştır"); hint.setObjectName("sqlHint"); hlay.addWidget(title); hlay.addWidget(self.sql_result_badge); hlay.addStretch(1); hlay.addWidget(hint); rlay.addWidget(head)
+        self.sql_result = QTableWidget(0, 0); self.sql_result.setEditTriggers(QTableWidget.NoEditTriggers); self.sql_result.verticalHeader().setVisible(False); self.sql_result.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents); self.sql_result.setAlternatingRowColors(True); self.sql_result.setTextElideMode(Qt.ElideRight); rlay.addWidget(self.sql_result, 1)
+        splitter.addWidget(result_panel); splitter.setSizes([360, 300]); lay.addWidget(splitter, 1)
+        footer = QFrame(); footer.setObjectName("sqlFooter"); flay = QHBoxLayout(footer); flay.setContentsMargins(14, 7, 14, 7)
+        self.sql_status_lbl = QLabel("Ctrl+Enter → Çalıştır · Ctrl+L → Temizle"); self.sql_status_lbl.setObjectName("sqlHint"); flay.addWidget(self.sql_status_lbl, 1)
+        self.sql_clear_btn = QPushButton("Temizle"); self.sql_clear_btn.setObjectName("softBtn"); self.sql_clear_btn.clicked.connect(self._clear_sql_terminal)
+        self.sql_run_btn = QPushButton("Çalıştır"); self.sql_run_btn.setObjectName("primaryBtn"); self.sql_run_btn.clicked.connect(self._run_sql_terminal)
+        flay.addWidget(self.sql_clear_btn); flay.addWidget(self.sql_run_btn); lay.addWidget(footer)
+        self.sql_shortcuts = []
+        for sequence, handler in (("Ctrl+Return", self._run_sql_terminal), ("Ctrl+Enter", self._run_sql_terminal), ("Ctrl+L", self._clear_sql_terminal)):
+            shortcut = QShortcut(QKeySequence(sequence), self)
+            shortcut.activated.connect(handler)
+            self.sql_shortcuts.append(shortcut)
         return page
 
     def _build_sql_page(self):
-        page = QWidget()
-        lay = QVBoxLayout(page)
-        lay.setSpacing(8)
+        return self.build_sql_tab()
 
-        splitter = QSplitter(Qt.Vertical)
-        self.sql_editor = QPlainTextEdit()
-        self.sql_editor.setPlaceholderText("SELECT * FROM contracts LIMIT 100;")
-        self.sql_editor.setStyleSheet("QPlainTextEdit { font-family: Consolas, 'Courier New', monospace; font-size: 13px; }")
-        splitter.addWidget(self.sql_editor)
-
-        result_wrap = QWidget()
-        rlay = QVBoxLayout(result_wrap)
-        self.sql_result = QTableWidget(0, 0)
-        self.sql_result.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.sql_result.verticalHeader().setVisible(False)
-        self.sql_result.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
-        self.sql_result.setAlternatingRowColors(True)
-        rlay.addWidget(self.sql_result, 1)
-        splitter.addWidget(result_wrap)
-        splitter.setSizes([260, 340])
-        lay.addWidget(splitter, 1)
-
-        bl = QHBoxLayout()
-        self.sql_status_lbl = QLabel("")
-        self.sql_status_lbl.setStyleSheet("color:#1f3b58;")
-        bl.addWidget(self.sql_status_lbl, 1)
-        self.sql_clear_btn = QPushButton("Temizle"); self.sql_clear_btn.setObjectName("softBtn"); self.sql_clear_btn.clicked.connect(self._clear_sql_terminal)
-        self.sql_run_btn = QPushButton("Çalıştır"); self.sql_run_btn.setObjectName("primaryBtn"); self.sql_run_btn.clicked.connect(self._run_sql_terminal)
-        bl.addWidget(self.sql_clear_btn)
-        bl.addWidget(self.sql_run_btn)
-        lay.addLayout(bl)
-        return page
+    def switch_database_tab(self, page: str):
+        indexes = {"tables": 0, "schema": 1, "sql": 2}
+        page = page if page in indexes else "tables"
+        self.page_stack.setCurrentIndex(indexes[page])
+        for name, tab in self.top_tabs.items():
+            active = name == page; tab.setProperty("active", active); tab.style().unpolish(tab); tab.style().polish(tab)
+        for name, badge in self.top_tab_badges.items():
+            badge.setProperty("active", name == page); badge.style().unpolish(badge); badge.style().polish(badge)
 
     def _set_page(self, page: str):
-        self.tables_page.setVisible(page == "tables")
-        self.schema_page.setVisible(page == "schema")
-        self.sql_page.setVisible(page == "sql")
-        self.sidebar.setVisible(page == "tables")
-        self.rail_tables.setProperty("active", page == "tables")
-        self.rail_schema.setProperty("active", page == "schema")
-        self.rail_sql.setProperty("active", page == "sql")
-        self.rail_tables.style().unpolish(self.rail_tables); self.rail_tables.style().polish(self.rail_tables)
-        self.rail_schema.style().unpolish(self.rail_schema); self.rail_schema.style().polish(self.rail_schema)
-        self.rail_sql.style().unpolish(self.rail_sql); self.rail_sql.style().polish(self.rail_sql)
+        self.switch_database_tab(page)
 
     def refresh_all(self):
         self.stats = self.store.database_stats()
         _path = Path(str(self.stats.get("path", "database.sts")))
         self.table_names = sorted(list((self.stats.get("table_counts") or {}).keys()))
-        self._refresh_sidebar()
+        if "tables" in self.top_tab_badges:
+            self.top_tab_badges["tables"].setText(str(len(self.table_names)))
         if not self.active_table and self.table_names:
             self.active_table = self.table_names[0]
+        self._refresh_sidebar()
         self._refresh_active_table()
         self._render_schema()
 
@@ -472,7 +419,7 @@ QPushButton#relationRow[selected='true'] { background:#eaf1ff; border:1px solid 
             desc = TABLE_INFO.get(t, "")
             if q and q not in t.lower() and q not in desc.lower():
                 continue
-            item = QListWidgetItem(f"{t}\n{desc}  ({counts.get(t, 0)})")
+            item = QListWidgetItem(f"{t}\n{desc} · {counts.get(t, 0)}")
             item.setData(Qt.UserRole, t)
             item.setToolTip(f"{t}\n{desc}\nKayıt: {counts.get(t, 0)}")
             self.table_list.addItem(item)
@@ -530,6 +477,10 @@ QPushButton#relationRow[selected='true'] { background:#eaf1ff; border:1px solid 
         if self._sort_column:
             rows = self._sorted_rows(rows, self._sort_column, self._sort_ascending)
         self._fill_table_grid(rows, self._current_columns)
+        if hasattr(self, "table_status_lbl"):
+            total = int((self.stats.get("table_counts") or {}).get(self.active_table, len(self._current_rows)))
+            limit = self.limit_combo.currentText()
+            self.table_status_lbl.setText(f"{self.active_table} · {total} satır · {limit} gösteriliyor")
 
     def _sort_table(self):
         if not self._current_columns:
@@ -586,7 +537,7 @@ QPushButton#relationRow[selected='true'] { background:#eaf1ff; border:1px solid 
 
             col_count = 4
             x_start, y_start = 40, 30
-            x_step = 410
+            x_step = 330
             y_gap = 52
             row_heights: List[float] = []
             max_x = 0.0
@@ -808,7 +759,8 @@ QPushButton#relationRow[selected='true'] { background:#eaf1ff; border:1px solid 
         self.sql_editor.clear()
         self.sql_result.setRowCount(0)
         self.sql_result.setColumnCount(0)
-        self.sql_status_lbl.setText("")
+        self.sql_status_lbl.setText("Ctrl+Enter → Çalıştır · Ctrl+L → Temizle")
+        self.sql_result_badge.setText("0 satır · 0ms")
 
     def _run_sql_terminal(self):
         sql = self.sql_editor.toPlainText().strip()
@@ -835,11 +787,13 @@ QPushButton#relationRow[selected='true'] { background:#eaf1ff; border:1px solid 
                 ms = int((time.perf_counter() - started) * 1000)
                 self._set_sql_status(f"Çalışma süresi: {ms} ms | Satır: {len(rows)}")
                 row_count = len(rows)
+                self.sql_result_badge.setText(f"{row_count} satır · {ms}ms")
             else:
                 conn.commit()
                 row_count = cursor.rowcount if cursor.rowcount is not None and cursor.rowcount >= 0 else 0
                 ms = int((time.perf_counter() - started) * 1000)
                 self.sql_result.setRowCount(0); self.sql_result.setColumnCount(0)
+                self.sql_result_badge.setText(f"{row_count} satır · {ms}ms")
                 self._set_sql_status(f"Sorgu tamamlandı. Etkilenen satır: {row_count} | Çalışma süresi: {ms} ms")
                 self.refresh_all()
             self.store._log("sql_query_executed", message="SQL Terminal sorgusu çalıştırıldı", payload={"operation": op, "duration_ms": ms, "changed": changed, "row_count": row_count})
