@@ -73,7 +73,7 @@ from PySide6.QtWidgets import (
     QDialog, QLineEdit, QComboBox, QDateEdit, QSpinBox, QDoubleSpinBox,
     QMessageBox, QFileDialog, QFrame, QScrollArea, QCheckBox, QHeaderView,
     QSizePolicy, QProgressBar, QProgressDialog, QStyledItemDelegate, QTextEdit,
-    QToolButton, QMenu, QInputDialog, QWidgetAction, QStackedWidget
+    QToolButton, QMenu, QInputDialog, QWidgetAction
 )
 
 
@@ -4371,9 +4371,6 @@ class ContractWorkWindow(QDialog):
         left_block_lay.setContentsMargins(0, 0, 0, 0)
         left_block_lay.setSpacing(10)
 
-        self._build_contract_side_panel(left_block_width)
-        left_block_lay.addWidget(self.contract_side_panel, 0)
-
         left_row = QHBoxLayout()
         left_row.setContentsMargins(0, 0, 0, 0)
         left_row.setSpacing(10)
@@ -4407,6 +4404,9 @@ class ContractWorkWindow(QDialog):
         body.addWidget(left_block, 0)
 
         right = QFrame(); right.setObjectName("contentPanel"); rv = QVBoxLayout(right); rv.setContentsMargins(16, 12, 16, 12); rv.setSpacing(8); body.addWidget(right, 1)
+        self.build_collapse_bar()
+        rv.addWidget(self.collapse_bar, 0)
+        rv.addWidget(self.collapse_panel, 0)
         self.render_contract_tags()
 
         # ── Üst satır: SİSTEM BİLEŞENLERİ etiketi + Sistemi Düzenle butonu aynı hizada ──
@@ -4892,12 +4892,37 @@ class ContractWorkWindow(QDialog):
             [dict(t) for t in self.contract_tags if str((t or {}).get("name") or "").strip()],
             key=lambda x: self._tag_key(str(x.get("name", ""))),
         )
+        panel_layout = QVBoxLayout(self.collapse_panel); panel_layout.setContentsMargins(8, 7, 8, 5); panel_layout.setSpacing(3)
+        self.collapse_scroll = QScrollArea(); self.collapse_scroll.setWidgetResizable(True); self.collapse_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded); self.collapse_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.collapse_content = QWidget(); self.collapse_content.setStyleSheet("background:transparent;")
+        self.collapse_content_layout = QHBoxLayout(self.collapse_content); self.collapse_content_layout.setContentsMargins(0, 0, 0, 0); self.collapse_content_layout.setSpacing(7); self.collapse_content_layout.addStretch()
+        self.collapse_scroll.setWidget(self.collapse_content); panel_layout.addWidget(self.collapse_scroll, 1)
+        self.collapse_total = QLabel(""); self.collapse_total.setAlignment(Qt.AlignRight | Qt.AlignVCenter); self.collapse_total.setStyleSheet("background:transparent; color:#64748b; border:0; font-size:10px;")
+        panel_layout.addWidget(self.collapse_total, 0)
+        self._collapse_anim = QPropertyAnimation(self.collapse_panel, b"maximumHeight", self); self._collapse_anim.setDuration(170); self._collapse_anim.setEasingCurve(QEasingCurve.InOutCubic)
+        self._update_collapse_buttons()
 
-    def _clear_card_layout(self, layout):
-        while layout.count() > 1:
-            item = layout.takeAt(0)
+    def toggle_collapse(self, panel: str):
+        if panel not in {"tags", "files"}:
+            return
+        opening = self._open_panel != panel
+        self._open_panel = panel if opening else None
+        if opening:
+            self._render_collapse_content(panel)
+        self._update_collapse_buttons()
+        self._collapse_anim.stop(); self._collapse_anim.setStartValue(self.collapse_panel.maximumHeight()); self._collapse_anim.setEndValue(110 if opening else 0); self._collapse_anim.start()
+
+    def _update_collapse_buttons(self):
+        opened = getattr(self, "_open_panel", None)
+        self.btn_tags.setChecked(opened == "tags"); self.btn_files.setChecked(opened == "files")
+        self.btn_tags.setText(f"🏷  Etiketler  {'˄' if opened == 'tags' else '˅'}")
+        self.btn_files.setText(f"📎  Belgeler  {'˄' if opened == 'files' else '˅'}")
+
+    def _clear_collapse_content(self):
+        while self.collapse_content_layout.count() > 1:
+            item = self.collapse_content_layout.takeAt(0)
             widget = item.widget()
-            if widget:
+            if widget is not None:
                 widget.deleteLater()
 
     def create_tag_card(self, tag: dict) -> QFrame:
@@ -4938,22 +4963,17 @@ class ContractWorkWindow(QDialog):
     @staticmethod
     def format_file_size(size_bytes: int) -> str:
         size = float(size_bytes or 0)
-        if size < 1024:
-            return f"{int(size)} B"
-        if size < 1024 * 1024:
-            return f"{size / 1024:.0f} KB"
+        if size < 1024: return f"{int(size)} B"
+        if size < 1024 * 1024: return f"{size / 1024:.0f} KB"
         return f"{size / (1024 * 1024):.1f} MB"
 
     @staticmethod
     def format_file_date(created_at: str) -> str:
         raw = str(created_at or "").strip()
-        if not raw:
-            return "-"
+        if not raw: return "-"
         try:
             parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
-            if parsed.date() == date.today():
-                return "Bugün"
-            return parsed.strftime("%d.%m.%Y")
+            return "Bugün" if parsed.date() == date.today() else parsed.strftime("%d.%m.%Y")
         except ValueError:
             return raw[:10]
 
@@ -5021,7 +5041,7 @@ class ContractWorkWindow(QDialog):
         except Exception as exc:
             QMessageBox.warning(self, "Belge açılamadı", str(exc))
 
-    def export_contract_file(self, file_id: int):
+    def refresh_contract_files_panel(self):
         try:
             filename, _mime, _content = self.store.get_contract_file_bytes(file_id)
             target, _ = QFileDialog.getSaveFileName(self, "Belgeyi Dışa Aktar", filename)
