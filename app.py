@@ -326,12 +326,14 @@ class FilterableHeaderView(QHeaderView):
         # Tum satirlari tara (visible_rows varsa onu kullan)
         source = getattr(table, '_all_rows_for_filter', None)
         if source is not None:
-            col_keys = getattr(table, "_filter_col_keys", ["type", "no", "user", "status", "date", "days", "tags", "summary"])
+            col_keys = getattr(table, "_filter_col_keys", ["row_no", "platform", "type", "no", "user", "status", "date", "days", "tags", "summary"])
             if col < len(col_keys):
                 window = table.window()
-                for it in source:
+                for row_index, it in enumerate(source, start=1):
                     key = col_keys[col]
-                    if key == "type":
+                    if key == "row_no":
+                        v = str(row_index)
+                    elif key == "type":
                         v = str(it.get("type_display", it.get("type", "")) or "").strip()
                     elif key in {"status", "date", "days"} and hasattr(window, "_contract_health"):
                         _cls, st, days, dt = window._contract_health(it)
@@ -358,7 +360,7 @@ class FilterableHeaderView(QHeaderView):
 
     def _on_section_clicked(self, col: int):
         values = self._get_column_values(col)
-        if not values and col not in (4, 5):
+        if not values and col not in (6, 7):
             return
         current_filter = self._col_filters.get(col)  # None = tumu
 
@@ -375,24 +377,24 @@ class FilterableHeaderView(QHeaderView):
         clear_action = popup.addAction("✕ Filtreyi Temizle")
         clear_action.setEnabled(current_filter is not None or col in self._date_ranges or col in self._day_ranges)
         popup.addSeparator()
-        # Kalan Gun (col 5) - siralama secenekleri ekle
+        # Kalan Gun (col 7) - siralama secenekleri ekle
         sort_asc_action = None
         sort_desc_action = None
-        if col == 5:  # Kalan Gun sutunu
+        if col == 7:  # Kalan Gun sutunu
             sort_asc_action = popup.addAction("↑ Artan Sırala (Az → Çok)")
             sort_desc_action = popup.addAction("↓ Azalan Sırala (Çok → Az)")
             popup.addSeparator()
 
 
-        if col == 4:
+        if col == 6:
             self._add_date_range_controls(popup, col)
             popup.addSeparator()
-        elif col == 5:
+        elif col == 7:
             self._add_day_range_controls(popup, col)
             popup.addSeparator()
         # Her deger icin checkbox action
         check_actions: List[Tuple[QAction, str]] = []
-        if col not in (4, 5):
+        if col not in (6, 7):
             for val in values:
                 icon_txt = "✔" if (current_filter is None or val in current_filter) else "□"
                 a = popup.addAction(f"{icon_txt}  {val}")
@@ -6388,7 +6390,7 @@ class MainWindow(QMainWindow):
         fb.addWidget(self.clear_filters_btn, 0)
         fb.addStretch()
         self.filter_bar.setVisible(False)
-        self.contract_table=QTableWidget(0,8)
+        self.contract_table=QTableWidget(0,10)
         self.contract_table.setObjectName("contractTable")
         # Yatay scroll yok — sütunlar her zaman tablo içinde kalır
         self.contract_table.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -6396,15 +6398,17 @@ class MainWindow(QMainWindow):
         self._filter_header = FilterableHeaderView(Qt.Horizontal, self.contract_table)
         self._filter_header.filterChanged.connect(self.schedule_apply_contract_filter)
         self.contract_table.setHorizontalHeader(self._filter_header)
-        self.contract_table.setHorizontalHeaderLabels(["Sözleşme Türü", "Sözleşme No", "Kullanıcı", "Durum", "T. Tarihi", "Kalan Gün", "Etiketler", "Özet"])
-        self.contract_table._filter_col_keys = ["type", "no", "user", "status", "date", "days", "tags", "summary"]
+        self.contract_table.setHorizontalHeaderLabels(["Sıra/No", "Platform", "Sözleşme Türü", "Sözleşme No", "Kullanıcı", "Durum", "T. Tarihi", "Kalan Gün", "Etiketler", "Özet"])
+        self.contract_table._filter_col_keys = ["row_no", "platform", "type", "no", "user", "status", "date", "days", "tags", "summary"]
         self.contract_table._sort_mode = 'default'  # siralama modu
         # Tüm sütunlar Stretch — her zaman ekranı doldurur, yatay kaymaz.
-        # Özet (7) sabit 72px sağ kenarda.
+        # Özet (9) sabit 72px sağ kenarda.
         _hh = self.contract_table.horizontalHeader()
         _hh.setSectionResizeMode(QHeaderView.Stretch)    # hepsi orantılı dolar
-        _hh.setSectionResizeMode(7, QHeaderView.Fixed)   # Özet sabit
-        self.contract_table.setColumnWidth(7, 72)
+        _hh.setSectionResizeMode(0, QHeaderView.Fixed)   # Sıra/No sabit
+        self.contract_table.setColumnWidth(0, 64)
+        _hh.setSectionResizeMode(9, QHeaderView.Fixed)   # Özet sabit
+        self.contract_table.setColumnWidth(9, 72)
         vhh = self.contract_table.verticalHeader()
         vhh.setMinimumWidth(62)
         vhh.setDefaultAlignment(Qt.AlignCenter)
@@ -6815,7 +6819,12 @@ class MainWindow(QMainWindow):
             if str(self.platform_list.item(i).data(Qt.UserRole) or "")
         ]
 
+    def normalize_platform_selection_state(self):
+        if not self.selected_platforms:
+            self.multi_platform_mode = False
+
     def refresh_platform_list_ui(self):
+        self.normalize_platform_selection_state()
         self._updating_platform_list = True
         try:
             for i in range(self.platform_list.count()):
@@ -6826,6 +6835,7 @@ class MainWindow(QMainWindow):
                     item.setFlags(flags | Qt.ItemIsUserCheckable)
                     item.setCheckState(Qt.Checked if platform in self.selected_platforms else Qt.Unchecked)
                 else:
+                    item.setCheckState(Qt.Unchecked)
                     item.setFlags(flags & ~Qt.ItemIsUserCheckable)
                 item.setSelected(platform in self.selected_platforms)
         finally:
@@ -6837,6 +6847,7 @@ class MainWindow(QMainWindow):
         self.platform_info_bar.setVisible(count > 0)
 
     def _apply_platform_selection(self):
+        self.normalize_platform_selection_state()
         selected = set(self.selected_platforms)
         self.all_contract_rows = [
             dict(it) for it in self.contract_index
@@ -6907,8 +6918,7 @@ class MainWindow(QMainWindow):
             self.selected_platforms.remove(platform)
         else:
             self.selected_platforms.add(platform)
-        if not self.selected_platforms:
-            self.multi_platform_mode = False
+        self.normalize_platform_selection_state()
         self._apply_platform_selection()
 
     def select_all_platforms(self):
@@ -6919,6 +6929,14 @@ class MainWindow(QMainWindow):
     def clear_platform_selection(self):
         self.selected_platforms.clear()
         self.multi_platform_mode = False
+        self._updating_platform_list = True
+        try:
+            for i in range(self.platform_list.count()):
+                item = self.platform_list.item(i)
+                item.setCheckState(Qt.Unchecked)
+                item.setSelected(False)
+        finally:
+            self._updating_platform_list = False
         self._apply_platform_selection()
 
     def _clear_upcoming_layout(self):
@@ -7340,10 +7358,10 @@ class MainWindow(QMainWindow):
         return True
 
     def _on_contract_cell_clicked(self, row: int, col: int):
-        """Col 7 (Ozet) hucresine tiklayinca popup ac.
+        """Col 9 (Ozet) hucresine tiklayinca popup ac.
         Col disi tiklama open_selected_contract ile cakismasin.
         """
-        if col != 7:
+        if col != 9:
             return
         rows = getattr(self.contract_table, "_visible_rows", [])
         if row < 0 or row >= len(rows):
@@ -7619,7 +7637,7 @@ class MainWindow(QMainWindow):
             date_ranges = dict(getattr(self._filter_header, "_date_ranges", {}))
             day_ranges = dict(getattr(self._filter_header, "_day_ranges", {}))
         selected_platforms = set(getattr(self, "selected_platforms", set()))
-        for it in getattr(self, "all_contract_rows", []):
+        for row_number, it in enumerate(getattr(self, "all_contract_rows", []), start=1):
             if selected_platforms and str(it.get("platform", "")) not in selected_platforms:
                 continue
             hay = str(it.get("_search_norm") or "")
@@ -7641,22 +7659,24 @@ class MainWindow(QMainWindow):
                 continue
             if days_max is not None and (day_num is None or day_num > days_max):
                 continue
-            if 4 in date_ranges:
-                start_date, end_date = date_ranges.get(4, (None, None))
+            if 6 in date_ranges:
+                start_date, end_date = date_ranges.get(6, (None, None))
                 if start_date and (not completion or completion < start_date):
                     continue
                 if end_date and (not completion or completion > end_date):
                     continue
-            if 5 in day_ranges:
-                min_day, max_day = day_ranges.get(5, (None, None))
+            if 7 in day_ranges:
+                min_day, max_day = day_ranges.get(7, (None, None))
                 if min_day is not None and (day_num is None or day_num < min_day):
                     continue
                 if max_day is not None and (day_num is None or day_num > max_day):
                     continue
-            # Sutun bazli filtreler (0=Platform,1=No,2=User,3=Durum,4=Tarih,5=Gun,6=Etiketler,7=Ozet)
+            # Sutun bazli filtreler (0=Sira,1=Platform,2=Tur,3=No,4=User,5=Durum,6=Tarih,7=Gun,8=Etiketler,9=Ozet)
             tags_str = str(it.get("_tags_str") or "")
             col_vals = [
+                str(row_number),
                 str(it.get("platform", "") or ""),
+                str(it.get("type_display", it.get("type", "")) or ""),
                 str(it.get("no", "") or ""),
                 str(it.get("user", "") or ""),
                 st_label,
@@ -7672,7 +7692,7 @@ class MainWindow(QMainWindow):
 
                 # Etiketler kolonu için özel kontrol:
                 # seçilen etiketlerden en az biri satırdaki etiketlerde varsa geçir.
-                if ci == 6:
+                if ci == 8:
                     row_tags = [str(t or "").strip() for t in list(it.get("tags", []) or []) if str(t or "").strip()]
                     if not any(tag in fset for tag in row_tags):
                         skip = True
@@ -7728,25 +7748,34 @@ class MainWindow(QMainWindow):
                     self.contract_table.removeCellWidget(r, c)
                 self.contract_table.setRowHeight(r, 36)
                 cls, st_label, days_text, tdate = self._contract_health(it)
+                payload = {
+                    "platform": str(it.get("platform", "") or ""),
+                    "contract_no": str(it.get("no", "") or ""),
+                    "contract_type": str(it.get("type_display", it.get("type", "")) or ""),
+                    "contract_item": it,
+                }
                 vals=[
+                    r + 1,
+                    it.get("platform", ""),
                     it.get("type_display", it.get("type", "")) or "",
-                    it.get("no",""),
-                    it.get("user",""),
+                    it.get("no", ""),
+                    it.get("user", ""),
                     st_label,
                     tdate,
                     days_text,
-                    None,  # col 6: Etiketler widget
-                    None,  # col 7: Ozet butonu
+                    None,  # col 8: Etiketler widget
+                    None,  # col 9: Ozet butonu
                 ]
                 for c,v in enumerate(vals):
-                    if c == 6:
+                    if c == 8:
                         # Etiketler: dikey sıralı renkli chip'ler
                         tags_list = list(it.get("tags", []) or [])
                         if not tags_list:
                             empty = QTableWidgetItem("")
                             empty.setFlags(empty.flags() & ~Qt.ItemIsEditable)
-                            self.contract_table.setItem(r, 6, empty)
-                            self.contract_table.setRowHeight(r, max(self.contract_table.rowHeight(r), 52 if len(self.selected_platforms) != 1 else 36))
+                            empty.setData(Qt.UserRole, payload)
+                            self.contract_table.setItem(r, 8, empty)
+                            self.contract_table.setRowHeight(r, max(self.contract_table.rowHeight(r), 36))
                             continue
                         wrap = QWidget()
                         wrap.setStyleSheet("QWidget{background:transparent;border:0px;}")
@@ -7767,14 +7796,17 @@ class MainWindow(QMainWindow):
                                 f"padding:2px 8px;font-size:11px;font-weight:700;}}"
                             )
                             wl.addWidget(chip)
-                        self.contract_table.setCellWidget(r, 6, wrap)
+                        placeholder = QTableWidgetItem("")
+                        placeholder.setData(Qt.UserRole, payload)
+                        self.contract_table.setItem(r, 8, placeholder)
+                        self.contract_table.setCellWidget(r, 8, wrap)
                         # Satır yüksekliğini etiket sayısına göre ayarla
                         CHIP_H, CHIP_SP, PAD = 22, 3, 8
                         n = len(tags_list)
                         row_h = max(36, n * CHIP_H + max(0, n - 1) * CHIP_SP + PAD) if n > 0 else 36
-                        self.contract_table.setRowHeight(r, max(self.contract_table.rowHeight(r), row_h, 52 if len(self.selected_platforms) != 1 else 36))
+                        self.contract_table.setRowHeight(r, max(self.contract_table.rowHeight(r), row_h))
                         continue
-                    if c == 7:
+                    if c == 9:
                         lbl = QLabel("\U0001F50D")
                         lbl.setAlignment(Qt.AlignCenter)
                         lbl.setToolTip("Bileşen özetini gör")
@@ -7789,20 +7821,15 @@ class MainWindow(QMainWindow):
                         wl.setSpacing(0)
                         wl.setAlignment(Qt.AlignCenter)
                         wl.addWidget(lbl)
-                        self.contract_table.setCellWidget(r, 7, wrap)
-                        continue
-                    if c == 1 and len(self.selected_platforms) != 1:
-                        wrap = QWidget(); wl = QVBoxLayout(wrap); wl.setContentsMargins(4, 3, 4, 3); wl.setSpacing(2)
-                        no_label = QLabel(str(v or "")); no_label.setStyleSheet("QLabel{color:#0f172a;font-size:12px;font-weight:700;}")
-                        platform_badge = QLabel(str(it.get("platform", "") or "")); platform_badge.setStyleSheet("QLabel{background:#e0ecff;color:#1d4ed8;border-radius:7px;padding:1px 5px;font-size:10px;font-weight:800;}")
-                        platform_badge.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
-                        wl.addWidget(no_label); wl.addWidget(platform_badge, 0, Qt.AlignLeft)
-                        self.contract_table.setCellWidget(r, c, wrap)
-                        self.contract_table.setRowHeight(r, max(self.contract_table.rowHeight(r), 52))
+                        placeholder = QTableWidgetItem("")
+                        placeholder.setData(Qt.UserRole, payload)
+                        self.contract_table.setItem(r, 9, placeholder)
+                        self.contract_table.setCellWidget(r, 9, wrap)
                         continue
                     cell = QTableWidgetItem(str(v or ""))
                     cell.setFlags(cell.flags() & ~Qt.ItemIsEditable)
-                    if c == 3:
+                    cell.setData(Qt.UserRole, payload)
+                    if c == 5:
                         if cls == "geciken":
                             cell.setForeground(QColor("#dc2626"))
                         elif cls == "kritik":
@@ -7811,7 +7838,7 @@ class MainWindow(QMainWindow):
                             cell.setForeground(QColor("#047857"))
                         else:
                             cell.setForeground(QColor("#1f5be3"))
-                    if c == 5:
+                    if c == 7:
                         if str(v).startswith("-"):
                             cell.setForeground(QColor("#dc2626"))
                         elif str(v).endswith("gün"):
@@ -7883,12 +7910,33 @@ class MainWindow(QMainWindow):
 
     def open_selected_contract(self, row, col):
         rows = getattr(self.contract_table, "_visible_rows", [])
-        if row < 0 or row >= len(rows):
+        if row < 0 or row >= self.contract_table.rowCount():
             return
-        if col == 7:
-            self.show_contract_summary(row, rows[row])
+        if col == 9:
+            if row < len(rows):
+                self.show_contract_summary(row, rows[row])
             return
-        self.open_contract_item(rows[row])
+        payload = None
+        for column in range(self.contract_table.columnCount()):
+            cell = self.contract_table.item(row, column)
+            candidate = cell.data(Qt.UserRole) if cell else None
+            if isinstance(candidate, dict) and candidate.get("contract_no"):
+                payload = candidate
+                break
+        if payload and isinstance(payload.get("contract_item"), dict):
+            self.open_contract_item(payload["contract_item"])
+            return
+        if row < len(rows):
+            self.open_contract_item(rows[row])
+            return
+        platform_item = self.contract_table.item(row, 1)
+        type_item = self.contract_table.item(row, 2)
+        no_item = self.contract_table.item(row, 3)
+        self.open_contract_item({
+            "platform": platform_item.text() if platform_item else "",
+            "type": type_item.text() if type_item else "",
+            "no": no_item.text() if no_item else "",
+        })
 
     def _apply_deleted_contract_to_index(self, deleted_info: dict):
         p = str((deleted_info or {}).get("platform") or "")
