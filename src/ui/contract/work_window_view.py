@@ -6,6 +6,8 @@ from typing import Optional
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QTableWidgetItem
 
+from src.ui.contract.delivery_user_display import delivery_users_text
+
 
 def update_system_metric_cards(self, sys_info):
     if not hasattr(self, "system_metric_labels"):
@@ -26,10 +28,12 @@ def update_system_metric_cards(self, sys_info):
     elif parsed_completion:
         left = (parsed_completion - date.today()).days
         days = f"-{abs(left)} gün" if left < 0 else f"{left} gün"
+    deliveries = self.deliveries.get(sys_info.name, []) if sys_info else []
     values = {
         "completion": completion or "-",
         "days": days,
         "acceptance": acceptance or "-",
+        "user": delivery_users_text(deliveries),
     }
     for key, label in self.system_metric_labels.items():
         label.setText(values.get(key, "-"))

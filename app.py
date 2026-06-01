@@ -4486,6 +4486,7 @@ class ContractWorkWindow(QDialog):
         top_row.addWidget(system_metric_card("completion", "Termin Tarihi"), 0)
         top_row.addWidget(system_metric_card("days", "Kalan Gün"), 0)
         top_row.addWidget(system_metric_card("acceptance", "Kabul Tarihi"), 0)
+        top_row.addWidget(system_metric_card("user", "Kullanıcı"), 0)
         top_row.addStretch(1)
         self.edit_system_btn = QPushButton("✎ Sistemi Düzenle")
         self.edit_system_btn.setObjectName("secondary")
