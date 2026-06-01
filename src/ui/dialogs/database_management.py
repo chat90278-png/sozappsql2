@@ -36,7 +36,15 @@ from PySide6.QtWidgets import (
 )
 
 from src.ui.theme import STYLE
-from src.ui.dialogs.schema_relationships import get_schema_relationships as read_schema_relationships, get_table_columns as read_table_columns, relationship_key, relationship_text
+from src.ui.dialogs.schema_relationships import (
+    compact_relationship_text,
+    filter_relationship_groups,
+    get_schema_relationships as read_schema_relationships,
+    get_table_columns as read_table_columns,
+    group_relationships_by_source,
+    relationship_key,
+    relationship_text,
+)
 
 TABLE_INFO = {
     "contracts": "Ana sözleşme ve SD kayıtları",
@@ -253,9 +261,14 @@ QLabel#pkTag { color:#0f9f6e; font-weight:800; }
 QLabel#fkTag { color:#4f46e5; font-weight:800; }
 QFrame#relationPanel { background:#ffffff; border:1px solid #d8e4f2; border-radius:10px; }
 QLabel#relationTitle { color:#0f2742; font-size:14px; font-weight:800; }
-QListWidget#relationList { border:none; background:#ffffff; }
-QListWidget#relationList::item { border:1px solid #e1e9f5; border-radius:7px; margin:2px; padding:7px; color:#264463; }
-QListWidget#relationList::item:selected { background:#eaf1ff; border:1px solid #8bb3ff; color:#1d4ed8; }
+QScrollArea#relationScroll { border:none; background:#ffffff; }
+QWidget#relationScrollBody { background:#ffffff; }
+QFrame#relationGroupCard { background:#ffffff; border:1px solid #d8e4f2; border-radius:8px; }
+QPushButton#relationGroupHeader { background:#f1f5ff; border:none; border-radius:6px; color:#173b69; padding:6px 8px; text-align:left; font-weight:800; }
+QPushButton#relationGroupHeader[active='true'] { background:#dbeafe; color:#1d4ed8; }
+QPushButton#relationRow { background:transparent; border:none; border-radius:5px; color:#264463; padding:5px 8px; text-align:left; }
+QPushButton#relationRow:hover { background:#f8fbff; }
+QPushButton#relationRow[selected='true'] { background:#eaf1ff; border:1px solid #8bb3ff; color:#1d4ed8; }
 """
 
     def _build(self):
@@ -365,10 +378,7 @@ QListWidget#relationList::item:selected { background:#eaf1ff; border:1px solid #
         page = QWidget(); lay = QVBoxLayout(page); lay.setSpacing(8)
         tb = QFrame(); tb.setObjectName("toolbarCard")
         tlay = QHBoxLayout(tb); tlay.setContentsMargins(8, 8, 8, 8); tlay.setSpacing(8)
-        tlay.addWidget(QLabel("Şema Görselleştirici"))
-        self.schema_combo = QComboBox(); self.schema_combo.addItem("schema = main")
-        self.rel_combo = QComboBox(); self.rel_combo.addItems(["Tüm ilişkiler", "Sadece seçili tablo", "Kritik ilişkiler"]); self.rel_combo.currentTextChanged.connect(self._apply_schema_focus)
-        self.schema_search = QLineEdit(); self.schema_search.setPlaceholderText("Tablo veya kolon ara..."); self.schema_search.textChanged.connect(self._highlight_schema)
+        self.schema_search = QLineEdit(); self.schema_search.setPlaceholderText("Tablo, kolon veya ilişki ara..."); self.schema_search.textChanged.connect(self._on_schema_search_changed)
         self.auto_btn = QPushButton("Otomatik Yerleştir"); self.auto_btn.setObjectName("softBtn"); self.auto_btn.clicked.connect(self._layout_schema)
         tlay.addWidget(self.schema_search, 1)
         tlay.addWidget(self.auto_btn, 0)
@@ -385,8 +395,11 @@ QListWidget#relationList::item:selected { background:#eaf1ff; border:1px solid #
         relation_lay.addWidget(relation_title)
         self.relation_search = QLineEdit(); self.relation_search.setPlaceholderText("İlişki ara..."); self.relation_search.textChanged.connect(self._refresh_relationship_list)
         relation_lay.addWidget(self.relation_search)
-        self.relation_list = QListWidget(); self.relation_list.setObjectName("relationList"); self.relation_list.itemClicked.connect(self._on_relationship_selected)
-        relation_lay.addWidget(self.relation_list, 1)
+        self.relation_scroll = QScrollArea(); self.relation_scroll.setObjectName("relationScroll"); self.relation_scroll.setWidgetResizable(True); self.relation_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.relation_scroll_body = QWidget(); self.relation_scroll_body.setObjectName("relationScrollBody")
+        self.relation_groups_layout = QVBoxLayout(self.relation_scroll_body); self.relation_groups_layout.setContentsMargins(0, 0, 0, 0); self.relation_groups_layout.setSpacing(6); self.relation_groups_layout.addStretch(1)
+        self.relation_scroll.setWidget(self.relation_scroll_body)
+        relation_lay.addWidget(self.relation_scroll, 1)
 
         schema_splitter = QSplitter(Qt.Horizontal)
         schema_splitter.addWidget(wrap)
@@ -659,6 +672,7 @@ QListWidget#relationList::item:selected { background:#eaf1ff; border:1px solid #
         self.selected_relationship = None
         for name, card in self.schema_cards.items():
             card.setSelected(name == self.selected_schema_table)
+        self._refresh_relationship_list()
         self._apply_schema_focus()
 
     def _clear_schema_selection(self):
@@ -666,33 +680,53 @@ QListWidget#relationList::item:selected { background:#eaf1ff; border:1px solid #
         self.selected_relationship = None
         for card in self.schema_cards.values():
             card.setSelected(False)
-        self.relation_list.clearSelection()
+        self._refresh_relationship_list()
         self._apply_schema_focus()
 
-    def _on_relationship_selected(self, item):
-        key = item.data(Qt.UserRole)
+    def _on_relationship_selected(self, key):
         self.selected_relationship = next((rel for rel in self.schema_relationships if relationship_key(rel) == key), None)
         self.selected_schema_table = ""
         for card in self.schema_cards.values():
             card.setSelected(False)
+        self._refresh_relationship_list()
         self._apply_schema_focus()
 
-    def _refresh_relationship_list(self):
-        if not hasattr(self, "relation_list"):
+    def _clear_relationship_group_cards(self):
+        if not hasattr(self, "relation_groups_layout"):
             return
-        query = self.relation_search.text().strip().casefold()
+        while self.relation_groups_layout.count() > 1:
+            item = self.relation_groups_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+
+    def _refresh_relationship_list(self):
+        if not hasattr(self, "relation_groups_layout"):
+            return
+        groups = group_relationships_by_source(self.schema_relationships)
+        for query in (self.schema_search.text(), self.relation_search.text()):
+            groups = filter_relationship_groups(groups, query)
         selected_key = relationship_key(self.selected_relationship) if self.selected_relationship else None
-        self.relation_list.clear()
-        for relationship in self.schema_relationships:
-            text = relationship_text(relationship)
-            if query and query not in text.casefold():
-                continue
-            item = QListWidgetItem(text)
-            item.setData(Qt.UserRole, relationship_key(relationship))
-            item.setToolTip(f"{text}\nON DELETE {relationship['on_delete']} | ON UPDATE {relationship['on_update']}")
-            self.relation_list.addItem(item)
-            if selected_key == relationship_key(relationship):
-                item.setSelected(True)
+        self._clear_relationship_group_cards()
+        for source_table, relationships in groups.items():
+            card = QFrame(); card.setObjectName("relationGroupCard")
+            card_lay = QVBoxLayout(card); card_lay.setContentsMargins(4, 4, 4, 4); card_lay.setSpacing(1)
+            header = QPushButton(f"{source_table} · {len(relationships)} ilişki"); header.setObjectName("relationGroupHeader")
+            header.setProperty("active", source_table == self.selected_schema_table); header.setToolTip(f"{source_table} tablosunu ve bağlı tabloları vurgula")
+            header.clicked.connect(lambda _checked=False, table=source_table: self._select_schema_table(table))
+            card_lay.addWidget(header)
+            for relationship in relationships:
+                key = relationship_key(relationship)
+                full_text = relationship_text(relationship)
+                row = QPushButton(compact_relationship_text(relationship)); row.setObjectName("relationRow")
+                row.setProperty("selected", key == selected_key); row.setToolTip(f"{full_text}\nON DELETE {relationship['on_delete']} | ON UPDATE {relationship['on_update']}")
+                row.clicked.connect(lambda _checked=False, rel_key=key: self._on_relationship_selected(rel_key))
+                card_lay.addWidget(row)
+            self.relation_groups_layout.insertWidget(self.relation_groups_layout.count() - 1, card)
+
+    def _on_schema_search_changed(self):
+        self._refresh_relationship_list()
+        self._apply_schema_focus()
 
     def _highlight_schema(self):
         self._apply_schema_focus()
@@ -700,7 +734,6 @@ QListWidget#relationList::item:selected { background:#eaf1ff; border:1px solid #
     def _apply_schema_focus(self):
         query = self.schema_search.text().strip().casefold() if hasattr(self, "schema_search") else ""
         focused_tables = self._focused_tables()
-        relation_mode = self.rel_combo.currentText() if hasattr(self, "rel_combo") else "Tüm ilişkiler"
         for table, card in self.schema_cards.items():
             columns = [column["name"].casefold() for column in self._schema_columns(table)]
             search_hit = not query or query in table.casefold() or any(query in column for column in columns)
@@ -712,9 +745,8 @@ QListWidget#relationList::item:selected { background:#eaf1ff; border:1px solid #
             is_selected = bool(self.selected_relationship and relationship_key(relationship) == relationship_key(self.selected_relationship))
             touches_table = bool(self.selected_schema_table and self.selected_schema_table in {relationship["source_table"], relationship["target_table"]})
             strong = is_selected or touches_table
-            visible = relation_mode != "Sadece seçili tablo" or not focused_tables or strong
-            rec["line"].setVisible(visible)
-            rec["label"].setVisible(visible)
+            rec["line"].setVisible(True)
+            rec["label"].setVisible(True)
             rec["line"].setPen(QPen(QColor("#2563eb") if strong else QColor("#9db2cf"), 3.0 if strong else 1.2, Qt.SolidLine if strong else Qt.DashLine))
             rec["line"].setOpacity(1.0 if strong else (0.38 if focused_tables else 0.55))
             rec["label"].setOpacity(1.0 if strong else (0.35 if focused_tables else 0.7))

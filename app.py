@@ -73,7 +73,7 @@ from PySide6.QtWidgets import (
     QDialog, QLineEdit, QComboBox, QDateEdit, QSpinBox, QDoubleSpinBox,
     QMessageBox, QFileDialog, QFrame, QScrollArea, QCheckBox, QHeaderView,
     QSizePolicy, QProgressBar, QProgressDialog, QStyledItemDelegate, QTextEdit,
-    QToolButton, QMenu, QInputDialog, QWidgetAction, QStackedWidget
+    QToolButton, QMenu, QInputDialog, QWidgetAction
 )
 
 
@@ -4371,9 +4371,6 @@ class ContractWorkWindow(QDialog):
         left_block_lay.setContentsMargins(0, 0, 0, 0)
         left_block_lay.setSpacing(10)
 
-        self._build_contract_side_panel(left_block_width)
-        left_block_lay.addWidget(self.contract_side_panel, 0)
-
         left_row = QHBoxLayout()
         left_row.setContentsMargins(0, 0, 0, 0)
         left_row.setSpacing(10)
@@ -4407,6 +4404,9 @@ class ContractWorkWindow(QDialog):
         body.addWidget(left_block, 0)
 
         right = QFrame(); right.setObjectName("contentPanel"); rv = QVBoxLayout(right); rv.setContentsMargins(16, 12, 16, 12); rv.setSpacing(8); body.addWidget(right, 1)
+        self.build_collapse_bar()
+        rv.addWidget(self.collapse_bar, 0)
+        rv.addWidget(self.collapse_panel, 0)
         self.render_contract_tags()
 
         # ── Üst satır: SİSTEM BİLEŞENLERİ etiketi + Sistemi Düzenle butonu aynı hizada ──
@@ -4795,165 +4795,116 @@ class ContractWorkWindow(QDialog):
     def _tag_key(self, name: str) -> str:
         return self.store._normalize_label(name)
 
-    def _build_contract_side_panel(self, panel_width: int):
-        self.contract_side_panel = QFrame()
-        self.contract_side_panel.setObjectName("contractSidePanel")
-        self.contract_side_panel.setFixedSize(panel_width, 294)
-        self.contract_side_panel.setStyleSheet(
-            "QFrame#contractSidePanel{background:#ffffff; border:1px solid #d7e3f1; border-radius:13px;}"
-            "QFrame#contractSideTabBar{background:#edf4fb; border:0; border-bottom:1px solid #d7e3f1; border-radius:12px 12px 0 0;}"
-            "QFrame[sideTab='true']{background:transparent; border:1px solid transparent; border-bottom:0; border-radius:9px 9px 0 0;}"
-            "QFrame[sideTabActive='true']{background:#ffffff; border:1px solid #d7e3f1; border-bottom:0; border-radius:9px 9px 0 0;}"
-            "QLabel#sideTabText{background:transparent; color:#31445f; font-size:12px; font-weight:900;}"
-            "QLabel#sideTabText[active='true']{color:#0f2d4a;}"
-            "QLabel#sideTabBadge{background:#dbeafe; color:#1d4ed8; border:0; border-radius:10px; padding:1px 6px; font-size:11px; font-weight:900;}"
-            "QLabel#sidePanelTitle{background:transparent; color:#48627f; font-size:11px; font-weight:900;}"
-            "QPushButton#sidePanelAdd{background:#2563eb; color:#ffffff; border:0; border-radius:11px; font-size:22px; font-weight:900; padding:0;}"
-            "QPushButton#sidePanelAdd:hover{background:#1d4ed8;}"
-            "QPushButton#fileDropZone{background:#f1f7ff; color:#1e3a5f; border:1px dashed #a8bdd6; border-radius:11px; padding:7px 10px; text-align:left; font-size:11px; font-weight:700;}"
-            "QPushButton#fileDropZone:hover{background:#e8f2ff; border-color:#7ca4d8;}"
-            "QLabel#sidePanelEmpty{background:#f8fbff; color:#64748b; border:1px dashed #c7d6e8; border-radius:11px; padding:13px; font-size:12px;}"
-            "QLabel#fileTotal{background:transparent; color:#64748b; border:0; font-size:11px;}"
+    def build_collapse_bar(self):
+        self._open_panel: Optional[str] = None
+        self._contract_files_cache: List[dict] = []
+        self.collapse_bar = QFrame(); self.collapse_bar.setObjectName("collapseBar"); self.collapse_bar.setFixedHeight(42)
+        self.collapse_bar.setStyleSheet(
+            "QFrame#collapseBar{background:#ffffff; border:0; border-bottom:1px solid #e2e8f0;}"
+            "QPushButton#collapseTabBtn{background:transparent; color:#64748b; border:0; border-bottom:2px solid transparent; border-radius:0; padding:8px 10px; font-size:12px; font-weight:800;}"
+            "QPushButton#collapseTabBtn:checked{color:#1e40af; border-bottom:2px solid #1f5be3;}"
+            "QLabel#countBadge{background:#dbeafe; color:#1d4ed8; border:0; border-radius:9px; padding:2px 6px; font-size:11px; font-weight:800;}"
+            "QLabel#collapseHint{background:transparent; color:#94a3b8; border:0; font-size:10px;}"
         )
-        outer = QVBoxLayout(self.contract_side_panel)
-        outer.setContentsMargins(0, 0, 0, 0)
-        outer.setSpacing(0)
-        tab_bar = QFrame(); tab_bar.setObjectName("contractSideTabBar"); tab_bar.setFixedHeight(42)
-        tab_lay = QHBoxLayout(tab_bar); tab_lay.setContentsMargins(10, 7, 10, 0); tab_lay.setSpacing(6)
-        self.side_tab_frames = []
-        self.side_tab_badges = []
-        for index, title in enumerate(("Etiketler", "Belgeler")):
-            tab = QFrame(); tab.setProperty("sideTab", True); tab.setProperty("sideTabActive", index == 0)
-            tab.setCursor(Qt.PointingHandCursor); tab.setFixedHeight(35)
-            row = QHBoxLayout(tab); row.setContentsMargins(12, 0, 10, 0); row.setSpacing(7)
-            text = QLabel(title); text.setObjectName("sideTabText"); text.setProperty("active", index == 0)
-            badge = QLabel("0"); badge.setObjectName("sideTabBadge"); badge.setAlignment(Qt.AlignCenter); badge.setMinimumWidth(20)
-            row.addWidget(text); row.addWidget(badge)
-            switch_tab = lambda event, idx=index: self._set_contract_side_tab(idx)
-            tab.mousePressEvent = switch_tab; text.mousePressEvent = switch_tab; badge.mousePressEvent = switch_tab
-            self.side_tab_frames.append((tab, text))
-            self.side_tab_badges.append(badge)
-            tab_lay.addWidget(tab, 0)
-        tab_lay.addStretch()
-        outer.addWidget(tab_bar, 0)
-        self.contract_side_stack = QStackedWidget(); self.contract_side_stack.setStyleSheet("QStackedWidget{background:#ffffff; border:0;}")
-        self.tag_card = self._build_tag_panel_page()
-        self.documents_card = self._build_file_panel_page()
-        self.contract_side_stack.addWidget(self.tag_card)
-        self.contract_side_stack.addWidget(self.documents_card)
-        outer.addWidget(self.contract_side_stack, 1)
-        self._set_contract_side_tab(0)
+        bar = QHBoxLayout(self.collapse_bar); bar.setContentsMargins(0, 0, 6, 0); bar.setSpacing(3)
+        self.btn_tags = QPushButton(); self.btn_tags.setObjectName("collapseTabBtn"); self.btn_tags.setCheckable(True); self.btn_tags.clicked.connect(lambda: self.toggle_collapse("tags"))
+        self.badge_tags = QLabel("0"); self.badge_tags.setObjectName("countBadge"); self.badge_tags.setAlignment(Qt.AlignCenter)
+        self.btn_files = QPushButton(); self.btn_files.setObjectName("collapseTabBtn"); self.btn_files.setCheckable(True); self.btn_files.clicked.connect(lambda: self.toggle_collapse("files"))
+        self.badge_files = QLabel("0"); self.badge_files.setObjectName("countBadge"); self.badge_files.setAlignment(Qt.AlignCenter)
+        hint = QLabel("tıkla – açılır"); hint.setObjectName("collapseHint")
+        bar.addWidget(self.btn_tags); bar.addWidget(self.badge_tags); bar.addSpacing(5); bar.addWidget(self.btn_files); bar.addWidget(self.badge_files); bar.addStretch(); bar.addWidget(hint)
 
-    def _set_contract_side_tab(self, index: int):
-        self.contract_side_stack.setCurrentIndex(index)
-        for current, (frame, label) in enumerate(self.side_tab_frames):
-            active = current == index
-            frame.setProperty("sideTabActive", active)
-            label.setProperty("active", active)
-            frame.style().unpolish(frame); frame.style().polish(frame)
-            label.style().unpolish(label); label.style().polish(label)
-
-    def _panel_page_layout(self, page: QFrame, title: str, tooltip: str, callback):
-        layout = QVBoxLayout(page); layout.setContentsMargins(11, 9, 11, 8); layout.setSpacing(8)
-        head = QHBoxLayout(); head.setContentsMargins(0, 0, 0, 0)
-        heading = QLabel(title); heading.setObjectName("sidePanelTitle")
-        add_btn = QPushButton("+"); add_btn.setObjectName("sidePanelAdd"); add_btn.setFixedSize(42, 38); add_btn.setToolTip(tooltip); add_btn.clicked.connect(callback)
-        head.addWidget(heading); head.addStretch(); head.addWidget(add_btn)
-        layout.addLayout(head)
-        return layout
-
-    def _make_card_scroll(self):
-        scroll = QScrollArea(); scroll.setWidgetResizable(True); scroll.setFrameShape(QFrame.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff); scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        scroll.setStyleSheet("QScrollArea{background:transparent; border:0;} QScrollArea > QWidget > QWidget{background:transparent;} QScrollBar:vertical{width:8px; background:transparent;} QScrollBar::handle:vertical{background:#94a3b8; border-radius:4px; min-height:22px;} QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical{height:0;}")
-        host = QWidget(); host.setMinimumWidth(0); host.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred); host.setStyleSheet("background:transparent;")
-        cards = QVBoxLayout(host); cards.setContentsMargins(0, 0, 2, 0); cards.setSpacing(8); cards.addStretch()
-        scroll.setWidget(host)
-        return scroll, cards
-
-    def _build_tag_panel_page(self):
-        page = QFrame(); page.setStyleSheet("background:#ffffff; border:0;")
-        layout = self._panel_page_layout(page, "SÖZLEŞME ETİKETLERİ", "Etiket ekle", self.open_tag_assign_dialog)
-        scroll, self.tag_cards_layout = self._make_card_scroll(); layout.addWidget(scroll, 1)
-        return page
-
-    def _build_file_panel_page(self):
-        page = QFrame(); page.setStyleSheet("background:#ffffff; border:0;")
-        layout = self._panel_page_layout(page, "SÖZLEŞME BELGELERİ", "Dosya ekle", self.add_contract_file)
-        drop = QPushButton("  ↑    Dosya ekle\n       PDF, Word, Excel, görsel veya TXT · En fazla 25 MB")
-        drop.setObjectName("fileDropZone"); drop.setCursor(Qt.PointingHandCursor); drop.setToolTip("Dosya ekle"); drop.clicked.connect(self.add_contract_file)
-        layout.addWidget(drop, 0)
-        scroll, self.file_cards_layout = self._make_card_scroll(); layout.addWidget(scroll, 1)
-        self.file_total_label = QLabel("Toplam 0 B"); self.file_total_label.setObjectName("fileTotal"); self.file_total_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        layout.addWidget(self.file_total_label, 0)
-        return page
-
-    def _ordered_contract_tags(self) -> List[dict]:
-        return sorted(
-            [dict(t) for t in self.contract_tags if str((t or {}).get("name") or "").strip()],
-            key=lambda x: self._tag_key(str(x.get("name", ""))),
+        self.collapse_panel = QFrame(); self.collapse_panel.setObjectName("collapsePanel"); self.collapse_panel.setMaximumHeight(0); self.collapse_panel.setMinimumHeight(0)
+        self.collapse_panel.setStyleSheet(
+            "QFrame#collapsePanel{background:#fafbff; border:0; border-bottom:1px solid #e8f0fb;}"
+            "QScrollArea{background:transparent; border:0;} QScrollArea > QWidget > QWidget{background:transparent;}"
+            "QScrollBar:horizontal{height:7px; background:transparent;} QScrollBar::handle:horizontal{background:#cbd5e1; border-radius:3px; min-width:24px;} QScrollBar::add-line:horizontal,QScrollBar::sub-line:horizontal{width:0;}"
         )
+        panel_layout = QVBoxLayout(self.collapse_panel); panel_layout.setContentsMargins(8, 7, 8, 5); panel_layout.setSpacing(3)
+        self.collapse_scroll = QScrollArea(); self.collapse_scroll.setWidgetResizable(True); self.collapse_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded); self.collapse_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.collapse_content = QWidget(); self.collapse_content.setStyleSheet("background:transparent;")
+        self.collapse_content_layout = QHBoxLayout(self.collapse_content); self.collapse_content_layout.setContentsMargins(0, 0, 0, 0); self.collapse_content_layout.setSpacing(7); self.collapse_content_layout.addStretch()
+        self.collapse_scroll.setWidget(self.collapse_content); panel_layout.addWidget(self.collapse_scroll, 1)
+        self.collapse_total = QLabel(""); self.collapse_total.setAlignment(Qt.AlignRight | Qt.AlignVCenter); self.collapse_total.setStyleSheet("background:transparent; color:#64748b; border:0; font-size:10px;")
+        panel_layout.addWidget(self.collapse_total, 0)
+        self._collapse_anim = QPropertyAnimation(self.collapse_panel, b"maximumHeight", self); self._collapse_anim.setDuration(170); self._collapse_anim.setEasingCurve(QEasingCurve.InOutCubic)
+        self._update_collapse_buttons()
 
-    def _clear_card_layout(self, layout):
-        while layout.count() > 1:
-            item = layout.takeAt(0)
+    def toggle_collapse(self, panel: str):
+        if panel not in {"tags", "files"}:
+            return
+        opening = self._open_panel != panel
+        self._open_panel = panel if opening else None
+        if opening:
+            self._render_collapse_content(panel)
+        self._update_collapse_buttons()
+        self._collapse_anim.stop(); self._collapse_anim.setStartValue(self.collapse_panel.maximumHeight()); self._collapse_anim.setEndValue(110 if opening else 0); self._collapse_anim.start()
+
+    def _update_collapse_buttons(self):
+        opened = getattr(self, "_open_panel", None)
+        self.btn_tags.setChecked(opened == "tags"); self.btn_files.setChecked(opened == "files")
+        self.btn_tags.setText(f"🏷  Etiketler  {'˄' if opened == 'tags' else '˅'}")
+        self.btn_files.setText(f"📎  Belgeler  {'˄' if opened == 'files' else '˅'}")
+
+    def _clear_collapse_content(self):
+        while self.collapse_content_layout.count() > 1:
+            item = self.collapse_content_layout.takeAt(0)
             widget = item.widget()
-            if widget:
+            if widget is not None:
                 widget.deleteLater()
 
-    def _create_tag_card(self, tag: dict) -> QFrame:
-        name = str((tag or {}).get("name") or "").strip()
-        color = str((tag or {}).get("color") or "#3B82F6")
-        card = QFrame(); card.setObjectName("sideTagCard"); card.setMinimumWidth(0); card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed); card.setFixedHeight(58)
-        card.setStyleSheet("QFrame#sideTagCard{background:#f8fbff; border:1px solid #dbe7f5; border-radius:11px;} QFrame#sideTagCard:hover{background:#eef6ff; border-color:#b8cef0;} QLabel{background:transparent; border:0;} QPushButton{background:#ffffff; color:#334155; border:1px solid #d8e4f2; border-radius:8px; font-size:15px;} QPushButton:hover{background:#fee2e2; color:#b91c1c;}")
-        row = QHBoxLayout(card); row.setContentsMargins(10, 7, 10, 7); row.setSpacing(8)
-        dot = QLabel("●"); dot.setFixedWidth(10); dot.setStyleSheet(f"color:{color}; font-size:12px;")
-        middle = QWidget(); middle.setMinimumWidth(0); middle.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed); middle.setStyleSheet("background:transparent;"); column = QVBoxLayout(middle); column.setContentsMargins(0, 0, 0, 0); column.setSpacing(1)
-        title = ElidedLabel(name); title.setMinimumWidth(0); title.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed); title.setToolTip(name); title.setStyleSheet("color:#10233d; font-size:12px; font-weight:900;")
-        meta = QLabel("Sözleşmeye atanmış etiket"); meta.setStyleSheet("color:#64748b; font-size:10px;")
-        column.addWidget(title); column.addWidget(meta)
-        remove = QPushButton("×"); remove.setFixedSize(29, 29); remove.setToolTip("Etiketi kaldır"); remove.clicked.connect(lambda _=False, nm=name: self.remove_contract_tag(nm))
-        row.addWidget(dot); row.addWidget(middle, 1); row.addWidget(remove)
-        return card
+    def _render_collapse_content(self, panel: str):
+        self._clear_collapse_content()
+        if panel == "tags":
+            self.collapse_total.setText("")
+            for tag in self._ordered_contract_tags():
+                self.collapse_content_layout.insertWidget(self.collapse_content_layout.count() - 1, self.create_tag_card(tag))
+            add = QPushButton("+ Etiket Ekle"); add.setObjectName("collapseAddBtn"); add.clicked.connect(self.open_tag_assign_dialog)
+        else:
+            files = list(self._contract_files_cache)
+            for metadata in files:
+                self.collapse_content_layout.insertWidget(self.collapse_content_layout.count() - 1, self.create_file_card(metadata))
+            add = QPushButton("+ Dosya Ekle"); add.setObjectName("collapseAddBtn"); add.clicked.connect(self.add_contract_file)
+            self.collapse_total.setText(f"Toplam {self.format_file_size(sum(int(item.get('size_bytes', 0) or 0) for item in files))}")
+        add.setFixedHeight(38); add.setStyleSheet("QPushButton{background:#eff6ff; color:#1d4ed8; border:1px dashed #93c5fd; border-radius:8px; padding:6px 11px; font-size:11px; font-weight:800;} QPushButton:hover{background:#dbeafe;}")
+        self.collapse_content_layout.insertWidget(self.collapse_content_layout.count() - 1, add)
 
-    def render_contract_tags(self):
-        self.render_contract_files()
-        if not hasattr(self, "tag_cards_layout"):
-            return
-        self._clear_card_layout(self.tag_cards_layout)
-        ordered = self._ordered_contract_tags()
-        self.side_tab_badges[0].setText(str(len(ordered)))
-        if not ordered:
-            empty = QLabel("Henüz etiket atanmadı."); empty.setObjectName("sidePanelEmpty"); empty.setAlignment(Qt.AlignCenter)
-            self.tag_cards_layout.insertWidget(0, empty)
-            return
-        for tag in ordered:
-            self.tag_cards_layout.insertWidget(self.tag_cards_layout.count() - 1, self._create_tag_card(tag))
+    def _update_collapse_badges(self):
+        self.badge_tags.setText(str(len(self._ordered_contract_tags())))
+        self.badge_files.setText(str(len(self._contract_files_cache)))
+
+    def _ordered_contract_tags(self) -> List[dict]:
+        return sorted([dict(t) for t in self.contract_tags if str((t or {}).get("name") or "").strip()], key=lambda x: self._tag_key(str(x.get("name", ""))))
+
+    def create_tag_card(self, tag: dict) -> QFrame:
+        name = str((tag or {}).get("name") or "").strip(); color = str((tag or {}).get("color") or "#3B82F6")
+        chip = QFrame(); chip.setFixedHeight(38); chip.setStyleSheet("QFrame{background:#ffffff; border:1px solid #dbe7f5; border-radius:9px;} QLabel{background:transparent; border:0;} QPushButton{background:transparent; color:#64748b; border:0; font-size:14px; font-weight:900;} QPushButton:hover{color:#dc2626; background:#fee2e2; border-radius:7px;}")
+        row = QHBoxLayout(chip); row.setContentsMargins(8, 4, 5, 4); row.setSpacing(5)
+        dot = QLabel("●"); dot.setStyleSheet(f"color:{color}; font-size:11px;")
+        title = ElidedLabel(name); title.setToolTip(name); title.setMaximumWidth(150); title.setStyleSheet("color:#10233d; font-size:11px; font-weight:800;")
+        remove = QPushButton("×"); remove.setFixedSize(24, 24); remove.setToolTip("Etiketi kaldır"); remove.clicked.connect(lambda _=False, nm=name: self.remove_contract_tag(nm))
+        row.addWidget(dot); row.addWidget(title); row.addWidget(remove)
+        return chip
 
     @staticmethod
-    def _format_file_size(size_bytes: int) -> str:
+    def format_file_size(size_bytes: int) -> str:
         size = float(size_bytes or 0)
-        if size < 1024:
-            return f"{int(size)} B"
-        if size < 1024 * 1024:
-            return f"{size / 1024:.0f} KB"
+        if size < 1024: return f"{int(size)} B"
+        if size < 1024 * 1024: return f"{size / 1024:.0f} KB"
         return f"{size / (1024 * 1024):.1f} MB"
 
     @staticmethod
-    def _format_file_date(created_at: str) -> str:
+    def format_file_date(created_at: str) -> str:
         raw = str(created_at or "").strip()
-        if not raw:
-            return "-"
+        if not raw: return "-"
         try:
             parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
-            if parsed.date() == date.today():
-                return "Bugün"
-            return parsed.strftime("%d.%m.%Y")
+            return "Bugün" if parsed.date() == date.today() else parsed.strftime("%d.%m.%Y")
         except ValueError:
             return raw[:10]
 
     @staticmethod
-    def _file_type_style(ext: str) -> Tuple[str, str]:
+    def file_type_style(ext: str) -> Tuple[str, str]:
         extension = str(ext or "").strip().lower()
         if extension == "pdf": return "PDF", "#ef4444"
         if extension in {"doc", "docx"}: return "DOC", "#2563eb"
@@ -4961,37 +4912,35 @@ class ContractWorkWindow(QDialog):
         if extension in {"png", "jpg", "jpeg"}: return "IMG", "#7c3aed"
         return "TXT", "#64748b"
 
-    def _create_file_card(self, metadata: dict) -> QFrame:
-        file_id = int(metadata["id"]); filename = str(metadata.get("filename") or "")
-        ext = str(metadata.get("file_ext") or "").upper() or "DOSYA"
-        icon_text, icon_color = self._file_type_style(ext)
-        card = QFrame(); card.setObjectName("sideFileCard"); card.setMinimumWidth(0); card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed); card.setFixedHeight(62); card.setProperty("contractFileId", file_id); card.installEventFilter(self)
-        card.setStyleSheet("QFrame#sideFileCard{background:#f8fbff; border:1px solid #dbe7f5; border-radius:12px;} QFrame#sideFileCard:hover{background:#eef6ff; border-color:#b8cef0;} QLabel{background:transparent; border:0;} QToolButton{background:#ffffff; color:#334155; border:1px solid #d8e4f2; border-radius:8px; font-size:16px; font-weight:900;} QToolButton:hover{background:#eff6ff; border-color:#b8cef0;}")
-        row = QHBoxLayout(card); row.setContentsMargins(10, 8, 10, 8); row.setSpacing(9)
-        icon = QLabel(icon_text); icon.setFixedSize(40, 40); icon.setAlignment(Qt.AlignCenter); icon.setStyleSheet(f"background:{icon_color}; color:#ffffff; border-radius:11px; font-size:13px; font-weight:900;")
-        middle = QWidget(); middle.setMinimumWidth(0); middle.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed); middle.setStyleSheet("background:transparent;"); column = QVBoxLayout(middle); column.setContentsMargins(0, 0, 0, 0); column.setSpacing(2)
-        title = ElidedLabel(filename); title.setMinimumWidth(0); title.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed); title.setToolTip(filename); title.setStyleSheet("color:#10233d; font-size:12px; font-weight:900;")
-        meta = QLabel(f"{ext}  ·  {self._format_file_size(metadata.get('size_bytes', 0))}  ·  {self._format_file_date(metadata.get('created_at', ''))}"); meta.setMinimumWidth(0); meta.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed); meta.setStyleSheet("color:#64748b; font-size:10px;")
-        column.addWidget(title); column.addWidget(meta)
-        menu_btn = QToolButton(); menu_btn.setText("⋯"); menu_btn.setFixedSize(30, 30); menu_btn.setToolTip("Menü"); menu_btn.clicked.connect(lambda _=False, fid=file_id, btn=menu_btn: self.show_contract_file_button_menu(fid, btn))
-        row.addWidget(icon); row.addWidget(middle, 1); row.addWidget(menu_btn)
+    def create_file_card(self, metadata: dict) -> QFrame:
+        file_id = int(metadata["id"]); filename = str(metadata.get("filename") or ""); ext = str(metadata.get("file_ext") or "").upper() or "DOSYA"; icon_text, icon_color = self.file_type_style(ext)
+        card = QFrame(); card.setFixedHeight(40); card.setMinimumWidth(190); card.setMaximumWidth(270); card.setProperty("contractFileId", file_id); card.installEventFilter(self)
+        card.setStyleSheet("QFrame{background:#ffffff; border:1px solid #dbe7f5; border-radius:9px;} QLabel{background:transparent; border:0;} QToolButton{background:transparent; color:#334155; border:0; font-size:15px; font-weight:900;} QToolButton:hover{background:#eff6ff; border-radius:7px;}")
+        row = QHBoxLayout(card); row.setContentsMargins(5, 4, 4, 4); row.setSpacing(5)
+        icon = QLabel(icon_text); icon.setFixedSize(31, 30); icon.setAlignment(Qt.AlignCenter); icon.setStyleSheet(f"background:{icon_color}; color:#ffffff; border-radius:7px; font-size:10px; font-weight:900;")
+        title = ElidedLabel(filename); title.setMinimumWidth(55); title.setToolTip(filename); title.setStyleSheet("color:#10233d; font-size:10px; font-weight:800;")
+        size = QLabel(self.format_file_size(metadata.get("size_bytes", 0))); size.setStyleSheet("color:#64748b; font-size:9px;")
+        menu_btn = QToolButton(); menu_btn.setText("⋯"); menu_btn.setFixedSize(24, 24); menu_btn.setToolTip("Menü"); menu_btn.clicked.connect(lambda _=False, fid=file_id, btn=menu_btn: self.show_contract_file_button_menu(fid, btn))
+        row.addWidget(icon); row.addWidget(title, 1); row.addWidget(size); row.addWidget(menu_btn)
         return card
 
-    def render_contract_files(self):
-        if not hasattr(self, "file_cards_layout"):
-            return
+    def refresh_contract_tags_panel(self):
+        self._update_collapse_badges()
+        if self._open_panel == "tags": self._render_collapse_content("tags")
+
+    def refresh_contract_files_panel(self):
         try:
-            files = self.store.list_contract_files(self.ci.platform, self.ci.no, self.ci.contract_type)
+            self._contract_files_cache = self.store.list_contract_files(self.ci.platform, self.ci.no, self.ci.contract_type)
         except Exception:
-            files = []
-        self._clear_card_layout(self.file_cards_layout)
-        for metadata in files:
-            self.file_cards_layout.insertWidget(self.file_cards_layout.count() - 1, self._create_file_card(metadata))
-        if not files:
-            empty = QLabel("Henüz belge eklenmedi."); empty.setObjectName("sidePanelEmpty"); empty.setAlignment(Qt.AlignCenter)
-            self.file_cards_layout.insertWidget(0, empty)
-        self.side_tab_badges[1].setText(str(len(files)))
-        self.file_total_label.setText(f"Toplam {self._format_file_size(sum(int(item.get('size_bytes', 0) or 0) for item in files))}")
+            self._contract_files_cache = []
+        self._update_collapse_badges()
+        if self._open_panel == "files": self._render_collapse_content("files")
+
+    def render_contract_tags(self):
+        self.refresh_contract_files_panel(); self.refresh_contract_tags_panel()
+
+    def render_contract_files(self):
+        self.refresh_contract_files_panel()
 
     def add_contract_file(self):
         path, _ = QFileDialog.getOpenFileName(self, "Sözleşmeye Dosya Ekle", "", "PDF/Word/Excel/Resim/TXT (*.pdf *.doc *.docx *.xls *.xlsx *.png *.jpg *.jpeg *.txt)")
@@ -5043,97 +4992,6 @@ class ContractWorkWindow(QDialog):
         menu.addSeparator()
         menu.addAction("Sil", lambda: self.delete_contract_file(file_id))
         menu.exec(button.mapToGlobal(QPoint(0, button.height())))
-
-    @staticmethod
-    def _format_file_size(size_bytes: int) -> str:
-        size = float(size_bytes or 0)
-        if size < 1024:
-            return f"{int(size)} B"
-        if size < 1024 * 1024:
-            return f"{size / 1024:.0f} KB"
-        return f"{size / (1024 * 1024):.1f} MB"
-
-    @staticmethod
-    def _contract_file_icon(ext: str) -> str:
-        extension = str(ext or "").lower()
-        if extension == "pdf": return "📄"
-        if extension in {"doc", "docx"}: return "📝"
-        if extension in {"xls", "xlsx"}: return "📊"
-        if extension in {"png", "jpg", "jpeg"}: return "🖼"
-        return "📎"
-
-    def render_contract_files(self):
-        if not hasattr(self, "contract_files_list"):
-            return
-        try:
-            files = self.store.list_contract_files(self.ci.platform, self.ci.no, self.ci.contract_type)
-        except Exception:
-            files = []
-        self.contract_files_list.clear()
-        for metadata in files:
-            ext = str(metadata.get("file_ext") or "").upper() or "DOSYA"
-            text = f"{self._contract_file_icon(ext)} {metadata.get('filename', '')}\n{ext} · {self._format_file_size(metadata.get('size_bytes', 0))}"
-            item = QListWidgetItem(text)
-            item.setData(Qt.UserRole, int(metadata["id"]))
-            item.setToolTip(str(metadata.get("filename") or ""))
-            self.contract_files_list.addItem(item)
-        if hasattr(self, "contract_side_tabs"):
-            self.contract_side_tabs.setTabText(self.documents_tab_index, f"Belgeler {len(files)}")
-
-    def add_contract_file(self):
-        path, _ = QFileDialog.getOpenFileName(self, "Sözleşmeye Dosya Ekle", "", "PDF/Word/Excel/Resim/TXT (*.pdf *.doc *.docx *.xls *.xlsx *.png *.jpg *.jpeg *.txt)")
-        if not path:
-            return
-        try:
-            self.store.add_contract_file(self.ci.platform, self.ci.no, path, self.ci.contract_type)
-            self.render_contract_files()
-        except Exception as exc:
-            QMessageBox.warning(self, "Dosya eklenemedi", str(exc))
-
-    def open_contract_file(self, file_id: int):
-        try:
-            filename, _mime, content = self.store.get_contract_file_bytes(file_id)
-            suffix = Path(filename).suffix
-            temp = tempfile.NamedTemporaryFile(prefix="sts_contract_", suffix=suffix, delete=False)
-            try:
-                temp.write(content)
-            finally:
-                temp.close()
-            QDesktopServices.openUrl(QUrl.fromLocalFile(temp.name))
-        except Exception as exc:
-            QMessageBox.warning(self, "Belge açılamadı", str(exc))
-
-    def export_contract_file(self, file_id: int):
-        try:
-            filename, _mime, _content = self.store.get_contract_file_bytes(file_id)
-            target, _ = QFileDialog.getSaveFileName(self, "Belgeyi Dışa Aktar", filename)
-            if not target:
-                return
-            self.store.export_contract_file(file_id, target)
-            QMessageBox.information(self, "Belge dışa aktarıldı", "Belge başarıyla dışa aktarıldı.")
-        except Exception as exc:
-            QMessageBox.warning(self, "Belge dışa aktarılamadı", str(exc))
-
-    def delete_contract_file(self, file_id: int):
-        if QMessageBox.question(self, "Belgeyi Sil", "Belge STS dosyasından silinsin mi? Orijinal dosyaya dokunulmaz.") != QMessageBox.Yes:
-            return
-        try:
-            self.store.delete_contract_file(file_id)
-            self.render_contract_files()
-        except Exception as exc:
-            QMessageBox.warning(self, "Belge silinemedi", str(exc))
-
-    def show_contract_file_menu(self, pos):
-        item = self.contract_files_list.itemAt(pos)
-        if not item:
-            return
-        file_id = int(item.data(Qt.UserRole))
-        menu = QMenu(self)
-        menu.addAction("Aç", lambda: self.open_contract_file(file_id))
-        menu.addAction("Dışa Aktar", lambda: self.export_contract_file(file_id))
-        menu.addSeparator()
-        menu.addAction("Sil", lambda: self.delete_contract_file(file_id))
-        menu.exec(self.contract_files_list.mapToGlobal(pos))
 
     def open_tag_assign_dialog(self):
         dlg = TagAssignDialog(self.store, self.contract_tags, self)
@@ -6178,6 +6036,10 @@ class MainWindow(QMainWindow):
         self._version_baseline_signature = None
         self.calendar_window: Optional[ContractCalendarWindow] = None
         self._pending_select_platform: Optional[str] = None
+        self.selected_platforms: set[str] = set()
+        self.multi_platform_mode: bool = False
+        self._updating_platform_list = False
+        self._platform_checkbox_changed: Optional[str] = None
         self.setWindowTitle(APP_TITLE)
         icon_path = app_icon_path()
         if icon_path.exists():
@@ -6210,9 +6072,9 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Excel’e Aktar", "Excel’e aktarım yalnızca STS veri dosyalarında desteklenir.")
             return
         active_platform = ""
-        cur = self.platform_list.currentItem() if hasattr(self, "platform_list") else None
-        if cur:
-            active_platform = str(cur.data(Qt.UserRole) or "")
+        selected = set(getattr(self, "selected_platforms", set()))
+        if len(selected) == 1:
+            active_platform = next(iter(selected))
         from src.ui.dialogs.excel_export_options import ExcelExportDialog
         dlg = ExcelExportDialog(self.store, self, active_platform=active_platform, contract_index=getattr(self, "contract_index", None))
         if not dlg.exec() or not dlg.result_options:
@@ -6388,8 +6250,23 @@ class MainWindow(QMainWindow):
 
         body=QHBoxLayout(); body.setSpacing(8); main.addLayout(body,1)
         left=QFrame(); left.setObjectName("panel"); left.setFixedWidth(350); lv=QVBoxLayout(left); lv.setContentsMargins(0, 0, 0, 0); lv.setSpacing(0)
-        h=QLabel("Platformlar"); h.setObjectName("panelTitle"); lv.addWidget(h)
-        self.platform_list=QListWidget(); self.platform_list.currentRowChanged.connect(self.on_platform_row_changed); lv.addWidget(self.platform_list,1)
+        platform_head = QWidget(); ph = QHBoxLayout(platform_head); ph.setContentsMargins(12, 8, 12, 8); ph.setSpacing(6)
+        h=QLabel("Platformlar"); h.setObjectName("panelTitle"); ph.addWidget(h); ph.addStretch(1)
+        self.platform_selection_badge = QLabel(""); self.platform_selection_badge.setObjectName("platformSelectionBadge")
+        self.platform_selection_badge.setStyleSheet("QLabel{background:#dbeafe;color:#1d4ed8;border-radius:9px;padding:2px 7px;font-size:11px;font-weight:800;}")
+        self.platform_selection_badge.hide(); ph.addWidget(self.platform_selection_badge)
+        lv.addWidget(platform_head)
+        self.platform_list=QListWidget(); self.platform_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.platform_list.itemClicked.connect(self.on_platform_clicked)
+        self.platform_list.itemChanged.connect(self._on_platform_item_changed)
+        self.platform_list.customContextMenuRequested.connect(self._on_platform_context_menu_requested)
+        lv.addWidget(self.platform_list,1)
+        self.platform_info_bar = QFrame(); self.platform_info_bar.setObjectName("platformInfoBar")
+        self.platform_info_bar.setStyleSheet("QFrame#platformInfoBar{background:#f8fbff;border-top:1px solid #dbe7f5;} QLabel{color:#64748b;font-size:11px;} QPushButton{background:transparent;border:0;color:#1d4ed8;font-size:11px;font-weight:800;padding:2px 4px;}")
+        pi = QHBoxLayout(self.platform_info_bar); pi.setContentsMargins(10, 4, 8, 4); pi.setSpacing(4)
+        self.platform_info_label = QLabel(""); pi.addWidget(self.platform_info_label); pi.addStretch(1)
+        clear_platforms = QPushButton("temizle"); clear_platforms.clicked.connect(self.clear_platform_selection); pi.addWidget(clear_platforms)
+        self.platform_info_bar.hide(); lv.addWidget(self.platform_info_bar)
         new=QPushButton("+ Yeni Sözleşme"); new.clicked.connect(self.new_contract); new.setMinimumHeight(46); lv.addWidget(new)
         body.addWidget(left, 0)
 
@@ -6836,17 +6713,139 @@ class MainWindow(QMainWindow):
         self.position_query_logo_background()
 
     def _set_platform_items(self, platforms: List[str]):
-        self.platform_list.clear()
-        counts: Dict[str, int] = {}
-        for it in self.contract_index:
-            p = str(it.get("platform", ""))
-            counts[p] = counts.get(p, 0) + 1
-        for p in platforms:
-            cnt = counts.get(str(p), 0)
-            row = QListWidgetItem(f"{p}   ({cnt})")
-            row.setData(Qt.UserRole, p)
-            row.setSizeHint(QSize(0, 54))
-            self.platform_list.addItem(row)
+        available = {str(p) for p in platforms}
+        self.selected_platforms.intersection_update(available)
+        if not self.selected_platforms:
+            self.multi_platform_mode = False
+        self._updating_platform_list = True
+        try:
+            self.platform_list.clear()
+            counts: Dict[str, int] = {}
+            for it in self.contract_index:
+                p = str(it.get("platform", ""))
+                counts[p] = counts.get(p, 0) + 1
+            for p in platforms:
+                platform = str(p)
+                row = QListWidgetItem(f"{platform}   ({counts.get(platform, 0)})")
+                row.setData(Qt.UserRole, platform)
+                row.setSizeHint(QSize(0, 54))
+                self.platform_list.addItem(row)
+        finally:
+            self._updating_platform_list = False
+        self.refresh_platform_list_ui()
+
+    def _all_platform_names(self) -> List[str]:
+        return [
+            str(self.platform_list.item(i).data(Qt.UserRole) or "")
+            for i in range(self.platform_list.count())
+            if str(self.platform_list.item(i).data(Qt.UserRole) or "")
+        ]
+
+    def refresh_platform_list_ui(self):
+        self._updating_platform_list = True
+        try:
+            for i in range(self.platform_list.count()):
+                item = self.platform_list.item(i)
+                platform = str(item.data(Qt.UserRole) or "")
+                flags = item.flags()
+                if self.multi_platform_mode:
+                    item.setFlags(flags | Qt.ItemIsUserCheckable)
+                    item.setCheckState(Qt.Checked if platform in self.selected_platforms else Qt.Unchecked)
+                else:
+                    item.setFlags(flags & ~Qt.ItemIsUserCheckable)
+                item.setSelected(platform in self.selected_platforms)
+        finally:
+            self._updating_platform_list = False
+        count = len(self.selected_platforms)
+        self.platform_selection_badge.setText(f"{count} seçili")
+        self.platform_selection_badge.setVisible(count > 0)
+        self.platform_info_label.setText(f"{count} platform · sağ tık ile düzenle")
+        self.platform_info_bar.setVisible(count > 0)
+
+    def _apply_platform_selection(self):
+        selected = set(self.selected_platforms)
+        self.all_contract_rows = [
+            dict(it) for it in self.contract_index
+            if not selected or str(it.get("platform", "")) in selected
+        ]
+        self._prepare_contract_row_cache(self.all_contract_rows)
+        self._refresh_query_filters()
+        if not selected:
+            self.right_title.setText("Sözleşme Sorgulama")
+            self.update_query_logo_background(None)
+        elif len(selected) == 1:
+            platform = next(iter(selected))
+            self.right_title.setText(f"{platform} - Sözleşmeler")
+            self.update_query_logo_background(platform)
+        else:
+            self.right_title.setText(f"{len(selected)} Platform - Sözleşmeler")
+            self.update_query_logo_background(None)
+        self.refresh_platform_list_ui()
+        self.schedule_apply_contract_filter()
+
+    def on_platform_clicked(self, item: QListWidgetItem):
+        platform = str(item.data(Qt.UserRole) or "")
+        if not platform:
+            return
+        if self.multi_platform_mode:
+            if self._platform_checkbox_changed == platform:
+                self._platform_checkbox_changed = None
+            else:
+                self.toggle_platform_multi(platform)
+        elif self.selected_platforms == {platform}:
+            self.clear_platform_selection()
+        else:
+            self.selected_platforms = {platform}
+            self._apply_platform_selection()
+
+    def _on_platform_item_changed(self, item: QListWidgetItem):
+        if self._updating_platform_list or not self.multi_platform_mode:
+            return
+        platform = str(item.data(Qt.UserRole) or "")
+        checked = item.checkState() == Qt.Checked
+        if checked != (platform in self.selected_platforms):
+            self._platform_checkbox_changed = platform
+            QTimer.singleShot(0, lambda p=platform: self._clear_platform_checkbox_marker(p))
+            self.toggle_platform_multi(platform)
+
+    def _clear_platform_checkbox_marker(self, platform: str):
+        if self._platform_checkbox_changed == platform:
+            self._platform_checkbox_changed = None
+
+    def _on_platform_context_menu_requested(self, pos: QPoint):
+        item = self.platform_list.itemAt(pos)
+        if item:
+            self.show_platform_context_menu(str(item.data(Qt.UserRole) or ""), self.platform_list.viewport().mapToGlobal(pos))
+
+    def show_platform_context_menu(self, platform: str, global_pos: QPoint):
+        if not platform:
+            return
+        menu = QMenu(self)
+        label = "− Seçimden çıkar" if platform in self.selected_platforms else "+ Çoklu seçime ekle"
+        menu.addAction(label, lambda: self.toggle_platform_multi(platform))
+        menu.addAction("☑ Tümünü seç", self.select_all_platforms)
+        menu.addAction("× Seçimi temizle", self.clear_platform_selection)
+        menu.exec(global_pos)
+
+    def toggle_platform_multi(self, platform: str):
+        self.multi_platform_mode = True
+        if platform in self.selected_platforms:
+            self.selected_platforms.remove(platform)
+        else:
+            self.selected_platforms.add(platform)
+        if not self.selected_platforms:
+            self.multi_platform_mode = False
+        self._apply_platform_selection()
+
+    def select_all_platforms(self):
+        self.selected_platforms = set(self._all_platform_names())
+        self.multi_platform_mode = bool(self.selected_platforms)
+        self._apply_platform_selection()
+
+    def clear_platform_selection(self):
+        self.selected_platforms.clear()
+        self.multi_platform_mode = False
+        self._apply_platform_selection()
 
     def _clear_upcoming_layout(self):
         while self.upcoming_layout.count():
@@ -6895,18 +6894,12 @@ class MainWindow(QMainWindow):
             self.upcoming_layout.addWidget(b)
         self.upcoming_layout.addStretch()
 
-    def on_platform_row_changed(self, row: int):
-        if row < 0:
-            return
-        item = self.platform_list.item(row)
-        if not item:
-            return
-        platform = item.data(Qt.UserRole) or item.text()
-        self.update_query_logo_background(str(platform))
-        self.load_platform_contracts(str(platform))
-
     def set_empty_state(self):
         self.platform_list.clear()
+        self.selected_platforms.clear()
+        self.multi_platform_mode = False
+        if hasattr(self, "platform_selection_badge"):
+            self.refresh_platform_list_ui()
         self.all_contract_rows = []
         self.contract_table.setRowCount(0)
         self.set_index_progress_badge(False, 0)
@@ -6964,12 +6957,15 @@ class MainWindow(QMainWindow):
         self.store = None
         self.contract_index = []
         self.all_contract_rows = []
+        self.selected_platforms.clear()
+        self.multi_platform_mode = False
         self._store_loading = True
         self._index_ready_for_use = False
         self._last_load_timings = {}
         self._version_baseline_signature = None
         if hasattr(self, "platform_list"):
             self.platform_list.clear()
+            self.refresh_platform_list_ui()
         if hasattr(self, "contract_table"):
             self.contract_table.setRowCount(0)
         self._streaming_index = False
@@ -7000,8 +6996,7 @@ class MainWindow(QMainWindow):
         self._tag_color_map_cache = None
         self._set_platform_items(self.store.platform_names())
         self.update_alert_strip()
-        if self.platform_list.count():
-            self.platform_list.setCurrentRow(0)
+        self._apply_platform_selection()
         self.connection_label.setText("✓ STS veri dosyası bağlı")
 
     def is_sts_mode(self) -> bool:
@@ -7072,7 +7067,7 @@ class MainWindow(QMainWindow):
             if target:
                 self.select_platform(target)
             elif self.platform_list.count():
-                self.platform_list.setCurrentRow(0)
+                self._apply_platform_selection()
             else:
                 self.set_empty_state()
         finally:
@@ -7101,8 +7096,8 @@ class MainWindow(QMainWindow):
                 self.refresh_open_calendar()
                 if select_platform:
                     self.select_platform(select_platform)
-                elif self.platform_list.count() and self.platform_list.currentRow() < 0:
-                    self.platform_list.setCurrentRow(0)
+                else:
+                    self._apply_platform_selection()
                 self.connection_label.setText("✓ STS veri dosyası bağlı")
                 return
             self._pending_select_platform = select_platform
@@ -7118,10 +7113,8 @@ class MainWindow(QMainWindow):
                 self.refresh_open_calendar()
                 if select_platform:
                     self.select_platform(select_platform)
-                elif self.platform_list.count() and self.platform_list.currentRow() < 0:
-                    self.platform_list.setCurrentRow(0)
                 else:
-                    self.schedule_apply_contract_filter()
+                    self._apply_platform_selection()
             finally:
                 self.set_busy_overlay(False)
             return
@@ -7132,11 +7125,8 @@ class MainWindow(QMainWindow):
         self._set_platform_items(self.store.platform_names())
         self.update_alert_strip()
         self.refresh_open_calendar()
-        cur = self.platform_list.currentItem()
-        if cur:
-            self.load_platform_contracts(str(cur.data(Qt.UserRole) or ""))
-        elif self.platform_list.count():
-            self.platform_list.setCurrentRow(0)
+        if self.platform_list.count():
+            self._apply_platform_selection()
         else:
             self.set_empty_state()
 
@@ -7154,8 +7144,7 @@ class MainWindow(QMainWindow):
         platforms = self.store.platform_names()
         self._set_platform_items(platforms)
         self.update_alert_strip()
-        if self.platform_list.count() and self.platform_list.currentRow() < 0:
-            self.platform_list.setCurrentRow(0)
+        self._apply_platform_selection()
 
     def on_excel_index_batch(self, platform: str, rows, mapped_percent: int, message: str):
         new_rows = [dict(it) for it in list(rows or [])]
@@ -7166,10 +7155,7 @@ class MainWindow(QMainWindow):
         self.contract_index.extend(new_rows)
         self.connection_label.setText(f"Excel indeksleniyor %{int(mapped_percent or 0)}")
         if self.store:
-            cur_item = self.platform_list.currentItem()
-            cur_platform = str(cur_item.data(Qt.UserRole) or "") if cur_item else ""
-            if cur_platform and cur_platform == str(platform):
-                self.load_platform_contracts(cur_platform)
+            self._apply_platform_selection()
 
     def on_excel_index_ready(self, platforms, index, timings):
         self.contract_index = list(index or [])
@@ -7189,16 +7175,13 @@ class MainWindow(QMainWindow):
         self.refresh_open_calendar()
         if self._pending_select_platform:
             self.select_platform(self._pending_select_platform)
-        elif self.platform_list.count() and self.platform_list.currentRow() < 0:
-            self.platform_list.setCurrentRow(0)
-        elif not self.platform_list.count():
+        elif self.platform_list.count():
+            self._apply_platform_selection()
+        else:
             self.contract_table.setRowCount(0)
 
     def on_excel_loaded(self, store, index):
-        selected_platform = ""
-        cur = self.platform_list.currentItem() if hasattr(self, "platform_list") else None
-        if cur:
-            selected_platform = str(cur.data(Qt.UserRole) or "")
+        selected_platform = next(iter(self.selected_platforms)) if len(self.selected_platforms) == 1 else ""
         self.store = store
         self.contract_index = list(index or [])
         self.path = self.store.path
@@ -7408,23 +7391,17 @@ class MainWindow(QMainWindow):
         self.update_query_logo_background(None)
         self.update_alert_strip()
         self.refresh_open_calendar()
-        if self.platform_list.count():
-            self.platform_list.setCurrentRow(0)
+        self._apply_platform_selection()
 
-    def select_platform(self,p):
-        for i in range(self.platform_list.count()):
-            it = self.platform_list.item(i)
-            if str(it.data(Qt.UserRole) or "") == str(p):
-                self.platform_list.setCurrentRow(i)
-                return
+    def select_platform(self, p):
+        platform = str(p or "")
+        if platform and platform in self._all_platform_names():
+            self.selected_platforms = {platform}
+            self.multi_platform_mode = False
+            self._apply_platform_selection()
 
     def load_platform_contracts(self, platform):
-        if not platform: return
-        self.all_contract_rows = [dict(it) for it in self.contract_index if str(it.get("platform", "")) == str(platform)]
-        self._prepare_contract_row_cache(self.all_contract_rows)
-        self._refresh_query_filters()
-        self.right_title.setText(f"{platform} - Sözleşmeler")
-        self.schedule_apply_contract_filter()
+        self.select_platform(platform)
 
     def toggle_filter_bar(self):
         visible = not self.filter_bar.isVisible()
@@ -7567,7 +7544,10 @@ class MainWindow(QMainWindow):
             col_filters = dict(self._filter_header._col_filters)
             date_ranges = dict(getattr(self._filter_header, "_date_ranges", {}))
             day_ranges = dict(getattr(self._filter_header, "_day_ranges", {}))
+        selected_platforms = set(getattr(self, "selected_platforms", set()))
         for it in getattr(self, "all_contract_rows", []):
+            if selected_platforms and str(it.get("platform", "")) not in selected_platforms:
+                continue
             hay = str(it.get("_search_norm") or "")
             if q and q not in hay:
                 continue
@@ -7670,6 +7650,9 @@ class MainWindow(QMainWindow):
             self.contract_table.setRowCount(len(rows))
             self.contract_table._visible_rows = rows
             for r,it in enumerate(rows):
+                for c in range(self.contract_table.columnCount()):
+                    self.contract_table.removeCellWidget(r, c)
+                self.contract_table.setRowHeight(r, 36)
                 cls, st_label, days_text, tdate = self._contract_health(it)
                 vals=[
                     it.get("type_display", it.get("type", "")) or "",
@@ -7689,7 +7672,7 @@ class MainWindow(QMainWindow):
                             empty = QTableWidgetItem("")
                             empty.setFlags(empty.flags() & ~Qt.ItemIsEditable)
                             self.contract_table.setItem(r, 6, empty)
-                            self.contract_table.setRowHeight(r, 36)
+                            self.contract_table.setRowHeight(r, max(self.contract_table.rowHeight(r), 52 if len(self.selected_platforms) != 1 else 36))
                             continue
                         wrap = QWidget()
                         wrap.setStyleSheet("QWidget{background:transparent;border:0px;}")
@@ -7715,7 +7698,7 @@ class MainWindow(QMainWindow):
                         CHIP_H, CHIP_SP, PAD = 22, 3, 8
                         n = len(tags_list)
                         row_h = max(36, n * CHIP_H + max(0, n - 1) * CHIP_SP + PAD) if n > 0 else 36
-                        self.contract_table.setRowHeight(r, row_h)
+                        self.contract_table.setRowHeight(r, max(self.contract_table.rowHeight(r), row_h, 52 if len(self.selected_platforms) != 1 else 36))
                         continue
                     if c == 7:
                         lbl = QLabel("\U0001F50D")
@@ -7733,6 +7716,15 @@ class MainWindow(QMainWindow):
                         wl.setAlignment(Qt.AlignCenter)
                         wl.addWidget(lbl)
                         self.contract_table.setCellWidget(r, 7, wrap)
+                        continue
+                    if c == 1 and len(self.selected_platforms) != 1:
+                        wrap = QWidget(); wl = QVBoxLayout(wrap); wl.setContentsMargins(4, 3, 4, 3); wl.setSpacing(2)
+                        no_label = QLabel(str(v or "")); no_label.setStyleSheet("QLabel{color:#0f172a;font-size:12px;font-weight:700;}")
+                        platform_badge = QLabel(str(it.get("platform", "") or "")); platform_badge.setStyleSheet("QLabel{background:#e0ecff;color:#1d4ed8;border-radius:7px;padding:1px 5px;font-size:10px;font-weight:800;}")
+                        platform_badge.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
+                        wl.addWidget(no_label); wl.addWidget(platform_badge, 0, Qt.AlignLeft)
+                        self.contract_table.setCellWidget(r, c, wrap)
+                        self.contract_table.setRowHeight(r, max(self.contract_table.rowHeight(r), 52))
                         continue
                     cell = QTableWidgetItem(str(v or ""))
                     cell.setFlags(cell.flags() & ~Qt.ItemIsEditable)
@@ -7798,7 +7790,7 @@ class MainWindow(QMainWindow):
                     if str(platform or "") in platforms:
                         self.select_platform(platform)
                     elif self.platform_list.count():
-                        self.platform_list.setCurrentRow(0)
+                        self._apply_platform_selection()
                     else:
                         self.set_empty_state()
                 finally:
