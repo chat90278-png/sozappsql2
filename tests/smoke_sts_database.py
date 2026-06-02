@@ -23,7 +23,7 @@ with TemporaryDirectory() as td:
         'delivery_components': {'delivery_id', 'component_id', 'planned', 'delivered'},
         'contract_tags': {'contract_id', 'tag_id'},
         'contract_files': {'contract_id', 'filename', 'original_path', 'file_ext', 'mime_type', 'size_bytes', 'content_blob', 'note', 'created_at', 'updated_at'},
-        'activity_logs': {'platform_id', 'entity_type', 'entity_id'},
+        'activity_logs': {'platform_id', 'entity_type', 'entity_id', 'source', 'device_name'},
     }
     for table, columns in expected_columns.items():
         actual = {r[1] for r in db.conn.execute(f'PRAGMA table_info({table})')}

@@ -9,15 +9,17 @@ from src.services.sts_database import STSDatabase, now_iso
 
 
 class STSStore:
-    def __init__(self, path: Path | str):
+    def __init__(self, path: Path | str, actor: str = "Kullanıcı", source: str = "Main UI"):
         self.path = Path(path)
-        self.db = STSDatabase(self.path)
+        self.actor = str(actor or "Kullanıcı")
+        self.source = str(source or "Main UI")
+        self.db = STSDatabase(self.path, source=self.source)
         self._id_cache = {"platform": {}, "component": {}, "user": {}, "tag": {}}
 
-    def current_actor(self) -> str: return "Sistem"
+    def current_actor(self) -> str: return self.actor
     def save(self): self.db.conn.commit()
     def reload_from_disk(self):
-        self.db.close(); self.db = STSDatabase(self.path)
+        self.db.close(); self.db = STSDatabase(self.path, source=self.source)
         self._clear_id_cache()
     @contextmanager
     def batch_save(self):
@@ -133,26 +135,24 @@ class STSStore:
         return self.db.database_stats()
 
     def integrity_check(self):
-        out = self.db.integrity_check()
-        self._log("database_integrity_checked", entity_type="database", payload={"result": out[:10]})
-        return out
+        return self.db.integrity_check()
 
     def foreign_key_check(self):
         return self.db.foreign_key_check()
 
     def vacuum(self):
         res = self.db.vacuum()
-        self._log("database_vacuum_completed", entity_type="database", payload=res)
+        self._log("database_vacuum_completed", entity_type="database", source="Database Manager", payload=res)
         return res
 
     def optimize(self):
         res = self.db.optimize()
-        self._log("database_optimize_completed", entity_type="database", payload=res)
+        self._log("database_optimize_completed", entity_type="database", source="Database Manager", payload=res)
         return res
 
     def backup_database(self, target_path):
         res = self.db.backup_to(target_path)
-        self._log("database_backup_created", entity_type="database", payload=res)
+        self._log("database_backup_created", entity_type="database", source="Database Manager", message="Veritabanı yedeği oluşturuldu", payload=res)
         return res
 
     def supports_database_management(self):
@@ -224,6 +224,7 @@ class STSStore:
         return [{"name":r[0],"yi_yd":r[1] or "Yİ","active":bool(r[2]),"note":r[3] or ""} for r in self.db.conn.execute(q)]
     def write_users(self, users_payload, actor=None):
         ts = now_iso()
+        before_users = {str(row["name"]): {"yi_yd": row["yi_yd"] or "Yİ", "active": bool(row["active"]), "note": row["note"] or ""} for row in self.db.conn.execute("SELECT name,yi_yd,active,note FROM users")}
         rows = []
         seen = set()
         for u in list(users_payload or []):
@@ -251,7 +252,14 @@ class STSStore:
             else:
                 self.db.conn.execute("DELETE FROM users")
         self._clear_id_cache("user")
-        self._log("users_updated", entity_type="user", message="Kullanıcı listesi güncellendi", payload={"count": len(rows)}, actor=actor or self.current_actor())
+        audit_actor = actor or self.current_actor()
+        after_users = {name: {"yi_yd": yi_yd, "active": bool(active), "note": note} for name, yi_yd, active, note, _created, _updated in rows}
+        for name in sorted(set(before_users) | set(after_users)):
+            before_user, after_user = before_users.get(name), after_users.get(name)
+            action = "user_created" if before_user is None else ("user_deleted" if after_user is None else ("user_updated" if before_user != after_user else ""))
+            if action:
+                self._log(action, entity_type="user", entity_key=name, source="Main UI", message={"user_created": "Kullanıcı eklendi", "user_updated": "Kullanıcı güncellendi", "user_deleted": "Kullanıcı silindi"}[action], before=before_user, after=after_user, actor=audit_actor)
+        self._log("users_updated", entity_type="user", message="Kullanıcı listesi güncellendi", payload={"count": len(rows)}, actor=audit_actor)
 
     def load_components(self):
         out=[]
@@ -261,6 +269,7 @@ class STSStore:
         return out
     def write_components(self, components_payload, actor=None):
         ts = now_iso()
+        before_components = {str(row["name"]): {"version": row["version"] or "", "unit": row["unit"] or "Adet", "active": bool(row["active"]), "usage": float(row["usage"] or 1)} for row in self.db.conn.execute("SELECT name,version,unit,active,usage FROM components")}
         normalized = []
         seen = set()
         for c in list(components_payload or []):
@@ -295,7 +304,14 @@ class STSStore:
             else:
                 self.db.conn.execute("DELETE FROM components")
         self._clear_id_cache("component")
-        self._log("components_updated", entity_type="component", message="Bileşen listesi güncellendi", payload={"count": len(normalized)}, actor=actor or self.current_actor())
+        audit_actor = actor or self.current_actor()
+        after_components = {name: {"version": version, "unit": unit, "active": bool(active), "usage": float(usage)} for name, version, unit, active, usage, _platforms in normalized}
+        for name in sorted(set(before_components) | set(after_components)):
+            before_component, after_component = before_components.get(name), after_components.get(name)
+            action = "component_created" if before_component is None else ("component_deleted" if after_component is None else ("component_updated" if before_component != after_component else ""))
+            if action:
+                self._log(action, entity_type="component", entity_key=name, source="Main UI", message={"component_created": "Bileşen eklendi", "component_updated": "Bileşen güncellendi", "component_deleted": "Bileşen silindi"}[action], before=before_component, after=after_component, actor=audit_actor)
+        self._log("components_updated", entity_type="component", message="Bileşen listesi güncellendi", payload={"count": len(normalized)}, actor=audit_actor)
 
 
     def assigned_components(self, platform: str) -> List[str]:
@@ -467,7 +483,7 @@ class STSStore:
                     kind = str((t.get("kind") if isinstance(t, dict) else getattr(t, "kind", "contract")) or "contract")
                     self.db.conn.execute("INSERT INTO tags(name,color,kind,created_at,updated_at) VALUES(?,?,?,?,?)", (nm, color, kind, ts, ts))
                 self.db.conn.execute("INSERT OR IGNORE INTO contract_tags(contract_id,tag_id) VALUES(?,?)", (cid, self.get_tag_id(nm)))
-        self._log("contract_tags_updated", entity_type="contract", entity_id=cid, platform=str(platform or ""), contract_no=str(contract_no or ""), message="Sözleşme etiketleri güncellendi", payload={"count": len(names)}, actor=actor or self.current_actor())
+        self._log("contract_tags_updated", entity_type="contract", entity_id=cid, platform=str(platform or ""), contract_no=str(contract_no or ""), source="Tag Manager", message="Sözleşme etiketleri güncellendi", payload={"count": len(names)}, actor=actor or self.current_actor())
 
 
     def list_contract_files(self, platform, contract_no, contract_type=None):
@@ -502,6 +518,7 @@ class STSStore:
                 (cid, source.name, str(source), ext, mime_type, len(content), content, str(note or ""), ts, ts),
             )
             file_id = int(self.db.conn.execute("SELECT last_insert_rowid()").fetchone()[0])
+        self._log("document_added", entity_type="document", entity_id=file_id, contract_no=str(contract_no or ""), source="Document Manager", message="Belge eklendi", payload={"filename": source.name, "size_bytes": len(content)})
         return file_id
 
     def get_contract_file_bytes(self, file_id):
@@ -517,9 +534,13 @@ class STSStore:
         return {"filename": filename, "mime_type": mime_type, "target_path": str(target), "size_bytes": len(content)}
 
     def delete_contract_file(self, file_id):
+        before = self.db.conn.execute("SELECT id,contract_id,filename,size_bytes,note FROM contract_files WHERE id=?", (int(file_id),)).fetchone()
         with self.db.tx():
             cursor = self.db.conn.execute("DELETE FROM contract_files WHERE id=?", (int(file_id),))
-        return bool(cursor.rowcount)
+        deleted = bool(cursor.rowcount)
+        if deleted:
+            self._log("document_deleted", entity_type="document", entity_id=int(file_id), source="Document Manager", message="Belge silindi", before=dict(before) if before else None)
+        return deleted
 
     def list_main_contracts(self, platform, tags_map=None):
         rows=[]; tags_map = tags_map or self.all_contract_tags_map()
@@ -567,7 +588,16 @@ class STSStore:
         user_names_json = self._encode_user_names(users)
         search_text = " ".join([str(ci.platform or ""), str(ci.no or ""), str(ctype or ""), str(ci.note or ""), user_display, " ".join(users)]).strip()
         ci.user = user_display; ci.users = users
-        row=self.db.conn.execute("SELECT id FROM contracts WHERE platform_id=? AND contract_no=? AND contract_type=?",(platform_id,ci.no,ctype)).fetchone()
+        row=self.db.conn.execute("SELECT id,status,note,completion_date,acceptance_date FROM contracts WHERE platform_id=? AND contract_no=? AND contract_type=?",(platform_id,ci.no,ctype)).fetchone()
+        before_contract = {"status": row[1] or "", "note": row[2] or "", "completion_date": row[3] or "", "acceptance_date": row[4] or ""} if row else None
+        old_systems = {}
+        old_deliveries = {}
+        if row:
+            for old_system in self.db.conn.execute("SELECT id,name,status,completion_date,acceptance_date FROM systems WHERE contract_id=?", (row[0],)):
+                components = {item[0]: float(item[1] or 0) for item in self.db.conn.execute("SELECT c.name,sc.qty FROM system_components sc JOIN components c ON c.id=sc.component_id WHERE sc.system_id=?", (old_system[0],))}
+                old_systems[str(old_system[1])] = {"status": old_system[2] or "", "completion_date": old_system[3] or "", "acceptance_date": old_system[4] or "", "components": components}
+            for old_delivery in self.db.conn.execute("SELECT system_name,name,status,acceptance_date,note FROM deliveries WHERE contract_id=?", (row[0],)):
+                old_deliveries[(str(old_delivery[0]), str(old_delivery[1]))] = {"status": old_delivery[2] or "", "acceptance_date": old_delivery[3] or "", "note": old_delivery[4] or ""}
         with self.db.tx():
             if row:
                 cid=row[0]
@@ -595,7 +625,33 @@ class STSStore:
                         planned=float((delivery.planned or {}).get(cname,0) or 0); delivered=float((delivery.delivered or {}).get(cname,0) or 0)
                         if planned > 0 or delivered > 0:
                             self.db.conn.execute("INSERT INTO delivery_components(delivery_id,component_id,planned,delivered) VALUES(?,?,?,?)",(did,self.get_component_id(cname,create=True),planned,delivered))
-        self._log("contract_updated" if row else "contract_created", entity_type="contract", entity_id=cid, platform=str(ci.platform or ""), contract_no=str(ci.no or ""), payload={"system_count":len(systems or []),"delivery_count":sum(len(v or []) for v in (deliveries or {}).values()),"component_count":sum(len((x.components or {})) for x in (systems or []))}, actor=self.current_actor())
+        after_contract = {"status": str(ci.status or ""), "note": str(ci.note or ""), "completion_date": str(ci.completion_date or ""), "acceptance_date": str(ci.acceptance_date or "")}
+        self._log("contract_updated" if row else "contract_created", entity_type="contract", entity_id=cid, platform=str(ci.platform or ""), contract_no=str(ci.no or ""), source="Contract Detail", message="Sözleşme ana bilgileri güncellendi" if row else "Sözleşme oluşturuldu", before=before_contract, after=after_contract, payload={"system_count":len(systems or []),"delivery_count":sum(len(v or []) for v in (deliveries or {}).values()),"component_count":sum(len((x.components or {})) for x in (systems or []))}, actor=self.current_actor())
+        if before_contract and before_contract.get("status") != after_contract.get("status"):
+            self._log("contract_status_changed", entity_type="contract", entity_id=cid, platform=str(ci.platform or ""), contract_no=str(ci.no or ""), source="Contract Detail", message="Sözleşme durumu güncellendi", before={"status": before_contract.get("status")}, after={"status": after_contract.get("status")}, actor=self.current_actor())
+        new_systems = {str(system.name): {"status": str(system.status or ""), "completion_date": str(system.completion_date or ""), "acceptance_date": str(system.acceptance_date or ""), "components": {str(name): float(qty or 0) for name, qty in (system.components or {}).items() if float(qty or 0) > 0}} for system in (systems or [])}
+        for name in sorted(set(new_systems) | set(old_systems)):
+            before_system, after_system = old_systems.get(name), new_systems.get(name)
+            if before_system is None:
+                self._log("system_created", entity_type="system", entity_key=name, contract_no=str(ci.no or ""), source="System Editor", message="Sistem eklendi", after=after_system)
+            elif after_system is None:
+                self._log("system_deleted", entity_type="system", entity_key=name, contract_no=str(ci.no or ""), source="System Editor", message="Sistem silindi", before=before_system)
+            elif before_system != after_system:
+                self._log("system_updated", entity_type="system", entity_key=name, contract_no=str(ci.no or ""), source="System Editor", message="Sistem güncellendi", before=before_system, after=after_system)
+                if before_system.get("components") != after_system.get("components"):
+                    self._log("system_component_updated", entity_type="system", entity_key=name, contract_no=str(ci.no or ""), source="System Editor", message="Sistem bileşenleri güncellendi", before={"components": before_system.get("components")}, after={"components": after_system.get("components")})
+        new_deliveries = {(str(system_name), str(delivery.name)): {"status": str(delivery.status or ""), "acceptance_date": str(delivery.acceptance_date or ""), "note": str(delivery.note or "")} for system_name, items in (deliveries or {}).items() for delivery in (items or [])}
+        for key in sorted(set(new_deliveries) | set(old_deliveries)):
+            before_delivery, after_delivery = old_deliveries.get(key), new_deliveries.get(key)
+            entity_key = f"{key[0]} / {key[1]}"
+            if before_delivery is None:
+                self._log("delivery_created", entity_type="delivery", entity_key=entity_key, contract_no=str(ci.no or ""), source="Delivery Editor", message="Teslimat eklendi", after=after_delivery)
+            elif after_delivery is None:
+                self._log("delivery_deleted", entity_type="delivery", entity_key=entity_key, contract_no=str(ci.no or ""), source="Delivery Editor", message="Teslimat silindi", before=before_delivery)
+            elif before_delivery != after_delivery:
+                self._log("delivery_updated", entity_type="delivery", entity_key=entity_key, contract_no=str(ci.no or ""), source="Delivery Editor", message="Teslimat güncellendi", before=before_delivery, after=after_delivery)
+                if before_delivery.get("status") != after_delivery.get("status"):
+                    self._log("delivery_status_changed", entity_type="delivery", entity_key=entity_key, contract_no=str(ci.no or ""), source="Delivery Editor", message="Teslimat durumu güncellendi", before={"status": before_delivery.get("status")}, after={"status": after_delivery.get("status")})
         return cid
 
     def load_contract_structure(self, platform, contract_no, start_row=None, contract_type=None):
@@ -632,6 +688,8 @@ class STSStore:
     def delete_contract(self, platform, contract_no, start_row=None, actor=None, progress_cb=None):
         row=self.db.conn.execute("SELECT id FROM contracts WHERE platform_id=? AND contract_no=? ORDER BY id LIMIT 1",(self.get_platform_id(platform),contract_no)).fetchone()
         if not row: return {"platform":platform,"contract_no":contract_no,"start_row":0,"end_row":0,"deleted_rows":0}
-        cid=row[0]; self.db.conn.execute("DELETE FROM contracts WHERE id=?",(cid,)); self.db.conn.commit()
-        self._log("contract_deleted", entity_type="contract", entity_id=cid, platform=str(platform or ""), contract_no=str(contract_no or ""), actor=actor or self.current_actor())
+        cid=row[0]
+        before = self.db.conn.execute("SELECT contract_no,contract_type,status,completion_date,acceptance_date FROM contracts WHERE id=?", (cid,)).fetchone()
+        self.db.conn.execute("DELETE FROM contracts WHERE id=?",(cid,)); self.db.conn.commit()
+        self._log("contract_deleted", entity_type="contract", entity_id=cid, platform=str(platform or ""), contract_no=str(contract_no or ""), source="Contract Detail", message="Sözleşme silindi", before=dict(before) if before else None, actor=actor or self.current_actor())
         return {"platform":platform,"contract_no":contract_no,"start_row":cid,"end_row":cid,"deleted_rows":1}

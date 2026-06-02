@@ -22,7 +22,7 @@ EXPECTED_COLUMNS = {
     "tags": ["id", "name", "color", "kind", "created_at", "updated_at"],
     "contract_tags": ["id", "contract_id", "tag_id"],
     "contract_files": ["id", "contract_id", "filename", "original_path", "file_ext", "mime_type", "size_bytes", "content_blob", "note", "created_at", "updated_at"],
-    "activity_logs": ["id", "created_at", "actor", "action", "entity_type", "entity_id", "entity_key", "platform_id", "contract_no", "message", "before_json", "after_json", "payload_json"],
+    "activity_logs": ["id", "created_at", "actor", "source", "device_name", "action", "entity_type", "entity_id", "entity_key", "platform_id", "contract_no", "message", "before_json", "after_json", "payload_json"],
 }
 
 with TemporaryDirectory() as td:

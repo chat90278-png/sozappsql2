@@ -51,7 +51,7 @@ def create_manual_sts(output_path: Path | str = OUTPUT_PATH) -> Path:
     for suffix in ("-shm", "-wal"):
         Path(f"{output}{suffix}").unlink(missing_ok=True)
 
-    store = STSStore(output)
+    store = STSStore(output, actor="Test", source="Test")
     try:
         for platform in ("AKINCI", "KIZILELMA", "TB2"):
             store.create_platform(platform)
