@@ -2,6 +2,7 @@ from __future__ import annotations
 import json
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QComboBox, QPushButton, QTableWidget, QTableWidgetItem, QHeaderView, QMessageBox, QPlainTextEdit
+from src.services.sts_database import format_log_timestamp
 from src.ui.theme import STYLE
 
 
@@ -32,8 +33,8 @@ class ActivityLogDialog(QDialog):
         btn = QPushButton("Yenile"); btn.clicked.connect(self.refresh_logs)
         for w in [self.search, self.platform, self.action, self.limit, btn]: filt.addWidget(w)
         root.addLayout(filt)
-        self.table = QTableWidget(0,7)
-        self.table.setHorizontalHeaderLabels(["Tarih/Saat","Kullanıcı","İşlem","Tür","Platform","Sözleşme","Açıklama"])
+        self.table = QTableWidget(0,10)
+        self.table.setHorizontalHeaderLabels(["ID", "Tarih", "İşlem Yapan", "İşlem Kaynağı", "Bilgisayar", "İşlem", "Kayıt Türü", "Sözleşme No", "Mesaj", "Detay"])
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.table.cellDoubleClicked.connect(self.open_detail)
@@ -49,8 +50,21 @@ class ActivityLogDialog(QDialog):
         i = self.action.findData(cur); self.action.setCurrentIndex(i if i>=0 else 0); self.action.blockSignals(False)
         self.table.setRowCount(len(self.logs))
         for r,log in enumerate(self.logs):
-            vals=[log.get('created_at',''),log.get('actor',''),log.get('action',''),log.get('entity_type',''),log.get('platform',''),log.get('contract_no',''),log.get('message','')]
-            for c,v in enumerate(vals): self.table.setItem(r,c,QTableWidgetItem(str(v or '')))
+            detail = self._detail_summary(log)
+            vals = [
+                log.get("id", ""), format_log_timestamp(log.get("created_at", "")), log.get("actor") or "-",
+                log.get("source") or "-", log.get("device_name") or "-", log.get("action") or "-",
+                log.get("entity_type") or "-", log.get("contract_no") or "-", log.get("message") or "-", detail,
+            ]
+            for c,v in enumerate(vals): self.table.setItem(r,c,QTableWidgetItem(str(v or '-')))
+
+    def _detail_summary(self, log):
+        parts = []
+        for key in ("before_json", "after_json", "payload_json"):
+            value = log.get(key)
+            if value not in (None, "", "null"):
+                parts.append(f"{key}: {str(value)[:120]}")
+        return " | ".join(parts) or "-"
 
     def _pretty(self, txt):
         if txt in (None, "", "null"): return ""
@@ -62,8 +76,10 @@ class ActivityLogDialog(QDialog):
         log = self.logs[row]
         d = QDialog(self); d.setWindowTitle("Log Detayı"); d.resize(900,650); d.setStyleSheet(STYLE)
         lay = QVBoxLayout(d)
-        keys=["created_at","actor","action","entity_type","entity_id","entity_key","platform","contract_no","message"]
-        for k in keys: lay.addWidget(QLabel(f"{k}: {log.get(k,'') or ''}"))
+        keys=["id","created_at","actor","source","device_name","action","entity_type","entity_id","entity_key","platform","contract_no","message"]
+        for k in keys:
+            value = format_log_timestamp(log.get(k, "")) if k == "created_at" else (log.get(k, "") or "-")
+            lay.addWidget(QLabel(f"{k}: {value}"))
         for k in ["before_json","after_json","payload_json"]:
             lay.addWidget(QLabel(k))
             t=QPlainTextEdit(); t.setReadOnly(True); t.setPlainText(self._pretty(log.get(k))); lay.addWidget(t)

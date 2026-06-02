@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from datetime import date
 from typing import Optional
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QTableWidgetItem
 
+from src.domain.contract_timing import contract_timing
 from src.ui.contract.delivery_user_display import delivery_users_text
 
 
@@ -14,20 +14,13 @@ def update_system_metric_cards(self, sys_info):
         return
     completion = str(getattr(sys_info, "completion_date", "") or "") if sys_info else ""
     acceptance = str(getattr(sys_info, "acceptance_date", "") or "") if sys_info else ""
-    days = "-"
-    parsed_completion = self._parse_iso_date(completion)
-    parsed_acceptance = self._parse_iso_date(acceptance)
-    if parsed_completion and parsed_acceptance:
-        diff = (parsed_acceptance - parsed_completion).days
-        if diff < 0:
-            days = f"{abs(diff)} gün erken teslim edildi"
-        elif diff > 0:
-            days = f"{diff} gün geç teslim edildi"
-        else:
-            days = "Zamanında teslim edildi"
-    elif parsed_completion:
-        left = (parsed_completion - date.today()).days
-        days = f"-{abs(left)} gün" if left < 0 else f"{left} gün"
+    days, _day_num, _timing_kind = contract_timing(
+        completion,
+        acceptance,
+        str(getattr(sys_info, "status", "") or "") if sys_info else "",
+    )
+    if days == "—":
+        days = "-"
     deliveries = self.deliveries.get(sys_info.name, []) if sys_info else []
     values = {
         "completion": completion or "-",
@@ -48,14 +41,15 @@ def refresh_summary_only(self):
         comp = self.summary.item(r, 0).text()
         qty = sys_info.components.get(comp, 0)
         delivered = sum(d.delivered.get(comp, 0) for d in self.deliveries.get(sys_info.name, []))
-        vals = [comp, qty, delivered, qty - delivered]
+        note = str((getattr(sys_info, "component_notes", {}) or {}).get(comp, "") or "")
+        vals = [comp, qty, delivered, qty - delivered, note]
         for c, v in enumerate(vals):
             it = self.summary.item(r, c)
             if it is None:
                 it = QTableWidgetItem()
                 self.summary.setItem(r, c, it)
-            it.setText(self._fmt_num(v) if c else str(v))
-            if c != 1:
+            it.setText(self._fmt_num(v) if c in (1, 2, 3) else str(v))
+            if c not in (1, 4):
                 it.setFlags(it.flags() & ~Qt.ItemIsEditable)
     self._updating_summary = False
 
@@ -74,21 +68,22 @@ def refresh_right(self):
 
     self._updating_summary = True
     self.summary.setRowCount(len(display_comps))
-    self.summary.setColumnCount(4)
-    self.summary.setHorizontalHeaderLabels(["Bileşen", "Sözleşme Adedi", "Teslim Edilen", "Kalan"])
+    self.summary.setColumnCount(5)
+    self.summary.setHorizontalHeaderLabels(["Bileşen", "Sözleşme Adedi", "Teslim Edilen", "Kalan", "Not"])
     if hasattr(self, "configure_summary_columns"):
         self.configure_summary_columns()
     for r, comp in enumerate(display_comps):
         qty = self._as_number(sys_info.components.get(comp, 0))
         delivered = sum(d.delivered.get(comp, 0) for d in self.deliveries.get(sys_info.name, []))
-        vals = [comp, qty, delivered, qty - delivered]
+        note = str((getattr(sys_info, "component_notes", {}) or {}).get(comp, "") or "")
+        vals = [comp, qty, delivered, qty - delivered, note]
         for c, v in enumerate(vals):
-            it = QTableWidgetItem(self._fmt_num(v) if c else str(v))
-            if c == 1:
+            it = QTableWidgetItem(self._fmt_num(v) if c in (1, 2, 3) else str(v))
+            if c in (1, 4):
                 it.setFlags(it.flags() | Qt.ItemIsEditable)
             else:
                 it.setFlags(it.flags() & ~Qt.ItemIsEditable)
-            if c > 0:
+            if c in (1, 2, 3):
                 it.setTextAlignment(Qt.AlignCenter)
             self.summary.setItem(r, c, it)
     self._updating_summary = False

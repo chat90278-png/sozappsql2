@@ -1,3 +1,4 @@
+import sqlite3
 import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -17,12 +18,12 @@ with TemporaryDirectory() as td:
         'component_platforms': {'component_id', 'platform_id'},
         'contracts': {'platform_id', 'user_id'},
         'systems': {'contract_id'},
-        'system_components': {'system_id', 'component_id', 'qty'},
+        'system_components': {'system_id', 'component_id', 'qty', 'note'},
         'deliveries': {'contract_id', 'system_id', 'delivery_user_id'},
         'delivery_components': {'delivery_id', 'component_id', 'planned', 'delivered'},
         'contract_tags': {'contract_id', 'tag_id'},
         'contract_files': {'contract_id', 'filename', 'original_path', 'file_ext', 'mime_type', 'size_bytes', 'content_blob', 'note', 'created_at', 'updated_at'},
-        'activity_logs': {'platform_id', 'entity_type', 'entity_id'},
+        'activity_logs': {'platform_id', 'entity_type', 'entity_id', 'source', 'device_name'},
     }
     for table, columns in expected_columns.items():
         actual = {r[1] for r in db.conn.execute(f'PRAGMA table_info({table})')}

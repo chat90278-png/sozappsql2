@@ -55,8 +55,8 @@ with TemporaryDirectory() as td:
         completion_date="2026-12-31",
     )
     systems = [
-        SystemInfo(name="Sistem-A", components={"GÖVDE": 2, "KANAT": 4, "SIFIR": 0}),
-        SystemInfo(name="Sistem-B", components={"MOTOR": 1, "AVİYONİK": 3, "SIFIR": -1}),
+        SystemInfo(name="Sistem-A", components={"GÖVDE": 2, "KANAT": 4, "SIFIR": 0}, component_notes={"GÖVDE": "A gövde notu", "KANAT": "A kanat notu"}),
+        SystemInfo(name="Sistem-B", components={"MOTOR": 1, "AVİYONİK": 3, "SIFIR": -1}, component_notes={"AVİYONİK": "B aviyonik notu"}),
     ]
     deliveries = {
         "Sistem-A": [
@@ -97,6 +97,10 @@ with TemporaryDirectory() as td:
     assert {item.name: item.components for item in loaded_systems} == {
         "Sistem-A": {"GÖVDE": 2.0, "KANAT": 4.0},
         "Sistem-B": {"MOTOR": 1.0, "AVİYONİK": 3.0},
+    }
+    assert {item.name: item.component_notes for item in loaded_systems} == {
+        "Sistem-A": {"GÖVDE": "A gövde notu", "KANAT": "A kanat notu"},
+        "Sistem-B": {"AVİYONİK": "B aviyonik notu"},
     }
     assert len(loaded_deliveries["Sistem-A"]) == 2
     assert len(loaded_deliveries["Sistem-B"]) == 2

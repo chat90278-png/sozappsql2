@@ -16,13 +16,13 @@ EXPECTED_COLUMNS = {
     "component_platforms": ["id", "component_id", "platform_id", "enabled"],
     "contracts": ["id", "platform_id", "user_id", "contract_no", "user_names", "yi_yd", "contract_type", "type_display", "link_type", "status", "signed_date", "t0_date", "t0_months", "completion_date", "acceptance_date", "content", "note", "is_main", "parent_contract_id", "parent_contract_no", "search_text", "payload_json", "created_at", "updated_at"],
     "systems": ["id", "contract_id", "name", "status", "completion_date", "acceptance_date", "note", "sort_order", "payload_json"],
-    "system_components": ["id", "system_id", "component_id", "qty"],
+    "system_components": ["id", "system_id", "component_id", "qty", "note"],
     "deliveries": ["id", "contract_id", "system_id", "delivery_user_id", "system_name", "name", "status", "acceptance_date", "note", "sort_order", "payload_json"],
     "delivery_components": ["id", "delivery_id", "component_id", "planned", "delivered"],
     "tags": ["id", "name", "color", "kind", "created_at", "updated_at"],
     "contract_tags": ["id", "contract_id", "tag_id"],
     "contract_files": ["id", "contract_id", "filename", "original_path", "file_ext", "mime_type", "size_bytes", "content_blob", "note", "created_at", "updated_at"],
-    "activity_logs": ["id", "created_at", "actor", "action", "entity_type", "entity_id", "entity_key", "platform_id", "contract_no", "message", "before_json", "after_json", "payload_json"],
+    "activity_logs": ["id", "created_at", "actor", "source", "device_name", "action", "entity_type", "entity_id", "entity_key", "platform_id", "contract_no", "message", "before_json", "after_json", "payload_json"],
 }
 
 with TemporaryDirectory() as td:

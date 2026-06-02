@@ -35,6 +35,7 @@ from PySide6.QtWidgets import (
 )
 
 from src.ui.theme import STYLE
+from src.services.sts_database import should_audit_sql, sql_operation
 from src.ui.dialogs.schema_relationships import (
     compact_relationship_text,
     filter_relationship_groups,
@@ -759,7 +760,7 @@ QLabel#sqlResultBadge { background:#d1fae5; color:#065f46; border-radius:5px; pa
             self._set_sql_status("SQL hatası: Veritabanı bağlantısı yok.", error=True)
             return
         started = time.perf_counter()
-        changed = op not in {"SELECT", "PRAGMA", "WITH", "EXPLAIN"}
+        changed = should_audit_sql(op)
         try:
             cursor = conn.execute(sql)
             if op in {"SELECT", "PRAGMA", "WITH", "EXPLAIN"}:
@@ -778,7 +779,8 @@ QLabel#sqlResultBadge { background:#d1fae5; color:#065f46; border-radius:5px; pa
                 self.sql_result_badge.setText(f"{row_count} satır · {ms}ms")
                 self._set_sql_status(f"Sorgu tamamlandı. Etkilenen satır: {row_count} | Çalışma süresi: {ms} ms")
                 self.refresh_all()
-            self.store._log("sql_query_executed", message="SQL Terminal sorgusu çalıştırıldı", payload={"operation": op, "duration_ms": ms, "changed": changed, "row_count": row_count})
+            if changed:
+                self.store.db.add_sql_query_log(sql, duration_ms=ms, affected_rows=row_count)
         except Exception as exc:
             try:
                 conn.rollback()
@@ -800,9 +802,7 @@ QLabel#sqlResultBadge { background:#d1fae5; color:#065f46; border-radius:5px; pa
         return len(chunks) == 1
 
     def _sql_operation(self, sql: str) -> str:
-        cleaned = re.sub(r"^\s*(--[^\n]*\n|/\*.*?\*/\s*)*", "", sql, flags=re.S).strip()
-        token = cleaned.split(None, 1)[0].upper() if cleaned else ""
-        return token
+        return sql_operation(sql)
 
     def _confirm_sql_operation(self, op: str) -> bool:
         if op in {"SELECT", "PRAGMA", "WITH", "EXPLAIN"}:
