@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from datetime import date
 from typing import Optional
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QTableWidgetItem
 
+from src.domain.contract_timing import contract_timing
 from src.ui.contract.delivery_user_display import delivery_users_text
 
 
@@ -14,20 +14,13 @@ def update_system_metric_cards(self, sys_info):
         return
     completion = str(getattr(sys_info, "completion_date", "") or "") if sys_info else ""
     acceptance = str(getattr(sys_info, "acceptance_date", "") or "") if sys_info else ""
-    days = "-"
-    parsed_completion = self._parse_iso_date(completion)
-    parsed_acceptance = self._parse_iso_date(acceptance)
-    if parsed_completion and parsed_acceptance:
-        diff = (parsed_acceptance - parsed_completion).days
-        if diff < 0:
-            days = f"{abs(diff)} gün erken teslim edildi"
-        elif diff > 0:
-            days = f"{diff} gün geç teslim edildi"
-        else:
-            days = "Zamanında teslim edildi"
-    elif parsed_completion:
-        left = (parsed_completion - date.today()).days
-        days = f"-{abs(left)} gün" if left < 0 else f"{left} gün"
+    days, _day_num, _timing_kind = contract_timing(
+        completion,
+        acceptance,
+        str(getattr(sys_info, "status", "") or "") if sys_info else "",
+    )
+    if days == "—":
+        days = "-"
     deliveries = self.deliveries.get(sys_info.name, []) if sys_info else []
     values = {
         "completion": completion or "-",

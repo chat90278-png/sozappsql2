@@ -58,6 +58,7 @@ from src.config.app_config import (
     EXTRA_SYSTEM_SHEET_NAMES,
 )
 from src.models.app_models import ComponentDef, ContractInfo, SystemInfo, DeliveryInfo, TagDef
+from src.domain.contract_timing import contract_timing, is_completed_status
 from src.ui.widgets import stat_card, set_card_value
 from src.ui.theme import STYLE
 from src.ui.tarih import ContractCalendarWindow
@@ -6806,32 +6807,19 @@ class MainWindow(QMainWindow):
         cache_key = (status_txt, completion_txt, acceptance_txt, today_iso)
         if it.get("_health_cache_key") == cache_key and "_health_cache_value" in it:
             return it["_health_cache_value"]
-        norm = self._norm_tr(status_txt)
         d = parse_iso_date(completion_txt)
         date_txt = d.strftime("%d.%m.%Y") if d else "-"
-        # Siniflandirma (renk icin)
-        if "teslim edildi" in norm or "tamam" in norm:
+        days_text, day_num, timing_kind = contract_timing(completion_txt, acceptance_txt, status_txt)
+        # Siniflandirma (renk ve uyari listeleri icin). Tamamlanmis gec
+        # teslimatlar kirmizi gorunur ancak aktif gecikme uyarilarina girmez.
+        if timing_kind == "gecikmeli_teslim":
+            cls = "gecikmeli_teslim"
+        elif is_completed_status(status_txt):
             cls = "tamamlandi"
-        elif d:
-            delta = (d - date.today()).days
-            cls = "geciken" if delta < 0 else ("kritik" if delta <= 60 else "normal")
+        elif day_num is not None:
+            cls = "geciken" if day_num < 0 else ("kritik" if day_num <= 60 else "normal")
         else:
             cls = "normal"
-        # Kalan gun
-        if d:
-            delta = (d - date.today()).days
-            days_text = f"-{abs(delta)} gün" if delta < 0 else f"{delta} gün"
-        else:
-            days_text = "—"
-        acceptance = parse_iso_date(acceptance_txt)
-        if d and acceptance:
-            diff = (acceptance - d).days
-            if diff < 0:
-                days_text = f"{abs(diff)} gün erken teslim edildi"
-            elif diff > 0:
-                days_text = f"{diff} gün geç teslim edildi"
-            else:
-                days_text = "Zamanında teslim edildi"
         # Gosterilecek etiket: Excel'deki gercek durum degeri
         st_label = status_txt if status_txt else "—"
         result = (cls, st_label, days_text, date_txt)
@@ -7699,12 +7687,9 @@ class MainWindow(QMainWindow):
         return (1, 99999999)
 
     def _days_sort_key(self, it: dict):
-        _cls, _st, days_txt, _dt = self._contract_health(it)
-        txt = str(days_txt or "").strip().replace(" gün", "")
-        if txt.startswith("-"):
-            return (0, -abs(as_number(txt)))
-        if txt and txt != "—":
-            return (0, as_number(txt))
+        day_num = it.get("_day_num")
+        if day_num is not None:
+            return (0, int(day_num))
         return (1, 99999999)
 
     def _prepare_contract_row_cache(self, rows: List[dict]):
@@ -7714,7 +7699,13 @@ class MainWindow(QMainWindow):
             completion = parse_iso_date(completion_txt)
             it["_completion_obj"] = completion
             it["_completion_ord"] = completion.toordinal() if completion else None
-            it["_day_num"] = (completion - today).days if completion else None
+            _days_text, day_num, _timing_kind = contract_timing(
+                completion_txt,
+                str(it.get("acceptance_date", "") or ""),
+                str(it.get("status", "") or ""),
+                today=today,
+            )
+            it["_day_num"] = day_num
             tags_list = list(it.get("tags", []) or [])
             it["_tags_str"] = ", ".join(tags_list) if tags_list else ""
             hay = it.get("search") or " ".join(str(it.get(k, "")) for k in ["platform", "no", "user", "status", "completion_date", "content"]).lower()
@@ -7960,7 +7951,7 @@ class MainWindow(QMainWindow):
                     cell.setFlags(cell.flags() & ~Qt.ItemIsEditable)
                     cell.setData(Qt.UserRole, payload)
                     if c == COL_STATUS:
-                        if cls == "geciken":
+                        if cls in {"geciken", "gecikmeli_teslim"}:
                             cell.setForeground(QColor("#dc2626"))
                         elif cls == "kritik":
                             cell.setForeground(QColor("#b45309"))
@@ -7969,8 +7960,12 @@ class MainWindow(QMainWindow):
                         else:
                             cell.setForeground(QColor("#1f5be3"))
                     if c == COL_REMAINING:
-                        if str(v).startswith("-"):
+                        if cls in {"geciken", "gecikmeli_teslim"}:
                             cell.setForeground(QColor("#dc2626"))
+                        elif "erken teslim edildi" in str(v):
+                            cell.setForeground(QColor("#047857"))
+                        elif str(v) in {"Termin gününde teslim edildi", "Teslim tarihi yok", "—"}:
+                            cell.setForeground(QColor("#64748b"))
                         elif str(v).endswith("gün"):
                             days_num = as_number(str(v).replace(" gün", ""))
                             if days_num <= 60:

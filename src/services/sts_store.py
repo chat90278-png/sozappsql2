@@ -536,7 +536,7 @@ class STSStore:
                 "user":user_display,"users":users,
                 "type":r["contract_type"],"contract_type":r["contract_type"],
                 "type_display":r["type_display"],"link":r["link_type"],"status":r["status"],
-                "completion_date":r["completion_date"],"content":r["content"] or r["note"] or "",
+                "completion_date":r["completion_date"],"acceptance_date":r["acceptance_date"],"content":r["content"] or r["note"] or "",
                 "is_main":bool(r["is_main"]),"tags":list(tags),"search":search_text
             })
         return rows

@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
     QSizePolicy,
 )
 
+from src.domain.contract_timing import contract_timing
 from src.models.app_models import ContractInfo, DeliveryInfo, SystemInfo
 from src.services.excel_store import ExcelStore
 
@@ -87,17 +88,9 @@ def display_date(value: str) -> str:
 
 
 
-def delivery_timing_text(deadline: Optional[date], acceptance: Optional[date]) -> str:
-    if not deadline:
-        return "—"
-    if acceptance:
-        diff = (acceptance - deadline).days
-        if diff < 0:
-            return f"{abs(diff)} gün erken teslim edildi"
-        if diff > 0:
-            return f"{diff} gün geç teslim edildi"
-        return "Zamanında teslim edildi"
-    return str((deadline - date.today()).days)
+def delivery_timing_text(deadline: Optional[date], acceptance: Optional[date], status: str = "") -> str:
+    text, _day_num, _timing_kind = contract_timing(deadline, acceptance, status)
+    return text
 
 def iso_display(value: str) -> str:
     d = parse_iso_date(value)
@@ -866,7 +859,7 @@ class ContractSummaryDialog(QDialog):
             rows.append([
                 ctx.button_label.replace("Ana Söz.", "Ana Sözleşme"),
                 display_date(ci.completion_date),
-                delivery_timing_text(deadline, parse_iso_date(acceptance)),
+                delivery_timing_text(deadline, parse_iso_date(acceptance), ci.status),
                 display_date(acceptance),
             ])
         self.contract_info_table.setRowCount(len(rows))
@@ -904,7 +897,8 @@ class ContractSummaryDialog(QDialog):
                     for delivery in delivery_list:
                         if str(delivery.acceptance_date or "").strip():
                             acceptance = str(delivery.acceptance_date or "")
-        self.days_value.setText(delivery_timing_text(deadline, parse_iso_date(acceptance)))
+        status = ci.status if ci else self.item.get("status", "")
+        self.days_value.setText(delivery_timing_text(deadline, parse_iso_date(acceptance), status))
         self.acceptance_value.setText(display_date(acceptance))
 
     def _system_chip(self, text: str, object_name: str = "systemChipNeutral") -> QLabel:

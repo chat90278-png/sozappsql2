@@ -2493,6 +2493,7 @@ class ExcelStore:
                 "link": "Ana S\u00f6zle\u015fme" if is_main else "Ana s\u00f6zle\u015fmeye ba\u011fl\u0131 SD",
                 "status": val(12),
                 "completion_date": val(11),
+                "acceptance_date": val(13),
                 "content": val(7),
                 "is_main": is_main,
                 "tags": tags,
