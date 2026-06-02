@@ -279,7 +279,18 @@ CREATE INDEX IF NOT EXISTS idx_logs_entity ON activity_logs(entity_type,entity_i
         if t not in allowed:
             raise ValueError("Geçersiz tablo adı")
         lim = max(1, min(1000, int(limit or 100)))
-        rows = self.conn.execute(f"SELECT * FROM {t} LIMIT ?", (lim,)).fetchall()
+        if t == "activity_logs":
+            preferred = [
+                "id", "created_at", "actor", "source", "device_name", "action", "entity_type", "entity_id",
+                "entity_key", "platform_id", "contract_no", "message", "before_json", "after_json", "payload_json",
+            ]
+            existing = self._table_columns(t)
+            selected = [column for column in preferred if column in existing]
+            selected.extend(column for column in existing if column not in selected)
+            columns = ", ".join(selected) or "*"
+            rows = self.conn.execute(f"SELECT {columns} FROM {t} LIMIT ?", (lim,)).fetchall()
+        else:
+            rows = self.conn.execute(f"SELECT * FROM {t} LIMIT ?", (lim,)).fetchall()
         return [dict(r) for r in rows]
 
 
