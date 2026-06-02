@@ -123,17 +123,10 @@ CREATE INDEX IF NOT EXISTS idx_logs_entity ON activity_logs(entity_type,entity_i
         # cannot add foreign-key constraints with ALTER TABLE, but adding the
         # nullable column keeps those files readable and writable. New files
         # still receive the foreign keys from the CREATE TABLE definitions.
-        migrated = []
-        if self._ensure_column("deliveries", "delivery_user_id", "INTEGER"):
-            migrated.append("deliveries.delivery_user_id")
+        self._ensure_column("deliveries", "delivery_user_id", "INTEGER")
         # Component notes were added after the initial v2 schema. Keep legacy
         # STS files readable by adding the nullable column in place.
-        if self._ensure_column("system_components", "note", "TEXT"):
-            migrated.append("system_components.note")
-        if self._ensure_column("activity_logs", "source", "TEXT"):
-            migrated.append("activity_logs.source")
-        if self._ensure_column("activity_logs", "device_name", "TEXT"):
-            migrated.append("activity_logs.device_name")
+        self._ensure_column("system_components", "note", "TEXT")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_deliveries_delivery_user_id ON deliveries(delivery_user_id)")
         self.conn.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version','2')")
         self.conn.commit()

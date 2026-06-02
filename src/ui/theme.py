@@ -590,24 +590,44 @@ QLabel#windowBar {
     font-size:14px;
 }
 QFrame#contractHeader {
-    background:qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #243244, stop:1 #2e3f55);
-    border:1px solid #223245;
-    border-radius:10px;
-    padding:10px;
+    background:qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #1e2e41, stop:1 #263547);
+    border:0;
+    border-bottom:1px solid #1a2a3a;
+    border-radius:0;
 }
-QFrame#contractHeader QWidget#metaWrap {
+QWidget#metaCell {
     background:transparent;
 }
-QFrame#contractHeader QFrame#metaCard {
-    background:#31465f;
-    border:1px solid #48617f;
-    border-radius:8px;
+QLabel#metaHeaderLabel {
+    color:#8db8d8;
+    font-size:10px;
+    font-weight:600;
+    letter-spacing:0.5px;
+    background:transparent;
 }
-QFrame#contractHeader QLabel#metaLabel {
-    color:#cfe0f7;
-}
-QFrame#contractHeader QLabel#metaValue {
+QLabel#metaHeaderValue {
     color:#ffffff;
+    font-size:14px;
+    font-weight:800;
+    background:transparent;
+}
+QFrame#metaHeaderDiv {
+    background:#3a546e;
+    min-width:1px;
+    max-width:1px;
+}
+QPushButton#headerEditBtn {
+    background:rgba(255,255,255,0.10);
+    color:#d8eaff;
+    border:1px solid rgba(255,255,255,0.20);
+    border-radius:8px;
+    padding:5px 14px;
+    font-size:13px;
+    font-weight:700;
+}
+QPushButton#headerEditBtn:hover {
+    background:rgba(255,255,255,0.18);
+    border-color:rgba(255,255,255,0.35);
 }
 
 QFrame#contractVersionBar {

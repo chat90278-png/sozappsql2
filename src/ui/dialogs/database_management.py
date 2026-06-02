@@ -227,42 +227,138 @@ class DatabaseManagementDialog(QDialog):
 
     def apply_database_editor_styles(self) -> str:
         return """
-QDialog#databaseEditorDialog { background:#f0f4f8; }
-QFrame#topBar { background:#0f2340; border:0; }
-QLabel#titleBadge { background:#1f5be3; color:#ffffff; border-radius:7px; padding:6px 8px; font-size:11px; font-weight:800; }
-QLabel#topTitle { color:#c8ddf2; font-size:13px; font-weight:700; }
-QFrame#topSeparator { background:#1e3a5c; border:0; }
-QPushButton#topTab { background:transparent; border:0; border-bottom:3px solid transparent; border-radius:0; color:#6f9dca; padding:0 24px; font-size:14px; font-weight:800; }
-QPushButton#topTab:hover { background:#17314f; color:#b8d7f2; }
-QPushButton#topTab[active='true'] { color:#f1f7ff; border-bottom:3px solid #3b82f6; }
+/* ── Temel ── */
+QDialog#databaseEditorDialog { background:#f1f5f9; }
+
+/* ── Top Bar ── */
+QFrame#topBar { background:#0d1e33; border:0; border-bottom:1px solid #162840; }
+QLabel#titleBadge {
+    background:qlineargradient(x1:0,y1:0,x2:1,y2:1,stop:0 #2563eb,stop:1 #1d4ed8);
+    color:#ffffff; border-radius:8px; padding:5px 9px; font-size:11px; font-weight:900;
+}
+QLabel#topTitle { color:#94b8d8; font-size:13px; font-weight:600; letter-spacing:0.3px; }
+QFrame#topSeparator { background:#1e3654; border:0; }
+QPushButton#topTab {
+    background:transparent; border:0; border-bottom:3px solid transparent;
+    border-radius:0; color:#5b85a8; padding:0 22px; font-size:13px; font-weight:600;
+}
+QPushButton#topTab:hover { background:rgba(255,255,255,0.04); color:#a8c8e8; }
+QPushButton#topTab[active='true'] {
+    color:#e8f2ff; border-bottom:3px solid #3b82f6;
+    background:rgba(59,130,246,0.07);
+    font-weight:700;
+}
 QLabel { background:transparent; }
-QFrame#tableSidebar, QFrame#tableMain, QFrame#toolbarCard, QFrame#sqlResultPanel, QFrame#sqlFooter { background:#ffffff; border:0; }
-QFrame#tableSidebar { border-right:1px solid #e2e8f0; }
-QLineEdit, QComboBox { background:#f8fafc; border:1px solid #e2e8f0; border-radius:6px; padding:6px 9px; color:#374151; }
-QPushButton#softBtn { background:#ffffff; border:1px solid #e2e8f0; color:#64748b; border-radius:6px; padding:6px 10px; font-weight:700; }
-QPushButton#softBtn:hover { background:#f1f5f9; }
-QPushButton#primaryBtn { background:#1f5be3; border:0; color:#ffffff; border-radius:6px; padding:6px 13px; font-weight:800; }
-QListWidget#tableList { background:#ffffff; border:0; outline:0; }
-QListWidget#tableList::item { border:0; border-left:2px solid transparent; padding:7px 12px; color:#1e293b; }
-QListWidget#tableList::item:hover { background:#f8fafc; }
-QListWidget#tableList::item:selected { background:#eff6ff; border-left:2px solid #1f5be3; color:#1e40af; }
-QTableWidget { background:#ffffff; border:0; gridline-color:#e2e8f0; alternate-background-color:#f8faff; selection-background-color:#eff6ff; selection-color:#1e293b; }
-QHeaderView::section { background:#f8fafc; border:0; border-right:1px solid #e2e8f0; border-bottom:1px solid #e2e8f0; padding:6px; color:#64748b; font-weight:700; }
-QLabel#tableStatus, QLabel#sqlHint { color:#94a3b8; font-size:10px; }
-QFrame#schemaCanvasWrap { background:#f8fafc; border:0; }
-QFrame#relationPanel { background:#ffffff; border-left:1px solid #e2e8f0; }
-QLabel#relationTitle { color:#374151; font-size:12px; font-weight:800; }
+
+/* ── Sidebar ── */
+QFrame#tableSidebar { background:#ffffff; border:0; border-right:1px solid #e8edf5; }
+QListWidget#tableList { background:#ffffff; border:0; outline:0; font-size:12px; }
+QListWidget#tableList::item {
+    border:0;
+    border-left:3px solid transparent;
+    border-bottom:1px solid #f0f4fa;
+    padding:9px 14px;
+    color:#374151;
+    font-size:12px;
+    font-weight:500;
+}
+QListWidget#tableList::item:hover {
+    background:#f0f5ff;
+    color:#1e40af;
+    border-left:3px solid #93c5fd;
+    border-bottom:1px solid #f0f4fa;
+}
+QListWidget#tableList::item:selected {
+    background:#dbeafe;
+    border-left:3px solid #2563eb;
+    border-bottom:1px solid #bcd3f5;
+    color:#1e40af;
+    font-weight:700;
+}
+
+/* ── Toolbar ── */
+QFrame#toolbarCard {
+    background:#ffffff; border:0;
+    border-bottom:1px solid #e8edf5;
+}
+QLineEdit, QComboBox {
+    background:#f8fafc; border:1px solid #dde5ef;
+    border-radius:7px; padding:6px 10px; color:#334155;
+    font-size:12px;
+}
+QLineEdit:focus, QComboBox:focus { border-color:#3b82f6; background:#ffffff; }
+QPushButton#softBtn {
+    background:#ffffff; border:1px solid #dde5ef; color:#475569;
+    border-radius:7px; padding:6px 12px; font-size:12px; font-weight:600;
+}
+QPushButton#softBtn:hover { background:#f1f5f9; border-color:#c0cfe0; color:#1e293b; }
+QPushButton#primaryBtn {
+    background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #3b82f6,stop:1 #2563eb);
+    border:0; color:#ffffff; border-radius:7px; padding:6px 16px;
+    font-size:12px; font-weight:700;
+}
+QPushButton#primaryBtn:hover { background:#1d4ed8; }
+
+/* ── Data Table ── */
+QFrame#tableMain { background:#ffffff; border:0; }
+QTableWidget {
+    background:#ffffff; border:0;
+    gridline-color:#edf0f7;
+    alternate-background-color:#fafbfe;
+    selection-background-color:#eff6ff; selection-color:#1e293b;
+    font-size:12px;
+}
+QHeaderView::section {
+    background:#f4f7fc; border:0;
+    border-right:1px solid #e8edf5; border-bottom:2px solid #dde5ef;
+    padding:7px 10px; color:#475569; font-size:11px; font-weight:700;
+    letter-spacing:0.3px; text-transform:uppercase;
+}
+QLabel#tableStatus { color:#64748b; font-size:11px; padding:5px 14px; background:#f8fafc; border-top:1px solid #e8edf5; }
+
+/* ── Schema / Relations ── */
+QFrame#schemaCanvasWrap { background:#edf2f8; border:0; }
+QFrame#relationPanel {
+    background:#fafbfe; border:0; border-left:1px solid #e2e8f2;
+}
+QLabel#relationTitle { color:#1e293b; font-size:12px; font-weight:800; letter-spacing:0.3px; text-transform:uppercase; }
 QScrollArea#relationScroll { border:0; background:#ffffff; }
 QWidget#relationScrollBody { background:#ffffff; }
 QFrame#relationGroupCard { background:#ffffff; border:0; border-bottom:1px solid #f1f5f9; }
-QPushButton#relationGroupHeader { background:transparent; border:0; color:#1e293b; padding:5px 3px; text-align:left; font-weight:800; }
-QPushButton#relationGroupHeader[active='true'] { color:#1d4ed8; }
-QPushButton#relationRow { background:transparent; border:0; color:#64748b; padding:3px 5px; text-align:left; font-size:10px; }
-QPushButton#relationRow:hover { background:#f8fafc; color:#1d4ed8; }
-QPushButton#relationRow[selected='true'] { background:#eff6ff; color:#1d4ed8; }
-QPlainTextEdit#sqlEditor { background:#f8fafc; border:0; border-bottom:1px solid #e2e8f0; padding:12px; color:#1e293b; font-family:Consolas, 'Courier New', monospace; font-size:13px; }
-QLabel#sqlResultTitle { color:#64748b; font-size:11px; font-weight:800; }
-QLabel#sqlResultBadge { background:#d1fae5; color:#065f46; border-radius:5px; padding:2px 7px; font-size:10px; }
+QPushButton#relationGroupHeader {
+    background:transparent; border:0; color:#1e293b;
+    padding:6px 4px; text-align:left; font-size:12px; font-weight:700;
+}
+QPushButton#relationGroupHeader:hover { color:#2563eb; }
+QPushButton#relationGroupHeader[active='true'] { color:#2563eb; }
+QPushButton#relationRow {
+    background:transparent; border:0; color:#64748b;
+    padding:3px 6px; text-align:left; font-size:11px;
+}
+QPushButton#relationRow:hover { background:#f0f6ff; color:#2563eb; border-radius:4px; }
+QPushButton#relationRow[selected='true'] {
+    background:#eff6ff; color:#1d4ed8; border-radius:4px;
+}
+
+/* ── SQL Terminal ── */
+QPlainTextEdit#sqlEditor {
+    background:#1a1b2e; border:0;
+    border-bottom:2px solid #12131f;
+    padding:16px 18px; color:#c9d1f5;
+    font-family:Consolas, 'Cascadia Code', 'Courier New', monospace;
+    font-size:13px; line-height:1.6;
+    selection-background-color:#2d2f5e;
+}
+QFrame#sqlResultPanel { background:#ffffff; border:0; border-top:1px solid #e8edf5; }
+QLabel#sqlResultTitle { color:#334155; font-size:12px; font-weight:700; }
+QLabel#sqlResultBadge {
+    background:#dcfce7; color:#166534; border-radius:6px;
+    padding:2px 9px; font-size:11px; font-weight:700;
+}
+QFrame#sqlFooter {
+    background:#f8fafc; border:0; border-top:1px solid #e8edf5;
+}
+QLabel#sqlHint { color:#94a3b8; font-size:11px; }
 """
 
     def _local_style(self) -> str:
@@ -283,6 +379,29 @@ QLabel#sqlResultBadge { background:#d1fae5; color:#065f46; border-radius:5px; pa
         root.addWidget(self.page_stack, 1)
         self.switch_database_tab("tables")
 
+    def _make_tab_button(self, icon_svg: str, label: str, page: str) -> QPushButton:
+        """İkon (SVG) + yazı yan yana, tek QPushButton olarak oluşturur."""
+        btn = QPushButton()
+        btn.setObjectName("topTab")
+        btn.setFixedHeight(58)
+        # İkon SVG'yi QPixmap'e çevirip QIcon olarak ata
+        from PySide6.QtGui import QPixmap, QIcon
+        from PySide6.QtCore import QByteArray
+        from PySide6.QtSvg import QSvgRenderer
+        from PySide6.QtGui import QPainter
+        px = QPixmap(18, 18)
+        px.fill(Qt.transparent)
+        renderer = QSvgRenderer(QByteArray(icon_svg.encode()))
+        painter = QPainter(px)
+        renderer.render(painter)
+        painter.end()
+        btn.setIcon(QIcon(px))
+        btn.setIconSize(px.size())
+        btn.setText(f"  {label}")
+        btn.setMinimumWidth(140)
+        btn.clicked.connect(lambda _=False, p=page: self.switch_database_tab(p))
+        return btn
+
     def build_topbar(self):
         bar = QFrame(); bar.setObjectName("topBar"); bar.setFixedHeight(58)
         lay = QHBoxLayout(bar); lay.setContentsMargins(16, 0, 12, 0); lay.setSpacing(0)
@@ -290,10 +409,34 @@ QLabel#sqlResultBadge { background:#d1fae5; color:#065f46; border-radius:5px; pa
         title = QLabel("STS Database Editor"); title.setObjectName("topTitle")
         sep = QFrame(); sep.setObjectName("topSeparator"); sep.setFixedSize(1, 24)
         lay.addWidget(logo); lay.addSpacing(10); lay.addWidget(title); lay.addSpacing(18); lay.addWidget(sep); lay.addSpacing(6)
+
+        _ICON_TABLES = (
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#6f9dca" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+            '<rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/>'
+            '<line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="3" x2="9" y2="21"/>'
+            '</svg>'
+        )
+        _ICON_RELATIONS = (
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#6f9dca" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+            '<circle cx="5" cy="12" r="2"/><circle cx="19" cy="5" r="2"/><circle cx="19" cy="19" r="2"/>'
+            '<line x1="7" y1="12" x2="17" y2="6"/><line x1="7" y1="12" x2="17" y2="18"/>'
+            '</svg>'
+        )
+        _ICON_SQL = (
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#6f9dca" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+            '<polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/>'
+            '</svg>'
+        )
+
         self.top_tabs = {}
-        for name, label, width in (("tables", "▦   Tablolar", 150), ("schema", "⌘   İlişkiler", 158), ("sql", "▣   SQL Terminali", 190)):
-            tab = QPushButton(label); tab.setObjectName("topTab"); tab.setFixedHeight(58); tab.setMinimumWidth(width); tab.clicked.connect(lambda _=False, page=name: self.switch_database_tab(page))
-            lay.addWidget(tab); self.top_tabs[name] = tab
+        for name, icon_svg, label in (
+            ("tables",  _ICON_TABLES,    "Tablolar"),
+            ("schema",  _ICON_RELATIONS, "İlişkiler"),
+            ("sql",     _ICON_SQL,       "SQL Terminali"),
+        ):
+            tab = self._make_tab_button(icon_svg, label, name)
+            lay.addWidget(tab)
+            self.top_tabs[name] = tab
         lay.addStretch(1)
         return bar
 
@@ -302,11 +445,16 @@ QLabel#sqlResultBadge { background:#d1fae5; color:#065f46; border-radius:5px; pa
 
     def build_tables_tab(self):
         page = QWidget(); body = QHBoxLayout(page); body.setContentsMargins(0, 0, 0, 0); body.setSpacing(0)
-        sidebar = QFrame(); sidebar.setObjectName("tableSidebar"); sidebar.setFixedWidth(220)
+        sidebar = QFrame(); sidebar.setObjectName("tableSidebar"); sidebar.setFixedWidth(230)
         slay = QVBoxLayout(sidebar); slay.setContentsMargins(0, 0, 0, 0); slay.setSpacing(0)
-        search_wrap = QWidget(); sw = QVBoxLayout(search_wrap); sw.setContentsMargins(12, 10, 12, 10)
-        self.table_search = QLineEdit(); self.table_search.setPlaceholderText("Tablo ara..."); self.table_search.textChanged.connect(self._refresh_sidebar); sw.addWidget(self.table_search)
-        slay.addWidget(search_wrap)
+        # Sidebar header
+        sidebar_head = QWidget(); sidebar_head.setStyleSheet("background:#f4f7fc; border-bottom:1px solid #e2e8f2;")
+        sh_lay = QVBoxLayout(sidebar_head); sh_lay.setContentsMargins(14, 12, 14, 8); sh_lay.setSpacing(6)
+        sidebar_title = QLabel("TABLOLAR"); sidebar_title.setStyleSheet("color:#475569; font-size:10px; font-weight:800; letter-spacing:1px; background:transparent;")
+        sh_lay.addWidget(sidebar_title)
+        self.table_search = QLineEdit(); self.table_search.setPlaceholderText("Tablo ara..."); self.table_search.textChanged.connect(self._refresh_sidebar)
+        sh_lay.addWidget(self.table_search)
+        slay.addWidget(sidebar_head)
         self.table_list = QListWidget(); self.table_list.setObjectName("tableList"); self.table_list.itemSelectionChanged.connect(self._on_table_selected); slay.addWidget(self.table_list, 1)
         body.addWidget(sidebar)
         main = QFrame(); main.setObjectName("tableMain"); mlay = QVBoxLayout(main); mlay.setContentsMargins(0, 0, 0, 0); mlay.setSpacing(0)
@@ -355,13 +503,13 @@ QLabel#sqlResultBadge { background:#d1fae5; color:#065f46; border-radius:5px; pa
         self.sql_editor = QPlainTextEdit(); self.sql_editor.setObjectName("sqlEditor"); self.sql_editor.setPlainText("SELECT * FROM contracts LIMIT 100;"); self.sql_editor.setMinimumHeight(210)
         splitter.addWidget(self.sql_editor)
         result_panel = QFrame(); result_panel.setObjectName("sqlResultPanel"); rlay = QVBoxLayout(result_panel); rlay.setContentsMargins(0, 0, 0, 0); rlay.setSpacing(0)
-        head = QWidget(); hlay = QHBoxLayout(head); hlay.setContentsMargins(14, 6, 14, 6)
+        head = QWidget(); head.setStyleSheet("background:#f8fafc; border-bottom:1px solid #e8edf5;"); hlay = QHBoxLayout(head); hlay.setContentsMargins(14, 8, 14, 8)
         title = QLabel("Sonuçlar"); title.setObjectName("sqlResultTitle"); self.sql_result_badge = QLabel("0 satır · 0ms"); self.sql_result_badge.setObjectName("sqlResultBadge")
         hint = QLabel("Ctrl+Enter ile çalıştır"); hint.setObjectName("sqlHint"); hlay.addWidget(title); hlay.addWidget(self.sql_result_badge); hlay.addStretch(1); hlay.addWidget(hint); rlay.addWidget(head)
         self.sql_result = QTableWidget(0, 0); self.sql_result.setEditTriggers(QTableWidget.NoEditTriggers); self.sql_result.verticalHeader().setVisible(False); self.sql_result.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents); self.sql_result.setAlternatingRowColors(True); self.sql_result.setTextElideMode(Qt.ElideRight); rlay.addWidget(self.sql_result, 1)
         splitter.addWidget(result_panel); splitter.setSizes([360, 300]); lay.addWidget(splitter, 1)
         footer = QFrame(); footer.setObjectName("sqlFooter"); flay = QHBoxLayout(footer); flay.setContentsMargins(14, 7, 14, 7)
-        self.sql_status_lbl = QLabel("Ctrl+Enter → Çalıştır · Ctrl+L → Temizle"); self.sql_status_lbl.setObjectName("sqlHint"); flay.addWidget(self.sql_status_lbl, 1)
+        self.sql_status_lbl = QLabel("  Ctrl+Enter → Çalıştır   ·   Ctrl+L → Temizle"); self.sql_status_lbl.setObjectName("sqlHint"); flay.addWidget(self.sql_status_lbl, 1)
         self.sql_clear_btn = QPushButton("Temizle"); self.sql_clear_btn.setObjectName("softBtn"); self.sql_clear_btn.clicked.connect(self._clear_sql_terminal)
         self.sql_run_btn = QPushButton("Çalıştır"); self.sql_run_btn.setObjectName("primaryBtn"); self.sql_run_btn.clicked.connect(self._run_sql_terminal)
         flay.addWidget(self.sql_clear_btn); flay.addWidget(self.sql_run_btn); lay.addWidget(footer)
@@ -376,11 +524,41 @@ QLabel#sqlResultBadge { background:#d1fae5; color:#065f46; border-radius:5px; pa
         return self.build_sql_tab()
 
     def switch_database_tab(self, page: str):
+        from PySide6.QtGui import QPixmap, QIcon, QPainter
+        from PySide6.QtCore import QByteArray
+        from PySide6.QtSvg import QSvgRenderer
+        _ICONS = {
+            "tables": (
+                '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="{c}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+                '<rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/>'
+                '<line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="3" x2="9" y2="21"/>'
+                '</svg>'
+            ),
+            "schema": (
+                '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="{c}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+                '<circle cx="5" cy="12" r="2"/><circle cx="19" cy="5" r="2"/><circle cx="19" cy="19" r="2"/>'
+                '<line x1="7" y1="12" x2="17" y2="6"/><line x1="7" y1="12" x2="17" y2="18"/>'
+                '</svg>'
+            ),
+            "sql": (
+                '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="{c}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+                '<polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/>'
+                '</svg>'
+            ),
+        }
         indexes = {"tables": 0, "schema": 1, "sql": 2}
         page = page if page in indexes else "tables"
         self.page_stack.setCurrentIndex(indexes[page])
         for name, tab in self.top_tabs.items():
-            active = name == page; tab.setProperty("active", active); tab.style().unpolish(tab); tab.style().polish(tab)
+            active = name == page
+            tab.setProperty("active", active)
+            tab.style().unpolish(tab); tab.style().polish(tab)
+            color = "#ffffff" if active else "#6f9dca"
+            svg = _ICONS.get(name, "").replace("{c}", color)
+            px = QPixmap(18, 18); px.fill(Qt.transparent)
+            renderer = QSvgRenderer(QByteArray(svg.encode()))
+            painter = QPainter(px); renderer.render(painter); painter.end()
+            tab.setIcon(QIcon(px)); tab.setIconSize(px.size())
 
     def _set_page(self, page: str):
         self.switch_database_tab(page)
@@ -402,9 +580,13 @@ QLabel#sqlResultBadge { background:#d1fae5; color:#065f46; border-radius:5px; pa
             desc = TABLE_INFO.get(t, "")
             if q and q not in t.lower() and q not in desc.lower():
                 continue
-            item = QListWidgetItem(f"{t}\n{desc} · {counts.get(t, 0)}")
+            cnt = counts.get(t, 0)
+            label = f"{t}  ·  {cnt}"
+            if desc:
+                label += f"\n{desc}"
+            item = QListWidgetItem(label)
             item.setData(Qt.UserRole, t)
-            item.setToolTip(f"{t}\n{desc}\nKayıt: {counts.get(t, 0)}")
+            item.setToolTip(f"{t}\n{desc}\nKayıt: {cnt}")
             self.table_list.addItem(item)
             if t == self.active_table:
                 item.setSelected(True)
