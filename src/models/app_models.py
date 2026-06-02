@@ -39,6 +39,7 @@ class ContractInfo:
 class SystemInfo:
     name: str
     components: Dict[str, float]
+    component_notes: Dict[str, str] = field(default_factory=dict)
     t0_date: str = ""
     t0_months: int = 0
     completion_date: str = ""
