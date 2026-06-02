@@ -695,6 +695,8 @@ def open_auto_accept_dialog(work_window):
         overlay.deleteLater()
     if result and dlg.result_deliveries:
         work_window.deliveries.setdefault(sys_info.name, []).extend(dlg.result_deliveries)
+        work_window._deleted_delivery_systems.discard(sys_info.name)
+        work_window._set_dirty()
         work_window.expanded_delivery_index = None
         work_window.refresh_live_statuses()
         work_window.refresh_right()

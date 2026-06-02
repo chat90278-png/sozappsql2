@@ -59,6 +59,7 @@ from src.config.app_config import (
 )
 from src.models.app_models import ComponentDef, ContractInfo, SystemInfo, DeliveryInfo, TagDef
 from src.domain.contract_timing import contract_timing, is_completed_status
+from src.domain.delivery_coverage import acceptance_coverage_issues
 from src.ui.widgets import stat_card, set_card_value
 from src.ui.theme import STYLE
 from src.ui.tarih import ContractCalendarWindow
@@ -5734,9 +5735,12 @@ class ContractWorkWindow(QDialog):
                 f"{ci.contract_type}: otomatik Kabul 1 ekranda oluşturuldu. "
                 "Lütfen açılan kabul ekranını kontrol edip onaylayın; ardından tekrar Kaydet'e basın."
             )
-        total_errors = self._validate_acceptance_totals(systems, deliveries)
-        if total_errors:
-            return False, f"{ci.contract_type}: sistem ve kabul adetleri uyuşmuyor:\n" + "\n".join(total_errors)
+        issues = self._acceptance_coverage_issues(systems, deliveries)
+        if issues:
+            title, message = self._acceptance_validation_message(issues)
+            ctx["_acceptance_validation_title"] = title
+            ctx["_acceptance_validation_issues"] = issues
+            return False, f"{ci.contract_type}: {message}"
         self._apply_derived_statuses(ci, systems, deliveries)
         ctx["deliveries"] = deliveries
         ctx["systems"] = systems
@@ -5758,16 +5762,20 @@ class ContractWorkWindow(QDialog):
             if not ok:
                 ctx = self._context_cache[key]
                 created_defaults = list(ctx.pop("_created_default_systems", []) or [])
+                validation_title = str(ctx.pop("_acceptance_validation_title", "") or "")
+                validation_issues = list(ctx.pop("_acceptance_validation_issues", []) or [])
                 self._load_cached_context(key)
                 if created_defaults:
                     self.selected_system = created_defaults[0]
+                elif validation_issues:
+                    self._focus_acceptance_issue(validation_issues)
                 self.expanded_delivery_index = None
                 self.refresh_contract_header()
                 self.render_contract_tags()
                 self.refresh()
                 QMessageBox.information(
                     self,
-                    "Kabul oluşturuldu" if created_defaults else "Eksik",
+                    "Kabul oluşturuldu" if created_defaults else (validation_title or "Eksik"),
                     msg,
                 )
                 if created_defaults:
@@ -6070,6 +6078,49 @@ class ContractWorkWindow(QDialog):
         if self.deliveries.get(system_name):
             self.edit_delivery(0)
 
+    def _acceptance_coverage_issues(self, systems: List[SystemInfo], deliveries: Dict[str, List[DeliveryInfo]]) -> List[dict]:
+        return acceptance_coverage_issues(systems, deliveries)
+
+    def _acceptance_validation_message(self, issues: List[dict]) -> Tuple[str, str]:
+        unassigned = [issue for issue in issues if issue.get("kind") == "unassigned"]
+        over_delivered = [issue for issue in issues if issue.get("kind") == "over_delivered"]
+        delivery_over_planned = [issue for issue in issues if issue.get("kind") == "delivery_over_planned"]
+        over_assigned = [issue for issue in issues if issue.get("kind") == "over_assigned"]
+        if over_delivered:
+            title = "Teslim edilen miktar sözleşme adedini aşıyor"
+            intro = "Bazı bileşenlerde teslim edilen miktar sözleşme adedini aşıyor. Kaydetmeden önce miktarları düzeltin."
+            details = [f"• {issue['system']} / {issue['component']}: sözleşme {fmt_num(issue['contract_qty'])}, teslim edilen {fmt_num(issue['delivered_qty'])}" for issue in over_delivered]
+        elif delivery_over_planned:
+            title = "Teslim edilen miktar kabul adedini aşıyor"
+            intro = "Bazı kabullerde teslim edilen miktar kabul adedini aşıyor. Kaydetmeden önce miktarları düzeltin."
+            details = [f"• {issue['system']} / {issue['delivery']} / {issue['component']}: kabul {fmt_num(issue['planned_qty'])}, teslim edilen {fmt_num(issue['delivered_qty'])}" for issue in delivery_over_planned]
+        elif over_assigned:
+            title = "Kabul miktarı sistem adedini aşıyor"
+            intro = "Bazı bileşenlerde kabullere atanan miktar sistem adedini aşıyor. Kaydetmeden önce miktarları düzeltin."
+            details = [f"• {issue['system']} / {issue['component']}: sistem {fmt_num(issue['contract_qty'])}, kabuller {fmt_num(issue['planned_qty'])}" for issue in over_assigned]
+        else:
+            title = "Atanmamış bileşenler var"
+            intro = "Bu sözleşmede teslimata/kabule atanmamış bileşenler bulunuyor. Kaydetmeden önce kalan bileşenleri bir kabule atayın."
+            details = [f"• {issue['system']} / {issue['component']}: {fmt_num(issue['qty'])} adet atanmadı" for issue in unassigned]
+        shown = details[:10]
+        if len(details) > len(shown):
+            shown.append(f"... ve {len(details) - len(shown)} kalem daha")
+        return title, intro + "\n\n" + "\n".join(shown)
+
+    def _focus_acceptance_issue(self, issues: List[dict]):
+        if not issues:
+            return
+        system_name = str(issues[0].get("system") or "")
+        if not system_name:
+            return
+        self.selected_system = system_name
+        self._populate_system_list()
+        for index, sys_info in enumerate(self.systems):
+            if sys_info.name == system_name:
+                self.system_list.setCurrentRow(index)
+                break
+        self.refresh_right()
+
     def _validate_acceptance_totals(self, systems: List[SystemInfo], deliveries: Dict[str, List[DeliveryInfo]]) -> List[str]:
         errors = []
         for sys_info in systems:
@@ -6173,13 +6224,11 @@ class ContractWorkWindow(QDialog):
         self.sync_summary_to_system()
         if not self.ensure_systems_have_acceptances():
             return
-        total_errors = self._validate_acceptance_totals(self.systems, self.deliveries)
-        if total_errors:
-            QMessageBox.warning(
-                self,
-                "Sistem / kabul adedi uyuşmuyor",
-                "Kaydetmeden önce sistem adetleri ile kabullerdeki toplam adetleri eşitleyin:\n\n" + "\n".join(total_errors),
-            )
+        issues = self._acceptance_coverage_issues(self.systems, self.deliveries)
+        if issues:
+            title, message = self._acceptance_validation_message(issues)
+            self._focus_acceptance_issue(issues)
+            QMessageBox.warning(self, title, message)
             return
         self._apply_derived_statuses(self.ci, self.systems, self.deliveries)
         # ── Değişiklik tespiti ──────────────────────────────────────────────
