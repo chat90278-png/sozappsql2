@@ -6122,9 +6122,25 @@ class ContractWorkWindow(QDialog):
         self.refresh_right()
 
     def _validate_acceptance_totals(self, systems: List[SystemInfo], deliveries: Dict[str, List[DeliveryInfo]]) -> List[str]:
-        issues = self._acceptance_coverage_issues(systems, deliveries)
-        _title, message = self._acceptance_validation_message(issues) if issues else ("", "")
-        return message.splitlines() if message else []
+        errors = []
+        for sys_info in systems:
+            sys_deliveries = deliveries.get(sys_info.name, []) or []
+            components = self._component_display_keys(sys_info)
+            for comp in components:
+                total = max(as_number((sys_info.components or {}).get(comp, 0)), 0)
+                planned_sum = sum(max(as_number((d.planned or {}).get(comp, 0)), 0) for d in sys_deliveries)
+                delivered_sum = sum(max(as_number((d.delivered or {}).get(comp, 0)), 0) for d in sys_deliveries)
+                if planned_sum - total > 0.0001:
+                    errors.append(f"{sys_info.name} / {comp}: sistem {fmt_num(total)}, kabuller {fmt_num(planned_sum)}")
+                if delivered_sum - planned_sum > 0.0001:
+                    errors.append(f"{sys_info.name} / {comp}: teslim edilen {fmt_num(delivered_sum)}, kabul adedi {fmt_num(planned_sum)}")
+            for delivery in sys_deliveries:
+                for comp, qty in (delivery.delivered or {}).items():
+                    planned_qty = max(as_number((delivery.planned or {}).get(comp, 0)), 0)
+                    delivered_qty = max(as_number(qty), 0)
+                    if delivered_qty - planned_qty > 0.0001:
+                        errors.append(f"{sys_info.name} / {delivery.name} / {comp}: teslim edilen, kabul adedini aşıyor")
+        return errors
 
     def ensure_systems_have_acceptances(self) -> bool:
         missing_systems = [
