@@ -3818,6 +3818,7 @@ class DeliveryDialog(StyledDialog):
         planned_assigned: Optional[Dict[str, float]] = None,
         contract_t0_date: str = "",
         events_provider: Optional[Callable[[], List[dict]]] = None,
+        allow_delete: bool = False,
     ):
         super().__init__("Teslimat / Kabul Ekle", parent)
         self.system = system
@@ -3827,6 +3828,8 @@ class DeliveryDialog(StyledDialog):
         self.planned_assigned = dict(planned_assigned or {})
         self.contract_t0_date = contract_t0_date
         self.events_provider = events_provider
+        self.allow_delete = bool(allow_delete)
+        self.delete_requested = False
         self.result: Optional[DeliveryInfo] = None
         self.resize(1280, 700)
         self.inputs: Dict[str, Tuple[QTableWidgetItem, QTableWidgetItem, QTableWidgetItem]] = {}
@@ -3977,12 +3980,34 @@ class DeliveryDialog(StyledDialog):
         root.addWidget(self.component_search, 0)
         root.addWidget(self.qty_table, 1)
 
-        row = QHBoxLayout(); row.addStretch()
+        row = QHBoxLayout()
+        if self.allow_delete:
+            delete_btn = QPushButton("Kabul Sil")
+            delete_btn.setObjectName("danger")
+            delete_btn.clicked.connect(self.request_delete)
+            row.addWidget(delete_btn)
+        row.addStretch()
         cancel = QPushButton("İptal"); cancel.setObjectName("secondary"); cancel.clicked.connect(self.reject)
         save = QPushButton("Kaydet")
         save.clicked.connect(self.save)
         row.addWidget(cancel); row.addWidget(save)
         root.addLayout(row)
+
+    def request_delete(self):
+        confirm = QMessageBox(self)
+        confirm.setIcon(QMessageBox.Warning)
+        confirm.setWindowTitle("Kabul Sil")
+        confirm.setText(
+            "Bu kabul silinecek. Bu kabule ait teslim miktarları artık teslim edilmiş sayılmayacak. "
+            "Sistem ana bileşen adetleri değişmeyecek. Devam etmek istiyor musunuz?"
+        )
+        delete_btn = confirm.addButton("Evet, Sil", QMessageBox.DestructiveRole)
+        confirm.addButton("Vazgeç", QMessageBox.RejectRole)
+        confirm.exec()
+        if confirm.clickedButton() != delete_btn:
+            return
+        self.delete_requested = True
+        self.accept()
 
     def _is_delivered_status(self) -> bool:
         status = self.status.currentText().strip() if hasattr(self, "status") else ""
@@ -4248,6 +4273,7 @@ class ContractWorkWindow(QDialog):
         self._updating_summary = False
         self.deleted_contract_info: Optional[dict] = None
         self._context_cache: Dict[Tuple[str, str, str], dict] = {}
+        self._deleted_delivery_systems: set[str] = set()
         self._refreshing_contract_context = False
         self._contract_save_thread = None
         self._contract_save_worker = None
@@ -5373,6 +5399,7 @@ class ContractWorkWindow(QDialog):
             "ci": copy.deepcopy(self.ci),
             "systems": copy.deepcopy(self.systems),
             "deliveries": copy.deepcopy(self.deliveries),
+            "deleted_delivery_systems": set(self._deleted_delivery_systems),
             "tags": copy.deepcopy(self.contract_tags),
             "original_platform": str(self.original_platform or ""),
             "original_contract_no": str(self.original_contract_no or ""),
@@ -5387,6 +5414,7 @@ class ContractWorkWindow(QDialog):
         self.ci = copy.deepcopy(ctx["ci"])
         self.systems = copy.deepcopy(ctx.get("systems") or [])
         self.deliveries = copy.deepcopy(ctx.get("deliveries") or {})
+        self._deleted_delivery_systems = set(ctx.get("deleted_delivery_systems") or set())
         self.contract_tags = copy.deepcopy(ctx.get("tags") or [])
         self.original_platform = str(ctx.get("original_platform") or self.ci.platform or "")
         self.original_contract_no = str(ctx.get("original_contract_no") or self.ci.no or "")
@@ -5588,6 +5616,7 @@ class ContractWorkWindow(QDialog):
             "ci": sd_ci,
             "systems": [],
             "deliveries": {},
+            "deleted_delivery_systems": set(),
             "tags": [],
             "original_platform": platform,
             "original_contract_no": no,
@@ -5627,13 +5656,15 @@ class ContractWorkWindow(QDialog):
     def _delivery_is_preparing(self, delivery: DeliveryInfo) -> bool:
         return self._norm_status_text(getattr(delivery, "status", "")) == "teslimata hazirlaniyor"
 
-    def _derive_system_status(self, deliveries: List[DeliveryInfo]) -> str:
+    def _derive_system_status(self, sys_info: SystemInfo, deliveries: List[DeliveryInfo]) -> str:
         if not deliveries:
             return "Başlanmadı"
-        delivered_count = sum(1 for d in deliveries if self._delivery_is_delivered(d))
-        if delivered_count == len(deliveries):
+        component_qty = {name: max(as_number(qty), 0) for name, qty in (sys_info.components or {}).items()}
+        delivered_qty = {name: sum(max(as_number((delivery.delivered or {}).get(name, 0)), 0) for delivery in deliveries) for name in component_qty}
+        active_components = [name for name, qty in component_qty.items() if qty > 0.0001]
+        if active_components and all(delivered_qty.get(name, 0) >= component_qty[name] - 0.0001 for name in active_components):
             return "Teslim Edildi"
-        if delivered_count > 0:
+        if any(qty > 0.0001 for qty in delivered_qty.values()):
             return "Parçalı Teslimat"
         if any(self._delivery_is_preparing(d) for d in deliveries):
             return "Teslimata Hazırlanıyor"
@@ -5647,8 +5678,8 @@ class ContractWorkWindow(QDialog):
                 latest = parsed
         return latest.isoformat() if latest else ""
 
-    def _system_acceptance_date(self, sys_deliveries: List[DeliveryInfo]) -> str:
-        if not sys_deliveries or not all(self._delivery_is_delivered(d) for d in sys_deliveries):
+    def _system_acceptance_date(self, sys_info: SystemInfo, sys_deliveries: List[DeliveryInfo]) -> str:
+        if self._norm_status_text(getattr(sys_info, "status", "")) != "teslim edildi":
             return ""
         return self._latest_acceptance_date(sys_deliveries)
 
@@ -5666,8 +5697,8 @@ class ContractWorkWindow(QDialog):
     def _apply_derived_statuses(self, ci: ContractInfo, systems: List[SystemInfo], deliveries: Dict[str, List[DeliveryInfo]]):
         for sys_info in systems:
             sys_deliveries = list(deliveries.get(sys_info.name, []) or [])
-            sys_info.status = self._derive_system_status(sys_deliveries)
-            sys_info.acceptance_date = self._system_acceptance_date(sys_deliveries)
+            sys_info.status = self._derive_system_status(sys_info, sys_deliveries)
+            sys_info.acceptance_date = self._system_acceptance_date(sys_info, sys_deliveries)
 
         ci.acceptance_date = self._contract_acceptance_date(systems)
 
@@ -5688,8 +5719,9 @@ class ContractWorkWindow(QDialog):
         if not systems:
             return False, f"{ci.contract_type}: en az bir sistem ekleyin."
         created_defaults = []
+        deleted_delivery_systems = set(ctx.get("deleted_delivery_systems") or set())
         for sys_info in systems:
-            if self._system_has_component_quantity(sys_info) and not deliveries.get(sys_info.name):
+            if self._system_has_component_quantity(sys_info) and not deliveries.get(sys_info.name) and sys_info.name not in deleted_delivery_systems:
                 d = self._default_acceptance_for(sys_info)
                 if d:
                     deliveries.setdefault(sys_info.name, []).append(d)
@@ -6022,6 +6054,7 @@ class ContractWorkWindow(QDialog):
         d = self._default_acceptance_for(sys_info)
         if d:
             self.deliveries.setdefault(sys_info.name, []).append(d)
+            self._deleted_delivery_systems.discard(sys_info.name)
             self._set_dirty()
 
     def _open_first_delivery_for_system(self, system_name: str):
@@ -6046,7 +6079,7 @@ class ContractWorkWindow(QDialog):
                 total = max(as_number((sys_info.components or {}).get(comp, 0)), 0)
                 planned_sum = sum(max(as_number((d.planned or {}).get(comp, 0)), 0) for d in sys_deliveries)
                 delivered_sum = sum(max(as_number((d.delivered or {}).get(comp, 0)), 0) for d in sys_deliveries)
-                if abs(planned_sum - total) > 0.0001:
+                if planned_sum - total > 0.0001:
                     errors.append(f"{sys_info.name} / {comp}: sistem {fmt_num(total)}, kabuller {fmt_num(planned_sum)}")
                 if delivered_sum - planned_sum > 0.0001:
                     errors.append(f"{sys_info.name} / {comp}: teslim edilen {fmt_num(delivered_sum)}, kabul adedi {fmt_num(planned_sum)}")
@@ -6061,7 +6094,9 @@ class ContractWorkWindow(QDialog):
     def ensure_systems_have_acceptances(self) -> bool:
         missing_systems = [
             sys_info for sys_info in self.systems
-            if self._system_has_component_quantity(sys_info) and not self.deliveries.get(sys_info.name)
+            if self._system_has_component_quantity(sys_info)
+            and not self.deliveries.get(sys_info.name)
+            and sys_info.name not in self._deleted_delivery_systems
         ]
         if not missing_systems:
             return True
