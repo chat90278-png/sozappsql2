@@ -94,6 +94,7 @@ def edit_delivery(self, idx: int):
         planned_assigned=planned_assigned,
         contract_t0_date=str(getattr(self.ci, "t0_date", "") or ""),
         events_provider=getattr(self, "date_picker_events", None),
+        allow_delete=True,
     )
     dlg.name.setText(current.name)
     dlg.status.setCurrentText(current.status or "PLAN")
@@ -146,7 +147,14 @@ def edit_delivery(self, idx: int):
         self.moveEvent = _orig_move
         overlay.hide()
         overlay.deleteLater()
-    if result and dlg.result:
+    if result and dlg.delete_requested:
+        del self.deliveries[sys_info.name][idx]
+        self._deleted_delivery_systems.add(sys_info.name)
+        self._set_dirty()
+        self.expanded_delivery_index = None
+        self.refresh_live_statuses()
+        self.refresh_right()
+    elif result and dlg.result:
         self.deliveries[sys_info.name][idx] = dlg.result
         self._set_dirty()
         self.expanded_delivery_index = None
@@ -204,6 +212,7 @@ def add_delivery(self):
         overlay.deleteLater()
     if result and dlg.result:
         self.deliveries.setdefault(sys_info.name, []).append(dlg.result)
+        self._deleted_delivery_systems.discard(sys_info.name)
         self._set_dirty()
         self.expanded_delivery_index = None
         self.refresh_live_statuses()

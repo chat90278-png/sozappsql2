@@ -596,35 +596,80 @@ class STSStore:
             for old_system in self.db.conn.execute("SELECT id,name,status,completion_date,acceptance_date FROM systems WHERE contract_id=?", (row[0],)):
                 components = {item[0]: float(item[1] or 0) for item in self.db.conn.execute("SELECT c.name,sc.qty FROM system_components sc JOIN components c ON c.id=sc.component_id WHERE sc.system_id=?", (old_system[0],))}
                 old_systems[str(old_system[1])] = {"status": old_system[2] or "", "completion_date": old_system[3] or "", "acceptance_date": old_system[4] or "", "components": components}
-            for old_delivery in self.db.conn.execute("SELECT system_name,name,status,acceptance_date,note FROM deliveries WHERE contract_id=?", (row[0],)):
-                old_deliveries[(str(old_delivery[0]), str(old_delivery[1]))] = {"status": old_delivery[2] or "", "acceptance_date": old_delivery[3] or "", "note": old_delivery[4] or ""}
+            for old_delivery in self.db.conn.execute("SELECT id,system_name,name,status,acceptance_date,note FROM deliveries WHERE contract_id=?", (row[0],)):
+                components = {item[0]: {"planned": float(item[1] or 0), "delivered": float(item[2] or 0)} for item in self.db.conn.execute("SELECT c.name,dc.planned,dc.delivered FROM delivery_components dc JOIN components c ON c.id=dc.component_id WHERE dc.delivery_id=?", (old_delivery[0],))}
+                old_deliveries[(str(old_delivery[1]), str(old_delivery[2]))] = {"id": int(old_delivery[0]), "status": old_delivery[3] or "", "acceptance_date": old_delivery[4] or "", "note": old_delivery[5] or "", "components": components}
         with self.db.tx():
             if row:
                 cid=row[0]
                 self.db.conn.execute("UPDATE contracts SET user_id=?,user_names=?,yi_yd=?,status=?,signed_date=?,t0_date=?,t0_months=?,completion_date=?,acceptance_date=?,note=?,content=?,search_text=?,updated_at=? WHERE id=?",(user_id,user_names_json,ci.yi_yd,ci.status,ci.signature_date,ci.t0_date,int(ci.t0_months or 0),ci.completion_date,ci.acceptance_date,ci.note,ci.note,search_text,ts,cid))
-                self.db.conn.execute("DELETE FROM deliveries WHERE contract_id=?",(cid,)); self.db.conn.execute("DELETE FROM systems WHERE contract_id=?",(cid,))
             else:
                 self.db.conn.execute("INSERT INTO contracts(platform_id,user_id,contract_no,user_names,yi_yd,contract_type,type_display,link_type,status,signed_date,t0_date,t0_months,completion_date,acceptance_date,content,note,is_main,parent_contract_no,search_text,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(platform_id,user_id,ci.no,user_names_json,ci.yi_yd,ctype,ctype,"",ci.status,ci.signature_date,ci.t0_date,int(ci.t0_months or 0),ci.completion_date,ci.acceptance_date,ci.note,ci.note,1 if self._normalize_label(ctype)==self._normalize_label('Ana Sözleşme') else 0,ci.sd_anchor_no,search_text,ts,ts))
                 cid=self.db.conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+            existing_systems = {str(item[1]): int(item[0]) for item in self.db.conn.execute("SELECT id,name FROM systems WHERE contract_id=?", (cid,))}
+            desired_system_names = {str(system.name) for system in (systems or [])}
+            # Remove deliveries first so deleted acceptances cascade only to their own delivery_components.
+            desired_delivery_keys = {(str(sys_name), str(delivery.name)) for sys_name, items in (deliveries or {}).items() for delivery in (items or [])}
+            for delivery_row in self.db.conn.execute("SELECT id,system_name,name FROM deliveries WHERE contract_id=?", (cid,)).fetchall():
+                if (str(delivery_row[1]), str(delivery_row[2])) not in desired_delivery_keys:
+                    self.db.conn.execute("DELETE FROM deliveries WHERE id=?", (delivery_row[0],))
+
             system_ids = {}
             for i,system in enumerate(systems or []):
-                self.db.conn.execute("INSERT INTO systems(contract_id,name,status,completion_date,acceptance_date,note,sort_order,payload_json) VALUES(?,?,?,?,?,?,?,?)",(cid,system.name,system.status,system.completion_date,system.acceptance_date,"",i,json.dumps({"t0_date":system.t0_date,"t0_months":system.t0_months})))
-                sid=self.db.conn.execute("SELECT last_insert_rowid()").fetchone()[0]; system_ids[system.name]=sid
-                # TODO: Component notes intentionally remain STS-database-only until the legacy Excel round-trip defines a compatible column.
+                payload=json.dumps({"t0_date":system.t0_date,"t0_months":system.t0_months})
+                sid=existing_systems.get(str(system.name))
+                if sid is None:
+                    self.db.conn.execute("INSERT INTO systems(contract_id,name,status,completion_date,acceptance_date,note,sort_order,payload_json) VALUES(?,?,?,?,?,?,?,?)",(cid,system.name,system.status,system.completion_date,system.acceptance_date,"",i,payload))
+                    sid=self.db.conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+                else:
+                    self.db.conn.execute("UPDATE systems SET name=?,status=?,completion_date=?,acceptance_date=?,sort_order=?,payload_json=? WHERE id=?",(system.name,system.status,system.completion_date,system.acceptance_date,i,payload,sid))
+                system_ids[system.name]=sid
+                existing_components = {int(item[0]): int(item[1]) for item in self.db.conn.execute("SELECT component_id,id FROM system_components WHERE system_id=?", (sid,))}
+                desired_component_ids = set()
                 for cname, qty in (system.components or {}).items():
                     value=float(qty or 0)
-                    if value > 0:
-                        self.db.conn.execute("INSERT INTO system_components(system_id,component_id,qty,note) VALUES(?,?,?,?)",(sid,self.get_component_id(cname,create=True),value,str((getattr(system, "component_notes", {}) or {}).get(cname, "") or "")))
+                    if value <= 0:
+                        continue
+                    component_id=self.get_component_id(cname,create=True); desired_component_ids.add(component_id)
+                    note=str((getattr(system, "component_notes", {}) or {}).get(cname, "") or "")
+                    if component_id in existing_components:
+                        self.db.conn.execute("UPDATE system_components SET qty=?,note=? WHERE id=?", (value,note,existing_components[component_id]))
+                    else:
+                        self.db.conn.execute("INSERT INTO system_components(system_id,component_id,qty,note) VALUES(?,?,?,?)",(sid,component_id,value,note))
+                for component_id, system_component_id in existing_components.items():
+                    if component_id not in desired_component_ids:
+                        self.db.conn.execute("DELETE FROM system_components WHERE id=?", (system_component_id,))
+            for name, sid in existing_systems.items():
+                if name not in desired_system_names:
+                    self.db.conn.execute("DELETE FROM systems WHERE id=?", (sid,))
+
+            existing_deliveries = {(str(item[1]), str(item[2])): int(item[0]) for item in self.db.conn.execute("SELECT id,system_name,name FROM deliveries WHERE contract_id=?", (cid,))}
             for sys_name, dlist in (deliveries or {}).items():
                 for i,delivery in enumerate(dlist or []):
                     delivery_user_id = self.get_user_id(getattr(delivery, "delivery_user", ""), create=True)
-                    self.db.conn.execute("INSERT INTO deliveries(contract_id,system_id,delivery_user_id,system_name,name,status,acceptance_date,note,sort_order,payload_json) VALUES(?,?,?,?,?,?,?,?,?,?)",(cid,system_ids.get(sys_name),delivery_user_id,sys_name,delivery.name,delivery.status,delivery.acceptance_date,delivery.note,i,json.dumps({"t0_date":delivery.t0_date,"t0_months":delivery.t0_months,"completion_date":delivery.completion_date})))
-                    did=self.db.conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+                    payload=json.dumps({"t0_date":delivery.t0_date,"t0_months":delivery.t0_months,"completion_date":delivery.completion_date})
+                    did=existing_deliveries.get((str(sys_name), str(delivery.name)))
+                    if did is None:
+                        self.db.conn.execute("INSERT INTO deliveries(contract_id,system_id,delivery_user_id,system_name,name,status,acceptance_date,note,sort_order,payload_json) VALUES(?,?,?,?,?,?,?,?,?,?)",(cid,system_ids.get(sys_name),delivery_user_id,sys_name,delivery.name,delivery.status,delivery.acceptance_date,delivery.note,i,payload))
+                        did=self.db.conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+                    else:
+                        self.db.conn.execute("UPDATE deliveries SET system_id=?,delivery_user_id=?,system_name=?,name=?,status=?,acceptance_date=?,note=?,sort_order=?,payload_json=? WHERE id=?",(system_ids.get(sys_name),delivery_user_id,sys_name,delivery.name,delivery.status,delivery.acceptance_date,delivery.note,i,payload,did))
+                    existing_components = {int(item[0]): int(item[1]) for item in self.db.conn.execute("SELECT component_id,id FROM delivery_components WHERE delivery_id=?", (did,))}
+                    desired_component_ids = set()
                     names=set((delivery.planned or {})) | set((delivery.delivered or {}))
                     for cname in names:
                         planned=float((delivery.planned or {}).get(cname,0) or 0); delivered=float((delivery.delivered or {}).get(cname,0) or 0)
-                        if planned > 0 or delivered > 0:
-                            self.db.conn.execute("INSERT INTO delivery_components(delivery_id,component_id,planned,delivered) VALUES(?,?,?,?)",(did,self.get_component_id(cname,create=True),planned,delivered))
+                        if planned <= 0 and delivered <= 0:
+                            continue
+                        component_id=self.get_component_id(cname,create=True); desired_component_ids.add(component_id)
+                        if component_id in existing_components:
+                            self.db.conn.execute("UPDATE delivery_components SET planned=?,delivered=? WHERE id=?",(planned,delivered,existing_components[component_id]))
+                        else:
+                            self.db.conn.execute("INSERT INTO delivery_components(delivery_id,component_id,planned,delivered) VALUES(?,?,?,?)",(did,component_id,planned,delivered))
+                    for component_id, delivery_component_id in existing_components.items():
+                        if component_id not in desired_component_ids:
+                            self.db.conn.execute("DELETE FROM delivery_components WHERE id=?", (delivery_component_id,))
         after_contract = {"status": str(ci.status or ""), "note": str(ci.note or ""), "completion_date": str(ci.completion_date or ""), "acceptance_date": str(ci.acceptance_date or "")}
         self._log("contract_updated" if row else "contract_created", entity_type="contract", entity_id=cid, platform=str(ci.platform or ""), contract_no=str(ci.no or ""), source="Contract Detail", message="Sözleşme ana bilgileri güncellendi" if row else "Sözleşme oluşturuldu", before=before_contract, after=after_contract, payload={"system_count":len(systems or []),"delivery_count":sum(len(v or []) for v in (deliveries or {}).values()),"component_count":sum(len((x.components or {})) for x in (systems or []))}, actor=self.current_actor())
         if before_contract and before_contract.get("status") != after_contract.get("status"):
@@ -640,18 +685,19 @@ class STSStore:
                 self._log("system_updated", entity_type="system", entity_key=name, contract_no=str(ci.no or ""), source="System Editor", message="Sistem güncellendi", before=before_system, after=after_system)
                 if before_system.get("components") != after_system.get("components"):
                     self._log("system_component_updated", entity_type="system", entity_key=name, contract_no=str(ci.no or ""), source="System Editor", message="Sistem bileşenleri güncellendi", before={"components": before_system.get("components")}, after={"components": after_system.get("components")})
-        new_deliveries = {(str(system_name), str(delivery.name)): {"status": str(delivery.status or ""), "acceptance_date": str(delivery.acceptance_date or ""), "note": str(delivery.note or "")} for system_name, items in (deliveries or {}).items() for delivery in (items or [])}
+        new_deliveries = {(str(system_name), str(delivery.name)): {"status": str(delivery.status or ""), "acceptance_date": str(delivery.acceptance_date or ""), "note": str(delivery.note or ""), "components": {name: {"planned": float((delivery.planned or {}).get(name, 0) or 0), "delivered": float((delivery.delivered or {}).get(name, 0) or 0)} for name in set((delivery.planned or {})) | set((delivery.delivered or {})) if float((delivery.planned or {}).get(name, 0) or 0) > 0 or float((delivery.delivered or {}).get(name, 0) or 0) > 0}} for system_name, items in (deliveries or {}).items() for delivery in (items or [])}
         for key in sorted(set(new_deliveries) | set(old_deliveries)):
             before_delivery, after_delivery = old_deliveries.get(key), new_deliveries.get(key)
+            before_compare = {name: value for name, value in (before_delivery or {}).items() if name != "id"}
             entity_key = f"{key[0]} / {key[1]}"
             if before_delivery is None:
                 self._log("delivery_created", entity_type="delivery", entity_key=entity_key, contract_no=str(ci.no or ""), source="Delivery Editor", message="Teslimat eklendi", after=after_delivery)
             elif after_delivery is None:
-                self._log("delivery_deleted", entity_type="delivery", entity_key=entity_key, contract_no=str(ci.no or ""), source="Delivery Editor", message="Teslimat silindi", before=before_delivery)
-            elif before_delivery != after_delivery:
-                self._log("delivery_updated", entity_type="delivery", entity_key=entity_key, contract_no=str(ci.no or ""), source="Delivery Editor", message="Teslimat güncellendi", before=before_delivery, after=after_delivery)
-                if before_delivery.get("status") != after_delivery.get("status"):
-                    self._log("delivery_status_changed", entity_type="delivery", entity_key=entity_key, contract_no=str(ci.no or ""), source="Delivery Editor", message="Teslimat durumu güncellendi", before={"status": before_delivery.get("status")}, after={"status": after_delivery.get("status")})
+                self._log("delivery_deleted", entity_type="delivery", entity_id=before_delivery.get("id"), entity_key=entity_key, contract_no=str(ci.no or ""), source="Delivery Editor", message="Teslimat silindi", before=before_delivery)
+            elif before_compare != after_delivery:
+                self._log("delivery_updated", entity_type="delivery", entity_key=entity_key, contract_no=str(ci.no or ""), source="Delivery Editor", message="Teslimat güncellendi", before=before_compare, after=after_delivery)
+                if before_compare.get("status") != after_delivery.get("status"):
+                    self._log("delivery_status_changed", entity_type="delivery", entity_key=entity_key, contract_no=str(ci.no or ""), source="Delivery Editor", message="Teslimat durumu güncellendi", before={"status": before_compare.get("status")}, after={"status": after_delivery.get("status")})
         return cid
 
     def load_contract_structure(self, platform, contract_no, start_row=None, contract_type=None):
