@@ -4299,6 +4299,7 @@ class ContractWorkWindow(QDialog):
                 {
                     "name":            str(s.name or ""),
                     "components":      {k: float(v) for k, v in sorted((s.components or {}).items())},
+                    "component_notes": {k: str(v or "") for k, v in sorted((getattr(s, "component_notes", {}) or {}).items()) if str(v or "")},
                     "t0_date":         str(s.t0_date or ""),
                     "t0_months":       int(s.t0_months or 0),
                     "completion_date": str(s.completion_date or ""),
@@ -4466,10 +4467,10 @@ class ContractWorkWindow(QDialog):
         rv.addLayout(top_row)
         self.edit_system_btn.clicked.connect(self.edit_system)
 
-        self.summary = QTableWidget(0, 4)
+        self.summary = QTableWidget(0, 5)
         configure_table(self.summary)
         self.summary.verticalHeader().setDefaultSectionSize(38)
-        self.summary.setHorizontalHeaderLabels(["Bileşen", "Sözleşme Adedi", "Teslim Edilen", "Kalan"])
+        self.summary.setHorizontalHeaderLabels(["Bileşen", "Sözleşme Adedi", "Teslim Edilen", "Kalan", "Not"])
         self.configure_summary_columns()
         self.summary.itemChanged.connect(self.on_summary_changed)
         self.summary.setMinimumHeight(340)
@@ -4579,6 +4580,17 @@ class ContractWorkWindow(QDialog):
     def eventFilter(self, obj, event):
         if obj is getattr(self, "side_meta_host", None) and event.type() in (QEvent.Resize, QEvent.Show):
             self.position_side_meta_popover()
+        if event.type() in (QEvent.WindowDeactivate, QEvent.ApplicationDeactivate) and getattr(self, "_side_meta_open_panel", None):
+            self.close_side_meta_popover()
+        if event.type() == QEvent.KeyPress and event.key() == Qt.Key_Escape and getattr(self, "_side_meta_open_panel", None):
+            self.close_side_meta_popover()
+            return True
+        if event.type() == QEvent.MouseButtonPress and getattr(self, "_side_meta_open_panel", None):
+            popover = getattr(self, "side_meta_popover", None)
+            bar = getattr(self, "side_meta_bar", None)
+            clicked_inside = any(widget and (obj is widget or widget.isAncestorOf(obj)) for widget in (popover, bar))
+            if not clicked_inside:
+                self.close_side_meta_popover()
         file_id = obj.property("contractFileId") if hasattr(obj, "property") else None
         if file_id and event.type() == QEvent.MouseButtonDblClick:
             self.open_contract_file(int(file_id))
@@ -4898,6 +4910,7 @@ class ContractWorkWindow(QDialog):
         self.side_meta_popover_body_layout.setSpacing(6)
         popover_layout.addWidget(self.side_meta_popover_body, 1)
         self.side_meta_popover.hide()
+        QApplication.instance().installEventFilter(self)
         self.position_side_meta_popover()
 
     def position_side_meta_popover(self):
@@ -5221,6 +5234,7 @@ class ContractWorkWindow(QDialog):
         current.name = new_name
         removed_components = set(getattr(updated, "removed_components", set()) or set())
         current.components = {k: v for k, v in dict(updated.components).items() if k not in removed_components}
+        current.component_notes = {k: v for k, v in (getattr(current, "component_notes", {}) or {}).items() if k in current.components}
         current.t0_date = updated.t0_date
         current.t0_months = updated.t0_months
         current.completion_date = updated.completion_date
@@ -5858,15 +5872,25 @@ class ContractWorkWindow(QDialog):
             qty_item = self.summary.item(r, 1)
             if not comp_item or not qty_item:
                 continue
-            sys_info.components[comp_item.text()] = as_number(qty_item.text())
+            comp = comp_item.text()
+            sys_info.components[comp] = as_number(qty_item.text())
+            note_item = self.summary.item(r, 4)
+            note = note_item.text() if note_item else ""
+            if not hasattr(sys_info, "component_notes"):
+                sys_info.component_notes = {}
+            if note:
+                sys_info.component_notes[comp] = note
+            else:
+                sys_info.component_notes.pop(comp, None)
 
     def on_summary_changed(self, item):
-        if self._updating_summary or item.column() != 1:
+        if self._updating_summary or item.column() not in (1, 4):
             return
         self._set_dirty()
         self.sync_summary_to_system()
-        self.refresh_system_card_text()
-        self.refresh_summary_only()
+        if item.column() == 1:
+            self.refresh_system_card_text()
+            self.refresh_summary_only()
 
     def refresh_system_card_text(self):
         r = self.system_list.currentRow()
