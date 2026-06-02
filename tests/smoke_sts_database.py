@@ -1,3 +1,4 @@
+import sqlite3
 import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -17,7 +18,7 @@ with TemporaryDirectory() as td:
         'component_platforms': {'component_id', 'platform_id'},
         'contracts': {'platform_id', 'user_id'},
         'systems': {'contract_id'},
-        'system_components': {'system_id', 'component_id', 'qty'},
+        'system_components': {'system_id', 'component_id', 'qty', 'note'},
         'deliveries': {'contract_id', 'system_id', 'delivery_user_id'},
         'delivery_components': {'delivery_id', 'component_id', 'planned', 'delivered'},
         'contract_tags': {'contract_id', 'tag_id'},

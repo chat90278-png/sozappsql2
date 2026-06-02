@@ -44,6 +44,7 @@ class SystemInfo:
     completion_date: str = ""
     status: str = "Başlanmadı"
     acceptance_date: str = ""
+    component_notes: Dict[str, str] = field(default_factory=dict)
 
 
 @dataclass

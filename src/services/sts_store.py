@@ -536,7 +536,7 @@ class STSStore:
                 "user":user_display,"users":users,
                 "type":r["contract_type"],"contract_type":r["contract_type"],
                 "type_display":r["type_display"],"link":r["link_type"],"status":r["status"],
-                "completion_date":r["completion_date"],"content":r["content"] or r["note"] or "",
+                "completion_date":r["completion_date"],"acceptance_date":r["acceptance_date"],"content":r["content"] or r["note"] or "",
                 "is_main":bool(r["is_main"]),"tags":list(tags),"search":search_text
             })
         return rows
@@ -580,10 +580,11 @@ class STSStore:
             for i,system in enumerate(systems or []):
                 self.db.conn.execute("INSERT INTO systems(contract_id,name,status,completion_date,acceptance_date,note,sort_order,payload_json) VALUES(?,?,?,?,?,?,?,?)",(cid,system.name,system.status,system.completion_date,system.acceptance_date,"",i,json.dumps({"t0_date":system.t0_date,"t0_months":system.t0_months})))
                 sid=self.db.conn.execute("SELECT last_insert_rowid()").fetchone()[0]; system_ids[system.name]=sid
+                # TODO: Component notes intentionally remain STS-database-only until the legacy Excel round-trip defines a compatible column.
                 for cname, qty in (system.components or {}).items():
                     value=float(qty or 0)
                     if value > 0:
-                        self.db.conn.execute("INSERT INTO system_components(system_id,component_id,qty) VALUES(?,?,?)",(sid,self.get_component_id(cname,create=True),value))
+                        self.db.conn.execute("INSERT INTO system_components(system_id,component_id,qty,note) VALUES(?,?,?,?)",(sid,self.get_component_id(cname,create=True),value,str((getattr(system, "component_notes", {}) or {}).get(cname, "") or "")))
             for sys_name, dlist in (deliveries or {}).items():
                 for i,delivery in enumerate(dlist or []):
                     delivery_user_id = self.get_user_id(getattr(delivery, "delivery_user", ""), create=True)
@@ -614,9 +615,11 @@ class STSStore:
         ci=ContractInfo(no=r['contract_no'],platform=r['platform'],user=user_display,yi_yd=r['yi_yd'] or "Yİ",contract_type=r['contract_type'] or "",signature_date=r['signed_date'] or "",t0_date=r['t0_date'] or "",t0_months=int(r['t0_months'] or 0),completion_date=r['completion_date'] or "",status=r['status'] or "PLAN",note=r['note'] or "",acceptance_date=r['acceptance_date'] or "",entry_start_row=int(r['id']),users=users)
         systems=[]; deliveries={}
         for s in self.db.conn.execute("SELECT * FROM systems WHERE contract_id=? ORDER BY sort_order,id",(r['id'],)):
-            comps={x[0]:float(x[1] or 0) for x in self.db.conn.execute("SELECT c.name,sc.qty FROM system_components sc JOIN components c ON c.id=sc.component_id WHERE sc.system_id=?",(s['id'],))}
+            component_rows=self.db.conn.execute("SELECT c.name,sc.qty,sc.note FROM system_components sc JOIN components c ON c.id=sc.component_id WHERE sc.system_id=?",(s['id'],)).fetchall()
+            comps={x[0]:float(x[1] or 0) for x in component_rows}
+            component_notes={x[0]:str(x[2] or "") for x in component_rows if str(x[2] or "")}
             payload=json.loads(s['payload_json'] or "{}")
-            si=SystemInfo(name=s['name'],components=comps,t0_date=payload.get('t0_date',''),t0_months=int(payload.get('t0_months',0) or 0),completion_date=s['completion_date'] or "",status=s['status'] or "Başlanmadı",acceptance_date=s['acceptance_date'] or "")
+            si=SystemInfo(name=s['name'],components=comps,component_notes=component_notes,t0_date=payload.get('t0_date',''),t0_months=int(payload.get('t0_months',0) or 0),completion_date=s['completion_date'] or "",status=s['status'] or "Başlanmadı",acceptance_date=s['acceptance_date'] or "")
             systems.append(si)
         for d in self.db.conn.execute("SELECT d.*,u.name AS delivery_user FROM deliveries d LEFT JOIN users u ON u.id=d.delivery_user_id WHERE d.contract_id=? ORDER BY d.system_name,d.sort_order,d.id",(r['id'],)):
             payload=json.loads(d['payload_json'] or "{}")
