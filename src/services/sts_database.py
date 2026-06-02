@@ -86,6 +86,7 @@ class STSDatabase:
         return False
 
     def init_schema(self):
+        migrated = []
         self.conn.executescript(
             """
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
@@ -123,10 +124,16 @@ CREATE INDEX IF NOT EXISTS idx_logs_entity ON activity_logs(entity_type,entity_i
         # cannot add foreign-key constraints with ALTER TABLE, but adding the
         # nullable column keeps those files readable and writable. New files
         # still receive the foreign keys from the CREATE TABLE definitions.
-        self._ensure_column("deliveries", "delivery_user_id", "INTEGER")
+        if self._ensure_column("deliveries", "delivery_user_id", "INTEGER"):
+            migrated.append("deliveries.delivery_user_id")
         # Component notes were added after the initial v2 schema. Keep legacy
         # STS files readable by adding the nullable column in place.
-        self._ensure_column("system_components", "note", "TEXT")
+        if self._ensure_column("system_components", "note", "TEXT"):
+            migrated.append("system_components.note")
+        # Audit metadata columns were added after the initial activity log schema.
+        for column in ("source", "device_name"):
+            if self._ensure_column("activity_logs", column, "TEXT"):
+                migrated.append(f"activity_logs.{column}")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_deliveries_delivery_user_id ON deliveries(delivery_user_id)")
         self.conn.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version','2')")
         self.conn.commit()
@@ -272,7 +279,18 @@ CREATE INDEX IF NOT EXISTS idx_logs_entity ON activity_logs(entity_type,entity_i
         if t not in allowed:
             raise ValueError("Geçersiz tablo adı")
         lim = max(1, min(1000, int(limit or 100)))
-        rows = self.conn.execute(f"SELECT * FROM {t} LIMIT ?", (lim,)).fetchall()
+        if t == "activity_logs":
+            preferred = [
+                "id", "created_at", "actor", "source", "device_name", "action", "entity_type", "entity_id",
+                "entity_key", "platform_id", "contract_no", "message", "before_json", "after_json", "payload_json",
+            ]
+            existing = self._table_columns(t)
+            selected = [column for column in preferred if column in existing]
+            selected.extend(column for column in existing if column not in selected)
+            columns = ", ".join(selected) or "*"
+            rows = self.conn.execute(f"SELECT {columns} FROM {t} LIMIT ?", (lim,)).fetchall()
+        else:
+            rows = self.conn.execute(f"SELECT * FROM {t} LIMIT ?", (lim,)).fetchall()
         return [dict(r) for r in rows]
 
 

@@ -33,8 +33,11 @@ class ActivityLogDialog(QDialog):
         btn = QPushButton("Yenile"); btn.clicked.connect(self.refresh_logs)
         for w in [self.search, self.platform, self.action, self.limit, btn]: filt.addWidget(w)
         root.addLayout(filt)
-        self.table = QTableWidget(0,10)
-        self.table.setHorizontalHeaderLabels(["ID", "Tarih", "İşlem Yapan", "İşlem Kaynağı", "Bilgisayar", "İşlem", "Kayıt Türü", "Sözleşme No", "Mesaj", "Detay"])
+        self.table = QTableWidget(0, 15)
+        self.table.setHorizontalHeaderLabels([
+            "ID", "Tarih", "İşlem Yapan", "İşlem Kaynağı", "Bilgisayar", "İşlem", "Kayıt Türü",
+            "Kayıt ID", "Kayıt Anahtarı", "Platform ID", "Sözleşme No", "Mesaj", "Önce", "Sonra", "Detay",
+        ])
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.table.cellDoubleClicked.connect(self.open_detail)
@@ -50,11 +53,12 @@ class ActivityLogDialog(QDialog):
         i = self.action.findData(cur); self.action.setCurrentIndex(i if i>=0 else 0); self.action.blockSignals(False)
         self.table.setRowCount(len(self.logs))
         for r,log in enumerate(self.logs):
-            detail = self._detail_summary(log)
             vals = [
                 log.get("id", ""), format_log_timestamp(log.get("created_at", "")), log.get("actor") or "-",
                 log.get("source") or "-", log.get("device_name") or "-", log.get("action") or "-",
-                log.get("entity_type") or "-", log.get("contract_no") or "-", log.get("message") or "-", detail,
+                log.get("entity_type") or "-", log.get("entity_id") or "-", log.get("entity_key") or "-",
+                log.get("platform_id") or "-", log.get("contract_no") or "-", log.get("message") or "-",
+                log.get("before_json") or "-", log.get("after_json") or "-", log.get("payload_json") or "-",
             ]
             for c,v in enumerate(vals): self.table.setItem(r,c,QTableWidgetItem(str(v or '-')))
 
