@@ -156,22 +156,12 @@ class ContractFileTreeWidget(QTreeWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._empty_title = "Henüz belge eklenmedi."
-        self._empty_hint = "Dosya ekleyin veya buraya sürükleyin."
         self.setAcceptDrops(True)
         self.setDragEnabled(False)
         self.setDragDropMode(QAbstractItemView.DropOnly)
         self.setDropIndicatorShown(True)
         self.setHeaderHidden(True)
-        self.setColumnCount(2)
-        self.header().setStretchLastSection(False)
-        self.header().setSectionResizeMode(0, QHeaderView.Stretch)
-        self.header().setSectionResizeMode(1, QHeaderView.Fixed)
-        self.setColumnWidth(1, 58)
         self.setRootIsDecorated(True)
-        self.setItemsExpandable(True)
-        self.setUniformRowHeights(True)
-        self.setTextElideMode(Qt.ElideRight)
         self.setAlternatingRowColors(False)
         self.setSelectionMode(QAbstractItemView.SingleSelection)
         self.setEditTriggers(
@@ -179,39 +169,6 @@ class ContractFileTreeWidget(QTreeWidget):
             | QAbstractItemView.SelectedClicked
         )
         self.setContextMenuPolicy(Qt.CustomContextMenu)
-
-    def set_empty_message(self, title: str, hint: str = ""):
-        self._empty_title = str(title or "")
-        self._empty_hint = str(hint or "")
-        self.viewport().update()
-
-    def _set_drag_over(self, enabled: bool):
-        if self.property("dragOver") == bool(enabled):
-            return
-        self.setProperty("dragOver", bool(enabled))
-        self.style().unpolish(self)
-        self.style().polish(self)
-        self.viewport().update()
-
-    def paintEvent(self, event):
-        super().paintEvent(event)
-        if self.topLevelItemCount() > 0:
-            return
-        painter = QPainter(self.viewport())
-        painter.setRenderHint(QPainter.Antialiasing, True)
-        rect = self.viewport().rect().adjusted(12, 12, -12, -12)
-        painter.setPen(QColor("#7b8da5"))
-        font = painter.font()
-        font.setPointSize(9)
-        font.setBold(True)
-        painter.setFont(font)
-        painter.drawText(rect.adjusted(0, -10, 0, -10), Qt.AlignCenter, self._empty_title)
-        if self._empty_hint:
-            font.setPointSize(8)
-            font.setBold(False)
-            painter.setFont(font)
-            painter.setPen(QColor("#94a3b8"))
-            painter.drawText(rect.adjusted(0, 16, 0, 16), Qt.AlignCenter, self._empty_hint)
 
     def _drop_folder_id(self, pos):
         item = self.itemAt(pos)
@@ -254,24 +211,17 @@ class ContractFileTreeWidget(QTreeWidget):
 
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():
-            self._set_drag_over(True)
             event.acceptProposedAction()
         else:
             event.ignore()
 
     def dragMoveEvent(self, event):
         if event.mimeData().hasUrls():
-            self._set_drag_over(True)
             event.acceptProposedAction()
         else:
             event.ignore()
 
-    def dragLeaveEvent(self, event):
-        self._set_drag_over(False)
-        super().dragLeaveEvent(event)
-
     def dropEvent(self, event):
-        self._set_drag_over(False)
         file_paths, error = self._local_file_paths_from_event(event)
         if not file_paths:
             if error:
@@ -5324,45 +5274,26 @@ class ContractWorkWindow(QDialog):
             else:
                 empty = QLabel("Henüz etiket atanmadı."); empty.setObjectName("sidePanelEmpty"); empty.setAlignment(Qt.AlignCenter); cards.insertWidget(0, empty)
         else:
+            drop = ContractFileDropButton("  ↑    Dosya ekle     PDF, Word, Excel, PowerPoint, görsel veya TXT", self)
+            drop.setObjectName("fileDropZone")
+            drop.setCursor(Qt.PointingHandCursor)
+            drop.clicked.connect(self._pick_contract_files)
+            drop.filesDropped.connect(self._handle_contract_files_drop)
+            drop.invalidDrop.connect(lambda message: QMessageBox.warning(self, "Dosya yüklenemedi", message))
+            body.addWidget(drop, 0)
             files = list(self._side_meta_files)
             folders = list(getattr(self, "_side_meta_folders", []))
-            toolbar = QHBoxLayout()
-            toolbar.setContentsMargins(0, 0, 0, 0)
-            toolbar.setSpacing(8)
-            add_file_btn = QPushButton("+ Dosya Ekle")
-            add_file_btn.setObjectName("documentActionPrimary")
-            add_file_btn.setFixedHeight(32)
-            add_file_btn.setCursor(Qt.PointingHandCursor)
-            add_file_btn.clicked.connect(self._pick_contract_files)
-            add_folder_btn = QPushButton("+ Klasör Ekle")
-            add_folder_btn.setObjectName("documentAction")
-            add_folder_btn.setFixedHeight(32)
-            add_folder_btn.setCursor(Qt.PointingHandCursor)
-            add_folder_btn.clicked.connect(self.add_contract_file_folder)
-            hint = QLabel("PDF, Word, Excel, PowerPoint")
-            hint.setObjectName("documentHint")
-            hint.setMinimumWidth(0)
-            hint.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
-            toolbar.addWidget(add_file_btn, 0)
-            toolbar.addWidget(add_folder_btn, 0)
-            toolbar.addWidget(hint, 1)
-            body.addLayout(toolbar)
             try:
                 tree = self.create_contract_files_tree(folders, files)
                 self.contract_files_tree = tree
-                tree.setFixedHeight(self.document_tree_height(folders, files))
-                body.addWidget(tree, 0)
-                footer = QHBoxLayout()
-                footer.setContentsMargins(2, 0, 2, 0)
-                footer.setSpacing(8)
-                drag_hint = QLabel("Sürükle-bırak desteklenir")
-                drag_hint.setObjectName("documentsFooterLeft")
+                body.addWidget(tree, 1)
+                if not files and not folders:
+                    empty = QLabel("Henüz belge eklenmedi.")
+                    empty.setObjectName("sidePanelEmpty")
+                    empty.setAlignment(Qt.AlignCenter)
+                    body.addWidget(empty, 0)
                 total = QLabel(f"Toplam {self.format_file_size(sum(int(item.get('size_bytes', 0) or 0) for item in files))}")
-                total.setObjectName("documentsFooterRight")
-                total.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-                footer.addWidget(drag_hint, 1)
-                footer.addWidget(total, 0)
-                body.addLayout(footer)
+                total.setObjectName("fileTotal"); total.setAlignment(Qt.AlignRight | Qt.AlignVCenter); body.addWidget(total, 0)
             except Exception as exc:
                 self.contract_files_tree = None
                 message = QLabel(f"Belgeler yüklenemedi: {exc}")
@@ -5447,22 +5378,7 @@ class ContractWorkWindow(QDialog):
                     parent_id = None
                 if parent_id not in folder_ids:
                     parent_id = None
-                folder["_tree_parent_id"] = parent_id
                 children_by_parent.setdefault(parent_id, []).append(folder)
-            direct_file_counts: Dict[int, int] = {folder_id: 0 for folder_id in folder_ids}
-            for metadata in files:
-                try:
-                    file_folder_id = int(metadata.get("folder_id") or 0)
-                except (TypeError, ValueError):
-                    file_folder_id = 0
-                if file_folder_id in direct_file_counts:
-                    direct_file_counts[file_folder_id] += 1
-
-            def folder_file_count(folder_id: int) -> int:
-                total = direct_file_counts.get(int(folder_id), 0)
-                for child in children_by_parent.get(int(folder_id), []):
-                    total += folder_file_count(int(child.get("id")))
-                return total
 
             def add_folder_items(parent_item, parent_id):
                 for folder in sorted(children_by_parent.get(parent_id, []), key=lambda x: str(x.get("name") or "").casefold()):
