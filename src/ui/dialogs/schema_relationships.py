@@ -19,7 +19,10 @@ FALLBACK_RELATIONSHIPS = [
     ("delivery_components", "component_id", "components", "id"),
     ("contract_tags", "contract_id", "contracts", "id"),
     ("contract_tags", "tag_id", "tags", "id"),
+    ("contract_file_folders", "contract_id", "contracts", "id"),
+    ("contract_file_folders", "parent_id", "contract_file_folders", "id"),
     ("contract_files", "contract_id", "contracts", "id"),
+    ("contract_files", "folder_id", "contract_file_folders", "id"),
     ("component_platforms", "component_id", "components", "id"),
     ("component_platforms", "platform_id", "platforms", "id"),
     ("activity_logs", "platform_id", "platforms", "id"),
@@ -28,6 +31,7 @@ FALLBACK_RELATIONSHIPS = [
 
 RELATIONSHIP_GROUP_ORDER = (
     "contracts",
+    "contract_file_folders",
     "contract_files",
     "deliveries",
     "delivery_components",

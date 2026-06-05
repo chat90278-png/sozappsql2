@@ -45,6 +45,11 @@ with TemporaryDirectory() as td:
     assert listed[0]["mime_type"] == "text/plain"
     assert listed[0]["size_bytes"] == source.stat().st_size
     assert listed[0]["note"] == "Test belgesi"
+    expect_value_error(
+        lambda: store.add_contract_file("AKINCI", contract.no, source, contract.contract_type),
+        "Bu belge zaten ekli.",
+    )
+    assert len(store.list_contract_files("AKINCI", contract.no, contract.contract_type)) == 1
     assert "content_blob" not in listed[0]
     assert "original_path" not in listed[0]
 
@@ -80,6 +85,25 @@ with TemporaryDirectory() as td:
     # Boyut ve uzantı kontrolleri sözleşme bulunabildiği sırada denenir.
     second = ContractInfo(no="AKN-FILES-002", platform="AKINCI", user="Ali Yılmaz", yi_yd="Yİ", contract_type="Ana Sözleşme", signature_date="", t0_date="", t0_months=0, completion_date="")
     store.write_contract(second, [], {})
+
+    root_folder = store.create_contract_file_folder("AKINCI", second.no, second.contract_type)
+    assert root_folder["name"] == "Yeni Klasör"
+    duplicate_named = store.create_contract_file_folder("AKINCI", second.no, second.contract_type)
+    assert duplicate_named["name"] == "Yeni Klasör (2)"
+    child_folder = store.create_contract_file_folder("AKINCI", second.no, second.contract_type, parent_id=root_folder["id"], name="Alt")
+    renamed = store.rename_contract_file_folder(child_folder["id"], "Teknik")
+    assert renamed["path"] == "Yeni Klasör/Teknik"
+    expect_value_error(lambda: store.rename_contract_file_folder(child_folder["id"], ""), "Klasör adı boş olamaz.")
+    expect_value_error(lambda: store.rename_contract_file_folder(child_folder["id"], "bad/name"), r'Klasör adında / \ : * ? " < > | karakterleri kullanılamaz.')
+    folder_source = root / "foldered.txt"
+    folder_source.write_text("foldered", encoding="utf-8")
+    folder_file_id = store.add_contract_file("AKINCI", second.no, folder_source, second.contract_type, folder_id=child_folder["id"])
+    foldered = [item for item in store.list_contract_files("AKINCI", second.no, second.contract_type) if item["id"] == folder_file_id][0]
+    assert foldered["folder_id"] == child_folder["id"]
+    assert foldered["folder_path"] == "Yeni Klasör/Teknik"
+    folder_actions = {row[0] for row in store.db.conn.execute("SELECT action FROM activity_logs WHERE entity_type='document_folder'")}
+    assert {"document_folder_created", "document_folder_renamed"} <= folder_actions
+
     too_large = root / "buyuk.txt"
     with too_large.open("wb") as stream:
         stream.truncate(25 * 1024 * 1024 + 1)

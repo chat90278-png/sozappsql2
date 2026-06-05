@@ -72,12 +72,147 @@ from PySide6.QtGui import QFont, QColor, QPixmap, QIcon, QPainter, QAction, QCur
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget,QGraphicsOpacityEffect, QGraphicsDropShadowEffect, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QPushButton, QListWidget, QListWidgetItem, QTableWidget, QTableWidgetItem,
-    QDialog, QLineEdit, QComboBox, QDateEdit, QSpinBox, QDoubleSpinBox,
+    QTreeWidget, QTreeWidgetItem, QDialog, QLineEdit, QComboBox, QDateEdit, QSpinBox, QDoubleSpinBox,
     QMessageBox, QFileDialog, QFrame, QScrollArea, QCheckBox, QHeaderView,
     QSizePolicy, QProgressBar, QProgressDialog, QStyledItemDelegate, QTextEdit,
-    QToolButton, QMenu, QInputDialog, QWidgetAction, QStackedWidget
+    QToolButton, QMenu, QInputDialog, QWidgetAction, QStackedWidget, QAbstractItemView, QStyle
 )
 
+
+
+class ContractFileDropButton(QPushButton):
+    """Clickable upload target that also accepts local file drops."""
+
+    filesDropped = Signal(list)
+    invalidDrop = Signal(str)
+
+    def __init__(self, text: str, parent=None):
+        super().__init__(text, parent)
+        self._default_text = text
+        self.setAcceptDrops(True)
+
+    def dragEnterEvent(self, event):
+        mime = event.mimeData()
+        if mime.hasUrls():
+            event.acceptProposedAction()
+            self.setText("  ↓    Dosyaları buraya bırakın")
+            return
+        event.ignore()
+
+    def dragMoveEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragLeaveEvent(self, event):
+        self.setText(self._default_text)
+        super().dragLeaveEvent(event)
+
+    def dropEvent(self, event):
+        self.setText(self._default_text)
+        mime = event.mimeData()
+        if not mime.hasUrls():
+            self.invalidDrop.emit("Yalnızca yerel dosyalar yüklenebilir.")
+            event.ignore()
+            return
+        file_paths = []
+        folder_dropped = False
+        unsupported_url = False
+        for url in mime.urls():
+            if not url.isLocalFile():
+                unsupported_url = True
+                continue
+            path = Path(url.toLocalFile())
+            if path.is_dir():
+                folder_dropped = True
+                continue
+            file_paths.append(str(path))
+        if folder_dropped:
+            self.invalidDrop.emit("Klasör yüklenemez, lütfen dosya seçin.")
+        if unsupported_url:
+            self.invalidDrop.emit("Web bağlantısı yüklenemez, lütfen yerel dosya seçin.")
+        if file_paths:
+            self.filesDropped.emit(file_paths)
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+
+class ContractFileTreeWidget(QTreeWidget):
+    """Tree view for contract folders/files with external file-drop support."""
+
+    filesDropped = Signal(list, object)
+    invalidDrop = Signal(str)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAcceptDrops(True)
+        self.setHeaderHidden(True)
+        self.setRootIsDecorated(True)
+        self.setAnimated(True)
+        self.setIndentation(16)
+        self.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.setDragDropMode(QAbstractItemView.DropOnly)
+        self.setEditTriggers(QAbstractItemView.DoubleClicked | QAbstractItemView.EditKeyPressed)
+        self.setContextMenuPolicy(Qt.CustomContextMenu)
+
+    def _folder_id_for_item(self, item):
+        if item is None:
+            return None
+        kind = item.data(0, Qt.UserRole)
+        if kind == "folder":
+            return item.data(0, Qt.UserRole + 1)
+        if kind == "file":
+            return item.data(0, Qt.UserRole + 2)
+        return None
+
+    def _drop_folder_id(self, pos):
+        return self._folder_id_for_item(self.itemAt(pos))
+
+    def _local_drop_paths(self, event):
+        mime = event.mimeData()
+        if not mime.hasUrls():
+            return [], "Yalnızca yerel dosyalar yüklenebilir."
+        file_paths = []
+        folder_dropped = False
+        unsupported_url = False
+        for url in mime.urls():
+            if not url.isLocalFile():
+                unsupported_url = True
+                continue
+            path = Path(url.toLocalFile())
+            if path.is_dir():
+                folder_dropped = True
+                continue
+            file_paths.append(str(path))
+        if folder_dropped:
+            return file_paths, "Klasör yüklenemez, lütfen dosya seçin."
+        if unsupported_url:
+            return file_paths, "Web bağlantısı yüklenemez, lütfen yerel dosya seçin."
+        return file_paths, ""
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dropEvent(self, event):
+        file_paths, warning = self._local_drop_paths(event)
+        if warning:
+            self.invalidDrop.emit(warning)
+        if file_paths:
+            self.filesDropped.emit(file_paths, self._drop_folder_id(event.position().toPoint() if hasattr(event, "position") else event.pos()))
+            event.acceptProposedAction()
+        else:
+            event.ignore()
 
 def app_icon_path() -> Path:
     """Return the native Windows icon when available, otherwise the SVG logo."""
@@ -2227,16 +2362,29 @@ class TagAssignDialog(StyledDialog):
     def __init__(self, store: ExcelStore, already_assigned: Optional[List[dict]] = None, parent=None):
         super().__init__("Etiket Ekle", parent)
         self.store = store
-        self.available_tags = store.load_tag_defs(active_only=True)
+        self.all_tags = list(store.load_tag_defs(active_only=True) or [])
+        assigned = list(already_assigned or [])
+        self.already_ids = {
+            int((t or {}).get("id") or 0)
+            for t in assigned
+            if isinstance(t, dict) and int((t or {}).get("id") or 0) > 0
+        }
         self.already_keys = {
             self.store._normalize_label(str((t or {}).get("name") or ""))
-            for t in list(already_assigned or [])
-            if str((t or {}).get("name") or "").strip()
+            for t in assigned
+            if isinstance(t, dict) and str((t or {}).get("name") or "").strip()
         }
+        self.available_tags = [tag for tag in self.all_tags if not self._is_tag_already_assigned(tag)]
         self.selected: Dict[str, TagDef] = {}
         self.result: List[dict] = []
         self.resize(520, 380)
         self.build()
+
+    def _is_tag_already_assigned(self, tag: TagDef) -> bool:
+        tag_id = int(getattr(tag, "id", 0) or 0)
+        if tag_id and tag_id in self.already_ids:
+            return True
+        return self.store._normalize_label(str(tag.name or "")) in self.already_keys
 
     def build(self):
         root = QVBoxLayout(self)
@@ -2254,7 +2402,8 @@ class TagAssignDialog(StyledDialog):
         tags_lay.setHorizontalSpacing(8)
         tags_lay.setVerticalSpacing(8)
         if not self.available_tags:
-            warn = QLabel("Aktif etiket yok. Önce Etiket Yönetimi ekranından etiket oluşturun.")
+            message = "Atanabilecek etiket bulunmuyor." if self.all_tags else "Aktif etiket yok. Önce Etiket Yönetimi ekranından etiket oluşturun."
+            warn = QLabel(message)
             warn.setObjectName("warning")
             warn.setWordWrap(True)
             tags_lay.addWidget(warn, 0, 0, 1, 3)
@@ -2264,10 +2413,6 @@ class TagAssignDialog(StyledDialog):
                 b.setCheckable(True)
                 b.setObjectName("tagChipBtn")
                 b.setStyleSheet(tag_chip_style(t.color, selected=False))
-                key = self.store._normalize_label(t.name)
-                if key in self.already_keys:
-                    b.setEnabled(False)
-                    b.setToolTip("Bu etiket zaten sözleşmeye atanmış.")
                 b.clicked.connect(lambda checked, tag=t, btn=b: self.toggle_tag(tag, btn, checked))
                 tags_lay.addWidget(b, i // 3, i % 3)
         root.addWidget(self.tags_wrap)
@@ -2283,10 +2428,11 @@ class TagAssignDialog(StyledDialog):
         cancel = QPushButton("İptal")
         cancel.setObjectName("secondary")
         cancel.clicked.connect(self.reject)
-        save = QPushButton("Ekle")
-        save.clicked.connect(self.save)
+        self.save_btn = QPushButton("Ekle")
+        self.save_btn.setEnabled(bool(self.available_tags))
+        self.save_btn.clicked.connect(self.save)
         row.addWidget(cancel)
-        row.addWidget(save)
+        row.addWidget(self.save_btn)
         root.addLayout(row)
 
     def toggle_tag(self, tag: TagDef, btn: QPushButton, checked: bool):
@@ -2298,6 +2444,9 @@ class TagAssignDialog(StyledDialog):
         btn.setStyleSheet(tag_chip_style(tag.color, selected=bool(checked)))
 
     def save(self):
+        if not self.available_tags:
+            QMessageBox.information(self, "Seçim", "Atanabilecek etiket bulunmuyor.")
+            return
         if not self.selected:
             QMessageBox.warning(self, "Seçim", "En az bir etiket seçin.")
             return
@@ -4279,6 +4428,7 @@ class ContractWorkWindow(QDialog):
         self._contract_save_thread = None
         self._contract_save_worker = None
         self._pending_contract_save_context = None
+        self._file_dialog_open: bool = False
         self._is_dirty: bool = False   # Kullanıcı henüz değişiklik yapmadı
         self.setWindowTitle(APP_TITLE)
         # QDialog varsayılan olarak ? butonu gösterir — standart pencere butonları ekle
@@ -4608,16 +4758,39 @@ class ContractWorkWindow(QDialog):
         super().resizeEvent(event)
         self.position_busy_overlay()
 
+    @staticmethod
+    def _is_widget_inside(widget, parent_widget) -> bool:
+        if widget is None or parent_widget is None:
+            return False
+        return widget is parent_widget or parent_widget.isAncestorOf(widget)
+
+    def _side_meta_event_widget(self, obj, event):
+        if isinstance(obj, QWidget):
+            return obj
+        global_pos = None
+        if hasattr(event, "globalPosition"):
+            global_pos = event.globalPosition().toPoint()
+        elif hasattr(event, "globalPos"):
+            global_pos = event.globalPos()
+        return QApplication.widgetAt(global_pos) if global_pos is not None else None
+
+    def _is_side_meta_inside_click(self, obj, event) -> bool:
+        widget = self._side_meta_event_widget(obj, event)
+        popover = getattr(self, "side_meta_popover", None)
+        bar = getattr(self, "side_meta_bar", None)
+        return self._is_widget_inside(widget, popover) or self._is_widget_inside(widget, bar)
+
     def eventFilter(self, obj, event):
         if obj is getattr(self, "side_meta_host", None) and event.type() in (QEvent.Resize, QEvent.Show):
             self.position_side_meta_popover()
-        if event.type() in (QEvent.WindowDeactivate, QEvent.ApplicationDeactivate) and getattr(self, "_side_meta_open_panel", None):
+        if (
+            event.type() in (QEvent.WindowDeactivate, QEvent.ApplicationDeactivate)
+            and getattr(self, "_side_meta_open_panel", None)
+            and not getattr(self, "_file_dialog_open", False)
+        ):
             self.close_side_meta_popover()
         if event.type() == QEvent.MouseButtonPress and getattr(self, "_side_meta_open_panel", None):
-            popover = getattr(self, "side_meta_popover", None)
-            bar = getattr(self, "side_meta_bar", None)
-            clicked_inside = isinstance(obj, QWidget) and any(widget and (obj is widget or widget.isAncestorOf(obj)) for widget in (popover, bar))
-            if not clicked_inside:
+            if not self._is_side_meta_inside_click(obj, event):
                 self.close_side_meta_popover()
         file_id = obj.property("contractFileId") if hasattr(obj, "property") else None
         if file_id and event.type() == QEvent.MouseButtonDblClick:
@@ -5031,12 +5204,19 @@ class ContractWorkWindow(QDialog):
         except Exception:
             return []
 
+    def _load_contract_file_folders(self) -> List[dict]:
+        try:
+            return list(self.store.list_contract_file_folders(self.ci.platform, self.ci.no, self.ci.contract_type))
+        except Exception:
+            return []
+
     def _set_side_meta_badge_counts(self, tag_count: int, file_count: int):
         self.side_badge_tags.setText(str(tag_count))
         self.side_badge_files.setText(str(file_count))
 
     def update_side_meta_badges(self):
         self._side_meta_files = self._load_contract_files()
+        self._side_meta_folders = self._load_contract_file_folders()
         self._set_side_meta_badge_counts(len(self._ordered_contract_tags()), len(self._side_meta_files))
 
     def _clear_side_meta_popover_body(self):
@@ -5070,16 +5250,30 @@ class ContractWorkWindow(QDialog):
             else:
                 empty = QLabel("Henüz etiket atanmadı."); empty.setObjectName("sidePanelEmpty"); empty.setAlignment(Qt.AlignCenter); cards.insertWidget(0, empty)
         else:
-            drop = QPushButton("  ↑    Dosya ekle     PDF, Word, Excel, görsel veya TXT")
-            drop.setObjectName("fileDropZone"); drop.setCursor(Qt.PointingHandCursor); drop.clicked.connect(self.add_contract_file)
-            body.addWidget(drop, 0)
-            scroll, cards = self._make_card_scroll(); body.addWidget(scroll, 1)
+            action_row = QHBoxLayout(); action_row.setContentsMargins(0, 0, 0, 2); action_row.setSpacing(6)
+            drop = ContractFileDropButton("  ↑    Dosya Ekle", self)
+            drop.setObjectName("fileDropZone")
+            drop.setCursor(Qt.PointingHandCursor)
+            drop.clicked.connect(self._pick_contract_files)
+            drop.filesDropped.connect(self._handle_contract_files_drop)
+            drop.invalidDrop.connect(lambda message: QMessageBox.warning(self, "Dosya yüklenemedi", message))
+            folder_btn = QPushButton("Klasör Ekle")
+            folder_btn.setObjectName("sidePanelAddInline")
+            folder_btn.setFixedHeight(30)
+            folder_btn.clicked.connect(self.add_contract_file_folder)
+            action_row.addWidget(drop, 1)
+            action_row.addWidget(folder_btn, 0)
+            body.addLayout(action_row)
             files = list(self._side_meta_files)
-            if files:
-                for metadata in files:
-                    cards.insertWidget(cards.count() - 1, self.create_file_card(metadata))
-            else:
-                empty = QLabel("Henüz belge eklenmedi."); empty.setObjectName("sidePanelEmpty"); empty.setAlignment(Qt.AlignCenter); cards.insertWidget(0, empty)
+            folders = list(getattr(self, "_side_meta_folders", []))
+            tree = self.create_contract_files_tree(folders, files)
+            self.contract_files_tree = tree
+            body.addWidget(tree, 1)
+            if not files and not folders:
+                empty = QLabel("Henüz belge eklenmedi.")
+                empty.setObjectName("sidePanelEmpty")
+                empty.setAlignment(Qt.AlignCenter)
+                body.addWidget(empty, 0)
             total = QLabel(f"Toplam {self.format_file_size(sum(int(item.get('size_bytes', 0) or 0) for item in files))}")
             total.setObjectName("fileTotal"); total.setAlignment(Qt.AlignRight | Qt.AlignVCenter); body.addWidget(total, 0)
 
@@ -5112,6 +5306,135 @@ class ContractWorkWindow(QDialog):
         remove = QPushButton("×"); remove.setObjectName("tagRemoveButton"); remove.setFixedSize(29, 29); remove.setToolTip("Etiketi kaldır"); remove.clicked.connect(lambda _=False, nm=name: self.remove_contract_tag(nm))
         row.addWidget(dot); row.addWidget(middle, 1); row.addWidget(remove)
         return card
+
+
+    def create_contract_files_tree(self, folders: List[dict], files: List[dict]) -> ContractFileTreeWidget:
+        tree = ContractFileTreeWidget(self)
+        tree.setMinimumHeight(120)
+        tree.setStyleSheet(
+            "QTreeWidget{background:#f8fbff; border:1px solid #dbe7f5; border-radius:11px; padding:4px; color:#10233d; font-size:12px;}"
+            "QTreeWidget::item{height:24px; border-radius:5px; padding:1px;}"
+            "QTreeWidget::item:selected{background:#dbeafe; color:#0f172a;}"
+            "QTreeWidget::item:hover{background:#eef6ff;}"
+        )
+        tree.filesDropped.connect(lambda paths, folder_id: self._add_contract_files(paths, folder_id))
+        tree.invalidDrop.connect(lambda message: QMessageBox.warning(self, "Dosya yüklenemedi", message))
+        tree.itemDoubleClicked.connect(self.on_contract_file_tree_double_clicked)
+        tree.itemChanged.connect(self.on_contract_file_tree_item_changed)
+        tree.customContextMenuRequested.connect(self.show_contract_file_tree_menu)
+        self._building_file_tree = True
+        try:
+            folder_items = {}
+            children_by_parent: Dict[object, List[dict]] = {}
+            for folder in folders:
+                children_by_parent.setdefault(folder.get("parent_id"), []).append(folder)
+
+            def add_folder_items(parent_item, parent_id):
+                for folder in sorted(children_by_parent.get(parent_id, []), key=lambda x: str(x.get("name") or "").casefold()):
+                    item = QTreeWidgetItem([str(folder.get("name") or "")])
+                    item.setIcon(0, self.style().standardIcon(QStyle.SP_DirIcon))
+                    item.setData(0, Qt.UserRole, "folder")
+                    item.setData(0, Qt.UserRole + 1, int(folder.get("id")))
+                    item.setData(0, Qt.UserRole + 2, folder.get("parent_id"))
+                    item.setData(0, Qt.UserRole + 3, str(folder.get("name") or ""))
+                    item.setFlags(item.flags() | Qt.ItemIsEditable | Qt.ItemIsDropEnabled)
+                    if parent_item is None:
+                        tree.addTopLevelItem(item)
+                    else:
+                        parent_item.addChild(item)
+                    folder_items[int(folder.get("id"))] = item
+                    add_folder_items(item, int(folder.get("id")))
+
+            add_folder_items(None, None)
+            for metadata in sorted(files, key=lambda x: (str(x.get("filename") or "").casefold(), int(x.get("id") or 0))):
+                parent_item = folder_items.get(int(metadata.get("folder_id") or 0))
+                ext = str(metadata.get("file_ext") or "").upper() or "DOSYA"
+                item = QTreeWidgetItem([str(metadata.get("filename") or "")])
+                item.setIcon(0, self.style().standardIcon(QStyle.SP_FileIcon))
+                item.setToolTip(0, f"{ext} · {self.format_file_size(metadata.get('size_bytes', 0))} · {self.format_file_date(metadata.get('created_at', ''))}")
+                item.setData(0, Qt.UserRole, "file")
+                item.setData(0, Qt.UserRole + 1, int(metadata.get("id")))
+                item.setData(0, Qt.UserRole + 2, metadata.get("folder_id"))
+                item.setFlags((item.flags() | Qt.ItemIsDragEnabled) & ~Qt.ItemIsEditable)
+                if parent_item is None:
+                    tree.addTopLevelItem(item)
+                else:
+                    parent_item.addChild(item)
+            tree.expandAll()
+        finally:
+            self._building_file_tree = False
+        return tree
+
+    def _selected_document_folder_id(self):
+        tree = getattr(self, "contract_files_tree", None)
+        item = tree.currentItem() if tree else None
+        if item is None:
+            return None
+        kind = item.data(0, Qt.UserRole)
+        if kind == "folder":
+            return item.data(0, Qt.UserRole + 1)
+        if kind == "file":
+            return item.data(0, Qt.UserRole + 2)
+        return None
+
+    def add_contract_file_folder(self):
+        try:
+            created = self.store.create_contract_file_folder(
+                self.ci.platform, self.ci.no, self.ci.contract_type, parent_id=self._selected_document_folder_id()
+            )
+            self.render_contract_files()
+            tree = getattr(self, "contract_files_tree", None)
+            if tree:
+                matches = tree.findItems(str(created.get("name") or ""), Qt.MatchRecursive | Qt.MatchExactly)
+                for item in matches:
+                    if item.data(0, Qt.UserRole) == "folder" and int(item.data(0, Qt.UserRole + 1)) == int(created.get("id")):
+                        tree.setCurrentItem(item)
+                        tree.editItem(item, 0)
+                        break
+        except Exception as exc:
+            QMessageBox.warning(self, "Klasör eklenemedi", str(exc))
+
+    def on_contract_file_tree_double_clicked(self, item, column):
+        if item and item.data(0, Qt.UserRole) == "file":
+            self.open_contract_file(int(item.data(0, Qt.UserRole + 1)))
+
+    def on_contract_file_tree_item_changed(self, item, column):
+        if getattr(self, "_building_file_tree", False) or not item or item.data(0, Qt.UserRole) != "folder":
+            return
+        folder_id = int(item.data(0, Qt.UserRole + 1))
+        old_name = str(item.data(0, Qt.UserRole + 3) or "")
+        new_name = str(item.text(0) or "").strip()
+        if new_name == old_name:
+            return
+        try:
+            renamed = self.store.rename_contract_file_folder(folder_id, new_name)
+            item.setData(0, Qt.UserRole + 3, str(renamed.get("name") or new_name))
+            self.render_contract_files()
+        except Exception as exc:
+            self._building_file_tree = True
+            try:
+                item.setText(0, old_name)
+            finally:
+                self._building_file_tree = False
+            QMessageBox.warning(self, "Klasör adı değiştirilemedi", str(exc))
+
+    def show_contract_file_tree_menu(self, pos):
+        tree = getattr(self, "contract_files_tree", None)
+        item = tree.itemAt(pos) if tree else None
+        if not item:
+            return
+        kind = item.data(0, Qt.UserRole)
+        menu = QMenu(self)
+        if kind == "file":
+            file_id = int(item.data(0, Qt.UserRole + 1))
+            menu.addAction("Aç", lambda: self.open_contract_file(file_id))
+            menu.addAction("Dışa Aktar", lambda: self.export_contract_file(file_id))
+            menu.addSeparator()
+            menu.addAction("Sil", lambda: self.delete_contract_file(file_id))
+        elif kind == "folder":
+            menu.addAction("Yeniden Adlandır", lambda: tree.editItem(item, 0))
+            menu.addAction("Klasör silme bu sürümde desteklenmiyor", lambda: QMessageBox.information(self, "Klasör Silme", "Klasör silme bu sürümde desteklenmiyor."))
+        menu.exec(tree.viewport().mapToGlobal(pos))
 
     def refresh_contract_tags_panel(self):
         self.update_side_meta_badges()
@@ -5146,7 +5469,8 @@ class ContractWorkWindow(QDialog):
         extension = str(ext or "").strip().lower()
         if extension == "pdf": return "PDF", "#ef4444"
         if extension in {"doc", "docx"}: return "DOC", "#2563eb"
-        if extension in {"xls", "xlsx"}: return "XLS", "#16a34a"
+        if extension in {"xls", "xlsx", "xlsm"}: return "XLS", "#16a34a"
+        if extension in {"ppt", "pptx"}: return "PPT", "#f97316"
         if extension in {"png", "jpg", "jpeg"}: return "IMG", "#7c3aed"
         return "TXT", "#64748b"
 
@@ -5171,15 +5495,66 @@ class ContractWorkWindow(QDialog):
         if self._side_meta_open_panel == "files":
             self.render_side_meta_popover_content("files")
 
-    def add_contract_file(self):
-        path, _ = QFileDialog.getOpenFileName(self, "Sözleşmeye Dosya Ekle", "", "PDF/Word/Excel/Resim/TXT (*.pdf *.doc *.docx *.xls *.xlsx *.png *.jpg *.jpeg *.txt)")
-        if not path:
-            return
+    def _pick_contract_files(self):
+        self._file_dialog_open = True
         try:
-            self.store.add_contract_file(self.ci.platform, self.ci.no, path, self.ci.contract_type)
+            paths, _ = QFileDialog.getOpenFileNames(
+                self,
+                "Sözleşmeye Dosya Ekle",
+                "",
+                "Documents (*.pdf *.doc *.docx *.xls *.xlsx *.xlsm *.ppt *.pptx *.txt *.png *.jpg *.jpeg);;All Files (*.*)",
+            )
+        finally:
+            self._file_dialog_open = False
+        if not paths:
+            return
+        self._add_contract_files(paths)
+
+    def _add_contract_files(self, file_paths, folder_id="__selection__"):
+        if folder_id == "__selection__":
+            folder_id = self._selected_document_folder_id()
+        paths = [str(path or "").strip() for path in (file_paths or []) if str(path or "").strip()]
+        if not paths:
+            return
+        added = 0
+        duplicates = 0
+        failures = []
+        for raw_path in paths:
+            path = Path(raw_path)
+            try:
+                if not path.exists():
+                    raise ValueError("Dosya seçilemedi veya bulunamadı.")
+                if path.is_dir():
+                    raise ValueError("Klasör yüklenemez, lütfen dosya seçin.")
+                if not path.is_file():
+                    raise ValueError("Lütfen geçerli bir dosya seçin.")
+                if not os.access(path, os.R_OK):
+                    raise ValueError("Dosya okunamıyor.")
+                self.store.add_contract_file(self.ci.platform, self.ci.no, path, self.ci.contract_type, folder_id=folder_id)
+                added += 1
+            except Exception as exc:
+                message = str(exc)
+                if "zaten ekli" in message.lower():
+                    duplicates += 1
+                else:
+                    failures.append(f"{path.name or raw_path}: {message}")
+        if added:
             self.render_contract_files()
-        except Exception as exc:
-            QMessageBox.warning(self, "Dosya eklenemedi", str(exc))
+        if failures:
+            QMessageBox.warning(self, "Bazı dosyalar eklenemedi", "\n".join(failures[:8]))
+        if added or duplicates:
+            if added and duplicates:
+                QMessageBox.information(self, "Belgeler güncellendi", f"{added} dosya eklendi, {duplicates} dosya zaten ekli olduğu için atlandı.")
+            elif duplicates and not failures:
+                QMessageBox.information(self, "Bu belge zaten ekli", "Seçilen belge zaten ekli.")
+            elif added > 1:
+                QMessageBox.information(self, "Belgeler eklendi", f"{added} dosya eklendi.")
+
+    def _handle_contract_files_drop(self, file_paths):
+        self._add_contract_files(file_paths)
+
+    def add_contract_file(self):
+        self._pick_contract_files()
 
     def open_contract_file(self, file_id: int):
         try:
