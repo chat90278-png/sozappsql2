@@ -678,8 +678,8 @@ class STSStore:
         ts = now_iso()
         with self.db.tx():
             self.db.conn.execute(
-                "INSERT INTO contract_files(contract_id,filename,original_path,file_ext,mime_type,size_bytes,content_blob,note,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
-                (cid, source.name, stored_path, ext, mime_type, len(content), content, str(note or ""), ts, ts),
+                "INSERT INTO contract_files(contract_id,folder_id,filename,original_path,file_ext,mime_type,size_bytes,content_blob,note,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                (cid, folder_id, source.name, stored_path, ext, mime_type, len(content), content, str(note or ""), ts, ts),
             )
             file_id = int(self.db.conn.execute("SELECT last_insert_rowid()").fetchone()[0])
         self._log(
@@ -689,7 +689,7 @@ class STSStore:
             contract_no=str(contract_no or ""),
             source="Document Manager",
             message="Belge eklendi",
-            payload={"filename": source.name, "size_bytes": len(content), "mime_type": mime_type, "extension": ext},
+            payload={"filename": source.name, "folder_id": folder_id, "size_bytes": len(content), "mime_type": mime_type, "extension": ext},
         )
         return file_id
 
