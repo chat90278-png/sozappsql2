@@ -45,6 +45,11 @@ with TemporaryDirectory() as td:
     assert listed[0]["mime_type"] == "text/plain"
     assert listed[0]["size_bytes"] == source.stat().st_size
     assert listed[0]["note"] == "Test belgesi"
+    expect_value_error(
+        lambda: store.add_contract_file("AKINCI", contract.no, source, contract.contract_type),
+        "Bu belge zaten ekli.",
+    )
+    assert len(store.list_contract_files("AKINCI", contract.no, contract.contract_type)) == 1
     assert "content_blob" not in listed[0]
     assert "original_path" not in listed[0]
 

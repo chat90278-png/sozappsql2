@@ -1,6 +1,7 @@
 from __future__ import annotations
 import json
 import mimetypes
+import os
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -501,24 +502,58 @@ class STSStore:
         if not cid:
             raise ValueError("Sözleşme bulunamadı. Önce sözleşmeyi kaydedin.")
         source = Path(file_path)
+        if not source.exists():
+            raise ValueError("Dosya seçilemedi veya bulunamadı.")
+        if source.is_dir():
+            raise ValueError("Klasör yüklenemez, lütfen dosya seçin.")
+        if not source.is_file():
+            raise ValueError("Lütfen geçerli bir dosya seçin.")
+        if not os.access(source, os.R_OK):
+            raise ValueError("Dosya okunamıyor.")
         ext = source.suffix.lower().lstrip(".")
-        allowed = {"pdf", "doc", "docx", "xls", "xlsx", "png", "jpg", "jpeg", "txt"}
+        allowed = {"pdf", "doc", "docx", "xls", "xlsx", "xlsm", "ppt", "pptx", "png", "jpg", "jpeg", "txt"}
         blocked = {"exe", "bat", "cmd", "ps1", "sh", "msi", "dll", "com", "scr", "vbs", "js"}
         if ext in blocked or ext not in allowed:
             raise ValueError("Bu dosya türü desteklenmiyor.")
         size = source.stat().st_size
         if size > 25 * 1024 * 1024:
             raise ValueError("Dosya boyutu 25 MB üstünde olamaz.")
-        content = source.read_bytes()
+        try:
+            content = source.read_bytes()
+        except OSError as exc:
+            raise ValueError(f"Dosya okunamıyor: {exc}") from exc
+        try:
+            stored_path = str(source.resolve())
+        except OSError:
+            stored_path = str(source)
+        duplicate = self.db.conn.execute(
+            """
+            SELECT id FROM contract_files
+            WHERE contract_id=? AND filename=?
+              AND (original_path=? OR (size_bytes=? AND content_blob=?))
+            LIMIT 1
+            """,
+            (cid, source.name, stored_path, len(content), content),
+        ).fetchone()
+        if duplicate:
+            raise ValueError("Bu belge zaten ekli.")
         mime_type = mimetypes.guess_type(source.name)[0] or "application/octet-stream"
         ts = now_iso()
         with self.db.tx():
             self.db.conn.execute(
                 "INSERT INTO contract_files(contract_id,filename,original_path,file_ext,mime_type,size_bytes,content_blob,note,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
-                (cid, source.name, str(source), ext, mime_type, len(content), content, str(note or ""), ts, ts),
+                (cid, source.name, stored_path, ext, mime_type, len(content), content, str(note or ""), ts, ts),
             )
             file_id = int(self.db.conn.execute("SELECT last_insert_rowid()").fetchone()[0])
-        self._log("document_added", entity_type="document", entity_id=file_id, contract_no=str(contract_no or ""), source="Document Manager", message="Belge eklendi", payload={"filename": source.name, "size_bytes": len(content)})
+        self._log(
+            "document_added",
+            entity_type="document",
+            entity_id=file_id,
+            contract_no=str(contract_no or ""),
+            source="Document Manager",
+            message="Belge eklendi",
+            payload={"filename": source.name, "size_bytes": len(content), "mime_type": mime_type, "extension": ext},
+        )
         return file_id
 
     def get_contract_file_bytes(self, file_id):
