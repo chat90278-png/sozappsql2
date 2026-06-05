@@ -2286,16 +2286,29 @@ class TagAssignDialog(StyledDialog):
     def __init__(self, store: ExcelStore, already_assigned: Optional[List[dict]] = None, parent=None):
         super().__init__("Etiket Ekle", parent)
         self.store = store
-        self.available_tags = store.load_tag_defs(active_only=True)
+        self.all_tags = list(store.load_tag_defs(active_only=True) or [])
+        assigned = list(already_assigned or [])
+        self.already_ids = {
+            int((t or {}).get("id") or 0)
+            for t in assigned
+            if isinstance(t, dict) and int((t or {}).get("id") or 0) > 0
+        }
         self.already_keys = {
             self.store._normalize_label(str((t or {}).get("name") or ""))
-            for t in list(already_assigned or [])
-            if str((t or {}).get("name") or "").strip()
+            for t in assigned
+            if isinstance(t, dict) and str((t or {}).get("name") or "").strip()
         }
+        self.available_tags = [tag for tag in self.all_tags if not self._is_tag_already_assigned(tag)]
         self.selected: Dict[str, TagDef] = {}
         self.result: List[dict] = []
         self.resize(520, 380)
         self.build()
+
+    def _is_tag_already_assigned(self, tag: TagDef) -> bool:
+        tag_id = int(getattr(tag, "id", 0) or 0)
+        if tag_id and tag_id in self.already_ids:
+            return True
+        return self.store._normalize_label(str(tag.name or "")) in self.already_keys
 
     def build(self):
         root = QVBoxLayout(self)
@@ -2313,7 +2326,8 @@ class TagAssignDialog(StyledDialog):
         tags_lay.setHorizontalSpacing(8)
         tags_lay.setVerticalSpacing(8)
         if not self.available_tags:
-            warn = QLabel("Aktif etiket yok. Önce Etiket Yönetimi ekranından etiket oluşturun.")
+            message = "Atanabilecek etiket bulunmuyor." if self.all_tags else "Aktif etiket yok. Önce Etiket Yönetimi ekranından etiket oluşturun."
+            warn = QLabel(message)
             warn.setObjectName("warning")
             warn.setWordWrap(True)
             tags_lay.addWidget(warn, 0, 0, 1, 3)
@@ -2323,10 +2337,6 @@ class TagAssignDialog(StyledDialog):
                 b.setCheckable(True)
                 b.setObjectName("tagChipBtn")
                 b.setStyleSheet(tag_chip_style(t.color, selected=False))
-                key = self.store._normalize_label(t.name)
-                if key in self.already_keys:
-                    b.setEnabled(False)
-                    b.setToolTip("Bu etiket zaten sözleşmeye atanmış.")
                 b.clicked.connect(lambda checked, tag=t, btn=b: self.toggle_tag(tag, btn, checked))
                 tags_lay.addWidget(b, i // 3, i % 3)
         root.addWidget(self.tags_wrap)
@@ -2342,10 +2352,11 @@ class TagAssignDialog(StyledDialog):
         cancel = QPushButton("İptal")
         cancel.setObjectName("secondary")
         cancel.clicked.connect(self.reject)
-        save = QPushButton("Ekle")
-        save.clicked.connect(self.save)
+        self.save_btn = QPushButton("Ekle")
+        self.save_btn.setEnabled(bool(self.available_tags))
+        self.save_btn.clicked.connect(self.save)
         row.addWidget(cancel)
-        row.addWidget(save)
+        row.addWidget(self.save_btn)
         root.addLayout(row)
 
     def toggle_tag(self, tag: TagDef, btn: QPushButton, checked: bool):
@@ -2357,6 +2368,9 @@ class TagAssignDialog(StyledDialog):
         btn.setStyleSheet(tag_chip_style(tag.color, selected=bool(checked)))
 
     def save(self):
+        if not self.available_tags:
+            QMessageBox.information(self, "Seçim", "Atanabilecek etiket bulunmuyor.")
+            return
         if not self.selected:
             QMessageBox.warning(self, "Seçim", "En az bir etiket seçin.")
             return

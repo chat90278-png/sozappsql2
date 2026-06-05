@@ -347,11 +347,11 @@ class STSStore:
 
     def load_tags(self, active_only: bool = True):
         rows = self.db.conn.execute(
-            "SELECT DISTINCT name, color, kind FROM tags WHERE COALESCE(name, '') <> '' ORDER BY name"
+            "SELECT id, name, color, kind FROM tags WHERE COALESCE(name, '') <> '' ORDER BY name"
         ).fetchall()
         out: List[TagDef] = []
         for r in rows:
-            out.append(TagDef(name=str(r[0]).strip(), color=str(r[1] or "#3B82F6").strip() or "#3B82F6", note="", active=True))
+            out.append(TagDef(name=str(r[1]).strip(), color=str(r[2] or "#3B82F6").strip() or "#3B82F6", note="", active=True, id=int(r[0] or 0)))
         return out
 
     def load_tag_defs(self, active_only: bool = True):

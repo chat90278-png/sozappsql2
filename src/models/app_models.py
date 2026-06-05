@@ -68,3 +68,4 @@ class TagDef:
     color: str = "#3B82F6"
     note: str = ""
     active: bool = True
+    id: int = 0
