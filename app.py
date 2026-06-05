@@ -79,6 +79,65 @@ from PySide6.QtWidgets import (
 )
 
 
+
+class ContractFileDropButton(QPushButton):
+    """Clickable upload target that also accepts local file drops."""
+
+    filesDropped = Signal(list)
+    invalidDrop = Signal(str)
+
+    def __init__(self, text: str, parent=None):
+        super().__init__(text, parent)
+        self._default_text = text
+        self.setAcceptDrops(True)
+
+    def dragEnterEvent(self, event):
+        mime = event.mimeData()
+        if mime.hasUrls():
+            event.acceptProposedAction()
+            self.setText("  ↓    Dosyaları buraya bırakın")
+            return
+        event.ignore()
+
+    def dragMoveEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragLeaveEvent(self, event):
+        self.setText(self._default_text)
+        super().dragLeaveEvent(event)
+
+    def dropEvent(self, event):
+        self.setText(self._default_text)
+        mime = event.mimeData()
+        if not mime.hasUrls():
+            self.invalidDrop.emit("Yalnızca yerel dosyalar yüklenebilir.")
+            event.ignore()
+            return
+        file_paths = []
+        folder_dropped = False
+        unsupported_url = False
+        for url in mime.urls():
+            if not url.isLocalFile():
+                unsupported_url = True
+                continue
+            path = Path(url.toLocalFile())
+            if path.is_dir():
+                folder_dropped = True
+                continue
+            file_paths.append(str(path))
+        if folder_dropped:
+            self.invalidDrop.emit("Klasör yüklenemez, lütfen dosya seçin.")
+        if unsupported_url:
+            self.invalidDrop.emit("Web bağlantısı yüklenemez, lütfen yerel dosya seçin.")
+        if file_paths:
+            self.filesDropped.emit(file_paths)
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
 def app_icon_path() -> Path:
     """Return the native Windows icon when available, otherwise the SVG logo."""
     if APP_ICON_ICO_PATH.exists():
@@ -5070,8 +5129,12 @@ class ContractWorkWindow(QDialog):
             else:
                 empty = QLabel("Henüz etiket atanmadı."); empty.setObjectName("sidePanelEmpty"); empty.setAlignment(Qt.AlignCenter); cards.insertWidget(0, empty)
         else:
-            drop = QPushButton("  ↑    Dosya ekle     PDF, Word, Excel, görsel veya TXT")
-            drop.setObjectName("fileDropZone"); drop.setCursor(Qt.PointingHandCursor); drop.clicked.connect(self.add_contract_file)
+            drop = ContractFileDropButton("  ↑    Dosya ekle     PDF, Word, Excel, PowerPoint, görsel veya TXT", self)
+            drop.setObjectName("fileDropZone")
+            drop.setCursor(Qt.PointingHandCursor)
+            drop.clicked.connect(self._pick_contract_files)
+            drop.filesDropped.connect(self._handle_contract_files_drop)
+            drop.invalidDrop.connect(lambda message: QMessageBox.warning(self, "Dosya yüklenemedi", message))
             body.addWidget(drop, 0)
             scroll, cards = self._make_card_scroll(); body.addWidget(scroll, 1)
             files = list(self._side_meta_files)
@@ -5146,7 +5209,8 @@ class ContractWorkWindow(QDialog):
         extension = str(ext or "").strip().lower()
         if extension == "pdf": return "PDF", "#ef4444"
         if extension in {"doc", "docx"}: return "DOC", "#2563eb"
-        if extension in {"xls", "xlsx"}: return "XLS", "#16a34a"
+        if extension in {"xls", "xlsx", "xlsm"}: return "XLS", "#16a34a"
+        if extension in {"ppt", "pptx"}: return "PPT", "#f97316"
         if extension in {"png", "jpg", "jpeg"}: return "IMG", "#7c3aed"
         return "TXT", "#64748b"
 
@@ -5171,15 +5235,60 @@ class ContractWorkWindow(QDialog):
         if self._side_meta_open_panel == "files":
             self.render_side_meta_popover_content("files")
 
-    def add_contract_file(self):
-        path, _ = QFileDialog.getOpenFileName(self, "Sözleşmeye Dosya Ekle", "", "PDF/Word/Excel/Resim/TXT (*.pdf *.doc *.docx *.xls *.xlsx *.png *.jpg *.jpeg *.txt)")
-        if not path:
+    def _pick_contract_files(self):
+        paths, _ = QFileDialog.getOpenFileNames(
+            self,
+            "Sözleşmeye Dosya Ekle",
+            "",
+            "Documents (*.pdf *.doc *.docx *.xls *.xlsx *.xlsm *.ppt *.pptx *.txt *.png *.jpg *.jpeg);;All Files (*.*)",
+        )
+        if not paths:
             return
-        try:
-            self.store.add_contract_file(self.ci.platform, self.ci.no, path, self.ci.contract_type)
+        self._add_contract_files(paths)
+
+    def _add_contract_files(self, file_paths):
+        paths = [str(path or "").strip() for path in (file_paths or []) if str(path or "").strip()]
+        if not paths:
+            return
+        added = 0
+        duplicates = 0
+        failures = []
+        for raw_path in paths:
+            path = Path(raw_path)
+            try:
+                if not path.exists():
+                    raise ValueError("Dosya seçilemedi veya bulunamadı.")
+                if path.is_dir():
+                    raise ValueError("Klasör yüklenemez, lütfen dosya seçin.")
+                if not path.is_file():
+                    raise ValueError("Lütfen geçerli bir dosya seçin.")
+                if not os.access(path, os.R_OK):
+                    raise ValueError("Dosya okunamıyor.")
+                self.store.add_contract_file(self.ci.platform, self.ci.no, path, self.ci.contract_type)
+                added += 1
+            except Exception as exc:
+                message = str(exc)
+                if "zaten ekli" in message.lower():
+                    duplicates += 1
+                else:
+                    failures.append(f"{path.name or raw_path}: {message}")
+        if added:
             self.render_contract_files()
-        except Exception as exc:
-            QMessageBox.warning(self, "Dosya eklenemedi", str(exc))
+        if failures:
+            QMessageBox.warning(self, "Bazı dosyalar eklenemedi", "\n".join(failures[:8]))
+        if added or duplicates:
+            if added and duplicates:
+                QMessageBox.information(self, "Belgeler güncellendi", f"{added} dosya eklendi, {duplicates} dosya zaten ekli olduğu için atlandı.")
+            elif duplicates and not failures:
+                QMessageBox.information(self, "Bu belge zaten ekli", "Seçilen belge zaten ekli.")
+            elif added > 1:
+                QMessageBox.information(self, "Belgeler eklendi", f"{added} dosya eklendi.")
+
+    def _handle_contract_files_drop(self, file_paths):
+        self._add_contract_files(file_paths)
+
+    def add_contract_file(self):
+        self._pick_contract_files()
 
     def open_contract_file(self, file_id: int):
         try:
