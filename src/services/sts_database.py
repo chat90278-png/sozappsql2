@@ -101,7 +101,8 @@ CREATE TABLE IF NOT EXISTS system_components(id INTEGER PRIMARY KEY AUTOINCREMEN
 CREATE TABLE IF NOT EXISTS deliveries(id INTEGER PRIMARY KEY AUTOINCREMENT,contract_id INTEGER NOT NULL,system_id INTEGER,delivery_user_id INTEGER,system_name TEXT NOT NULL,name TEXT NOT NULL,status TEXT,acceptance_date TEXT,note TEXT,sort_order INTEGER DEFAULT 0,payload_json TEXT,FOREIGN KEY(contract_id) REFERENCES contracts(id) ON DELETE CASCADE,FOREIGN KEY(system_id) REFERENCES systems(id) ON DELETE SET NULL,FOREIGN KEY(delivery_user_id) REFERENCES users(id) ON DELETE SET NULL);
 CREATE TABLE IF NOT EXISTS delivery_components(id INTEGER PRIMARY KEY AUTOINCREMENT,delivery_id INTEGER NOT NULL,component_id INTEGER NOT NULL,planned REAL DEFAULT 0,delivered REAL DEFAULT 0,UNIQUE(delivery_id,component_id),FOREIGN KEY(delivery_id) REFERENCES deliveries(id) ON DELETE CASCADE,FOREIGN KEY(component_id) REFERENCES components(id) ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS contract_tags(id INTEGER PRIMARY KEY AUTOINCREMENT,contract_id INTEGER NOT NULL,tag_id INTEGER NOT NULL,UNIQUE(contract_id,tag_id),FOREIGN KEY(contract_id) REFERENCES contracts(id) ON DELETE CASCADE,FOREIGN KEY(tag_id) REFERENCES tags(id) ON DELETE CASCADE);
-CREATE TABLE IF NOT EXISTS contract_files(id INTEGER PRIMARY KEY AUTOINCREMENT,contract_id INTEGER NOT NULL,filename TEXT NOT NULL,original_path TEXT,file_ext TEXT,mime_type TEXT,size_bytes INTEGER NOT NULL DEFAULT 0,content_blob BLOB NOT NULL,note TEXT,created_at TEXT,updated_at TEXT,FOREIGN KEY(contract_id) REFERENCES contracts(id) ON DELETE CASCADE);
+CREATE TABLE IF NOT EXISTS contract_file_folders(id INTEGER PRIMARY KEY AUTOINCREMENT,contract_id INTEGER NOT NULL,parent_id INTEGER,name TEXT NOT NULL,created_at TEXT,updated_at TEXT,UNIQUE(contract_id,parent_id,name),FOREIGN KEY(contract_id) REFERENCES contracts(id) ON DELETE CASCADE,FOREIGN KEY(parent_id) REFERENCES contract_file_folders(id) ON DELETE CASCADE);
+CREATE TABLE IF NOT EXISTS contract_files(id INTEGER PRIMARY KEY AUTOINCREMENT,contract_id INTEGER NOT NULL,folder_id INTEGER,filename TEXT NOT NULL,original_path TEXT,file_ext TEXT,mime_type TEXT,size_bytes INTEGER NOT NULL DEFAULT 0,content_blob BLOB NOT NULL,note TEXT,created_at TEXT,updated_at TEXT,FOREIGN KEY(contract_id) REFERENCES contracts(id) ON DELETE CASCADE,FOREIGN KEY(folder_id) REFERENCES contract_file_folders(id) ON DELETE SET NULL);
 CREATE TABLE IF NOT EXISTS activity_logs(id INTEGER PRIMARY KEY AUTOINCREMENT,created_at TEXT NOT NULL,actor TEXT,source TEXT,device_name TEXT,action TEXT NOT NULL,entity_type TEXT,entity_id TEXT,entity_key TEXT,platform_id INTEGER,contract_no TEXT,message TEXT,before_json TEXT,after_json TEXT,payload_json TEXT,FOREIGN KEY(platform_id) REFERENCES platforms(id) ON DELETE SET NULL);
 CREATE INDEX IF NOT EXISTS idx_contracts_platform_id ON contracts(platform_id);
 CREATE INDEX IF NOT EXISTS idx_contracts_platform_status ON contracts(platform_id,status);
@@ -114,6 +115,8 @@ CREATE INDEX IF NOT EXISTS idx_deliveries_system_id ON deliveries(system_id);
 CREATE INDEX IF NOT EXISTS idx_deliveries_contract_system ON deliveries(contract_id,system_id);
 CREATE INDEX IF NOT EXISTS idx_deliveries_acceptance_date ON deliveries(acceptance_date);
 CREATE INDEX IF NOT EXISTS idx_delivery_components_component_id ON delivery_components(component_id);
+CREATE INDEX IF NOT EXISTS idx_contract_file_folders_contract_id ON contract_file_folders(contract_id);
+CREATE INDEX IF NOT EXISTS idx_contract_file_folders_parent_id ON contract_file_folders(parent_id);
 CREATE INDEX IF NOT EXISTS idx_contract_files_contract_id ON contract_files(contract_id);
 CREATE INDEX IF NOT EXISTS idx_logs_created_at ON activity_logs(created_at);
 CREATE INDEX IF NOT EXISTS idx_logs_action ON activity_logs(action);
@@ -134,8 +137,14 @@ CREATE INDEX IF NOT EXISTS idx_logs_entity ON activity_logs(entity_type,entity_i
         for column in ("source", "device_name"):
             if self._ensure_column("activity_logs", column, "TEXT"):
                 migrated.append(f"activity_logs.{column}")
+        # Document folders were added after embedded contract files shipped.
+        if self._ensure_column("contract_files", "folder_id", "INTEGER"):
+            migrated.append("contract_files.folder_id")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_deliveries_delivery_user_id ON deliveries(delivery_user_id)")
-        self.conn.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version','2')")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_contract_file_folders_contract_id ON contract_file_folders(contract_id)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_contract_file_folders_parent_id ON contract_file_folders(parent_id)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_contract_files_folder_id ON contract_files(folder_id)")
+        self.conn.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version','3')")
         self.conn.commit()
         return migrated
 
@@ -209,7 +218,7 @@ CREATE INDEX IF NOT EXISTS idx_logs_entity ON activity_logs(entity_type,entity_i
     def database_stats(self):
         tables = [
             "platforms","users","components","component_platforms","tags","contracts","systems",
-            "system_components","deliveries","delivery_components","contract_tags","contract_files","activity_logs"
+            "system_components","deliveries","delivery_components","contract_tags","contract_file_folders","contract_files","activity_logs"
         ]
         counts = {}
         for t in tables:
@@ -273,7 +282,7 @@ CREATE INDEX IF NOT EXISTS idx_logs_entity ON activity_logs(entity_type,entity_i
     def preview_table(self, table_name, limit=100):
         allowed = {
             "platforms","users","components","component_platforms","tags","contracts","systems",
-            "system_components","deliveries","delivery_components","contract_tags","contract_files","activity_logs"
+            "system_components","deliveries","delivery_components","contract_tags","contract_file_folders","contract_files","activity_logs"
         }
         t = str(table_name or "").strip()
         if t not in allowed:

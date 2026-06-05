@@ -21,7 +21,8 @@ EXPECTED_COLUMNS = {
     "delivery_components": ["id", "delivery_id", "component_id", "planned", "delivered"],
     "tags": ["id", "name", "color", "kind", "created_at", "updated_at"],
     "contract_tags": ["id", "contract_id", "tag_id"],
-    "contract_files": ["id", "contract_id", "filename", "original_path", "file_ext", "mime_type", "size_bytes", "content_blob", "note", "created_at", "updated_at"],
+    "contract_file_folders": ["id", "contract_id", "parent_id", "name", "created_at", "updated_at"],
+    "contract_files": ["id", "contract_id", "folder_id", "filename", "original_path", "file_ext", "mime_type", "size_bytes", "content_blob", "note", "created_at", "updated_at"],
     "activity_logs": ["id", "created_at", "actor", "source", "device_name", "action", "entity_type", "entity_id", "entity_key", "platform_id", "contract_no", "message", "before_json", "after_json", "payload_json"],
 }
 
