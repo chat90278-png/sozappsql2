@@ -5140,13 +5140,17 @@ class ContractWorkWindow(QDialog):
         self.side_meta_popover = QFrame(self.side_meta_host)
         self.side_meta_popover.setObjectName("sideMetaPopover")
         self.side_meta_popover.setStyleSheet(
-            "QFrame#sideMetaPopover{background:#ffffff; border:1px solid #cbd9eb; border-radius:15px;}"
+            "QFrame#sideMetaPopover{background:#ffffff; border:1px solid #d5e0ee; border-radius:14px;}"
             "QPushButton#sidePanelAdd{background:#2563eb; color:#ffffff; border:0; border-radius:11px; font-size:20px; font-weight:900; padding:0;}"
             "QPushButton#sidePanelAdd:hover{background:#1d4ed8;}"
-            "QPushButton#fileDropZone{background:#f1f7ff; color:#1e3a5f; border:1px dashed #a8bdd6; border-radius:11px; padding:7px 10px; text-align:left; font-size:11px; font-weight:700;}"
-            "QPushButton#fileDropZone:hover{background:#e8f2ff; border-color:#7ca4d8;}"
+            "QPushButton#documentActionPrimary{background:#2563eb; color:#ffffff; border:1px solid #2563eb; border-radius:8px; padding:0 11px; font-size:11px; font-weight:800;}"
+            "QPushButton#documentActionPrimary:hover{background:#1d4ed8; border-color:#1d4ed8;}"
+            "QPushButton#documentAction{background:#f8fbff; color:#102a43; border:1px solid #cfe0f3; border-radius:8px; padding:0 11px; font-size:11px; font-weight:800;}"
+            "QPushButton#documentAction:hover{background:#edf5ff; border-color:#9ec5f8;}"
+            "QLabel#documentHint{background:transparent; color:#64748b; border:0; font-size:10px;}"
             "QLabel#sidePanelEmpty{background:#f8fbff; color:#64748b; border:1px dashed #c7d6e8; border-radius:11px; padding:13px; font-size:12px;}"
-            "QLabel#fileTotal{background:transparent; color:#64748b; border:0; font-size:11px;}"
+            "QLabel#documentsFooterLeft{background:transparent; color:#94a3b8; border:0; font-size:10px;}"
+            "QLabel#documentsFooterRight{background:transparent; color:#64748b; border:0; font-size:10px; font-weight:700;}"
             "QPushButton#sidePanelAddInline{background:#eef4ff; color:#1d4ed8; border:1px solid #bcd1f2; border-radius:7px; padding:2px 10px; font-size:11px; font-weight:700;}"
             "QPushButton#sidePanelAddInline:hover{background:#dbeafe;}"
         )
@@ -5156,8 +5160,8 @@ class ContractWorkWindow(QDialog):
         shadow.setColor(QColor(15, 45, 74, 55))
         self.side_meta_popover.setGraphicsEffect(shadow)
         popover_layout = QVBoxLayout(self.side_meta_popover)
-        popover_layout.setContentsMargins(10, 6, 10, 8)
-        popover_layout.setSpacing(6)
+        popover_layout.setContentsMargins(12, 10, 12, 10)
+        popover_layout.setSpacing(10)
         self.side_meta_popover_body = QWidget()
         self.side_meta_popover_body.setStyleSheet("background:transparent;")
         self.side_meta_popover_body_layout = QVBoxLayout(self.side_meta_popover_body)
@@ -5171,12 +5175,15 @@ class ContractWorkWindow(QDialog):
     def position_side_meta_popover(self):
         if not hasattr(self, "side_meta_popover") or not hasattr(self, "side_meta_host"):
             return
-        w = max(180, self.side_meta_host.width())
+        w = max(260, self.side_meta_host.width())
         self.side_meta_popover.setFixedWidth(w)
         self.side_meta_popover.adjustSize()
         hint_h = self.side_meta_popover.sizeHint().height()
-        h = max(80, min(hint_h, 300))
         top = self.side_meta_bar.height() + 3
+        host_h = self.side_meta_host.height() if self.side_meta_host.height() > 0 else 520
+        max_h = max(120, min(520, host_h - top - 4))
+        min_h = 230 if getattr(self, "_side_meta_open_panel", None) == "files" else 80
+        h = max(min_h, min(hint_h, max_h))
         self.side_meta_popover.setGeometry(0, top, w, h)
         if self.side_meta_popover.isVisible():
             self.side_meta_popover.raise_()
@@ -5326,14 +5333,32 @@ class ContractWorkWindow(QDialog):
         return card
 
 
+    @staticmethod
+    def document_tree_height(folders: List[dict], files: List[dict]) -> int:
+        row_count = len(folders or []) + len(files or [])
+        if row_count <= 0:
+            return 132
+        if row_count <= 3:
+            return 132
+        if row_count >= 10:
+            return 360
+        return min(360, 44 + row_count * 28)
+
+
     def create_contract_files_tree(self, folders: List[dict], files: List[dict]) -> ContractFileTreeWidget:
         tree = ContractFileTreeWidget(self)
-        tree.setMinimumHeight(120)
+        tree.setMinimumHeight(132)
         tree.setStyleSheet(
-            "QTreeWidget{background:#f8fbff; border:1px solid #dbe7f5; border-radius:11px; padding:4px; color:#10233d; font-size:12px;}"
-            "QTreeWidget::item{height:24px; border-radius:5px; padding:1px;}"
-            "QTreeWidget::item:selected{background:#dbeafe; color:#0f172a;}"
-            "QTreeWidget::item:hover{background:#eef6ff;}"
+            "QTreeWidget{background:#f8fbff; border:1px dashed #c7d7ea; border-radius:12px; padding:7px; color:#0f172a; font-size:11px; outline:0;}"
+            "QTreeWidget[dragOver=\"true\"]{background:#eef6ff; border-color:#2563eb;}"
+            "QTreeWidget::item{height:28px; border-radius:8px; padding:0 6px;}"
+            "QTreeWidget::item:selected{background:#dbeafe; color:#0f3f8f;}"
+            "QTreeWidget::item:hover{background:#edf5ff;}"
+            "QTreeWidget::branch{background:transparent;}"
+            "QScrollBar:vertical{width:8px; background:transparent; margin:3px 1px 3px 0;}"
+            "QScrollBar::handle:vertical{background:#c7d7ea; border-radius:4px; min-height:22px;}"
+            "QScrollBar::handle:vertical:hover{background:#9eb8d7;}"
+            "QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical{height:0;}"
         )
         tree.filesDropped.connect(lambda paths, folder_id: self._add_contract_files(paths, folder_id))
         tree.invalidDrop.connect(lambda message: QMessageBox.warning(self, "Dosya yüklenemedi", message))
@@ -5357,30 +5382,40 @@ class ContractWorkWindow(QDialog):
 
             def add_folder_items(parent_item, parent_id):
                 for folder in sorted(children_by_parent.get(parent_id, []), key=lambda x: str(x.get("name") or "").casefold()):
-                    item = QTreeWidgetItem([str(folder.get("name") or "")])
+                    folder_id = int(folder.get("id"))
+                    item = QTreeWidgetItem([str(folder.get("name") or ""), str(folder_file_count(folder_id))])
                     item.setIcon(0, self.style().standardIcon(QStyle.SP_DirIcon))
+                    item.setTextAlignment(1, Qt.AlignRight | Qt.AlignVCenter)
+                    item.setForeground(1, QColor("#94a3b8"))
                     item.setData(0, Qt.UserRole, "folder")
-                    item.setData(0, Qt.UserRole + 1, int(folder.get("id")))
-                    item.setData(0, Qt.UserRole + 2, folder.get("parent_id"))
+                    item.setData(0, Qt.UserRole + 1, folder_id)
+                    item.setData(0, Qt.UserRole + 2, folder.get("_tree_parent_id"))
                     item.setData(0, Qt.UserRole + 3, str(folder.get("name") or ""))
                     item.setFlags(item.flags() | Qt.ItemIsEditable | Qt.ItemIsDropEnabled)
                     if parent_item is None:
                         tree.addTopLevelItem(item)
                     else:
                         parent_item.addChild(item)
-                    folder_items[int(folder.get("id"))] = item
-                    add_folder_items(item, int(folder.get("id")))
+                    folder_items[folder_id] = item
+                    add_folder_items(item, folder_id)
 
             add_folder_items(None, None)
             for metadata in sorted(files, key=lambda x: (str(x.get("filename") or "").casefold(), int(x.get("id") or 0))):
-                parent_item = folder_items.get(int(metadata.get("folder_id") or 0))
+                try:
+                    file_folder_id = int(metadata.get("folder_id") or 0)
+                except (TypeError, ValueError):
+                    file_folder_id = 0
+                parent_item = folder_items.get(file_folder_id)
                 ext = str(metadata.get("file_ext") or "").upper() or "DOSYA"
-                item = QTreeWidgetItem([str(metadata.get("filename") or "")])
+                size_text = self.format_file_size(metadata.get("size_bytes", 0))
+                item = QTreeWidgetItem([str(metadata.get("filename") or ""), size_text])
                 item.setIcon(0, self.style().standardIcon(QStyle.SP_FileIcon))
-                item.setToolTip(0, f"{ext} · {self.format_file_size(metadata.get('size_bytes', 0))} · {self.format_file_date(metadata.get('created_at', ''))}")
+                item.setTextAlignment(1, Qt.AlignRight | Qt.AlignVCenter)
+                item.setForeground(1, QColor("#94a3b8"))
+                item.setToolTip(0, f"{ext} · {size_text} · {self.format_file_date(metadata.get('created_at', ''))}")
                 item.setData(0, Qt.UserRole, "file")
                 item.setData(0, Qt.UserRole + 1, int(metadata.get("id")))
-                item.setData(0, Qt.UserRole + 2, metadata.get("folder_id"))
+                item.setData(0, Qt.UserRole + 2, file_folder_id if parent_item is not None else None)
                 item.setFlags((item.flags() | Qt.ItemIsDragEnabled) & ~Qt.ItemIsEditable)
                 if parent_item is None:
                     tree.addTopLevelItem(item)
@@ -5421,8 +5456,14 @@ class ContractWorkWindow(QDialog):
             QMessageBox.warning(self, "Klasör eklenemedi", str(exc))
 
     def on_contract_file_tree_double_clicked(self, item, column):
-        if item and item.data(0, Qt.UserRole) == "file":
+        if not item:
+            return
+        if item.data(0, Qt.UserRole) == "file":
             self.open_contract_file(int(item.data(0, Qt.UserRole + 1)))
+        elif item.data(0, Qt.UserRole) == "folder":
+            tree = getattr(self, "contract_files_tree", None)
+            if tree:
+                tree.editItem(item, 0)
 
     def on_contract_file_tree_item_changed(self, item, column):
         if getattr(self, "_building_file_tree", False) or not item or item.data(0, Qt.UserRole) != "folder":
