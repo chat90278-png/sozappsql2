@@ -138,82 +138,6 @@ class ContractFileDropButton(QPushButton):
         else:
             event.ignore()
 
-
-class ContractFileTreeWidget(QTreeWidget):
-    """Tree view for contract folders/files with external file-drop support."""
-
-    filesDropped = Signal(list, object)
-    invalidDrop = Signal(str)
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setAcceptDrops(True)
-        self.setHeaderHidden(True)
-        self.setRootIsDecorated(True)
-        self.setAnimated(True)
-        self.setIndentation(16)
-        self.setSelectionMode(QAbstractItemView.SingleSelection)
-        self.setDragDropMode(QAbstractItemView.DropOnly)
-        self.setEditTriggers(QAbstractItemView.DoubleClicked | QAbstractItemView.EditKeyPressed)
-        self.setContextMenuPolicy(Qt.CustomContextMenu)
-
-    def _folder_id_for_item(self, item):
-        if item is None:
-            return None
-        kind = item.data(0, Qt.UserRole)
-        if kind == "folder":
-            return item.data(0, Qt.UserRole + 1)
-        if kind == "file":
-            return item.data(0, Qt.UserRole + 2)
-        return None
-
-    def _drop_folder_id(self, pos):
-        return self._folder_id_for_item(self.itemAt(pos))
-
-    def _local_drop_paths(self, event):
-        mime = event.mimeData()
-        if not mime.hasUrls():
-            return [], "Yalnızca yerel dosyalar yüklenebilir."
-        file_paths = []
-        folder_dropped = False
-        unsupported_url = False
-        for url in mime.urls():
-            if not url.isLocalFile():
-                unsupported_url = True
-                continue
-            path = Path(url.toLocalFile())
-            if path.is_dir():
-                folder_dropped = True
-                continue
-            file_paths.append(str(path))
-        if folder_dropped:
-            return file_paths, "Klasör yüklenemez, lütfen dosya seçin."
-        if unsupported_url:
-            return file_paths, "Web bağlantısı yüklenemez, lütfen yerel dosya seçin."
-        return file_paths, ""
-
-    def dragEnterEvent(self, event):
-        if event.mimeData().hasUrls():
-            event.acceptProposedAction()
-        else:
-            event.ignore()
-
-    def dragMoveEvent(self, event):
-        if event.mimeData().hasUrls():
-            event.acceptProposedAction()
-        else:
-            event.ignore()
-
-    def dropEvent(self, event):
-        file_paths, warning = self._local_drop_paths(event)
-        if warning:
-            self.invalidDrop.emit(warning)
-        if file_paths:
-            self.filesDropped.emit(file_paths, self._drop_folder_id(event.position().toPoint() if hasattr(event, "position") else event.pos()))
-            event.acceptProposedAction()
-        else:
-            event.ignore()
-
 def app_icon_path() -> Path:
     """Return the native Windows icon when available, otherwise the SVG logo."""
     if APP_ICON_ICO_PATH.exists():
@@ -5250,20 +5174,14 @@ class ContractWorkWindow(QDialog):
             else:
                 empty = QLabel("Henüz etiket atanmadı."); empty.setObjectName("sidePanelEmpty"); empty.setAlignment(Qt.AlignCenter); cards.insertWidget(0, empty)
         else:
-            action_row = QHBoxLayout(); action_row.setContentsMargins(0, 0, 0, 2); action_row.setSpacing(6)
-            drop = ContractFileDropButton("  ↑    Dosya Ekle", self)
+            drop = ContractFileDropButton("  ↑    Dosya ekle     PDF, Word, Excel, PowerPoint, görsel veya TXT", self)
             drop.setObjectName("fileDropZone")
             drop.setCursor(Qt.PointingHandCursor)
             drop.clicked.connect(self._pick_contract_files)
             drop.filesDropped.connect(self._handle_contract_files_drop)
             drop.invalidDrop.connect(lambda message: QMessageBox.warning(self, "Dosya yüklenemedi", message))
-            folder_btn = QPushButton("Klasör Ekle")
-            folder_btn.setObjectName("sidePanelAddInline")
-            folder_btn.setFixedHeight(30)
-            folder_btn.clicked.connect(self.add_contract_file_folder)
-            action_row.addWidget(drop, 1)
-            action_row.addWidget(folder_btn, 0)
-            body.addLayout(action_row)
+            body.addWidget(drop, 0)
+            scroll, cards = self._make_card_scroll(); body.addWidget(scroll, 1)
             files = list(self._side_meta_files)
             folders = list(getattr(self, "_side_meta_folders", []))
             tree = self.create_contract_files_tree(folders, files)
@@ -5496,23 +5414,17 @@ class ContractWorkWindow(QDialog):
             self.render_side_meta_popover_content("files")
 
     def _pick_contract_files(self):
-        self._file_dialog_open = True
-        try:
-            paths, _ = QFileDialog.getOpenFileNames(
-                self,
-                "Sözleşmeye Dosya Ekle",
-                "",
-                "Documents (*.pdf *.doc *.docx *.xls *.xlsx *.xlsm *.ppt *.pptx *.txt *.png *.jpg *.jpeg);;All Files (*.*)",
-            )
-        finally:
-            self._file_dialog_open = False
+        paths, _ = QFileDialog.getOpenFileNames(
+            self,
+            "Sözleşmeye Dosya Ekle",
+            "",
+            "Documents (*.pdf *.doc *.docx *.xls *.xlsx *.xlsm *.ppt *.pptx *.txt *.png *.jpg *.jpeg);;All Files (*.*)",
+        )
         if not paths:
             return
         self._add_contract_files(paths)
 
-    def _add_contract_files(self, file_paths, folder_id="__selection__"):
-        if folder_id == "__selection__":
-            folder_id = self._selected_document_folder_id()
+    def _add_contract_files(self, file_paths):
         paths = [str(path or "").strip() for path in (file_paths or []) if str(path or "").strip()]
         if not paths:
             return
@@ -5530,7 +5442,7 @@ class ContractWorkWindow(QDialog):
                     raise ValueError("Lütfen geçerli bir dosya seçin.")
                 if not os.access(path, os.R_OK):
                     raise ValueError("Dosya okunamıyor.")
-                self.store.add_contract_file(self.ci.platform, self.ci.no, path, self.ci.contract_type, folder_id=folder_id)
+                self.store.add_contract_file(self.ci.platform, self.ci.no, path, self.ci.contract_type)
                 added += 1
             except Exception as exc:
                 message = str(exc)
