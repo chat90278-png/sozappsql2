@@ -5260,16 +5260,12 @@ class ContractWorkWindow(QDialog):
             self.render_side_meta_popover_content("files")
 
     def _pick_contract_files(self):
-        self._file_dialog_open = True
-        try:
-            paths, _ = QFileDialog.getOpenFileNames(
-                self,
-                "Sözleşmeye Dosya Ekle",
-                "",
-                "Documents (*.pdf *.doc *.docx *.xls *.xlsx *.xlsm *.ppt *.pptx *.txt *.png *.jpg *.jpeg);;All Files (*.*)",
-            )
-        finally:
-            self._file_dialog_open = False
+        paths, _ = QFileDialog.getOpenFileNames(
+            self,
+            "Sözleşmeye Dosya Ekle",
+            "",
+            "Documents (*.pdf *.doc *.docx *.xls *.xlsx *.xlsm *.ppt *.pptx *.txt *.png *.jpg *.jpeg);;All Files (*.*)",
+        )
         if not paths:
             return
         self._add_contract_files(paths)
