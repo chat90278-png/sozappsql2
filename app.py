@@ -4338,6 +4338,7 @@ class ContractWorkWindow(QDialog):
         self._contract_save_thread = None
         self._contract_save_worker = None
         self._pending_contract_save_context = None
+        self._file_dialog_open: bool = False
         self._is_dirty: bool = False   # Kullanıcı henüz değişiklik yapmadı
         self.setWindowTitle(APP_TITLE)
         # QDialog varsayılan olarak ? butonu gösterir — standart pencere butonları ekle
@@ -4667,16 +4668,39 @@ class ContractWorkWindow(QDialog):
         super().resizeEvent(event)
         self.position_busy_overlay()
 
+    @staticmethod
+    def _is_widget_inside(widget, parent_widget) -> bool:
+        if widget is None or parent_widget is None:
+            return False
+        return widget is parent_widget or parent_widget.isAncestorOf(widget)
+
+    def _side_meta_event_widget(self, obj, event):
+        if isinstance(obj, QWidget):
+            return obj
+        global_pos = None
+        if hasattr(event, "globalPosition"):
+            global_pos = event.globalPosition().toPoint()
+        elif hasattr(event, "globalPos"):
+            global_pos = event.globalPos()
+        return QApplication.widgetAt(global_pos) if global_pos is not None else None
+
+    def _is_side_meta_inside_click(self, obj, event) -> bool:
+        widget = self._side_meta_event_widget(obj, event)
+        popover = getattr(self, "side_meta_popover", None)
+        bar = getattr(self, "side_meta_bar", None)
+        return self._is_widget_inside(widget, popover) or self._is_widget_inside(widget, bar)
+
     def eventFilter(self, obj, event):
         if obj is getattr(self, "side_meta_host", None) and event.type() in (QEvent.Resize, QEvent.Show):
             self.position_side_meta_popover()
-        if event.type() in (QEvent.WindowDeactivate, QEvent.ApplicationDeactivate) and getattr(self, "_side_meta_open_panel", None):
+        if (
+            event.type() in (QEvent.WindowDeactivate, QEvent.ApplicationDeactivate)
+            and getattr(self, "_side_meta_open_panel", None)
+            and not getattr(self, "_file_dialog_open", False)
+        ):
             self.close_side_meta_popover()
         if event.type() == QEvent.MouseButtonPress and getattr(self, "_side_meta_open_panel", None):
-            popover = getattr(self, "side_meta_popover", None)
-            bar = getattr(self, "side_meta_bar", None)
-            clicked_inside = isinstance(obj, QWidget) and any(widget and (obj is widget or widget.isAncestorOf(obj)) for widget in (popover, bar))
-            if not clicked_inside:
+            if not self._is_side_meta_inside_click(obj, event):
                 self.close_side_meta_popover()
         file_id = obj.property("contractFileId") if hasattr(obj, "property") else None
         if file_id and event.type() == QEvent.MouseButtonDblClick:
