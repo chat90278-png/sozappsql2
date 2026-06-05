@@ -11,6 +11,7 @@ import copy
 import time
 import traceback
 import tempfile
+import unicodedata
 from pathlib import Path
 from datetime import date, datetime, timedelta
 from typing import Callable, Dict, List, Optional, Tuple
@@ -80,6 +81,14 @@ from PySide6.QtWidgets import (
 
 
 
+def normalized_tag_key(value: str) -> str:
+    """Return a stable comparison key for tag names, including Turkish case variants."""
+    text = str(value or "").strip().replace("ı", "i").replace("İ", "i")
+    text = unicodedata.normalize("NFKD", text.casefold())
+    text = "".join(ch for ch in text if not unicodedata.combining(ch))
+    return " ".join(text.split())
+
+
 class ContractFileDropButton(QPushButton):
     """Clickable upload target that also accepts local file drops."""
 
@@ -137,6 +146,140 @@ class ContractFileDropButton(QPushButton):
             event.acceptProposedAction()
         else:
             event.ignore()
+
+
+class ContractFileTreeWidget(QTreeWidget):
+    """Folder-aware document tree with external file drop support."""
+
+    filesDropped = Signal(list, object)
+    invalidDrop = Signal(str)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._empty_title = "Henüz belge eklenmedi."
+        self._empty_hint = "Dosya ekleyin veya buraya sürükleyin."
+        self.setAcceptDrops(True)
+        self.setDragEnabled(False)
+        self.setDragDropMode(QAbstractItemView.DropOnly)
+        self.setDropIndicatorShown(True)
+        self.setHeaderHidden(True)
+        self.setColumnCount(2)
+        self.header().setStretchLastSection(False)
+        self.header().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.header().setSectionResizeMode(1, QHeaderView.Fixed)
+        self.setColumnWidth(1, 58)
+        self.setRootIsDecorated(True)
+        self.setItemsExpandable(True)
+        self.setUniformRowHeights(True)
+        self.setTextElideMode(Qt.ElideRight)
+        self.setAlternatingRowColors(False)
+        self.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.setEditTriggers(
+            QAbstractItemView.EditKeyPressed
+            | QAbstractItemView.SelectedClicked
+        )
+        self.setContextMenuPolicy(Qt.CustomContextMenu)
+
+    def set_empty_message(self, title: str, hint: str = ""):
+        self._empty_title = str(title or "")
+        self._empty_hint = str(hint or "")
+        self.viewport().update()
+
+    def _set_drag_over(self, enabled: bool):
+        if self.property("dragOver") == bool(enabled):
+            return
+        self.setProperty("dragOver", bool(enabled))
+        self.style().unpolish(self)
+        self.style().polish(self)
+        self.viewport().update()
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        if self.topLevelItemCount() > 0:
+            return
+        painter = QPainter(self.viewport())
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        rect = self.viewport().rect().adjusted(12, 12, -12, -12)
+        painter.setPen(QColor("#7b8da5"))
+        font = painter.font()
+        font.setPointSize(9)
+        font.setBold(True)
+        painter.setFont(font)
+        painter.drawText(rect.adjusted(0, -10, 0, -10), Qt.AlignCenter, self._empty_title)
+        if self._empty_hint:
+            font.setPointSize(8)
+            font.setBold(False)
+            painter.setFont(font)
+            painter.setPen(QColor("#94a3b8"))
+            painter.drawText(rect.adjusted(0, 16, 0, 16), Qt.AlignCenter, self._empty_hint)
+
+    def _drop_folder_id(self, pos):
+        item = self.itemAt(pos)
+        if item is None:
+            return None
+        kind = item.data(0, Qt.UserRole)
+        if kind == "folder":
+            return item.data(0, Qt.UserRole + 1)
+        if kind == "file":
+            return item.data(0, Qt.UserRole + 2)
+        return None
+
+    def _local_file_paths_from_event(self, event):
+        mime = event.mimeData()
+        if not mime.hasUrls():
+            return [], "Yalnızca yerel dosyalar yüklenebilir."
+        file_paths = []
+        folder_dropped = False
+        unsupported_url = False
+        for url in mime.urls():
+            if not url.isLocalFile():
+                unsupported_url = True
+                continue
+            path = Path(url.toLocalFile())
+            if path.is_dir():
+                folder_dropped = True
+                continue
+            file_paths.append(str(path))
+        if file_paths:
+            if folder_dropped:
+                self.invalidDrop.emit("Klasör yüklenemez, lütfen dosya seçin.")
+            if unsupported_url:
+                self.invalidDrop.emit("Web bağlantısı yüklenemez, lütfen yerel dosya seçin.")
+            return file_paths, ""
+        if folder_dropped:
+            return [], "Klasör yüklenemez, lütfen dosya seçin."
+        if unsupported_url:
+            return [], "Web bağlantısı yüklenemez, lütfen yerel dosya seçin."
+        return [], "Yüklenecek yerel dosya bulunamadı."
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls():
+            self._set_drag_over(True)
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event):
+        if event.mimeData().hasUrls():
+            self._set_drag_over(True)
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragLeaveEvent(self, event):
+        self._set_drag_over(False)
+        super().dragLeaveEvent(event)
+
+    def dropEvent(self, event):
+        self._set_drag_over(False)
+        file_paths, error = self._local_file_paths_from_event(event)
+        if not file_paths:
+            if error:
+                self.invalidDrop.emit(error)
+            event.ignore()
+            return
+        self.filesDropped.emit(file_paths, self._drop_folder_id(event.position().toPoint() if hasattr(event, "position") else event.pos()))
+        event.acceptProposedAction()
 
 def app_icon_path() -> Path:
     """Return the native Windows icon when available, otherwise the SVG logo."""
@@ -2286,16 +2429,21 @@ class TagAssignDialog(StyledDialog):
     def __init__(self, store: ExcelStore, already_assigned: Optional[List[dict]] = None, parent=None):
         super().__init__("Etiket Ekle", parent)
         self.store = store
-        self.available_tags = store.load_tag_defs(active_only=True)
+        self.all_tags = list(store.load_tag_defs(active_only=True))
         self.already_keys = {
-            self.store._normalize_label(str((t or {}).get("name") or ""))
+            self._tag_key(str((t or {}).get("name") or ""))
             for t in list(already_assigned or [])
             if str((t or {}).get("name") or "").strip()
         }
+        self.available_tags = [tag for tag in self.all_tags if self._tag_key(tag.name) not in self.already_keys]
         self.selected: Dict[str, TagDef] = {}
         self.result: List[dict] = []
+        self.save_btn: Optional[QPushButton] = None
         self.resize(520, 380)
         self.build()
+
+    def _tag_key(self, name: str) -> str:
+        return normalized_tag_key(name)
 
     def build(self):
         root = QVBoxLayout(self)
@@ -2312,21 +2460,22 @@ class TagAssignDialog(StyledDialog):
         tags_lay.setContentsMargins(10, 10, 10, 10)
         tags_lay.setHorizontalSpacing(8)
         tags_lay.setVerticalSpacing(8)
-        if not self.available_tags:
+        if not self.all_tags:
             warn = QLabel("Aktif etiket yok. Önce Etiket Yönetimi ekranından etiket oluşturun.")
             warn.setObjectName("warning")
             warn.setWordWrap(True)
             tags_lay.addWidget(warn, 0, 0, 1, 3)
+        elif not self.available_tags:
+            empty = QLabel("Atanabilecek etiket bulunmuyor.")
+            empty.setObjectName("warning")
+            empty.setWordWrap(True)
+            tags_lay.addWidget(empty, 0, 0, 1, 3)
         else:
             for i, t in enumerate(self.available_tags):
                 b = QPushButton(f"● {t.name}")
                 b.setCheckable(True)
                 b.setObjectName("tagChipBtn")
                 b.setStyleSheet(tag_chip_style(t.color, selected=False))
-                key = self.store._normalize_label(t.name)
-                if key in self.already_keys:
-                    b.setEnabled(False)
-                    b.setToolTip("Bu etiket zaten sözleşmeye atanmış.")
                 b.clicked.connect(lambda checked, tag=t, btn=b: self.toggle_tag(tag, btn, checked))
                 tags_lay.addWidget(b, i // 3, i % 3)
         root.addWidget(self.tags_wrap)
@@ -2343,23 +2492,31 @@ class TagAssignDialog(StyledDialog):
         cancel.setObjectName("secondary")
         cancel.clicked.connect(self.reject)
         save = QPushButton("Ekle")
+        save.setEnabled(False)
         save.clicked.connect(self.save)
+        self.save_btn = save
         row.addWidget(cancel)
         row.addWidget(save)
         root.addLayout(row)
 
     def toggle_tag(self, tag: TagDef, btn: QPushButton, checked: bool):
-        key = self.store._normalize_label(tag.name)
+        key = self._tag_key(tag.name)
         if checked:
             self.selected[key] = tag
         else:
             self.selected.pop(key, None)
         btn.setStyleSheet(tag_chip_style(tag.color, selected=bool(checked)))
+        if self.save_btn is not None:
+            self.save_btn.setEnabled(bool(self.selected))
 
     def save(self):
+        if not self.available_tags:
+            return
         if not self.selected:
             QMessageBox.warning(self, "Seçim", "En az bir etiket seçin.")
             return
+        if self.save_btn is not None:
+            self.save_btn.setEnabled(False)
         note = self.note.toPlainText().strip()
         out: List[dict] = []
         for tag in self.selected.values():
@@ -4322,7 +4479,7 @@ class ContractWorkWindow(QDialog):
         )
         dedup: Dict[str, dict] = {}
         for t in self.contract_tags:
-            k = self.store._normalize_label(str((t or {}).get("name") or ""))
+            k = normalized_tag_key(str((t or {}).get("name") or ""))
             if not k:
                 continue
             dedup[k] = dict(t)
@@ -4936,7 +5093,7 @@ class ContractWorkWindow(QDialog):
         self._start_contract_save_worker(worker, "Sözleşme siliniyor...")
 
     def _tag_key(self, name: str) -> str:
-        return self.store._normalize_label(name)
+        return normalized_tag_key(name)
 
     def build_side_meta_popover_bar(self, parent_width: int):
         """Build the compact meta bar and its layout-independent floating popover."""
@@ -5033,13 +5190,17 @@ class ContractWorkWindow(QDialog):
         self.side_meta_popover = QFrame(self.side_meta_host)
         self.side_meta_popover.setObjectName("sideMetaPopover")
         self.side_meta_popover.setStyleSheet(
-            "QFrame#sideMetaPopover{background:#ffffff; border:1px solid #cbd9eb; border-radius:15px;}"
+            "QFrame#sideMetaPopover{background:#ffffff; border:1px solid #d5e0ee; border-radius:14px;}"
             "QPushButton#sidePanelAdd{background:#2563eb; color:#ffffff; border:0; border-radius:11px; font-size:20px; font-weight:900; padding:0;}"
             "QPushButton#sidePanelAdd:hover{background:#1d4ed8;}"
-            "QPushButton#fileDropZone{background:#f1f7ff; color:#1e3a5f; border:1px dashed #a8bdd6; border-radius:11px; padding:7px 10px; text-align:left; font-size:11px; font-weight:700;}"
-            "QPushButton#fileDropZone:hover{background:#e8f2ff; border-color:#7ca4d8;}"
+            "QPushButton#documentActionPrimary{background:#2563eb; color:#ffffff; border:1px solid #2563eb; border-radius:8px; padding:0 11px; font-size:11px; font-weight:800;}"
+            "QPushButton#documentActionPrimary:hover{background:#1d4ed8; border-color:#1d4ed8;}"
+            "QPushButton#documentAction{background:#f8fbff; color:#102a43; border:1px solid #cfe0f3; border-radius:8px; padding:0 11px; font-size:11px; font-weight:800;}"
+            "QPushButton#documentAction:hover{background:#edf5ff; border-color:#9ec5f8;}"
+            "QLabel#documentHint{background:transparent; color:#64748b; border:0; font-size:10px;}"
             "QLabel#sidePanelEmpty{background:#f8fbff; color:#64748b; border:1px dashed #c7d6e8; border-radius:11px; padding:13px; font-size:12px;}"
-            "QLabel#fileTotal{background:transparent; color:#64748b; border:0; font-size:11px;}"
+            "QLabel#documentsFooterLeft{background:transparent; color:#94a3b8; border:0; font-size:10px;}"
+            "QLabel#documentsFooterRight{background:transparent; color:#64748b; border:0; font-size:10px; font-weight:700;}"
             "QPushButton#sidePanelAddInline{background:#eef4ff; color:#1d4ed8; border:1px solid #bcd1f2; border-radius:7px; padding:2px 10px; font-size:11px; font-weight:700;}"
             "QPushButton#sidePanelAddInline:hover{background:#dbeafe;}"
         )
@@ -5049,8 +5210,8 @@ class ContractWorkWindow(QDialog):
         shadow.setColor(QColor(15, 45, 74, 55))
         self.side_meta_popover.setGraphicsEffect(shadow)
         popover_layout = QVBoxLayout(self.side_meta_popover)
-        popover_layout.setContentsMargins(10, 6, 10, 8)
-        popover_layout.setSpacing(6)
+        popover_layout.setContentsMargins(12, 10, 12, 10)
+        popover_layout.setSpacing(10)
         self.side_meta_popover_body = QWidget()
         self.side_meta_popover_body.setStyleSheet("background:transparent;")
         self.side_meta_popover_body_layout = QVBoxLayout(self.side_meta_popover_body)
@@ -5064,12 +5225,15 @@ class ContractWorkWindow(QDialog):
     def position_side_meta_popover(self):
         if not hasattr(self, "side_meta_popover") or not hasattr(self, "side_meta_host"):
             return
-        w = max(180, self.side_meta_host.width())
+        w = max(260, self.side_meta_host.width())
         self.side_meta_popover.setFixedWidth(w)
         self.side_meta_popover.adjustSize()
         hint_h = self.side_meta_popover.sizeHint().height()
-        h = max(80, min(hint_h, 300))
         top = self.side_meta_bar.height() + 3
+        host_h = self.side_meta_host.height() if self.side_meta_host.height() > 0 else 520
+        max_h = max(120, min(520, host_h - top - 4))
+        min_h = 230 if getattr(self, "_side_meta_open_panel", None) == "files" else 80
+        h = max(min_h, min(hint_h, max_h))
         self.side_meta_popover.setGeometry(0, top, w, h)
         if self.side_meta_popover.isVisible():
             self.side_meta_popover.raise_()
@@ -5160,26 +5324,52 @@ class ContractWorkWindow(QDialog):
             else:
                 empty = QLabel("Henüz etiket atanmadı."); empty.setObjectName("sidePanelEmpty"); empty.setAlignment(Qt.AlignCenter); cards.insertWidget(0, empty)
         else:
-            drop = ContractFileDropButton("  ↑    Dosya ekle     PDF, Word, Excel, PowerPoint, görsel veya TXT", self)
-            drop.setObjectName("fileDropZone")
-            drop.setCursor(Qt.PointingHandCursor)
-            drop.clicked.connect(self._pick_contract_files)
-            drop.filesDropped.connect(self._handle_contract_files_drop)
-            drop.invalidDrop.connect(lambda message: QMessageBox.warning(self, "Dosya yüklenemedi", message))
-            body.addWidget(drop, 0)
-            scroll, cards = self._make_card_scroll(); body.addWidget(scroll, 1)
             files = list(self._side_meta_files)
             folders = list(getattr(self, "_side_meta_folders", []))
-            tree = self.create_contract_files_tree(folders, files)
-            self.contract_files_tree = tree
-            body.addWidget(tree, 1)
-            if not files and not folders:
-                empty = QLabel("Henüz belge eklenmedi.")
-                empty.setObjectName("sidePanelEmpty")
-                empty.setAlignment(Qt.AlignCenter)
-                body.addWidget(empty, 0)
-            total = QLabel(f"Toplam {self.format_file_size(sum(int(item.get('size_bytes', 0) or 0) for item in files))}")
-            total.setObjectName("fileTotal"); total.setAlignment(Qt.AlignRight | Qt.AlignVCenter); body.addWidget(total, 0)
+            toolbar = QHBoxLayout()
+            toolbar.setContentsMargins(0, 0, 0, 0)
+            toolbar.setSpacing(8)
+            add_file_btn = QPushButton("+ Dosya Ekle")
+            add_file_btn.setObjectName("documentActionPrimary")
+            add_file_btn.setFixedHeight(32)
+            add_file_btn.setCursor(Qt.PointingHandCursor)
+            add_file_btn.clicked.connect(self._pick_contract_files)
+            add_folder_btn = QPushButton("+ Klasör Ekle")
+            add_folder_btn.setObjectName("documentAction")
+            add_folder_btn.setFixedHeight(32)
+            add_folder_btn.setCursor(Qt.PointingHandCursor)
+            add_folder_btn.clicked.connect(self.add_contract_file_folder)
+            hint = QLabel("PDF, Word, Excel, PowerPoint")
+            hint.setObjectName("documentHint")
+            hint.setMinimumWidth(0)
+            hint.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+            toolbar.addWidget(add_file_btn, 0)
+            toolbar.addWidget(add_folder_btn, 0)
+            toolbar.addWidget(hint, 1)
+            body.addLayout(toolbar)
+            try:
+                tree = self.create_contract_files_tree(folders, files)
+                self.contract_files_tree = tree
+                tree.setFixedHeight(self.document_tree_height(folders, files))
+                body.addWidget(tree, 0)
+                footer = QHBoxLayout()
+                footer.setContentsMargins(2, 0, 2, 0)
+                footer.setSpacing(8)
+                drag_hint = QLabel("Sürükle-bırak desteklenir")
+                drag_hint.setObjectName("documentsFooterLeft")
+                total = QLabel(f"Toplam {self.format_file_size(sum(int(item.get('size_bytes', 0) or 0) for item in files))}")
+                total.setObjectName("documentsFooterRight")
+                total.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                footer.addWidget(drag_hint, 1)
+                footer.addWidget(total, 0)
+                body.addLayout(footer)
+            except Exception as exc:
+                self.contract_files_tree = None
+                message = QLabel(f"Belgeler yüklenemedi: {exc}")
+                message.setObjectName("sidePanelEmpty")
+                message.setWordWrap(True)
+                message.setAlignment(Qt.AlignCenter)
+                body.addWidget(message, 1)
 
     def _make_card_scroll(self):
         scroll = QScrollArea(); scroll.setWidgetResizable(True); scroll.setFrameShape(QFrame.NoFrame)
@@ -5212,14 +5402,32 @@ class ContractWorkWindow(QDialog):
         return card
 
 
+    @staticmethod
+    def document_tree_height(folders: List[dict], files: List[dict]) -> int:
+        row_count = len(folders or []) + len(files or [])
+        if row_count <= 0:
+            return 132
+        if row_count <= 3:
+            return 132
+        if row_count >= 10:
+            return 360
+        return min(360, 44 + row_count * 28)
+
+
     def create_contract_files_tree(self, folders: List[dict], files: List[dict]) -> ContractFileTreeWidget:
         tree = ContractFileTreeWidget(self)
-        tree.setMinimumHeight(120)
+        tree.setMinimumHeight(132)
         tree.setStyleSheet(
-            "QTreeWidget{background:#f8fbff; border:1px solid #dbe7f5; border-radius:11px; padding:4px; color:#10233d; font-size:12px;}"
-            "QTreeWidget::item{height:24px; border-radius:5px; padding:1px;}"
-            "QTreeWidget::item:selected{background:#dbeafe; color:#0f172a;}"
-            "QTreeWidget::item:hover{background:#eef6ff;}"
+            "QTreeWidget{background:#f8fbff; border:1px dashed #c7d7ea; border-radius:12px; padding:7px; color:#0f172a; font-size:11px; outline:0;}"
+            "QTreeWidget[dragOver=\"true\"]{background:#eef6ff; border-color:#2563eb;}"
+            "QTreeWidget::item{height:28px; border-radius:8px; padding:0 6px;}"
+            "QTreeWidget::item:selected{background:#dbeafe; color:#0f3f8f;}"
+            "QTreeWidget::item:hover{background:#edf5ff;}"
+            "QTreeWidget::branch{background:transparent;}"
+            "QScrollBar:vertical{width:8px; background:transparent; margin:3px 1px 3px 0;}"
+            "QScrollBar::handle:vertical{background:#c7d7ea; border-radius:4px; min-height:22px;}"
+            "QScrollBar::handle:vertical:hover{background:#9eb8d7;}"
+            "QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical{height:0;}"
         )
         tree.filesDropped.connect(lambda paths, folder_id: self._add_contract_files(paths, folder_id))
         tree.invalidDrop.connect(lambda message: QMessageBox.warning(self, "Dosya yüklenemedi", message))
@@ -5230,35 +5438,68 @@ class ContractWorkWindow(QDialog):
         try:
             folder_items = {}
             children_by_parent: Dict[object, List[dict]] = {}
+            folder_ids = {int(folder.get("id")) for folder in folders if folder.get("id") not in (None, "")}
             for folder in folders:
-                children_by_parent.setdefault(folder.get("parent_id"), []).append(folder)
+                parent_id = folder.get("parent_id")
+                try:
+                    parent_id = int(parent_id) if parent_id not in (None, "", 0) else None
+                except (TypeError, ValueError):
+                    parent_id = None
+                if parent_id not in folder_ids:
+                    parent_id = None
+                folder["_tree_parent_id"] = parent_id
+                children_by_parent.setdefault(parent_id, []).append(folder)
+            direct_file_counts: Dict[int, int] = {folder_id: 0 for folder_id in folder_ids}
+            for metadata in files:
+                try:
+                    file_folder_id = int(metadata.get("folder_id") or 0)
+                except (TypeError, ValueError):
+                    file_folder_id = 0
+                if file_folder_id in direct_file_counts:
+                    direct_file_counts[file_folder_id] += 1
+
+            def folder_file_count(folder_id: int) -> int:
+                total = direct_file_counts.get(int(folder_id), 0)
+                for child in children_by_parent.get(int(folder_id), []):
+                    total += folder_file_count(int(child.get("id")))
+                return total
 
             def add_folder_items(parent_item, parent_id):
                 for folder in sorted(children_by_parent.get(parent_id, []), key=lambda x: str(x.get("name") or "").casefold()):
-                    item = QTreeWidgetItem([str(folder.get("name") or "")])
+                    folder_id = int(folder.get("id"))
+                    item = QTreeWidgetItem([str(folder.get("name") or ""), str(folder_file_count(folder_id))])
                     item.setIcon(0, self.style().standardIcon(QStyle.SP_DirIcon))
+                    item.setTextAlignment(1, Qt.AlignRight | Qt.AlignVCenter)
+                    item.setForeground(1, QColor("#94a3b8"))
                     item.setData(0, Qt.UserRole, "folder")
-                    item.setData(0, Qt.UserRole + 1, int(folder.get("id")))
-                    item.setData(0, Qt.UserRole + 2, folder.get("parent_id"))
+                    item.setData(0, Qt.UserRole + 1, folder_id)
+                    item.setData(0, Qt.UserRole + 2, folder.get("_tree_parent_id"))
                     item.setData(0, Qt.UserRole + 3, str(folder.get("name") or ""))
                     item.setFlags(item.flags() | Qt.ItemIsEditable | Qt.ItemIsDropEnabled)
                     if parent_item is None:
                         tree.addTopLevelItem(item)
                     else:
                         parent_item.addChild(item)
-                    folder_items[int(folder.get("id"))] = item
-                    add_folder_items(item, int(folder.get("id")))
+                    folder_items[folder_id] = item
+                    add_folder_items(item, folder_id)
 
             add_folder_items(None, None)
             for metadata in sorted(files, key=lambda x: (str(x.get("filename") or "").casefold(), int(x.get("id") or 0))):
-                parent_item = folder_items.get(int(metadata.get("folder_id") or 0))
+                try:
+                    file_folder_id = int(metadata.get("folder_id") or 0)
+                except (TypeError, ValueError):
+                    file_folder_id = 0
+                parent_item = folder_items.get(file_folder_id)
                 ext = str(metadata.get("file_ext") or "").upper() or "DOSYA"
-                item = QTreeWidgetItem([str(metadata.get("filename") or "")])
+                size_text = self.format_file_size(metadata.get("size_bytes", 0))
+                item = QTreeWidgetItem([str(metadata.get("filename") or ""), size_text])
                 item.setIcon(0, self.style().standardIcon(QStyle.SP_FileIcon))
-                item.setToolTip(0, f"{ext} · {self.format_file_size(metadata.get('size_bytes', 0))} · {self.format_file_date(metadata.get('created_at', ''))}")
+                item.setTextAlignment(1, Qt.AlignRight | Qt.AlignVCenter)
+                item.setForeground(1, QColor("#94a3b8"))
+                item.setToolTip(0, f"{ext} · {size_text} · {self.format_file_date(metadata.get('created_at', ''))}")
                 item.setData(0, Qt.UserRole, "file")
                 item.setData(0, Qt.UserRole + 1, int(metadata.get("id")))
-                item.setData(0, Qt.UserRole + 2, metadata.get("folder_id"))
+                item.setData(0, Qt.UserRole + 2, file_folder_id if parent_item is not None else None)
                 item.setFlags((item.flags() | Qt.ItemIsDragEnabled) & ~Qt.ItemIsEditable)
                 if parent_item is None:
                     tree.addTopLevelItem(item)
@@ -5299,8 +5540,14 @@ class ContractWorkWindow(QDialog):
             QMessageBox.warning(self, "Klasör eklenemedi", str(exc))
 
     def on_contract_file_tree_double_clicked(self, item, column):
-        if item and item.data(0, Qt.UserRole) == "file":
+        if not item:
+            return
+        if item.data(0, Qt.UserRole) == "file":
             self.open_contract_file(int(item.data(0, Qt.UserRole + 1)))
+        elif item.data(0, Qt.UserRole) == "folder":
+            tree = getattr(self, "contract_files_tree", None)
+            if tree:
+                tree.editItem(item, 0)
 
     def on_contract_file_tree_item_changed(self, item, column):
         if getattr(self, "_building_file_tree", False) or not item or item.data(0, Qt.UserRole) != "folder":
@@ -5400,17 +5647,21 @@ class ContractWorkWindow(QDialog):
             self.render_side_meta_popover_content("files")
 
     def _pick_contract_files(self):
-        paths, _ = QFileDialog.getOpenFileNames(
-            self,
-            "Sözleşmeye Dosya Ekle",
-            "",
-            "Documents (*.pdf *.doc *.docx *.xls *.xlsx *.xlsm *.ppt *.pptx *.txt *.png *.jpg *.jpeg);;All Files (*.*)",
-        )
+        self._file_dialog_open = True
+        try:
+            paths, _ = QFileDialog.getOpenFileNames(
+                self,
+                "Sözleşmeye Dosya Ekle",
+                "",
+                "Documents (*.pdf *.doc *.docx *.xls *.xlsx *.xlsm *.ppt *.pptx *.txt *.png *.jpg *.jpeg);;All Files (*.*)",
+            )
+        finally:
+            self._file_dialog_open = False
         if not paths:
             return
-        self._add_contract_files(paths)
+        self._add_contract_files(paths, self._selected_document_folder_id())
 
-    def _add_contract_files(self, file_paths):
+    def _add_contract_files(self, file_paths, folder_id=None):
         paths = [str(path or "").strip() for path in (file_paths or []) if str(path or "").strip()]
         if not paths:
             return
@@ -5428,7 +5679,7 @@ class ContractWorkWindow(QDialog):
                     raise ValueError("Lütfen geçerli bir dosya seçin.")
                 if not os.access(path, os.R_OK):
                     raise ValueError("Dosya okunamıyor.")
-                self.store.add_contract_file(self.ci.platform, self.ci.no, path, self.ci.contract_type)
+                self.store.add_contract_file(self.ci.platform, self.ci.no, path, self.ci.contract_type, folder_id=folder_id)
                 added += 1
             except Exception as exc:
                 message = str(exc)
@@ -7146,6 +7397,21 @@ class MainWindow(QMainWindow):
         if hasattr(self, "contract_table") and obj is self.contract_table.viewport():
             if event.type() in (QEvent.Resize, QEvent.Move, QEvent.Show):
                 QTimer.singleShot(0, self.position_query_logo_background)
+        if obj is getattr(self, "side_meta_host", None) and event.type() in (QEvent.Resize, QEvent.Show):
+            self.position_side_meta_popover()
+        if (
+            event.type() in (QEvent.WindowDeactivate, QEvent.ApplicationDeactivate)
+            and getattr(self, "_side_meta_open_panel", None)
+            and not getattr(self, "_file_dialog_open", False)
+        ):
+            self.close_side_meta_popover()
+        if event.type() == QEvent.MouseButtonPress and getattr(self, "_side_meta_open_panel", None):
+            if not self._is_side_meta_inside_click(obj, event):
+                self.close_side_meta_popover()
+        file_id = obj.property("contractFileId") if hasattr(obj, "property") else None
+        if file_id and event.type() == QEvent.MouseButtonDblClick:
+            self.open_contract_file(int(file_id))
+            return True
         return super().eventFilter(obj, event)
 
     def _norm_tr(self, s: str) -> str:
