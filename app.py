@@ -11,6 +11,7 @@ import copy
 import time
 import traceback
 import tempfile
+import unicodedata
 from pathlib import Path
 from datetime import date, datetime, timedelta
 from typing import Callable, Dict, List, Optional, Tuple
@@ -78,6 +79,14 @@ from PySide6.QtWidgets import (
     QToolButton, QMenu, QInputDialog, QWidgetAction, QStackedWidget, QAbstractItemView, QStyle
 )
 
+
+
+def normalized_tag_key(value: str) -> str:
+    """Return a stable comparison key for tag names, including Turkish case variants."""
+    text = str(value or "").strip().replace("ı", "i").replace("İ", "i")
+    text = unicodedata.normalize("NFKD", text.casefold())
+    text = "".join(ch for ch in text if not unicodedata.combining(ch))
+    return " ".join(text.split())
 
 
 class ContractFileDropButton(QPushButton):
@@ -2370,16 +2379,21 @@ class TagAssignDialog(StyledDialog):
     def __init__(self, store: ExcelStore, already_assigned: Optional[List[dict]] = None, parent=None):
         super().__init__("Etiket Ekle", parent)
         self.store = store
-        self.available_tags = store.load_tag_defs(active_only=True)
+        self.all_tags = list(store.load_tag_defs(active_only=True))
         self.already_keys = {
-            self.store._normalize_label(str((t or {}).get("name") or ""))
+            self._tag_key(str((t or {}).get("name") or ""))
             for t in list(already_assigned or [])
             if str((t or {}).get("name") or "").strip()
         }
+        self.available_tags = [tag for tag in self.all_tags if self._tag_key(tag.name) not in self.already_keys]
         self.selected: Dict[str, TagDef] = {}
         self.result: List[dict] = []
+        self.save_btn: Optional[QPushButton] = None
         self.resize(520, 380)
         self.build()
+
+    def _tag_key(self, name: str) -> str:
+        return normalized_tag_key(name)
 
     def build(self):
         root = QVBoxLayout(self)
@@ -2396,21 +2410,22 @@ class TagAssignDialog(StyledDialog):
         tags_lay.setContentsMargins(10, 10, 10, 10)
         tags_lay.setHorizontalSpacing(8)
         tags_lay.setVerticalSpacing(8)
-        if not self.available_tags:
+        if not self.all_tags:
             warn = QLabel("Aktif etiket yok. Önce Etiket Yönetimi ekranından etiket oluşturun.")
             warn.setObjectName("warning")
             warn.setWordWrap(True)
             tags_lay.addWidget(warn, 0, 0, 1, 3)
+        elif not self.available_tags:
+            empty = QLabel("Atanabilecek etiket bulunmuyor.")
+            empty.setObjectName("warning")
+            empty.setWordWrap(True)
+            tags_lay.addWidget(empty, 0, 0, 1, 3)
         else:
             for i, t in enumerate(self.available_tags):
                 b = QPushButton(f"● {t.name}")
                 b.setCheckable(True)
                 b.setObjectName("tagChipBtn")
                 b.setStyleSheet(tag_chip_style(t.color, selected=False))
-                key = self.store._normalize_label(t.name)
-                if key in self.already_keys:
-                    b.setEnabled(False)
-                    b.setToolTip("Bu etiket zaten sözleşmeye atanmış.")
                 b.clicked.connect(lambda checked, tag=t, btn=b: self.toggle_tag(tag, btn, checked))
                 tags_lay.addWidget(b, i // 3, i % 3)
         root.addWidget(self.tags_wrap)
@@ -2427,23 +2442,31 @@ class TagAssignDialog(StyledDialog):
         cancel.setObjectName("secondary")
         cancel.clicked.connect(self.reject)
         save = QPushButton("Ekle")
+        save.setEnabled(False)
         save.clicked.connect(self.save)
+        self.save_btn = save
         row.addWidget(cancel)
         row.addWidget(save)
         root.addLayout(row)
 
     def toggle_tag(self, tag: TagDef, btn: QPushButton, checked: bool):
-        key = self.store._normalize_label(tag.name)
+        key = self._tag_key(tag.name)
         if checked:
             self.selected[key] = tag
         else:
             self.selected.pop(key, None)
         btn.setStyleSheet(tag_chip_style(tag.color, selected=bool(checked)))
+        if self.save_btn is not None:
+            self.save_btn.setEnabled(bool(self.selected))
 
     def save(self):
+        if not self.available_tags:
+            return
         if not self.selected:
             QMessageBox.warning(self, "Seçim", "En az bir etiket seçin.")
             return
+        if self.save_btn is not None:
+            self.save_btn.setEnabled(False)
         note = self.note.toPlainText().strip()
         out: List[dict] = []
         for tag in self.selected.values():
@@ -4406,7 +4429,7 @@ class ContractWorkWindow(QDialog):
         )
         dedup: Dict[str, dict] = {}
         for t in self.contract_tags:
-            k = self.store._normalize_label(str((t or {}).get("name") or ""))
+            k = normalized_tag_key(str((t or {}).get("name") or ""))
             if not k:
                 continue
             dedup[k] = dict(t)
@@ -5020,7 +5043,7 @@ class ContractWorkWindow(QDialog):
         self._start_contract_save_worker(worker, "Sözleşme siliniyor...")
 
     def _tag_key(self, name: str) -> str:
-        return self.store._normalize_label(name)
+        return normalized_tag_key(name)
 
     def build_side_meta_popover_bar(self, parent_width: int):
         """Build the compact meta bar and its layout-independent floating popover."""
