@@ -487,20 +487,157 @@ class STSStore:
         self._log("contract_tags_updated", entity_type="contract", entity_id=cid, platform=str(platform or ""), contract_no=str(contract_no or ""), source="Tag Manager", message="Sözleşme etiketleri güncellendi", payload={"count": len(names)}, actor=actor or self.current_actor())
 
 
+    def _folder_path_from_rows(self, folder_id, rows_by_id: dict[int, dict]) -> str:
+        if not folder_id:
+            return ""
+        parts = []
+        current = rows_by_id.get(int(folder_id))
+        guard = 0
+        while current and guard < 100:
+            parts.append(str(current.get("name") or ""))
+            parent_id = current.get("parent_id")
+            current = rows_by_id.get(int(parent_id)) if parent_id else None
+            guard += 1
+        return "/".join(reversed([part for part in parts if part]))
+
+    def _contract_folder_rows(self, contract_id: int) -> list[dict]:
+        rows = self.db.conn.execute(
+            "SELECT id,contract_id,parent_id,name,created_at,updated_at FROM contract_file_folders WHERE contract_id=? ORDER BY parent_id,name COLLATE NOCASE,id",
+            (int(contract_id),),
+        ).fetchall()
+        data = [dict(row) for row in rows]
+        by_id = {int(row["id"]): row for row in data}
+        for row in data:
+            row["path"] = self._folder_path_from_rows(row.get("id"), by_id)
+        return data
+
+    def list_contract_file_folders(self, platform, contract_no, contract_type=None):
+        cid = self._find_contract_id(platform, contract_no, contract_type)
+        if not cid:
+            return []
+        return self._contract_folder_rows(cid)
+
+    def _normalize_folder_name(self, name: str) -> str:
+        clean = str(name or "").strip()
+        if not clean:
+            raise ValueError("Klasör adı boş olamaz.")
+        if any(ch in clean for ch in '/\\:*?"<>|'):
+            raise ValueError("Klasör adında / \\ : * ? \" < > | karakterleri kullanılamaz.")
+        return clean
+
+    def _validate_contract_folder_id(self, contract_id: int, folder_id):
+        if folder_id in (None, "", 0):
+            return None
+        row = self.db.conn.execute(
+            "SELECT id FROM contract_file_folders WHERE id=? AND contract_id=?",
+            (int(folder_id), int(contract_id)),
+        ).fetchone()
+        if not row:
+            raise ValueError("Belge klasörü bulunamadı.")
+        return int(row[0])
+
+    def _folder_name_exists(self, contract_id: int, parent_id, name: str, exclude_id=None) -> bool:
+        params = [int(contract_id), str(name)]
+        sql = "SELECT id FROM contract_file_folders WHERE contract_id=? AND name=? AND "
+        if parent_id in (None, "", 0):
+            sql += "parent_id IS NULL"
+        else:
+            sql += "parent_id=?"
+            params.append(int(parent_id))
+        if exclude_id:
+            sql += " AND id<>?"
+            params.append(int(exclude_id))
+        sql += " LIMIT 1"
+        return self.db.conn.execute(sql, params).fetchone() is not None
+
+    def _unique_folder_name(self, contract_id: int, parent_id, base_name: str = "Yeni Klasör") -> str:
+        base = self._normalize_folder_name(base_name)
+        if not self._folder_name_exists(contract_id, parent_id, base):
+            return base
+        index = 2
+        while True:
+            candidate = f"{base} ({index})"
+            if not self._folder_name_exists(contract_id, parent_id, candidate):
+                return candidate
+            index += 1
+
+    def create_contract_file_folder(self, platform, contract_no, contract_type=None, parent_id=None, name="Yeni Klasör"):
+        cid = self._find_contract_id(platform, contract_no, contract_type)
+        if not cid:
+            raise ValueError("Sözleşme bulunamadı. Önce sözleşmeyi kaydedin.")
+        parent_id = self._validate_contract_folder_id(cid, parent_id)
+        folder_name = self._unique_folder_name(cid, parent_id, name or "Yeni Klasör")
+        ts = now_iso()
+        with self.db.tx():
+            self.db.conn.execute(
+                "INSERT INTO contract_file_folders(contract_id,parent_id,name,created_at,updated_at) VALUES(?,?,?,?,?)",
+                (cid, parent_id, folder_name, ts, ts),
+            )
+            folder_id = int(self.db.conn.execute("SELECT last_insert_rowid()").fetchone()[0])
+        folders = {int(row["id"]): row for row in self._contract_folder_rows(cid)}
+        folder_path = self._folder_path_from_rows(folder_id, folders)
+        self._log(
+            "document_folder_created",
+            entity_type="document_folder",
+            entity_id=folder_id,
+            contract_no=str(contract_no or ""),
+            source="Document Manager",
+            message="Belge klasörü oluşturuldu",
+            payload={"name": folder_name, "parent_id": parent_id, "path": folder_path},
+        )
+        return {"id": folder_id, "contract_id": cid, "parent_id": parent_id, "name": folder_name, "path": folder_path, "created_at": ts, "updated_at": ts}
+
+    def rename_contract_file_folder(self, folder_id, new_name: str):
+        row = self.db.conn.execute(
+            "SELECT id,contract_id,parent_id,name,created_at,updated_at FROM contract_file_folders WHERE id=?",
+            (int(folder_id),),
+        ).fetchone()
+        if not row:
+            raise ValueError("Belge klasörü bulunamadı.")
+        before = dict(row)
+        clean = self._normalize_folder_name(new_name)
+        if clean == str(before.get("name") or ""):
+            return {**before, "path": self._folder_path_from_rows(int(folder_id), {int(r["id"]): r for r in self._contract_folder_rows(int(before["contract_id"]))})}
+        if self._folder_name_exists(int(before["contract_id"]), before.get("parent_id"), clean, exclude_id=int(folder_id)):
+            raise ValueError("Aynı seviyede bu klasör adı zaten var.")
+        ts = now_iso()
+        with self.db.tx():
+            self.db.conn.execute("UPDATE contract_file_folders SET name=?,updated_at=? WHERE id=?", (clean, ts, int(folder_id)))
+        folders = {int(r["id"]): r for r in self._contract_folder_rows(int(before["contract_id"]))}
+        after = {**before, "name": clean, "updated_at": ts, "path": self._folder_path_from_rows(int(folder_id), folders)}
+        self._log(
+            "document_folder_renamed",
+            entity_type="document_folder",
+            entity_id=int(folder_id),
+            source="Document Manager",
+            message="Belge klasörü yeniden adlandırıldı",
+            before={"name": before.get("name"), "parent_id": before.get("parent_id")},
+            after={"name": clean, "parent_id": before.get("parent_id"), "path": after.get("path")},
+        )
+        return after
+
     def list_contract_files(self, platform, contract_no, contract_type=None):
         cid = self._find_contract_id(platform, contract_no, contract_type)
         if not cid:
             return []
+        folder_rows = self._contract_folder_rows(cid)
+        folders = {int(row["id"]): row for row in folder_rows}
         rows = self.db.conn.execute(
-            "SELECT id,filename,file_ext,mime_type,size_bytes,created_at,note FROM contract_files WHERE contract_id=? ORDER BY created_at,id",
+            "SELECT id,folder_id,filename,file_ext,mime_type,size_bytes,created_at,note FROM contract_files WHERE contract_id=? ORDER BY folder_id,filename COLLATE NOCASE,created_at,id",
             (cid,),
         ).fetchall()
-        return [dict(row) for row in rows]
+        out = []
+        for row in rows:
+            item = dict(row)
+            item["folder_path"] = self._folder_path_from_rows(item.get("folder_id"), folders)
+            out.append(item)
+        return out
 
-    def add_contract_file(self, platform, contract_no, file_path, contract_type=None, note=""):
+    def add_contract_file(self, platform, contract_no, file_path, contract_type=None, note="", folder_id=None):
         cid = self._find_contract_id(platform, contract_no, contract_type)
         if not cid:
             raise ValueError("Sözleşme bulunamadı. Önce sözleşmeyi kaydedin.")
+        folder_id = self._validate_contract_folder_id(cid, folder_id)
         source = Path(file_path)
         if not source.exists():
             raise ValueError("Dosya seçilemedi veya bulunamadı.")
@@ -569,7 +706,7 @@ class STSStore:
         return {"filename": filename, "mime_type": mime_type, "target_path": str(target), "size_bytes": len(content)}
 
     def delete_contract_file(self, file_id):
-        before = self.db.conn.execute("SELECT id,contract_id,filename,size_bytes,note FROM contract_files WHERE id=?", (int(file_id),)).fetchone()
+        before = self.db.conn.execute("SELECT id,contract_id,folder_id,filename,size_bytes,note FROM contract_files WHERE id=?", (int(file_id),)).fetchone()
         with self.db.tx():
             cursor = self.db.conn.execute("DELETE FROM contract_files WHERE id=?", (int(file_id),))
         deleted = bool(cursor.rowcount)

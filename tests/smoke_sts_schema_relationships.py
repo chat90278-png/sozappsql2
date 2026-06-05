@@ -26,7 +26,10 @@ with TemporaryDirectory() as td:
     assert "deliveries.delivery_user_id → users.id" in texts
     assert "systems.delivery_user_id → users.id" not in texts
     assert "delivery_components.component_id → components.id" in texts
+    assert "contract_file_folders.contract_id → contracts.id" in texts
+    assert "contract_file_folders.parent_id → contract_file_folders.id" in texts
     assert "contract_files.contract_id → contracts.id" in texts
+    assert "contract_files.folder_id → contract_file_folders.id" in texts
     groups = group_relationships_by_source(relationships)
     assert len(groups["deliveries"]) == 3
     assert {compact_relationship_text(item) for item in groups["deliveries"]} == {

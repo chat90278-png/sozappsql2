@@ -72,10 +72,10 @@ from PySide6.QtGui import QFont, QColor, QPixmap, QIcon, QPainter, QAction, QCur
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget,QGraphicsOpacityEffect, QGraphicsDropShadowEffect, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QPushButton, QListWidget, QListWidgetItem, QTableWidget, QTableWidgetItem,
-    QDialog, QLineEdit, QComboBox, QDateEdit, QSpinBox, QDoubleSpinBox,
+    QTreeWidget, QTreeWidgetItem, QDialog, QLineEdit, QComboBox, QDateEdit, QSpinBox, QDoubleSpinBox,
     QMessageBox, QFileDialog, QFrame, QScrollArea, QCheckBox, QHeaderView,
     QSizePolicy, QProgressBar, QProgressDialog, QStyledItemDelegate, QTextEdit,
-    QToolButton, QMenu, QInputDialog, QWidgetAction, QStackedWidget
+    QToolButton, QMenu, QInputDialog, QWidgetAction, QStackedWidget, QAbstractItemView, QStyle
 )
 
 
@@ -5114,12 +5114,19 @@ class ContractWorkWindow(QDialog):
         except Exception:
             return []
 
+    def _load_contract_file_folders(self) -> List[dict]:
+        try:
+            return list(self.store.list_contract_file_folders(self.ci.platform, self.ci.no, self.ci.contract_type))
+        except Exception:
+            return []
+
     def _set_side_meta_badge_counts(self, tag_count: int, file_count: int):
         self.side_badge_tags.setText(str(tag_count))
         self.side_badge_files.setText(str(file_count))
 
     def update_side_meta_badges(self):
         self._side_meta_files = self._load_contract_files()
+        self._side_meta_folders = self._load_contract_file_folders()
         self._set_side_meta_badge_counts(len(self._ordered_contract_tags()), len(self._side_meta_files))
 
     def _clear_side_meta_popover_body(self):
@@ -5162,11 +5169,15 @@ class ContractWorkWindow(QDialog):
             body.addWidget(drop, 0)
             scroll, cards = self._make_card_scroll(); body.addWidget(scroll, 1)
             files = list(self._side_meta_files)
-            if files:
-                for metadata in files:
-                    cards.insertWidget(cards.count() - 1, self.create_file_card(metadata))
-            else:
-                empty = QLabel("Henüz belge eklenmedi."); empty.setObjectName("sidePanelEmpty"); empty.setAlignment(Qt.AlignCenter); cards.insertWidget(0, empty)
+            folders = list(getattr(self, "_side_meta_folders", []))
+            tree = self.create_contract_files_tree(folders, files)
+            self.contract_files_tree = tree
+            body.addWidget(tree, 1)
+            if not files and not folders:
+                empty = QLabel("Henüz belge eklenmedi.")
+                empty.setObjectName("sidePanelEmpty")
+                empty.setAlignment(Qt.AlignCenter)
+                body.addWidget(empty, 0)
             total = QLabel(f"Toplam {self.format_file_size(sum(int(item.get('size_bytes', 0) or 0) for item in files))}")
             total.setObjectName("fileTotal"); total.setAlignment(Qt.AlignRight | Qt.AlignVCenter); body.addWidget(total, 0)
 
@@ -5199,6 +5210,135 @@ class ContractWorkWindow(QDialog):
         remove = QPushButton("×"); remove.setObjectName("tagRemoveButton"); remove.setFixedSize(29, 29); remove.setToolTip("Etiketi kaldır"); remove.clicked.connect(lambda _=False, nm=name: self.remove_contract_tag(nm))
         row.addWidget(dot); row.addWidget(middle, 1); row.addWidget(remove)
         return card
+
+
+    def create_contract_files_tree(self, folders: List[dict], files: List[dict]) -> ContractFileTreeWidget:
+        tree = ContractFileTreeWidget(self)
+        tree.setMinimumHeight(120)
+        tree.setStyleSheet(
+            "QTreeWidget{background:#f8fbff; border:1px solid #dbe7f5; border-radius:11px; padding:4px; color:#10233d; font-size:12px;}"
+            "QTreeWidget::item{height:24px; border-radius:5px; padding:1px;}"
+            "QTreeWidget::item:selected{background:#dbeafe; color:#0f172a;}"
+            "QTreeWidget::item:hover{background:#eef6ff;}"
+        )
+        tree.filesDropped.connect(lambda paths, folder_id: self._add_contract_files(paths, folder_id))
+        tree.invalidDrop.connect(lambda message: QMessageBox.warning(self, "Dosya yüklenemedi", message))
+        tree.itemDoubleClicked.connect(self.on_contract_file_tree_double_clicked)
+        tree.itemChanged.connect(self.on_contract_file_tree_item_changed)
+        tree.customContextMenuRequested.connect(self.show_contract_file_tree_menu)
+        self._building_file_tree = True
+        try:
+            folder_items = {}
+            children_by_parent: Dict[object, List[dict]] = {}
+            for folder in folders:
+                children_by_parent.setdefault(folder.get("parent_id"), []).append(folder)
+
+            def add_folder_items(parent_item, parent_id):
+                for folder in sorted(children_by_parent.get(parent_id, []), key=lambda x: str(x.get("name") or "").casefold()):
+                    item = QTreeWidgetItem([str(folder.get("name") or "")])
+                    item.setIcon(0, self.style().standardIcon(QStyle.SP_DirIcon))
+                    item.setData(0, Qt.UserRole, "folder")
+                    item.setData(0, Qt.UserRole + 1, int(folder.get("id")))
+                    item.setData(0, Qt.UserRole + 2, folder.get("parent_id"))
+                    item.setData(0, Qt.UserRole + 3, str(folder.get("name") or ""))
+                    item.setFlags(item.flags() | Qt.ItemIsEditable | Qt.ItemIsDropEnabled)
+                    if parent_item is None:
+                        tree.addTopLevelItem(item)
+                    else:
+                        parent_item.addChild(item)
+                    folder_items[int(folder.get("id"))] = item
+                    add_folder_items(item, int(folder.get("id")))
+
+            add_folder_items(None, None)
+            for metadata in sorted(files, key=lambda x: (str(x.get("filename") or "").casefold(), int(x.get("id") or 0))):
+                parent_item = folder_items.get(int(metadata.get("folder_id") or 0))
+                ext = str(metadata.get("file_ext") or "").upper() or "DOSYA"
+                item = QTreeWidgetItem([str(metadata.get("filename") or "")])
+                item.setIcon(0, self.style().standardIcon(QStyle.SP_FileIcon))
+                item.setToolTip(0, f"{ext} · {self.format_file_size(metadata.get('size_bytes', 0))} · {self.format_file_date(metadata.get('created_at', ''))}")
+                item.setData(0, Qt.UserRole, "file")
+                item.setData(0, Qt.UserRole + 1, int(metadata.get("id")))
+                item.setData(0, Qt.UserRole + 2, metadata.get("folder_id"))
+                item.setFlags((item.flags() | Qt.ItemIsDragEnabled) & ~Qt.ItemIsEditable)
+                if parent_item is None:
+                    tree.addTopLevelItem(item)
+                else:
+                    parent_item.addChild(item)
+            tree.expandAll()
+        finally:
+            self._building_file_tree = False
+        return tree
+
+    def _selected_document_folder_id(self):
+        tree = getattr(self, "contract_files_tree", None)
+        item = tree.currentItem() if tree else None
+        if item is None:
+            return None
+        kind = item.data(0, Qt.UserRole)
+        if kind == "folder":
+            return item.data(0, Qt.UserRole + 1)
+        if kind == "file":
+            return item.data(0, Qt.UserRole + 2)
+        return None
+
+    def add_contract_file_folder(self):
+        try:
+            created = self.store.create_contract_file_folder(
+                self.ci.platform, self.ci.no, self.ci.contract_type, parent_id=self._selected_document_folder_id()
+            )
+            self.render_contract_files()
+            tree = getattr(self, "contract_files_tree", None)
+            if tree:
+                matches = tree.findItems(str(created.get("name") or ""), Qt.MatchRecursive | Qt.MatchExactly)
+                for item in matches:
+                    if item.data(0, Qt.UserRole) == "folder" and int(item.data(0, Qt.UserRole + 1)) == int(created.get("id")):
+                        tree.setCurrentItem(item)
+                        tree.editItem(item, 0)
+                        break
+        except Exception as exc:
+            QMessageBox.warning(self, "Klasör eklenemedi", str(exc))
+
+    def on_contract_file_tree_double_clicked(self, item, column):
+        if item and item.data(0, Qt.UserRole) == "file":
+            self.open_contract_file(int(item.data(0, Qt.UserRole + 1)))
+
+    def on_contract_file_tree_item_changed(self, item, column):
+        if getattr(self, "_building_file_tree", False) or not item or item.data(0, Qt.UserRole) != "folder":
+            return
+        folder_id = int(item.data(0, Qt.UserRole + 1))
+        old_name = str(item.data(0, Qt.UserRole + 3) or "")
+        new_name = str(item.text(0) or "").strip()
+        if new_name == old_name:
+            return
+        try:
+            renamed = self.store.rename_contract_file_folder(folder_id, new_name)
+            item.setData(0, Qt.UserRole + 3, str(renamed.get("name") or new_name))
+            self.render_contract_files()
+        except Exception as exc:
+            self._building_file_tree = True
+            try:
+                item.setText(0, old_name)
+            finally:
+                self._building_file_tree = False
+            QMessageBox.warning(self, "Klasör adı değiştirilemedi", str(exc))
+
+    def show_contract_file_tree_menu(self, pos):
+        tree = getattr(self, "contract_files_tree", None)
+        item = tree.itemAt(pos) if tree else None
+        if not item:
+            return
+        kind = item.data(0, Qt.UserRole)
+        menu = QMenu(self)
+        if kind == "file":
+            file_id = int(item.data(0, Qt.UserRole + 1))
+            menu.addAction("Aç", lambda: self.open_contract_file(file_id))
+            menu.addAction("Dışa Aktar", lambda: self.export_contract_file(file_id))
+            menu.addSeparator()
+            menu.addAction("Sil", lambda: self.delete_contract_file(file_id))
+        elif kind == "folder":
+            menu.addAction("Yeniden Adlandır", lambda: tree.editItem(item, 0))
+            menu.addAction("Klasör silme bu sürümde desteklenmiyor", lambda: QMessageBox.information(self, "Klasör Silme", "Klasör silme bu sürümde desteklenmiyor."))
+        menu.exec(tree.viewport().mapToGlobal(pos))
 
     def refresh_contract_tags_panel(self):
         self.update_side_meta_badges()
