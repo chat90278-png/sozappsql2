@@ -7,6 +7,8 @@ from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
+from src.auth import ensure_document_locks_table, ensure_staff_table
+
 
 def now_iso() -> str:
     """Return sortable local computer time for persisted audit timestamps."""
@@ -39,6 +41,10 @@ def should_audit_sql(sql_or_operation: str) -> bool:
 
 def sql_query_preview(sql: str, limit: int = 200) -> str:
     return " ".join(str(sql or "").split())[:max(1, int(limit or 200))]
+
+
+def quote_identifier(identifier: str) -> str:
+    return '"' + str(identifier or "").replace('"', '""') + '"'
 
 
 class STSDatabase:
@@ -76,7 +82,7 @@ class STSDatabase:
             raise
 
     def _table_columns(self, table: str) -> set[str]:
-        rows = self.conn.execute(f"PRAGMA table_info({table})").fetchall()
+        rows = self.conn.execute(f"PRAGMA table_info({quote_identifier(table)})").fetchall()
         return {str(row[1]) for row in rows}
 
     def _ensure_column(self, table: str, name: str, ddl: str) -> bool:
@@ -144,6 +150,8 @@ CREATE INDEX IF NOT EXISTS idx_logs_entity ON activity_logs(entity_type,entity_i
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_contract_file_folders_contract_id ON contract_file_folders(contract_id)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_contract_file_folders_parent_id ON contract_file_folders(parent_id)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_contract_files_folder_id ON contract_files(folder_id)")
+        ensure_staff_table(self.conn)
+        ensure_document_locks_table(self.conn)
         self.conn.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version','3')")
         self.conn.commit()
         return migrated
@@ -215,17 +223,26 @@ CREATE INDEX IF NOT EXISTS idx_logs_entity ON activity_logs(entity_type,entity_i
         return [dict(r) for r in self.conn.execute(q, params).fetchall()]
 
 
+    def list_user_tables(self) -> List[str]:
+        rows = self.conn.execute(
+            """
+            SELECT name
+            FROM sqlite_master
+            WHERE type = 'table'
+              AND name NOT LIKE 'sqlite_%'
+            ORDER BY name
+            """
+        ).fetchall()
+        return [str(row[0]) for row in rows]
+
     def database_stats(self):
-        tables = [
-            "platforms","users","components","component_platforms","tags","contracts","systems",
-            "system_components","deliveries","delivery_components","contract_tags","contract_file_folders","contract_files","activity_logs"
-        ]
+        tables = self.list_user_tables()
         counts = {}
-        for t in tables:
+        for table in tables:
             try:
-                counts[t] = int(self.conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0])
+                counts[table] = int(self.conn.execute(f"SELECT COUNT(*) FROM {quote_identifier(table)}").fetchone()[0])
             except Exception:
-                counts[t] = 0
+                counts[table] = 0
         meta = {}
         try:
             for r in self.conn.execute("SELECT key,value FROM meta").fetchall():
@@ -280,14 +297,11 @@ CREATE INDEX IF NOT EXISTS idx_logs_entity ON activity_logs(entity_type,entity_i
 
 
     def preview_table(self, table_name, limit=100):
-        allowed = {
-            "platforms","users","components","component_platforms","tags","contracts","systems",
-            "system_components","deliveries","delivery_components","contract_tags","contract_file_folders","contract_files","activity_logs"
-        }
         t = str(table_name or "").strip()
-        if t not in allowed:
+        if t not in set(self.list_user_tables()):
             raise ValueError("Geçersiz tablo adı")
         lim = max(1, min(1000, int(limit or 100)))
+        quoted_table = quote_identifier(t)
         if t == "activity_logs":
             preferred = [
                 "id", "created_at", "actor", "source", "device_name", "action", "entity_type", "entity_id",
@@ -296,10 +310,10 @@ CREATE INDEX IF NOT EXISTS idx_logs_entity ON activity_logs(entity_type,entity_i
             existing = self._table_columns(t)
             selected = [column for column in preferred if column in existing]
             selected.extend(column for column in existing if column not in selected)
-            columns = ", ".join(selected) or "*"
-            rows = self.conn.execute(f"SELECT {columns} FROM {t} LIMIT ?", (lim,)).fetchall()
+            columns = ", ".join(quote_identifier(column) for column in selected) or "*"
+            rows = self.conn.execute(f"SELECT {columns} FROM {quoted_table} LIMIT ?", (lim,)).fetchall()
         else:
-            rows = self.conn.execute(f"SELECT * FROM {t} LIMIT ?", (lim,)).fetchall()
+            rows = self.conn.execute(f"SELECT * FROM {quoted_table} LIMIT ?", (lim,)).fetchall()
         return [dict(r) for r in rows]
 
 
