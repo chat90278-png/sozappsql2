@@ -705,6 +705,32 @@ class STSStore:
         target.write_bytes(content)
         return {"filename": filename, "mime_type": mime_type, "target_path": str(target), "size_bytes": len(content)}
 
+    def delete_contract_file_folder(self, folder_id):
+        row = self.db.conn.execute(
+            "SELECT id,contract_id,parent_id,name FROM contract_file_folders WHERE id=?",
+            (int(folder_id),),
+        ).fetchone()
+        if not row:
+            raise ValueError("Klasör bulunamadı.")
+        before = dict(row)
+        # Klasör altındaki dosya sayısını kontrol et (alt klasörler dahil, CASCADE siler)
+        file_count = self.db.conn.execute(
+            "SELECT COUNT(*) FROM contract_files WHERE folder_id IN "
+            "(WITH RECURSIVE sub(id) AS (SELECT ? UNION ALL SELECT f.id FROM contract_file_folders f JOIN sub ON f.parent_id=sub.id) SELECT id FROM sub)",
+            (int(folder_id),),
+        ).fetchone()[0]
+        with self.db.tx():
+            self.db.conn.execute("DELETE FROM contract_file_folders WHERE id=?", (int(folder_id),))
+        self._log(
+            "document_folder_deleted",
+            entity_type="document_folder",
+            entity_id=int(folder_id),
+            source="Document Manager",
+            message=f"Belge klasörü silindi ({file_count} dosya etkilendi)",
+            before={"name": before.get("name"), "parent_id": before.get("parent_id"), "file_count": file_count},
+        )
+        return True
+
     def delete_contract_file(self, file_id):
         before = self.db.conn.execute("SELECT id,contract_id,folder_id,filename,size_bytes,note FROM contract_files WHERE id=?", (int(file_id),)).fetchone()
         with self.db.tx():
