@@ -19,6 +19,15 @@ with TemporaryDirectory() as td:
     stats = s.database_stats()
     assert 'table_counts' in stats
     assert stats['table_counts'].get('contracts', 0) >= 1
+    assert 'staff' in stats['table_counts']
+    assert 'sqlite_sequence' not in stats['table_counts']
+    s.db.conn.execute('CREATE TABLE custom_management_table(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT)')
+    s.db.conn.execute("INSERT INTO custom_management_table(name) VALUES('visible')")
+    s.db.conn.commit()
+    refreshed_stats = s.database_stats()
+    assert refreshed_stats['table_counts'].get('custom_management_table') == 1
+    assert s.preview_table('staff') == []
+    assert s.preview_table('custom_management_table')[0]['name'] == 'visible'
     assert any(x.lower() == 'ok' for x in s.integrity_check())
     assert s.foreign_key_check() == []
     b = s.backup_database(bak)
