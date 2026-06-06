@@ -5301,8 +5301,22 @@ class ContractWorkWindow(QDialog):
     def _document_db_conn(self):
         return getattr(getattr(self.store, "db", None), "conn", None)
 
+    def _document_db_contract_id(self) -> int | None:
+        """Açık sözleşmenin DB contract_id'sini döner. STS dışında None."""
+        if not hasattr(self.store, "_resolve_contract_id"):
+            return None
+        ci = getattr(self, "ci", None)
+        if ci is None:
+            return None
+        return self.store._resolve_contract_id(
+            str(ci.platform or ""),
+            str(ci.no or ""),
+            str(ci.contract_type or "Ana Sözleşme"),
+        )
+
     def _default_document_lock_state(self) -> dict:
         return {
+            "contract_id": None,
             "is_locked": 0,
             "locked_by_staff_id": None,
             "locked_by_device_name": None,
@@ -5312,21 +5326,36 @@ class ContractWorkWindow(QDialog):
         }
 
     def _load_document_lock_state(self) -> dict:
-        conn = self._document_db_conn()
-        if conn is None:
-            self._document_lock_state = self._default_document_lock_state()
-            return dict(self._document_lock_state)
         try:
+            conn = self._document_db_conn()
+            if conn is None:
+                self._document_lock_state = self._default_document_lock_state()
+                return dict(self._document_lock_state)
+            if hasattr(self.store, "document_lock_state"):
+                ci = getattr(self, "ci", None)
+                if ci is not None:
+                    self._document_lock_state = self.store.document_lock_state(
+                        str(ci.platform or ""),
+                        str(ci.no or ""),
+                        str(ci.contract_type or "Ana Sözleşme"),
+                    )
+                    return dict(self._document_lock_state)
+            cid = self._document_db_contract_id()
+            if cid is None:
+                self._document_lock_state = self._default_document_lock_state()
+                return dict(self._document_lock_state)
             getter = getattr(auth, "get_document_lock_state", None)
             if not callable(getter):
-                raise AttributeError("src.auth.get_document_lock_state bulunamadı")
-            self._document_lock_state = getter(conn)
+                self._document_lock_state = self._default_document_lock_state()
+                return dict(self._document_lock_state)
+            self._document_lock_state = getter(conn, cid)
+            return dict(self._document_lock_state)
         except Exception:
             traceback.print_exc()
             # Belgeler paneli, lock state okunamadığında beyaz kalmasın;
             # güvenli varsayılan olarak kilit açık kabul edilir.
             self._document_lock_state = self._default_document_lock_state()
-        return dict(self._document_lock_state or self._default_document_lock_state())
+            return dict(self._document_lock_state)
 
     def _current_document_lock_state(self) -> dict:
         return dict(getattr(self, "_document_lock_state", {}) or self._load_document_lock_state())
@@ -5402,26 +5431,45 @@ class ContractWorkWindow(QDialog):
                 QMessageBox.warning(self, "Personel gerekli", "Belgeleri kilitlemek için personel girişi gereklidir.")
                 return
             if hasattr(self.store, "lock_documents"):
-                self._document_lock_state = self.store.lock_documents(self.current_staff)
+                ci = getattr(self, "ci", None)
+                self._document_lock_state = self.store.lock_documents(
+                    str(ci.platform or "") if ci else "",
+                    str(ci.no or "") if ci else "",
+                    self.current_staff,
+                    str(ci.contract_type or "Ana Sözleşme") if ci else "Ana Sözleşme",
+                )
             else:
                 lock_fn = getattr(auth, "lock_documents", None)
                 if not callable(lock_fn):
                     QMessageBox.warning(self, "Belgeler", "Belge kilidi fonksiyonu yüklenemedi. Lütfen uygulamayı güncel kodla yeniden başlatın.")
                     return
-                self._document_lock_state = lock_fn(conn, self.current_staff)
+                cid = self._document_db_contract_id()
+                if cid is None:
+                    QMessageBox.warning(self, "Belgeler", "Sözleşme ID'si bulunamadı.")
+                    return
+                self._document_lock_state = lock_fn(conn, cid, self.current_staff)
             self._animate_document_lock_button()
             self.render_contract_files()
             return
         if self._document_lock_same_device(state):
             actor = str((self.current_staff or {}).get("full_name") or "Personel")
             if hasattr(self.store, "unlock_documents"):
-                self._document_lock_state = self.store.unlock_documents(actor=actor)
+                ci = getattr(self, "ci", None)
+                self._document_lock_state = self.store.unlock_documents(
+                    str(ci.platform or "") if ci else "",
+                    str(ci.no or "") if ci else "",
+                    actor=actor,
+                    contract_type=str(ci.contract_type or "Ana Sözleşme") if ci else "Ana Sözleşme",
+                )
             else:
                 unlock_fn = getattr(auth, "unlock_documents", None)
                 if not callable(unlock_fn):
                     QMessageBox.warning(self, "Belgeler", "Belge kilidi açma fonksiyonu yüklenemedi. Lütfen uygulamayı güncel kodla yeniden başlatın.")
                     return
-                self._document_lock_state = unlock_fn(conn)
+                cid = self._document_db_contract_id()
+                if cid is None:
+                    return
+                self._document_lock_state = unlock_fn(conn, cid)
             self._animate_document_lock_button()
             self.render_contract_files()
             return

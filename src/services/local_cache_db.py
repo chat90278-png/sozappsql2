@@ -23,7 +23,7 @@ class LocalCacheDB:
     def _setup(self) -> None:
         self.conn.executescript(
             """
-            PRAGMA journal_mode=WAL;
+            PRAGMA journal_mode=DELETE;
             PRAGMA synchronous=NORMAL;
             PRAGMA temp_store=MEMORY;
 
