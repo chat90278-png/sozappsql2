@@ -9414,12 +9414,6 @@ if __name__ == "__main__":
     if icon_path.exists():
         app.setWindowIcon(QIcon(str(icon_path)))
 
-    # Startup uses modal dialogs before the main window exists.  Keep Qt from
-    # treating an accepted file/staff dialog as the last-window-close event;
-    # otherwise the first successful registration/login can request app quit
-    # before the real MainWindow event loop starts.
-    app.setQuitOnLastWindowClosed(False)
-
     start_dialog = WorkbookStartDialog()
     if not start_dialog.exec() or not start_dialog.selected_path:
         sys.exit(0)
@@ -9433,18 +9427,8 @@ if __name__ == "__main__":
 
     win = MainWindow(initial_path=selected_path, current_staff=staff)
     win.show()
-
-    def _start_initial_load():
-        app.setQuitOnLastWindowClosed(True)
-        try:
-            if selected_path.suffix.lower() == ".sts":
-                win.start_sts_load(selected_path)
-            else:
-                win.start_excel_load(selected_path)
-        except Exception as exc:
-            traceback.print_exc()
-            QMessageBox.critical(win, "Açılış hatası", f"Uygulama başlatılırken hata oluştu.\n\n{exc}")
-            app.quit()
-
-    QTimer.singleShot(0, _start_initial_load)
+    if selected_path.suffix.lower() == ".sts":
+        win.start_sts_load(selected_path)
+    else:
+        win.start_excel_load(selected_path)
     sys.exit(app.exec())
