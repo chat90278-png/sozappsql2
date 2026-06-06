@@ -45,7 +45,22 @@ class SystemInfo:
     completion_date: str = ""
     status: str = "Başlanmadı"
     acceptance_date: str = ""
-    component_notes: Dict[str, str] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        # Preserve the legacy positional constructor contract from before
+        # component_notes was inserted as a dataclass field.
+        if not isinstance(self.component_notes, dict):
+            t0_date = self.component_notes
+            t0_months = self.t0_date
+            completion_date = self.t0_months
+            status = self.completion_date
+            acceptance_date = self.status
+            self.component_notes = {}
+            self.t0_date = str(t0_date or "")
+            self.t0_months = int(t0_months or 0)
+            self.completion_date = str(completion_date or "")
+            self.status = str(status or "Başlanmadı")
+            self.acceptance_date = str(acceptance_date or "")
 
 
 @dataclass
