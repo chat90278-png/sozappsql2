@@ -336,3 +336,206 @@ def require_staff_login(db_or_path: sqlite3.Connection | str | Path, parent=None
     staff = show_staff_login_dialog(db_or_path, row, parent) if row else show_staff_register_dialog(db_or_path, device_name, parent)
     current_staff = staff
     return staff
+
+
+def ensure_document_locks_table(db_or_path: sqlite3.Connection | str | Path) -> None:
+    ensure_staff_table(db_or_path)
+    conn, should_close = _connection_from(db_or_path)
+    try:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS document_locks (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                is_locked INTEGER NOT NULL DEFAULT 0,
+                locked_by_staff_id INTEGER,
+                locked_by_device_name TEXT,
+                locked_by_full_name TEXT,
+                locked_at TEXT,
+                updated_at TEXT,
+                FOREIGN KEY(locked_by_staff_id) REFERENCES staff(id)
+            )
+            """
+        )
+        conn.commit()
+    finally:
+        if should_close:
+            conn.close()
+
+
+def get_document_lock_state(db_or_path: sqlite3.Connection | str | Path) -> dict[str, Any]:
+    ensure_document_locks_table(db_or_path)
+    conn, should_close = _connection_from(db_or_path)
+    try:
+        row = conn.execute(
+            """
+            SELECT id, is_locked, locked_by_staff_id, locked_by_device_name,
+                   locked_by_full_name, locked_at, updated_at
+            FROM document_locks
+            WHERE id=1
+            """
+        ).fetchone()
+        if not row:
+            return {
+                "id": 1,
+                "is_locked": 0,
+                "locked_by_staff_id": None,
+                "locked_by_device_name": None,
+                "locked_by_full_name": None,
+                "locked_at": None,
+                "updated_at": None,
+            }
+        return dict(row)
+    finally:
+        if should_close:
+            conn.close()
+
+
+def lock_documents(db_or_path: sqlite3.Connection | str | Path, staff: dict[str, Any]) -> dict[str, Any]:
+    ensure_document_locks_table(db_or_path)
+    conn, should_close = _connection_from(db_or_path)
+    try:
+        conn.execute(
+            """
+            INSERT INTO document_locks(
+                id, is_locked, locked_by_staff_id, locked_by_device_name,
+                locked_by_full_name, locked_at, updated_at
+            )
+            VALUES(1, 1, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            ON CONFLICT(id) DO UPDATE SET
+                is_locked=1,
+                locked_by_staff_id=excluded.locked_by_staff_id,
+                locked_by_device_name=excluded.locked_by_device_name,
+                locked_by_full_name=excluded.locked_by_full_name,
+                locked_at=CURRENT_TIMESTAMP,
+                updated_at=CURRENT_TIMESTAMP
+            """,
+            (
+                int(staff.get("id")) if staff and staff.get("id") is not None else None,
+                str((staff or {}).get("device_name") or ""),
+                str((staff or {}).get("full_name") or ""),
+            ),
+        )
+        conn.commit()
+        return get_document_lock_state(conn)
+    finally:
+        if should_close:
+            conn.close()
+
+
+def unlock_documents(db_or_path: sqlite3.Connection | str | Path) -> dict[str, Any]:
+    ensure_document_locks_table(db_or_path)
+    conn, should_close = _connection_from(db_or_path)
+    try:
+        conn.execute(
+            """
+            INSERT INTO document_locks(id, is_locked, updated_at)
+            VALUES(1, 0, CURRENT_TIMESTAMP)
+            ON CONFLICT(id) DO UPDATE SET
+                is_locked=0,
+                locked_by_staff_id=NULL,
+                locked_by_device_name=NULL,
+                locked_by_full_name=NULL,
+                locked_at=NULL,
+                updated_at=CURRENT_TIMESTAMP
+            """
+        )
+        conn.commit()
+        return get_document_lock_state(conn)
+    finally:
+        if should_close:
+            conn.close()
+
+
+def can_current_staff_access_documents(lock_state: Optional[dict[str, Any]], staff: Optional[dict[str, Any]]) -> bool:
+    state = lock_state or {}
+    if int(state.get("is_locked") or 0) == 0:
+        return True
+    if not staff:
+        return False
+    return str(staff.get("device_name") or "") == str(state.get("locked_by_device_name") or "")
+
+
+def get_staff_by_id(db_or_path: sqlite3.Connection | str | Path, staff_id: int):
+    ensure_staff_table(db_or_path)
+    conn, should_close = _connection_from(db_or_path)
+    try:
+        return conn.execute(
+            "SELECT id, device_name, full_name, password_hash, role, is_active FROM staff WHERE id=?",
+            (int(staff_id),),
+        ).fetchone()
+    finally:
+        if should_close:
+            conn.close()
+
+
+def verify_staff_password_by_id(db_or_path: sqlite3.Connection | str | Path, staff_id: int, password: str) -> bool:
+    row = get_staff_by_id(db_or_path, int(staff_id))
+    if not row or int(row["is_active"] if row["is_active"] is not None else 1) == 0:
+        return False
+    return verify_password(password, str(row["password_hash"] or ""))
+
+
+def require_document_unlock_password(parent, db_or_path: sqlite3.Connection | str | Path, lock_state: dict[str, Any]) -> bool:
+    from PySide6.QtWidgets import QDialog, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton, QVBoxLayout
+
+    staff_id = lock_state.get("locked_by_staff_id")
+    if staff_id is None:
+        QMessageBox.warning(parent, "Belgeler Kilitli", "Kilidi açacak personel kaydı bulunamadı veya pasif durumda.")
+        return False
+    row = get_staff_by_id(db_or_path, int(staff_id))
+    if not row or int(row["is_active"] if row["is_active"] is not None else 1) == 0:
+        QMessageBox.warning(parent, "Belgeler Kilitli", "Kilidi açacak personel kaydı bulunamadı veya pasif durumda.")
+        return False
+
+    full_name = str(lock_state.get("locked_by_full_name") or row["full_name"] or "Personel")
+    dlg = QDialog(parent)
+    dlg.setWindowTitle("Belgeler Kilitli")
+    dlg.setModal(True)
+    dlg.setFixedWidth(440)
+    try:
+        from src.ui.theme import STYLE
+        dlg.setStyleSheet(STYLE)
+    except Exception:
+        pass
+    layout = QVBoxLayout(dlg)
+    layout.setContentsMargins(22, 22, 22, 22)
+    layout.setSpacing(12)
+    title = QLabel("Belgeler Kilitli")
+    title.setObjectName("mainTitle")
+    layout.addWidget(title)
+    desc = QLabel(f"Bu belgeler {full_name} tarafından kilitlendi. Açmak için kilitleyen personelin şifresini girin.")
+    desc.setWordWrap(True)
+    desc.setObjectName("muted")
+    layout.addWidget(desc)
+    password_edit = QLineEdit()
+    password_edit.setEchoMode(QLineEdit.Password)
+    password_edit.setPlaceholderText("Personel Şifresi")
+    layout.addWidget(password_edit)
+    row_layout = QHBoxLayout()
+    row_layout.addStretch(1)
+    cancel = QPushButton("Vazgeç")
+    ok = QPushButton("Kilidi Aç")
+    ok.setDefault(True)
+    row_layout.addWidget(cancel)
+    row_layout.addWidget(ok)
+    layout.addLayout(row_layout)
+
+    def submit():
+        password = password_edit.text()
+        if not password:
+            QMessageBox.warning(dlg, "Eksik bilgi", "Personel Şifresi boş bırakılamaz.")
+            password_edit.setFocus()
+            return
+        valid = verify_staff_password_by_id(db_or_path, int(staff_id), password)
+        if not valid:
+            QMessageBox.warning(dlg, "Şifre hatalı", "Şifre hatalı.")
+            password_edit.setFocus()
+            password_edit.selectAll()
+            return
+        unlock_documents(db_or_path)
+        dlg.accept()
+
+    cancel.clicked.connect(dlg.reject)
+    ok.clicked.connect(submit)
+    password_edit.returnPressed.connect(submit)
+    return dlg.exec() == QDialog.Accepted
