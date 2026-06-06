@@ -443,6 +443,110 @@ COL_TAGS = 7
 COL_SUMMARY = 8
 
 
+class PlatformListDelegate(QStyledItemDelegate):
+    """Platform listesi: renkli kısaltma kutusu + isim + sayı."""
+
+    _PALETTES = [
+        ("#dbeafe", "#1e40af"),
+        ("#fce7f3", "#9d174d"),
+        ("#d1fae5", "#065f46"),
+        ("#fef3c7", "#92400e"),
+        ("#ede9fe", "#5b21b6"),
+        ("#fee2e2", "#991b1b"),
+        ("#e0f2fe", "#075985"),
+        ("#fef9c3", "#713f12"),
+    ]
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._counts: dict = {}   # row -> count string
+
+    def set_count(self, row: int, count: int):
+        self._counts[row] = str(count) if count else ""
+
+    def paint(self, painter, option, index):
+        from PySide6.QtGui import QColor
+        from PySide6.QtCore import QRect
+        from PySide6.QtWidgets import QStyle
+
+        painter.save()
+
+        # PySide6: option.state is StateFlag enum — use QStyle.StateFlag members
+        state = option.state
+        is_selected = bool(state & QStyle.State_Selected)
+        is_hover    = bool(state & QStyle.State_MouseOver)
+
+        # Arka plan
+        if is_selected:
+            painter.fillRect(option.rect, QColor("#eff6ff"))
+            # Sol mavi çizgi
+            painter.fillRect(
+                QRect(option.rect.left(), option.rect.top(), 3, option.rect.height()),
+                QColor("#2563eb")
+            )
+        elif is_hover:
+            painter.fillRect(option.rect, QColor("#f0f7ff"))
+        else:
+            painter.fillRect(option.rect, QColor("#ffffff"))
+
+        row = index.row()
+        pal_bg, pal_fg = self._PALETTES[row % len(self._PALETTES)]
+
+        # UserRole'den platform adını al (text'te sayaç olabilir)
+        platform_name = str(index.data(Qt.UserRole) or index.data(Qt.DisplayRole) or "").strip()
+        abbr = platform_name[:3].upper() if platform_name else "?"
+
+        rect = option.rect
+        abbr_rect = QRect(
+            rect.left() + 10,
+            rect.top() + (rect.height() - 26) // 2,
+            34, 26
+        )
+
+        # Kısaltma kutusu
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor(pal_bg))
+        painter.drawRoundedRect(abbr_rect, 5, 5)
+
+        af = painter.font()
+        af.setPointSize(8)
+        af.setBold(True)
+        painter.setFont(af)
+        painter.setPen(QColor(pal_fg))
+        painter.drawText(abbr_rect, Qt.AlignCenter, abbr)
+
+        # Platform adı
+        name_x = abbr_rect.right() + 10
+        count_str = self._counts.get(row, "")
+        count_w = 30 if count_str else 0
+        name_rect = QRect(name_x, rect.top(), rect.width() - name_x - count_w - 8, rect.height())
+
+        nf = painter.font()
+        nf.setPointSize(10)
+        nf.setBold(is_selected)
+        painter.setFont(nf)
+        painter.setPen(QColor("#1e40af") if is_selected else QColor("#374151"))
+        painter.drawText(name_rect, Qt.AlignVCenter | Qt.AlignLeft, platform_name)
+
+        # Sağda sözleşme sayısı
+        if count_str:
+            cnt_rect = QRect(rect.right() - count_w - 6, rect.top(), count_w, rect.height())
+            cf = painter.font()
+            cf.setPointSize(9)
+            cf.setBold(False)
+            painter.setFont(cf)
+            painter.setPen(QColor("#94a3b8"))
+            painter.drawText(cnt_rect, Qt.AlignVCenter | Qt.AlignRight, count_str)
+
+        painter.restore()
+
+    def sizeHint(self, option, index):
+        from PySide6.QtCore import QSize
+        return QSize(option.rect.width() if option.rect.width() > 0 else 200, 46)
+
+
+
+
 class FilterableHeaderView(QHeaderView):
     """Excel gibi sutun filtresi destekleyen header.
     Her sutun basliginda kucuk bir filtre ikonu gosterir.
@@ -1559,6 +1663,265 @@ class ComponentManagerDialog(StyledDialog):
 
 from src.ui.dialogs.platforms import PlatformManagerDialog, PlatformDialog
 
+
+class _PlatformRowWidget(QWidget):
+    """Platform dropdown satırı: renkli kısaltma + isim."""
+
+    clicked = Signal(str)
+
+    _PALETTES = [
+        ("#e8f0fe", "#1e40af"),
+        ("#fce7f3", "#9d174d"),
+        ("#ecfdf5", "#065f46"),
+        ("#fef3c7", "#92400e"),
+        ("#ede9fe", "#5b21b6"),
+        ("#fee2e2", "#991b1b"),
+        ("#d1fae5", "#065f46"),
+        ("#e0f2fe", "#075985"),
+    ]
+
+    def __init__(self, name: str, index: int, selected: bool = False, parent=None):
+        super().__init__(parent)
+        self._name = name
+        self._selected = selected
+        bg, fg = self._PALETTES[index % len(self._PALETTES)]
+        self._bg, self._fg = bg, fg
+        self.setCursor(Qt.PointingHandCursor)
+        self.setFixedHeight(40)
+
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(10, 0, 12, 0)
+        lay.setSpacing(10)
+
+        abbr = QLabel(name[:3].upper())
+        abbr.setFixedSize(30, 26)
+        abbr.setAlignment(Qt.AlignCenter)
+        abbr.setStyleSheet(
+            f"background:{bg};color:{fg};border-radius:5px;"
+            "font-size:9px;font-weight:800;letter-spacing:0.5px;"
+        )
+        lay.addWidget(abbr)
+
+        lbl = QLabel(name)
+        lbl.setStyleSheet("font-size:13px;color:#0f172a;background:transparent;")
+        lay.addWidget(lbl, 1)
+
+        if selected:
+            tick = QLabel("✓")
+            tick.setStyleSheet("color:#2563eb;font-size:13px;font-weight:700;background:transparent;")
+            lay.addWidget(tick)
+
+        self._update_bg()
+
+    def _update_bg(self):
+        if self._selected:
+            self.setStyleSheet("QWidget{background:#f0f7ff;}QWidget:hover{background:#e8f3ff;}")
+        else:
+            self.setStyleSheet("QWidget{background:white;}QWidget:hover{background:#f8fafc;}")
+
+    def mousePressEvent(self, event):
+        self.clicked.emit(self._name)
+
+
+class PlatformSelectWidget(QWidget):
+    """
+    Tek seçimli platform dropdown.
+    platform_names listesinden seçim yapar, renkli kısaltma + isim gösterir.
+
+    Public API:
+        set_platforms(names: List[str])
+        set_current(name: str)
+        current_text() -> str
+        currentTextChanged Signal(str)
+    """
+
+    currentTextChanged = Signal(str)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._platforms: List[str] = []
+        self._current: str = ""
+        self._dropdown: Optional[QFrame] = None
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+
+        self._display = QFrame()
+        self._display.setObjectName("platformSelectDisplay")
+        self._display.setCursor(Qt.PointingHandCursor)
+        self._display.setMinimumHeight(34)
+        self._display.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
+        self._display.setStyleSheet(
+            "QFrame#platformSelectDisplay{"
+            "background:white;border:1.5px solid #d8e2ed;border-radius:6px;"
+            "}"
+            "QFrame#platformSelectDisplay:hover{border-color:#93c5fd;}"
+        )
+        dl = QHBoxLayout(self._display)
+        dl.setContentsMargins(8, 4, 8, 4)
+        dl.setSpacing(8)
+
+        self._abbr_lbl = QLabel("")
+        self._abbr_lbl.setFixedSize(30, 24)
+        self._abbr_lbl.setAlignment(Qt.AlignCenter)
+        self._abbr_lbl.setStyleSheet(
+            "background:#e8f0fe;color:#1e40af;border-radius:4px;"
+            "font-size:9px;font-weight:800;letter-spacing:0.5px;"
+        )
+        self._abbr_lbl.hide()
+        dl.addWidget(self._abbr_lbl)
+
+        self._name_lbl = QLabel("Platform seçiniz...")
+        self._name_lbl.setStyleSheet("font-size:13px;color:#94a3b8;background:transparent;")
+        dl.addWidget(self._name_lbl, 1)
+
+        self._chev = QLabel("▾")
+        self._chev.setStyleSheet("color:#94a3b8;font-size:13px;background:transparent;")
+        dl.addWidget(self._chev)
+
+        lay.addWidget(self._display)
+        self._display.mousePressEvent = self._toggle_dropdown
+
+        # currentIndex ve currentText compat shims for QComboBox drop-in replacement
+        self._current_index: int = -1
+
+    # ── QComboBox compat ────────────────────────────────────────────────
+
+    def addItems(self, names):
+        self.set_platforms(list(names))
+
+    def addItem(self, name):
+        self._platforms.append(str(name))
+        self._rebuild_dropdown()
+
+    def currentText(self) -> str:
+        return self._current
+
+    def currentIndex(self) -> int:
+        try:
+            return self._platforms.index(self._current)
+        except ValueError:
+            return -1
+
+    def setCurrentIndex(self, idx: int):
+        if 0 <= idx < len(self._platforms):
+            self._set_current(self._platforms[idx])
+
+    def setCurrentText(self, text: str):
+        self._set_current(str(text or ""))
+
+    # currentIndexChanged shim — bağlamalar için
+    @property
+    def currentIndexChanged(self):
+        return self.currentTextChanged
+
+    # ── Public API ──────────────────────────────────────────────────────
+
+    def set_platforms(self, names: List[str]):
+        self._platforms = [str(n) for n in names if n]
+        if self._current not in self._platforms:
+            self._current = self._platforms[0] if self._platforms else ""
+        self._update_display()
+
+    def set_current(self, name: str):
+        self._set_current(str(name or ""))
+
+    # ── İç metodlar ────────────────────────────────────────────────────
+
+    _PALETTES = [
+        ("#e8f0fe", "#1e40af"),
+        ("#fce7f3", "#9d174d"),
+        ("#ecfdf5", "#065f46"),
+        ("#fef3c7", "#92400e"),
+        ("#ede9fe", "#5b21b6"),
+        ("#fee2e2", "#991b1b"),
+        ("#d1fae5", "#065f46"),
+        ("#e0f2fe", "#075985"),
+    ]
+
+    def _palette(self, name: str):
+        idx = self._platforms.index(name) if name in self._platforms else 0
+        return self._PALETTES[idx % len(self._PALETTES)]
+
+    def _set_current(self, name: str):
+        if name == self._current:
+            return
+        self._current = name
+        self._update_display()
+        self.currentTextChanged.emit(name)
+
+    def _update_display(self):
+        if self._current and self._current in self._platforms:
+            bg, fg = self._palette(self._current)
+            self._abbr_lbl.setText(self._current[:3].upper())
+            self._abbr_lbl.setStyleSheet(
+                f"background:{bg};color:{fg};border-radius:4px;"
+                "font-size:9px;font-weight:800;letter-spacing:0.5px;"
+            )
+            self._abbr_lbl.show()
+            self._name_lbl.setText(self._current)
+            self._name_lbl.setStyleSheet(
+                "font-size:13px;color:#0f172a;background:transparent;"
+            )
+        else:
+            self._abbr_lbl.hide()
+            self._name_lbl.setText("Platform seçiniz...")
+            self._name_lbl.setStyleSheet(
+                "font-size:13px;color:#94a3b8;background:transparent;"
+            )
+
+    def _toggle_dropdown(self, event=None):
+        if self._dropdown and self._dropdown.isVisible():
+            self._dropdown.hide()
+            return
+        self._open_dropdown()
+
+    def _open_dropdown(self):
+        if self._dropdown is None:
+            self._dropdown = QFrame(None)
+            self._dropdown.setObjectName("platformDropdown")
+            self._dropdown.setStyleSheet(
+                "QFrame#platformDropdown{"
+                "background:white;border:1.5px solid #e2e8f0;border-radius:10px;"
+                "}"
+            )
+            self._dropdown.setWindowFlags(Qt.Popup | Qt.FramelessWindowHint)
+
+        # Mevcut satırları temizle
+        if self._dropdown.layout():
+            while self._dropdown.layout().count():
+                item = self._dropdown.layout().takeAt(0)
+                if item.widget():
+                    item.widget().deleteLater()
+            QFrame().setLayout(self._dropdown.layout())
+
+        root = QVBoxLayout(self._dropdown)
+        root.setContentsMargins(0, 4, 0, 4)
+        root.setSpacing(0)
+
+        for i, name in enumerate(self._platforms):
+            row = _PlatformRowWidget(name, i, name == self._current)
+            row.clicked.connect(self._on_platform_clicked)
+            root.addWidget(row)
+
+        self._dropdown.setFixedWidth(max(self.width(), 200))
+        self._dropdown.adjustSize()
+
+        pos = self.mapToGlobal(self._display.rect().bottomLeft())
+        self._dropdown.move(pos.x(), pos.y() + 2)
+        self._dropdown.show()
+        self._dropdown.raise_()
+
+    def _on_platform_clicked(self, name: str):
+        self._dropdown.hide()
+        self._set_current(name)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if self._dropdown and self._dropdown.isVisible():
+            self._dropdown.setFixedWidth(max(self.width(), 200))
+
 class _UserRowWidget(QWidget):
     """Dropdown içindeki tek kullanıcı satırı: avatar + isim + checkbox."""
 
@@ -1798,13 +2161,13 @@ class _MultiUserDropdown(QFrame):
 
 class MultiUserSelectWidget(QWidget):
     """
-    Kullanıcı seçim widget'ı.
+    Kullanıcı seçim widget'ı — pill + flow wrap + avatar dropdown.
 
     Public API (değişmez):
-        set_available_users(names)  — kullanılabilir kullanıcıları set eder
-        set_users(names)            — seçili kullanıcıları set eder
+        set_available_users(names: List[str])
+        set_users(names: List[str])
         selected_users() -> List[str]
-        changed Signal
+        changed  Signal
     """
 
     changed = Signal()
@@ -1825,42 +2188,26 @@ class MultiUserSelectWidget(QWidget):
         self._selected: List[str] = []
         self._dropdown: Optional[_MultiUserDropdown] = None
 
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(0)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
 
-        # Tıklanabilir ana kutu
         self._display = QFrame()
         self._display.setObjectName("multiUserDisplay")
         self._display.setCursor(Qt.PointingHandCursor)
         self._display.setMinimumHeight(36)
+        self._display.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
         self._display.setStyleSheet(
             "QFrame#multiUserDisplay{"
-            "background:white;border:1.5px solid #d8e2ed;"
-            "border-radius:8px;padding:4px 8px;"
+            "background:white;border:1.5px solid #d8e2ed;border-radius:8px;"
             "}"
-            "QFrame#multiUserDisplay:hover{"
-            "border-color:#93c5fd;"
-            "}"
+            "QFrame#multiUserDisplay:hover{border-color:#93c5fd;}"
         )
-        self._display_lay = QHBoxLayout(self._display)
-        self._display_lay.setContentsMargins(4, 3, 6, 3)
-        self._display_lay.setSpacing(4)
+        self._vlay = QVBoxLayout(self._display)
+        self._vlay.setContentsMargins(8, 5, 8, 5)
+        self._vlay.setSpacing(4)
 
-        self._placeholder = QLabel("Kullanıcı seçiniz...")
-        self._placeholder.setStyleSheet(
-            "color:#94a3b8;font-size:13px;background:transparent;"
-        )
-        self._display_lay.addWidget(self._placeholder)
-        self._display_lay.addStretch()
-
-        self._chevron = QLabel("▾")
-        self._chevron.setStyleSheet(
-            "color:#94a3b8;font-size:13px;background:transparent;"
-        )
-        self._display_lay.addWidget(self._chevron)
-
-        lay.addWidget(self._display)
+        outer.addWidget(self._display)
         self._display.mousePressEvent = self._toggle_dropdown
         self._render_pills()
 
@@ -1907,49 +2254,102 @@ class MultiUserSelectWidget(QWidget):
         idx = sum(ord(c) for c in name) % len(self._PILL_COLORS)
         return self._PILL_COLORS[idx]
 
+    def _make_pill(self, name: str) -> QWidget:
+        bg, fg = self._pill_colors(name)
+        pill = QWidget()
+        pill.setStyleSheet(f"QWidget{{background:{bg};border-radius:10px;border:none;}}")
+        pl = QHBoxLayout(pill)
+        pl.setContentsMargins(9, 3, 7, 3)
+        pl.setSpacing(4)
+        lbl = QLabel(name)
+        lbl.setStyleSheet(
+            f"color:{fg};font-size:12px;font-weight:700;background:transparent;border:none;"
+        )
+        pl.addWidget(lbl)
+        x = QLabel("×")
+        x.setStyleSheet(
+            f"color:{fg};font-size:14px;background:transparent;border:none;padding:0 2px;"
+        )
+        x.setCursor(Qt.PointingHandCursor)
+        x.mousePressEvent = lambda e, n=name: self._remove_user(e, n)
+        pl.addWidget(x)
+        return pill
+
+    @staticmethod
+    def _est_pill_w(name: str) -> int:
+        WIDE, NARROW = set("mwMW"), set("iltfrjıİiI.,;: ")
+        w = sum(12 if c in WIDE else 4 if c == " " else 6 if c in NARROW else 8 for c in name)
+        return w + 44
+
+    def _clear_rows(self):
+        """_vlay içindeki tüm satır widget'larını sil (her seferinde yeni QLabel yaratılıyor)."""
+        while self._vlay.count():
+            item = self._vlay.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+
     def _render_pills(self):
-        # Display içini temizle
-        while self._display_lay.count():
-            item = self._display_lay.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
+        """Her çağrıda tüm satırları sıfırdan yeni widget'larla yeniden çizer.
+        _placeholder / _chevron artık kalıcı widget değil — her seferinde yeni QLabel."""
+        self._clear_rows()
 
         if not self._selected:
-            self._display_lay.addWidget(self._placeholder)
-            self._placeholder.show()
+            row = QWidget()
+            row.setStyleSheet("background:transparent;border:none;")
+            rl = QHBoxLayout(row)
+            rl.setContentsMargins(0, 0, 0, 0)
+            rl.setSpacing(4)
+            ph = QLabel("Kullanıcı seçiniz...")
+            ph.setStyleSheet(
+                "color:#94a3b8;font-size:13px;background:transparent;border:none;"
+            )
+            rl.addWidget(ph)
+            rl.addStretch()
+            ch = QLabel("▾")
+            ch.setStyleSheet(
+                "color:#94a3b8;font-size:13px;background:transparent;border:none;"
+            )
+            rl.addWidget(ch)
+            self._vlay.addWidget(row)
         else:
-            self._placeholder.hide()
-            for name in self._selected:
-                bg, fg = self._pill_colors(name)
-                pill = QWidget()
-                pill.setStyleSheet(
-                    f"background:{bg};border-radius:10px;"
-                )
-                pill_lay = QHBoxLayout(pill)
-                pill_lay.setContentsMargins(7, 2, 5, 2)
-                pill_lay.setSpacing(3)
-                lbl = QLabel(name)
-                lbl.setStyleSheet(
-                    f"color:{fg};font-size:11px;font-weight:700;"
-                    "background:transparent;"
-                )
-                pill_lay.addWidget(lbl)
-                x_btn = QLabel("×")
-                x_btn.setStyleSheet(
-                    f"color:{fg};font-size:13px;background:transparent;"
-                    "padding:0 1px;"
-                )
-                x_btn.setCursor(Qt.PointingHandCursor)
-                _name = name
-                x_btn.mousePressEvent = lambda e, n=_name: self._remove_user(e, n)
-                pill_lay.addWidget(x_btn)
-                self._display_lay.addWidget(pill)
+            dw = self._display.width()
+            avail = max(dw - 56, 150) if dw > 20 else 280
+            GAP = 5
 
-        self._display_lay.addStretch()
-        self._display_lay.addWidget(self._chevron)
-        self._chevron.show()
-        tooltip = ", ".join(self._selected)
-        self._display.setToolTip(tooltip)
+            all_rows: List[List[str]] = []
+            cur_row: List[str] = []
+            cur_w = 0
+            for name in self._selected:
+                pw = self._est_pill_w(name)
+                if cur_row and cur_w + GAP + pw > avail:
+                    all_rows.append(cur_row)
+                    cur_row = [name]
+                    cur_w = pw
+                else:
+                    cur_row.append(name)
+                    cur_w += (GAP if len(cur_row) > 1 else 0) + pw
+            if cur_row:
+                all_rows.append(cur_row)
+
+            for ri, row_names in enumerate(all_rows):
+                row = QWidget()
+                row.setStyleSheet("background:transparent;border:none;")
+                rl = QHBoxLayout(row)
+                rl.setContentsMargins(0, 0, 0, 0)
+                rl.setSpacing(GAP)
+                for nm in row_names:
+                    rl.addWidget(self._make_pill(nm))
+                rl.addStretch()
+                if ri == len(all_rows) - 1:
+                    ch = QLabel("▾")
+                    ch.setStyleSheet(
+                        "color:#94a3b8;font-size:13px;background:transparent;border:none;"
+                    )
+                    rl.addWidget(ch)
+                self._vlay.addWidget(row)
+
+        self._display.setToolTip(", ".join(self._selected))
 
     def _remove_user(self, event, name: str):
         event.accept()
@@ -1971,8 +2371,6 @@ class MultiUserSelectWidget(QWidget):
 
         self._dropdown.setFixedWidth(max(self.width(), 240))
         self._dropdown.populate(self._available, self._selected)
-
-        # Konumlandır — widget'ın hemen altına
         pos = self.mapToGlobal(self._display.rect().bottomLeft())
         self._dropdown.move(pos.x(), pos.y() + 2)
         self._dropdown.show()
@@ -1985,8 +2383,10 @@ class MultiUserSelectWidget(QWidget):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
+        self._render_pills()
         if self._dropdown:
             self._dropdown.setFixedWidth(max(self.width(), 240))
+
 
 class ContractDialog(StyledDialog):
     def __init__(self, store: ExcelStore, parent=None):
@@ -2037,7 +2437,7 @@ class ContractDialog(StyledDialog):
         no_container_lay.addWidget(no_row)
         no_container_lay.addWidget(self.no_dup_warn)
 
-        self.platform = QComboBox(); self.platform.addItems(self.store.platform_names())
+        self.platform = PlatformSelectWidget(self); self.platform.set_platforms(self.store.platform_names())
         self.user = MultiUserSelectWidget(self)
         self.user.set_available_users([u.get("name", "") for u in self.user_records])
         if self.user_records:
@@ -4917,8 +5317,16 @@ class ContractWorkWindow(QDialog):
                 h.addSpacing(4)
 
         h.addStretch()
-        e = QPushButton("✎ Ana Bilgileri Düzenle"); e.setObjectName("headerEditBtn")
+        e = QPushButton("  Ana Bilgileri Düzenle"); e.setObjectName("headerEditBtn")
         e.setFixedHeight(36)
+        _svg = b"""<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' width='15' height='15'>
+          <path d='M11.5 1.5a1.5 1.5 0 0 1 2.12 2.12l-9 9a1 1 0 0 1-.4.24l-3 1a.5.5 0 0 1-.63-.63l1-3a1 1 0 0 1 .24-.4z'
+                fill='none' stroke='#d8eaff' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/>
+        </svg>"""
+        _pix = QPixmap()
+        _pix.loadFromData(_svg, "SVG")
+        e.setIcon(QIcon(_pix))
+        e.setIconSize(QSize(15, 15))
         e.clicked.connect(self.edit_contract_info)
         h.addWidget(e)
         h.addSpacing(8)
@@ -7903,13 +8311,7 @@ class ContractWorkWindow(QDialog):
             if self._documents_changed:
                 self._finish_persisted_side_meta_only_save()
                 return
-            QMessageBox.information(
-                self,
-                "Değişiklik Yok",
-                "Herhangi bir değişiklik uygulamadınız.\n\n"
-                "Excel'de herhangi bir değişiklik uygulanmayacak,\n"
-                "versiyon ayrımı yapılmayacaktır.",
-            )
+            self.accept()
             return
 
         if self._save_context_family():
@@ -7933,13 +8335,7 @@ class ContractWorkWindow(QDialog):
                 if self._documents_changed:
                     self._finish_persisted_side_meta_only_save()
                     return
-                QMessageBox.information(
-                    self,
-                    "Değişiklik Yok",
-                    "Herhangi bir değişiklik uygulamadınız.\n\n"
-                    "Excel'de herhangi bir değişiklik uygulanmayacak,\n"
-                    "versiyon ayrımı yapılmayacaktır.",
-                )
+                self.accept()
                 return
         # ───────────────────────────────────────────────────────────────────
         old_key = (
@@ -8166,11 +8562,16 @@ class MainWindow(QMainWindow):
         main.setSpacing(8)
 
         top=QFrame(); top.setObjectName("topbar"); tl=QHBoxLayout(top); tl.setContentsMargins(12, 8, 12, 8); tl.setSpacing(10)
-        logo_path = app_icon_path()
-        if logo_path.exists():
+        # Logo: önce SVG, yoksa ico dene
+        _svg_logo = Path(__file__).parent / "src" / "ui" / "assets" / "sts_logo.svg"
+        _ico_logo = app_icon_path()
+        _logo_src = _svg_logo if _svg_logo.exists() else (_ico_logo if _ico_logo.exists() else None)
+        if _logo_src:
             logo = QLabel(); logo.setObjectName("appLogo")
-            logo.setPixmap(QPixmap(str(logo_path)).scaled(46, 46, Qt.KeepAspectRatio, Qt.SmoothTransformation))
-            logo.setFixedSize(52, 52)
+            _pix = QPixmap(str(_logo_src))
+            if not _pix.isNull():
+                logo.setPixmap(_pix.scaled(40, 40, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            logo.setFixedSize(48, 48)
             logo.setAlignment(Qt.AlignCenter)
             tl.addWidget(logo)
         title=QLabel(APP_TITLE); title.setObjectName("appTitle"); tl.addWidget(title)
@@ -8253,10 +8654,12 @@ class MainWindow(QMainWindow):
         self.platform_selection_badge.setStyleSheet("QLabel{background:#dbeafe;color:#1d4ed8;border-radius:9px;padding:2px 7px;font-size:11px;font-weight:800;}")
         self.platform_selection_badge.hide(); ph.addWidget(self.platform_selection_badge)
         lv.addWidget(platform_head)
-        self.platform_list=QListWidget(); self.platform_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.platform_list=QListWidget(); self.platform_list.setObjectName("mainPlatformList"); self.platform_list.setContextMenuPolicy(Qt.CustomContextMenu)
         self.platform_list.itemClicked.connect(self.on_platform_clicked)
         self.platform_list.itemChanged.connect(self._on_platform_item_changed)
         self.platform_list.customContextMenuRequested.connect(self._on_platform_context_menu_requested)
+        self._platform_list_delegate = PlatformListDelegate(self.platform_list)
+        self.platform_list.setItemDelegate(self._platform_list_delegate)
         lv.addWidget(self.platform_list,1)
         self.platform_info_bar = QFrame(); self.platform_info_bar.setObjectName("platformInfoBar")
         self.platform_info_bar.setStyleSheet("QFrame#platformInfoBar{background:#f8fbff;border-top:1px solid #dbe7f5;} QLabel{color:#64748b;font-size:11px;} QPushButton{background:transparent;border:0;color:#1d4ed8;font-size:11px;font-weight:800;padding:2px 4px;}")
@@ -8264,7 +8667,7 @@ class MainWindow(QMainWindow):
         self.platform_info_label = QLabel(""); pi.addWidget(self.platform_info_label); pi.addStretch(1)
         clear_platforms = QPushButton("temizle"); clear_platforms.clicked.connect(self.clear_platform_selection); pi.addWidget(clear_platforms)
         self.platform_info_bar.hide(); lv.addWidget(self.platform_info_bar)
-        new=QPushButton("+ Yeni Sözleşme"); new.clicked.connect(self.new_contract); new.setMinimumHeight(46); lv.addWidget(new)
+        new=QPushButton("+ Yeni Sözleşme"); new.setObjectName("newContractBtn"); new.clicked.connect(self.new_contract); new.setMinimumHeight(46); lv.addWidget(new)
         body.addWidget(left, 0)
 
         right=QFrame(); right.setObjectName("panel"); rv=QVBoxLayout(right); rv.setContentsMargins(12, 10, 12, 10); rv.setSpacing(8)
@@ -8726,12 +9129,14 @@ class MainWindow(QMainWindow):
             for it in self.contract_index:
                 p = str(it.get("platform", ""))
                 counts[p] = counts.get(p, 0) + 1
-            for p in platforms:
+            for i, p in enumerate(platforms):
                 platform = str(p)
-                row = QListWidgetItem(f"{platform}   ({counts.get(platform, 0)})")
+                row = QListWidgetItem(platform)
                 row.setData(Qt.UserRole, platform)
-                row.setSizeHint(QSize(0, 54))
+                row.setSizeHint(QSize(0, 46))
                 self.platform_list.addItem(row)
+                if hasattr(self, "_platform_list_delegate"):
+                    self._platform_list_delegate.set_count(i, counts.get(platform, 0))
         finally:
             self._updating_platform_list = False
         self.refresh_platform_list_ui()
