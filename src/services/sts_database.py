@@ -7,6 +7,8 @@ from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
+from src.auth import ensure_staff_table
+
 
 def now_iso() -> str:
     """Return sortable local computer time for persisted audit timestamps."""
@@ -144,6 +146,7 @@ CREATE INDEX IF NOT EXISTS idx_logs_entity ON activity_logs(entity_type,entity_i
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_contract_file_folders_contract_id ON contract_file_folders(contract_id)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_contract_file_folders_parent_id ON contract_file_folders(parent_id)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_contract_files_folder_id ON contract_files(folder_id)")
+        ensure_staff_table(self.conn)
         self.conn.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version','3')")
         self.conn.commit()
         return migrated
