@@ -56,7 +56,7 @@ class STSDatabase:
         self.conn = sqlite3.connect(str(self.path))
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA foreign_keys=ON")
-        self.conn.execute("PRAGMA journal_mode=WAL")
+        self.conn.execute("PRAGMA journal_mode=DELETE")
         self.conn.execute("PRAGMA synchronous=NORMAL")
         self.conn.execute("PRAGMA cache_size=-64000")
         migrated = self.init_schema()
@@ -291,6 +291,7 @@ CREATE INDEX IF NOT EXISTS idx_logs_entity ON activity_logs(entity_type,entity_i
         dest = sqlite3.connect(str(target_path))
         try:
             self.conn.backup(dest)
+            dest.execute("PRAGMA journal_mode=DELETE")
             dest.commit()
         finally:
             dest.close()

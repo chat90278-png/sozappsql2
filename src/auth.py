@@ -37,6 +37,7 @@ def _connection_from(db_or_path: sqlite3.Connection | str | Path) -> tuple[sqlit
         return db_or_path, False
     conn = sqlite3.connect(str(Path(db_or_path)))
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=DELETE")
     return conn, True
 
 
