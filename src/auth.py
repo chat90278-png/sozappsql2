@@ -328,12 +328,31 @@ def show_staff_login_dialog(db_or_path: sqlite3.Connection | str | Path, row, pa
     return dlg.staff if dlg.exec() == QDialog.Accepted else None
 
 
+def _show_staff_inactive_message(parent=None) -> None:
+    try:
+        from PySide6.QtWidgets import QMessageBox
+
+        QMessageBox.warning(parent, "Personel pasif", "Bu personel kaydı pasif durumda.")
+    except Exception:
+        pass
+
+
 def require_staff_login(db_or_path: sqlite3.Connection | str | Path, parent=None) -> Optional[dict[str, Any]]:
     global current_staff
     ensure_staff_table(db_or_path)
     device_name = get_device_name()
     row = get_staff_by_device(db_or_path, device_name)
-    staff = show_staff_login_dialog(db_or_path, row, parent) if row else show_staff_register_dialog(db_or_path, device_name, parent)
+    if row:
+        if int(row["is_active"] if row["is_active"] is not None else 1) == 0:
+            current_staff = None
+            _show_staff_inactive_message(parent)
+            return None
+        # device_name STS içinde tekildir; kayıtlı ve aktif cihazlar için tekrar
+        # şifre sormadan personel oturumunu aç. Şifre yine kilitli belgeleri
+        # farklı cihazdan açmak için staff.password_hash üzerinde kullanılmaya devam eder.
+        staff = build_current_staff(row)
+    else:
+        staff = show_staff_register_dialog(db_or_path, device_name, parent)
     current_staff = staff
     return staff
 

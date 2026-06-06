@@ -53,7 +53,7 @@ def test_staff_table_create_and_current_staff_payload():
     }
 
 
-def test_require_staff_login_sets_current_staff_for_register_and_login():
+def test_require_staff_login_sets_current_staff_for_register_and_auto_device_login():
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
     ensure_staff_table(conn)
@@ -68,20 +68,20 @@ def test_require_staff_login_sets_current_staff_for_register_and_login():
         def fake_register(db_or_path, device_name, parent=None):
             return build_current_staff(create_staff(db_or_path, device_name, "Startup Personel", "gizli"))
 
+        def fail_login(*_args, **_kwargs):
+            raise AssertionError("Kayıtlı cihaz için şifre/login dialogu açılmamalı")
+
         auth_module.show_staff_register_dialog = fake_register
         registered = auth_module.require_staff_login(conn)
         assert registered == auth_module.current_staff
         assert registered["device_name"] == "startup-cihaz"
         assert registered["full_name"] == "Startup Personel"
 
-        def fake_login(db_or_path, row, parent=None):
-            assert row["device_name"] == "startup-cihaz"
-            return build_current_staff(row)
-
-        auth_module.show_staff_login_dialog = fake_login
+        auth_module.show_staff_login_dialog = fail_login
         logged_in = auth_module.require_staff_login(conn)
         assert logged_in == auth_module.current_staff
         assert logged_in["id"] == registered["id"]
+        assert logged_in["device_name"] == "startup-cihaz"
     finally:
         auth_module.get_device_name = original_device
         auth_module.show_staff_register_dialog = original_register
@@ -158,7 +158,7 @@ def test_sts_database_initializes_staff_table(tmp_path):
 if __name__ == "__main__":
     test_password_hashing_uses_salt_and_verifies()
     test_staff_table_create_and_current_staff_payload()
-    test_require_staff_login_sets_current_staff_for_register_and_login()
+    test_require_staff_login_sets_current_staff_for_register_and_auto_device_login()
     test_document_lock_helpers_are_exported()
     test_document_lock_state_and_device_access()
     import tempfile
