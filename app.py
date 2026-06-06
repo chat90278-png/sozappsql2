@@ -428,6 +428,7 @@ class ElidedLabel(QLabel):
 
 from src.services.excel_store import ExcelStore
 from src.services.sts_store import STSStore
+from src import auth
 from src.workers import ExcelLoadWorker, ComponentSaveWorker, UserSaveWorker, ContractSaveWorker, AnalyzeDialog
 
 
@@ -7328,10 +7329,11 @@ from src.ui.dialogs.workbook_start import WorkbookStartDialog
 from src.ui.contract import work_window_view as cw_view
 
 class MainWindow(QMainWindow):
-    def __init__(self, store: Optional[ExcelStore] = None, contract_index: Optional[List[dict]] = None, initial_path: Optional[Path] = None):
+    def __init__(self, store: Optional[ExcelStore] = None, contract_index: Optional[List[dict]] = None, initial_path: Optional[Path] = None, current_staff: Optional[dict] = None):
         super().__init__()
         self.path = Path(initial_path) if initial_path else (store.path if store else Path(DEFAULT_FILE))
         self.store = store
+        self.current_staff = current_staff or auth.current_staff
         self.contract_index = contract_index if contract_index is not None else []
         self._tag_color_map_cache: Optional[Dict[str, str]] = None
         self._loading = False
@@ -8314,7 +8316,8 @@ class MainWindow(QMainWindow):
 
     def start_sts_load(self, path: Path):
         self.path = Path(path)
-        self.store = STSStore(self.path)
+        actor = str((self.current_staff or {}).get("full_name") or "Personel")
+        self.store = STSStore(self.path, actor=actor)
         self.contract_index = self.store.build_contract_index()
         self._tag_color_map_cache = None
         self._set_platform_items(self.store.platform_names())
@@ -8561,6 +8564,10 @@ class MainWindow(QMainWindow):
         if dlg.exec() and dlg.selected_path:
             sel = Path(dlg.selected_path)
             if sel.suffix.lower() == ".sts":
+                staff = auth.require_staff_login(sel, self)
+                if not staff:
+                    return
+                self.current_staff = staff
                 self.start_sts_load(sel)
             else:
                 self.start_excel_load(sel)
@@ -9220,7 +9227,22 @@ if __name__ == "__main__":
     icon_path = app_icon_path()
     if icon_path.exists():
         app.setWindowIcon(QIcon(str(icon_path)))
-    win = MainWindow()
+
+    start_dialog = WorkbookStartDialog()
+    if not start_dialog.exec() or not start_dialog.selected_path:
+        sys.exit(0)
+
+    selected_path = Path(start_dialog.selected_path)
+    staff = None
+    if selected_path.suffix.lower() == ".sts":
+        staff = auth.require_staff_login(selected_path)
+        if not staff:
+            sys.exit(0)
+
+    win = MainWindow(initial_path=selected_path, current_staff=staff)
     win.show()
-    QTimer.singleShot(0, win.open_file)
+    if selected_path.suffix.lower() == ".sts":
+        win.start_sts_load(selected_path)
+    else:
+        win.start_excel_load(selected_path)
     sys.exit(app.exec())
