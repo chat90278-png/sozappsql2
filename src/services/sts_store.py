@@ -117,28 +117,57 @@ class STSStore:
         return self.db.list_logs(limit=limit, action=action, entity_type=entity_type, platform=platform, contract_no=contract_no, search=search)
 
 
-    def document_lock_state(self):
-        return auth.get_document_lock_state(self.db.conn)
+    def _resolve_contract_id(self, platform: str, contract_no: str, contract_type: str = "Ana Sözleşme") -> int | None:
+        row = self.db.conn.execute(
+            """
+            SELECT c.id FROM contracts c
+            JOIN platforms p ON p.id = c.platform_id
+            WHERE p.name=? AND c.contract_no=? AND c.contract_type=?
+            """,
+            (str(platform or ""), str(contract_no or ""), str(contract_type or "Ana Sözleşme")),
+        ).fetchone()
+        return int(row[0]) if row else None
 
-    def lock_documents(self, current_staff):
-        state = auth.lock_documents(self.db.conn, current_staff or {})
+    def document_lock_state(self, platform: str, contract_no: str, contract_type: str = "Ana Sözleşme") -> dict:
+        cid = self._resolve_contract_id(platform, contract_no, contract_type)
+        if cid is None:
+            return {
+                "contract_id": None,
+                "is_locked": 0,
+                "locked_by_staff_id": None,
+                "locked_by_device_name": None,
+                "locked_by_full_name": None,
+                "locked_at": None,
+                "updated_at": None,
+            }
+        return auth.get_document_lock_state(self.db.conn, cid)
+
+    def lock_documents(self, platform: str, contract_no: str, current_staff, contract_type: str = "Ana Sözleşme") -> dict:
+        cid = self._resolve_contract_id(platform, contract_no, contract_type)
+        if cid is None:
+            return {"contract_id": None, "is_locked": 0}
+        state = auth.lock_documents(self.db.conn, cid, current_staff or {})
         self._log(
             "documents_locked",
             entity_type="document_lock",
             source="Document Manager",
             message="Belgeler kilitlendi",
-            payload={"locked_by_staff_id": (current_staff or {}).get("id"), "locked_by_device_name": (current_staff or {}).get("device_name")},
+            payload={"contract_id": cid, "locked_by_device_name": (current_staff or {}).get("device_name")},
             actor=str((current_staff or {}).get("full_name") or self.current_actor()),
         )
         return state
 
-    def unlock_documents(self, actor=None):
-        state = auth.unlock_documents(self.db.conn)
+    def unlock_documents(self, platform: str, contract_no: str, actor=None, contract_type: str = "Ana Sözleşme") -> dict:
+        cid = self._resolve_contract_id(platform, contract_no, contract_type)
+        if cid is None:
+            return {"contract_id": None, "is_locked": 0}
+        state = auth.unlock_documents(self.db.conn, cid)
         self._log(
             "documents_unlocked",
             entity_type="document_lock",
             source="Document Manager",
             message="Belgeler kilidi açıldı",
+            payload={"contract_id": cid},
             actor=str(actor or self.current_actor()),
         )
         return state

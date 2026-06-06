@@ -12,7 +12,7 @@ with TemporaryDirectory() as td:
     assert db.conn.execute('PRAGMA journal_mode').fetchone()[0].lower() == 'delete'
     assert db.conn.execute('PRAGMA synchronous').fetchone()[0] == 1
     assert db.conn.execute('PRAGMA cache_size').fetchone()[0] == -64000
-    assert db.conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0] == '4'
+    assert db.conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0] == '5'
 
     expected_columns = {
         'component_platforms': {'component_id', 'platform_id'},
@@ -44,7 +44,7 @@ with TemporaryDirectory() as td:
         'idx_systems_contract_id', 'idx_systems_completion_date', 'idx_system_components_component_id',
         'idx_deliveries_contract_id', 'idx_deliveries_system_id', 'idx_deliveries_delivery_user_id', 'idx_deliveries_contract_system',
         'idx_deliveries_acceptance_date', 'idx_delivery_components_component_id', 'idx_contract_file_folders_contract_id', 'idx_contract_file_folders_parent_id', 'idx_contract_files_contract_id', 'idx_contract_files_folder_id', 'idx_logs_created_at',
-        'idx_logs_action', 'idx_logs_entity', 'idx_document_locks_id',
+        'idx_logs_action', 'idx_logs_entity', 'idx_document_locks_contract_id',
     }
     actual_indexes = {r[0] for r in db.conn.execute("SELECT name FROM sqlite_master WHERE type='index'")}
     assert expected_indexes <= actual_indexes, expected_indexes - actual_indexes

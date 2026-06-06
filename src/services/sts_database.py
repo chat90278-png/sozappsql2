@@ -153,8 +153,18 @@ CREATE INDEX IF NOT EXISTS idx_logs_entity ON activity_logs(entity_type,entity_i
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_contract_files_folder_id ON contract_files(folder_id)")
         ensure_staff_table(self.conn)
         ensure_document_locks_table(self.conn)
-        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_document_locks_id ON document_locks(id)")
-        self.conn.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version','4')")
+        if "contract_id" not in self._table_columns("document_locks"):
+            # Legacy document_locks was a single global row constrained to id=1.
+            # Recreate it so per-contract locks are not blocked by that CHECK.
+            self.conn.execute("DROP TABLE IF EXISTS document_locks")
+            ensure_document_locks_table(self.conn)
+            migrated.append("document_locks.contract_id")
+        self.conn.execute("DROP INDEX IF EXISTS idx_document_locks_id")
+        self.conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_document_locks_contract_id "
+            "ON document_locks(contract_id)"
+        )
+        self.conn.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version','5')")
         self.conn.commit()
         return migrated
 
