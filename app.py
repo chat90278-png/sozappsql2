@@ -4451,6 +4451,7 @@ class ContractWorkWindow(QDialog):
         self._contract_save_worker = None
         self._pending_contract_save_context = None
         self._file_dialog_open: bool = False
+        self._documents_changed: bool = False
         self._is_dirty: bool = False   # Kullanıcı henüz değişiklik yapmadı
         self.setWindowTitle(APP_TITLE)
         # QDialog varsayılan olarak ? butonu gösterir — standart pencere butonları ekle
@@ -4478,6 +4479,15 @@ class ContractWorkWindow(QDialog):
     def _set_dirty(self) -> None:
         """Kullanıcı bir değişiklik yaptığında çağrılır."""
         self._is_dirty = True
+
+    def _mark_documents_changed(self) -> None:
+        """Belge/klasör işlemleri STS veritabanına anında yazılır; Kaydet uyarısını bastırmak için izlenir."""
+        self._documents_changed = True
+
+    def _finish_persisted_side_meta_only_save(self) -> None:
+        self._documents_changed = False
+        self._is_dirty = False
+        self.accept()
 
     def _make_data_snapshot(self) -> str:
         """ci + systems + deliveries + tags verilerinin JSON özeti."""
@@ -5968,6 +5978,7 @@ class ContractWorkWindow(QDialog):
             created = self.store.create_contract_file_folder(
                 self.ci.platform, self.ci.no, self.ci.contract_type, parent_id=self._selected_document_folder_id()
             )
+            self._mark_documents_changed()
             self.render_contract_files()
             tree = getattr(self, "contract_files_tree", None)
             if tree:
@@ -6003,6 +6014,7 @@ class ContractWorkWindow(QDialog):
         try:
             renamed = self.store.rename_contract_file_folder(folder_id, new_name)
             item.setData(0, Qt.UserRole + 3, str(renamed.get("name") or new_name))
+            self._mark_documents_changed()
             self.render_contract_files()
         except Exception as exc:
             self._building_file_tree = True
@@ -6050,6 +6062,7 @@ class ContractWorkWindow(QDialog):
                 return
             try:
                 self.store.delete_contract_file_folder(folder_id)
+                self._mark_documents_changed()
                 self.render_contract_files()
             except Exception as exc:
                 QMessageBox.warning(self, "Klasör silinemedi", str(exc))
@@ -6143,6 +6156,7 @@ class ContractWorkWindow(QDialog):
             created = self.store.create_contract_file_folder(
                 self.ci.platform, self.ci.no, self.ci.contract_type, parent_id=parent_folder_id
             )
+            self._mark_documents_changed()
             self.render_contract_files()
             tree = getattr(self, "contract_files_tree", None)
             if tree:
@@ -6230,6 +6244,7 @@ class ContractWorkWindow(QDialog):
                     self.store.delete_contract_file(fid)
                 except Exception:
                     pass
+            self._mark_documents_changed()
             self.render_contract_files()
         finally:
             self._end_side_meta_modal_action()
@@ -6436,6 +6451,7 @@ class ContractWorkWindow(QDialog):
                 else:
                     failures.append(f"{path.name or raw_path}: {message}")
         if added:
+            self._mark_documents_changed()
             self.render_contract_files()
         if failures:
             QMessageBox.warning(self, "Bazı dosyalar eklenemedi", "\n".join(failures[:8]))
@@ -6490,6 +6506,7 @@ class ContractWorkWindow(QDialog):
                 return
             try:
                 self.store.delete_contract_file(file_id)
+                self._mark_documents_changed()
                 self.render_contract_files()
             except Exception as exc:
                 QMessageBox.warning(self, "Belge silinemedi", str(exc))
@@ -7489,8 +7506,12 @@ class ContractWorkWindow(QDialog):
         super().reject()
 
     def save_all(self):
-        # Değişiklik yoksa kaydetme
+        # Belgeler/klasörler STS veritabanına anında yazılır. Bu durumda Kaydet'e
+        # basıldığında "Değişiklik Yok" uyarısı gösterme; pencereyi normal kapat.
         if not self._is_dirty and not self.is_new_contract:
+            if self._documents_changed:
+                self._finish_persisted_side_meta_only_save()
+                return
             QMessageBox.information(
                 self,
                 "Değişiklik Yok",
@@ -7518,6 +7539,9 @@ class ContractWorkWindow(QDialog):
         # ── Değişiklik tespiti ──────────────────────────────────────────────
         if not self.is_new_contract:
             if self._make_data_snapshot() == self._initial_snapshot:
+                if self._documents_changed:
+                    self._finish_persisted_side_meta_only_save()
+                    return
                 QMessageBox.information(
                     self,
                     "Değişiklik Yok",
