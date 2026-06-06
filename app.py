@@ -428,6 +428,7 @@ class ElidedLabel(QLabel):
 
 from src.services.excel_store import ExcelStore
 from src.services.sts_store import STSStore
+from src import auth
 from src.workers import ExcelLoadWorker, ComponentSaveWorker, UserSaveWorker, ContractSaveWorker, AnalyzeDialog
 
 
@@ -4414,6 +4415,9 @@ class ContractWorkWindow(QDialog):
     def __init__(self, store: ExcelStore, ci: ContractInfo, parent=None, systems: Optional[List[SystemInfo]] = None, deliveries: Optional[Dict[str, List[DeliveryInfo]]] = None):
         super().__init__(parent)
         self.store = store
+        parent_staff = getattr(parent, "current_staff", None) if parent is not None else None
+        self.current_staff = parent_staff or auth.current_staff
+        self._document_lock_state: dict = {}
         # Yeni sozlesme mi (systems/deliveries verilmemis) yoksa mevcut mu
         self.is_new_contract = (systems is None and deliveries is None)
         self.ci = ci
@@ -4447,6 +4451,7 @@ class ContractWorkWindow(QDialog):
         self._contract_save_worker = None
         self._pending_contract_save_context = None
         self._file_dialog_open: bool = False
+        self._documents_changed: bool = False
         self._is_dirty: bool = False   # Kullanıcı henüz değişiklik yapmadı
         self.setWindowTitle(APP_TITLE)
         # QDialog varsayılan olarak ? butonu gösterir — standart pencere butonları ekle
@@ -4474,6 +4479,15 @@ class ContractWorkWindow(QDialog):
     def _set_dirty(self) -> None:
         """Kullanıcı bir değişiklik yaptığında çağrılır."""
         self._is_dirty = True
+
+    def _mark_documents_changed(self) -> None:
+        """Belge/klasör işlemleri STS veritabanına anında yazılır; Kaydet uyarısını bastırmak için izlenir."""
+        self._documents_changed = True
+
+    def _finish_persisted_side_meta_only_save(self) -> None:
+        self._documents_changed = False
+        self._is_dirty = False
+        self.accept()
 
     def _make_data_snapshot(self) -> str:
         """ci + systems + deliveries + tags verilerinin JSON özeti."""
@@ -4801,7 +4815,11 @@ class ContractWorkWindow(QDialog):
     def eventFilter(self, obj, event):
         if obj is getattr(self, "side_meta_host", None) and event.type() in (QEvent.Resize, QEvent.Show):
             self.position_side_meta_popover()
-        _editing = getattr(self, "_tree_editing", False) or getattr(self, "_file_dialog_open", False)
+        _editing = (
+            getattr(self, "_tree_editing", False)
+            or getattr(self, "_file_dialog_open", False)
+            or getattr(self, "_side_meta_modal_open", False)
+        )
         if (
             event.type() in (QEvent.WindowDeactivate, QEvent.ApplicationDeactivate)
             and getattr(self, "_side_meta_open_panel", None)
@@ -5150,6 +5168,10 @@ class ContractWorkWindow(QDialog):
             "QPushButton#documentActionPrimary:hover{background:#1d4ed8; border-color:#1d4ed8;}"
             "QPushButton#documentAction{background:#f8fbff; color:#102a43; border:1px solid #cfe0f3; border-radius:9px; padding:0 12px; font-size:11px; font-weight:800; min-height:28px; max-height:32px;}"
             "QPushButton#documentAction:hover{background:#edf5ff; border-color:#9ec5f8;}"
+            "QPushButton#documentLockButton{background:#f8fbff; color:#0f172a; border:1px solid #cfe0f3; border-radius:9px; padding:0; font-size:15px; font-weight:900; min-width:30px; max-width:30px; min-height:28px; max-height:30px;}"
+            "QPushButton#documentLockButton:hover{background:#edf5ff; border-color:#9ec5f8;}"
+            "QPushButton#documentLockButton[locked=\"true\"]{background:#fff7ed; color:#9a3412; border-color:#fed7aa;}"
+            "QLabel#documentLockInfo{background:#fff7ed; color:#9a3412; border:1px solid #fed7aa; border-radius:8px; padding:4px 8px; font-size:10px; font-weight:700;}"
             "QLabel#documentHint{background:transparent; color:#94a3b8; border:0; font-size:10px; padding:0;}"
             # tree drop zone
             "QFrame#docDropZone{background:#f8fbff; border:1px dashed #c7d7ea; border-radius:12px;}"
@@ -5276,6 +5298,145 @@ class ContractWorkWindow(QDialog):
                     if child.widget() is not None:
                         child.widget().deleteLater()
 
+    def _document_db_conn(self):
+        return getattr(getattr(self.store, "db", None), "conn", None)
+
+    def _default_document_lock_state(self) -> dict:
+        return {
+            "is_locked": 0,
+            "locked_by_staff_id": None,
+            "locked_by_device_name": None,
+            "locked_by_full_name": None,
+            "locked_at": None,
+            "updated_at": None,
+        }
+
+    def _load_document_lock_state(self) -> dict:
+        conn = self._document_db_conn()
+        if conn is None:
+            self._document_lock_state = self._default_document_lock_state()
+            return dict(self._document_lock_state)
+        try:
+            getter = getattr(auth, "get_document_lock_state", None)
+            if not callable(getter):
+                raise AttributeError("src.auth.get_document_lock_state bulunamadı")
+            self._document_lock_state = getter(conn)
+        except Exception:
+            traceback.print_exc()
+            # Belgeler paneli, lock state okunamadığında beyaz kalmasın;
+            # güvenli varsayılan olarak kilit açık kabul edilir.
+            self._document_lock_state = self._default_document_lock_state()
+        return dict(self._document_lock_state or self._default_document_lock_state())
+
+    def _current_document_lock_state(self) -> dict:
+        return dict(getattr(self, "_document_lock_state", {}) or self._load_document_lock_state())
+
+    def _documents_access_allowed(self, lock_state: Optional[dict] = None) -> bool:
+        state = lock_state or self._current_document_lock_state()
+        checker = getattr(auth, "can_current_staff_access_documents", None)
+        if callable(checker):
+            return checker(state, self.current_staff)
+        if int((state or {}).get("is_locked") or 0) == 0:
+            return True
+        return bool(
+            self.current_staff
+            and str((self.current_staff or {}).get("device_name") or "") == str((state or {}).get("locked_by_device_name") or "")
+        )
+
+    def _document_lock_same_device(self, lock_state: Optional[dict] = None) -> bool:
+        state = lock_state or self._current_document_lock_state()
+        return bool(
+            int(state.get("is_locked") or 0) == 1
+            and self.current_staff
+            and str((self.current_staff or {}).get("device_name") or "") == str(state.get("locked_by_device_name") or "")
+        )
+
+    def _document_unlock_with_password(self, lock_state: Optional[dict] = None) -> bool:
+        conn = self._document_db_conn()
+        if conn is None:
+            return False
+        unlock_dialog = getattr(auth, "require_document_unlock_password", None)
+        if not callable(unlock_dialog):
+            QMessageBox.warning(
+                self,
+                "Belgeler Kilitli",
+                "Belge kilidi doğrulama fonksiyonu yüklenemedi. Lütfen uygulamayı güncel kodla yeniden başlatın.",
+            )
+            return False
+        if unlock_dialog(self, conn, lock_state or self._current_document_lock_state()):
+            self._load_document_lock_state()
+            self.render_contract_files()
+            return True
+        return False
+
+    def _ensure_document_access(self, interactive: bool = True) -> bool:
+        state = self._load_document_lock_state()
+        if self._documents_access_allowed(state):
+            return True
+        if interactive:
+            return self._document_unlock_with_password(state)
+        return False
+
+    def _animate_document_lock_button(self):
+        btn = getattr(self, "document_lock_btn", None)
+        if not btn:
+            return
+        rect = btn.geometry()
+        grow = rect.adjusted(-2, -2, 2, 2)
+        anim = QPropertyAnimation(btn, b"geometry", btn)
+        anim.setDuration(160)
+        anim.setStartValue(rect)
+        anim.setKeyValueAt(0.5, grow)
+        anim.setEndValue(rect)
+        anim.start()
+        self._document_lock_anim = anim
+
+    def _toggle_document_lock(self):
+        conn = self._document_db_conn()
+        if conn is None:
+            QMessageBox.information(self, "Belgeler", "Belge kilidi yalnızca STS veri dosyalarında desteklenir.")
+            return
+        state = self._load_document_lock_state()
+        if int(state.get("is_locked") or 0) == 0:
+            if not self.current_staff:
+                QMessageBox.warning(self, "Personel gerekli", "Belgeleri kilitlemek için personel girişi gereklidir.")
+                return
+            if hasattr(self.store, "lock_documents"):
+                self._document_lock_state = self.store.lock_documents(self.current_staff)
+            else:
+                lock_fn = getattr(auth, "lock_documents", None)
+                if not callable(lock_fn):
+                    QMessageBox.warning(self, "Belgeler", "Belge kilidi fonksiyonu yüklenemedi. Lütfen uygulamayı güncel kodla yeniden başlatın.")
+                    return
+                self._document_lock_state = lock_fn(conn, self.current_staff)
+            self._animate_document_lock_button()
+            self.render_contract_files()
+            return
+        if self._document_lock_same_device(state):
+            actor = str((self.current_staff or {}).get("full_name") or "Personel")
+            if hasattr(self.store, "unlock_documents"):
+                self._document_lock_state = self.store.unlock_documents(actor=actor)
+            else:
+                unlock_fn = getattr(auth, "unlock_documents", None)
+                if not callable(unlock_fn):
+                    QMessageBox.warning(self, "Belgeler", "Belge kilidi açma fonksiyonu yüklenemedi. Lütfen uygulamayı güncel kodla yeniden başlatın.")
+                    return
+                self._document_lock_state = unlock_fn(conn)
+            self._animate_document_lock_button()
+            self.render_contract_files()
+            return
+        if self._document_unlock_with_password(state):
+            self._animate_document_lock_button()
+
+    def _document_lock_summary_text(self, lock_state: Optional[dict] = None) -> str:
+        state = lock_state or self._current_document_lock_state()
+        if int(state.get("is_locked") or 0) == 0:
+            return ""
+        if self._document_lock_same_device(state):
+            return "🔒 Belgeler bu cihaz tarafından kilitlendi."
+        locked_by = str(state.get("locked_by_full_name") or "Personel")
+        return f"🔒 Belgeler kilitli · Kilitleyen: {locked_by}"
+
     def render_side_meta_popover_content(self, panel: str):
         self._clear_side_meta_popover_body()
         body = self.side_meta_popover_body_layout
@@ -5293,7 +5454,10 @@ class ContractWorkWindow(QDialog):
             else:
                 empty = QLabel("Henüz etiket atanmadı."); empty.setObjectName("sidePanelEmptyTag"); empty.setAlignment(Qt.AlignCenter); cards.insertWidget(0, empty)
         else:
-            # ── Toolbar: + Dosya Ekle | + Klasör Ekle | hint ───────────────
+            lock_state = self._load_document_lock_state()
+            documents_accessible = self._documents_access_allowed(lock_state)
+            documents_locked = int(lock_state.get("is_locked") or 0) == 1
+            # ── Toolbar: + Dosya Ekle | + Klasör Ekle | Kilit ───────────────
             toolbar = QHBoxLayout()
             toolbar.setContentsMargins(0, 0, 0, 0)
             toolbar.setSpacing(6)
@@ -5318,10 +5482,30 @@ class ContractWorkWindow(QDialog):
                 "QPushButton:hover{background:#edf5ff;border-color:#9ec5f8;}"
             )
             btn_folder.clicked.connect(self.add_contract_file_folder)
+            btn_file.setEnabled(documents_accessible)
+            btn_folder.setEnabled(documents_accessible)
+
+            lock_btn = QPushButton("🔒" if documents_locked else "🔓")
+            lock_btn.setObjectName("documentLockButton")
+            lock_btn.setProperty("locked", "true" if documents_locked else "false")
+            lock_btn.setFixedSize(30, 30)
+            lock_btn.setCursor(Qt.PointingHandCursor)
+            lock_btn.setToolTip("Belgeler kilitli" if documents_locked else "Belgeleri kilitle")
+            lock_btn.clicked.connect(self._toggle_document_lock)
+            self.document_lock_btn = lock_btn
+
             toolbar.addWidget(btn_file)
             toolbar.addWidget(btn_folder)
+            toolbar.addWidget(lock_btn)
             toolbar.addStretch(1)
             body.addLayout(toolbar)
+
+            lock_text = self._document_lock_summary_text(lock_state)
+            if lock_text:
+                lock_info = QLabel(lock_text)
+                lock_info.setObjectName("documentLockInfo")
+                lock_info.setWordWrap(True)
+                body.addWidget(lock_info, 0)
 
             files = list(self._side_meta_files)
             folders = list(getattr(self, "_side_meta_folders", []))
@@ -5333,6 +5517,9 @@ class ContractWorkWindow(QDialog):
 
             # forward drag-drop events from frame to tree
             def _frame_drag_enter(event):
+                if not documents_accessible:
+                    event.ignore()
+                    return
                 if event.mimeData().hasUrls():
                     drop_frame.setProperty("dragOver", "true")
                     drop_frame.style().unpolish(drop_frame)
@@ -5351,6 +5538,10 @@ class ContractWorkWindow(QDialog):
                 drop_frame.setProperty("dragOver", "false")
                 drop_frame.style().unpolish(drop_frame)
                 drop_frame.style().polish(drop_frame)
+                if not documents_accessible:
+                    self._ensure_document_access(interactive=True)
+                    event.ignore()
+                    return
                 tree_w = getattr(self, "contract_files_tree", None)
                 if tree_w:
                     tree_w.dropEvent(event)
@@ -5360,37 +5551,63 @@ class ContractWorkWindow(QDialog):
             drop_frame.dragEnterEvent = _frame_drag_enter
             drop_frame.dragLeaveEvent = _frame_drag_leave
             drop_frame.dropEvent = _frame_drop
-            drop_frame.dragMoveEvent = lambda e: (e.acceptProposedAction() if e.mimeData().hasUrls() else e.ignore())
+            drop_frame.dragMoveEvent = lambda e: (e.acceptProposedAction() if documents_accessible and e.mimeData().hasUrls() else e.ignore())
+            if not documents_accessible:
+                drop_frame.mousePressEvent = lambda event: self._ensure_document_access(interactive=True)
+
 
             drop_frame_layout = QVBoxLayout(drop_frame)
             drop_frame_layout.setContentsMargins(0, 0, 0, 0)
             drop_frame_layout.setSpacing(0)
 
             try:
-                tree = self.create_contract_files_tree(folders, files)
-                self.contract_files_tree = tree
-                tree_h = self.document_tree_height(folders, files)
-                tree.setMinimumHeight(tree_h)
-                tree.setMaximumHeight(tree_h)
-                drop_frame_layout.addWidget(tree)
+                if not documents_accessible:
+                    self.contract_files_tree = None
+                    locked_host = QWidget()
+                    locked_host.setStyleSheet("background:transparent;")
+                    lv = QVBoxLayout(locked_host)
+                    lv.setContentsMargins(12, 28, 12, 28)
+                    lv.setSpacing(6)
+                    lv.setAlignment(Qt.AlignCenter)
+                    l1 = QLabel("🔒 Belgeler kilitli")
+                    l1.setObjectName("sidePanelEmpty")
+                    l1.setAlignment(Qt.AlignCenter)
+                    l2 = QLabel(f"Kilitleyen: {str(lock_state.get('locked_by_full_name') or 'Personel')}")
+                    l2.setObjectName("sidePanelEmptySub")
+                    l2.setAlignment(Qt.AlignCenter)
+                    l3 = QLabel("Erişmek için tıklayın ve kilitleyen personelin şifresini girin.")
+                    l3.setObjectName("sidePanelEmptySub")
+                    l3.setAlignment(Qt.AlignCenter)
+                    l3.setWordWrap(True)
+                    lv.addWidget(l1)
+                    lv.addWidget(l2)
+                    lv.addWidget(l3)
+                    drop_frame_layout.addWidget(locked_host)
+                else:
+                    tree = self.create_contract_files_tree(folders, files)
+                    self.contract_files_tree = tree
+                    tree_h = self.document_tree_height(folders, files)
+                    tree.setMinimumHeight(tree_h)
+                    tree.setMaximumHeight(tree_h)
+                    drop_frame_layout.addWidget(tree)
 
-                if not files and not folders:
-                    # empty state overlay
-                    empty_host = QWidget()
-                    empty_host.setStyleSheet("background:transparent;")
-                    ev = QVBoxLayout(empty_host)
-                    ev.setContentsMargins(12, 20, 12, 20)
-                    ev.setSpacing(4)
-                    ev.setAlignment(Qt.AlignCenter)
-                    e1 = QLabel("Henüz belge eklenmedi.")
-                    e1.setObjectName("sidePanelEmpty")
-                    e1.setAlignment(Qt.AlignCenter)
-                    e2 = QLabel("Dosya ekleyin veya buraya sürükleyin.")
-                    e2.setObjectName("sidePanelEmptySub")
-                    e2.setAlignment(Qt.AlignCenter)
-                    ev.addWidget(e1)
-                    ev.addWidget(e2)
-                    drop_frame_layout.addWidget(empty_host)
+                    if not files and not folders:
+                        # empty state overlay
+                        empty_host = QWidget()
+                        empty_host.setStyleSheet("background:transparent;")
+                        ev = QVBoxLayout(empty_host)
+                        ev.setContentsMargins(12, 20, 12, 20)
+                        ev.setSpacing(4)
+                        ev.setAlignment(Qt.AlignCenter)
+                        e1 = QLabel("Henüz belge eklenmedi.")
+                        e1.setObjectName("sidePanelEmpty")
+                        e1.setAlignment(Qt.AlignCenter)
+                        e2 = QLabel("Dosya ekleyin veya buraya sürükleyin.")
+                        e2.setObjectName("sidePanelEmptySub")
+                        e2.setAlignment(Qt.AlignCenter)
+                        ev.addWidget(e1)
+                        ev.addWidget(e2)
+                        drop_frame_layout.addWidget(empty_host)
 
             except Exception as exc:
                 self.contract_files_tree = None
@@ -5755,10 +5972,13 @@ class ContractWorkWindow(QDialog):
         QTimer.singleShot(30, _select_all)
 
     def add_contract_file_folder(self):
+        if not self._ensure_document_access(interactive=True):
+            return
         try:
             created = self.store.create_contract_file_folder(
                 self.ci.platform, self.ci.no, self.ci.contract_type, parent_id=self._selected_document_folder_id()
             )
+            self._mark_documents_changed()
             self.render_contract_files()
             tree = getattr(self, "contract_files_tree", None)
             if tree:
@@ -5771,6 +5991,8 @@ class ContractWorkWindow(QDialog):
             QMessageBox.warning(self, "Klasör eklenemedi", str(exc))
 
     def on_contract_file_tree_double_clicked(self, item, column):
+        if not self._ensure_document_access(interactive=True):
+            return
         if not item:
             return
         if item.data(0, Qt.UserRole) == "file":
@@ -5779,6 +6001,8 @@ class ContractWorkWindow(QDialog):
             self._start_rename_item(item)
 
     def on_contract_file_tree_item_changed(self, item, column):
+        if not self._ensure_document_access(interactive=True):
+            return
         if getattr(self, "_building_file_tree", False) or not item or item.data(0, Qt.UserRole) != "folder":
             return
         self._tree_editing = False
@@ -5790,6 +6014,7 @@ class ContractWorkWindow(QDialog):
         try:
             renamed = self.store.rename_contract_file_folder(folder_id, new_name)
             item.setData(0, Qt.UserRole + 3, str(renamed.get("name") or new_name))
+            self._mark_documents_changed()
             self.render_contract_files()
         except Exception as exc:
             self._building_file_tree = True
@@ -5799,25 +6024,54 @@ class ContractWorkWindow(QDialog):
                 self._building_file_tree = False
             QMessageBox.warning(self, "Klasör adı değiştirilemedi", str(exc))
 
-    def delete_contract_file_folder(self, folder_id, folder_name):
-        file_count = sum(
-            1 for f in self._side_meta_files
-            if int(f.get("folder_id") or 0) == folder_id
-        )
-        msg = f'"{folder_name}" klasörünü silmek istediğinize emin misiniz?'
-        if file_count > 0:
-            msg += f"\n\nBu klasörde {file_count} dosya var. Dosyalar kökde kalacak."
-        reply = QMessageBox.question(self, "Klasörü Sil", msg,
-                                     QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
-        if reply != QMessageBox.Yes:
+    def _begin_side_meta_modal_action(self):
+        self._side_meta_modal_open = True
+        self._tree_editing = True
+
+    def _end_side_meta_modal_action(self):
+        self._side_meta_modal_open = False
+        self._tree_editing = False
+        if getattr(self, "_side_meta_last_panel", None) == "files":
+            QTimer.singleShot(0, self._restore_documents_popover_if_needed)
+
+    def _restore_documents_popover_if_needed(self):
+        popover = getattr(self, "side_meta_popover", None)
+        if popover is None or getattr(self, "_side_meta_last_panel", None) != "files":
             return
+        self._side_meta_open_panel = "files"
+        self._sync_side_meta_controls()
+        self.position_side_meta_popover()
+        popover.show()
+        popover.raise_()
+
+    def delete_contract_file_folder(self, folder_id, folder_name):
+        if not self._ensure_document_access(interactive=True):
+            return
+        self._begin_side_meta_modal_action()
         try:
-            self.store.delete_contract_file_folder(folder_id)
-            self.render_contract_files()
-        except Exception as exc:
-            QMessageBox.warning(self, "Klasör silinemedi", str(exc))
+            file_count = sum(
+                1 for f in self._side_meta_files
+                if int(f.get("folder_id") or 0) == folder_id
+            )
+            msg = f'"{folder_name}" klasörünü silmek istediğinize emin misiniz?'
+            if file_count > 0:
+                msg += f"\n\nBu klasörde {file_count} dosya var. Dosyalar kökde kalacak."
+            reply = QMessageBox.question(self, "Klasörü Sil", msg,
+                                         QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if reply != QMessageBox.Yes:
+                return
+            try:
+                self.store.delete_contract_file_folder(folder_id)
+                self._mark_documents_changed()
+                self.render_contract_files()
+            except Exception as exc:
+                QMessageBox.warning(self, "Klasör silinemedi", str(exc))
+        finally:
+            self._end_side_meta_modal_action()
 
     def show_contract_file_tree_menu(self, pos):
+        if not self._ensure_document_access(interactive=True):
+            return
         tree = getattr(self, "contract_files_tree", None)
         item = tree.itemAt(pos) if tree else None
         if not item:
@@ -5879,6 +6133,8 @@ class ContractWorkWindow(QDialog):
 
     def _add_files_to_folder(self, folder_id):
         """Belirli bir klasöre dosya ekle."""
+        if not self._ensure_document_access(interactive=True):
+            return
         self._file_dialog_open = True
         try:
             paths, _ = QFileDialog.getOpenFileNames(
@@ -5894,10 +6150,13 @@ class ContractWorkWindow(QDialog):
 
     def _add_subfolder(self, parent_folder_id):
         """Mevcut klasörün altına alt klasör ekle."""
+        if not self._ensure_document_access(interactive=True):
+            return
         try:
             created = self.store.create_contract_file_folder(
                 self.ci.platform, self.ci.no, self.ci.contract_type, parent_id=parent_folder_id
             )
+            self._mark_documents_changed()
             self.render_contract_files()
             tree = getattr(self, "contract_files_tree", None)
             if tree:
@@ -5911,6 +6170,8 @@ class ContractWorkWindow(QDialog):
 
     def _bulk_download_files(self, file_ids: list):
         """Seçili dosyaları klasöre indir."""
+        if not self._ensure_document_access(interactive=True):
+            return
         if not file_ids:
             return
         folder = QFileDialog.getExistingDirectory(self, "İndirme Klasörü Seç")
@@ -5936,6 +6197,8 @@ class ContractWorkWindow(QDialog):
 
     def _bulk_zip_files(self, file_ids: list):
         """Seçili dosyaları ZIP olarak indir."""
+        if not self._ensure_document_access(interactive=True):
+            return
         if not file_ids:
             return
         default_name = f"{self.ci.no}_belgeler.zip" if hasattr(self, "ci") else "belgeler.zip"
@@ -5963,24 +6226,33 @@ class ContractWorkWindow(QDialog):
 
     def _bulk_delete_files(self, file_ids: list):
         """Seçili dosyaları sil."""
+        if not self._ensure_document_access(interactive=True):
+            return
         if not file_ids:
             return
-        reply = QMessageBox.question(
-            self, "Dosyaları Sil",
-            f"{len(file_ids)} dosyayı silmek istediğinize emin misiniz?\nBu işlem geri alınamaz.",
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
-        )
-        if reply != QMessageBox.Yes:
-            return
-        for fid in file_ids:
-            try:
-                self.store.delete_contract_file(fid)
-            except Exception:
-                pass
-        self.render_contract_files()
+        self._begin_side_meta_modal_action()
+        try:
+            reply = QMessageBox.question(
+                self, "Dosyaları Sil",
+                f"{len(file_ids)} dosyayı silmek istediğinize emin misiniz?\nBu işlem geri alınamaz.",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+            )
+            if reply != QMessageBox.Yes:
+                return
+            for fid in file_ids:
+                try:
+                    self.store.delete_contract_file(fid)
+                except Exception:
+                    pass
+            self._mark_documents_changed()
+            self.render_contract_files()
+        finally:
+            self._end_side_meta_modal_action()
 
     def _download_folder(self, folder_id: int, folder_name: str, as_zip: bool = True):
         """Klasör ve tüm alt klasörlerini/dosyalarını recursive indir."""
+        if not self._ensure_document_access(interactive=True):
+            return
         # Tüm dosya ve klasör verisini yükle
         all_files = list(self._side_meta_files)
         all_folders = list(getattr(self, "_side_meta_folders", []))
@@ -6134,6 +6406,8 @@ class ContractWorkWindow(QDialog):
             self.render_side_meta_popover_content("files")
 
     def _pick_contract_files(self):
+        if not self._ensure_document_access(interactive=True):
+            return
         self._file_dialog_open = True
         try:
             paths, _ = QFileDialog.getOpenFileNames(
@@ -6149,6 +6423,8 @@ class ContractWorkWindow(QDialog):
         self._add_contract_files(paths, self._selected_document_folder_id())
 
     def _add_contract_files(self, file_paths, folder_id=None):
+        if not self._ensure_document_access(interactive=True):
+            return
         paths = [str(path or "").strip() for path in (file_paths or []) if str(path or "").strip()]
         if not paths:
             return
@@ -6175,6 +6451,7 @@ class ContractWorkWindow(QDialog):
                 else:
                     failures.append(f"{path.name or raw_path}: {message}")
         if added:
+            self._mark_documents_changed()
             self.render_contract_files()
         if failures:
             QMessageBox.warning(self, "Bazı dosyalar eklenemedi", "\n".join(failures[:8]))
@@ -6193,6 +6470,8 @@ class ContractWorkWindow(QDialog):
         self._pick_contract_files()
 
     def open_contract_file(self, file_id: int):
+        if not self._ensure_document_access(interactive=True):
+            return
         try:
             filename, _mime, content = self.store.get_contract_file_bytes(file_id)
             suffix = Path(filename).suffix
@@ -6206,6 +6485,8 @@ class ContractWorkWindow(QDialog):
             QMessageBox.warning(self, "Belge açılamadı", str(exc))
 
     def export_contract_file(self, file_id: int):
+        if not self._ensure_document_access(interactive=True):
+            return
         try:
             filename, _mime, _content = self.store.get_contract_file_bytes(file_id)
             target, _ = QFileDialog.getSaveFileName(self, "Belgeyi Dışa Aktar", filename)
@@ -6217,15 +6498,24 @@ class ContractWorkWindow(QDialog):
             QMessageBox.warning(self, "Belge dışa aktarılamadı", str(exc))
 
     def delete_contract_file(self, file_id: int):
-        if QMessageBox.question(self, "Belgeyi Sil", "Belge STS dosyasından silinsin mi? Orijinal dosyaya dokunulmaz.") != QMessageBox.Yes:
+        if not self._ensure_document_access(interactive=True):
             return
+        self._begin_side_meta_modal_action()
         try:
-            self.store.delete_contract_file(file_id)
-            self.render_contract_files()
-        except Exception as exc:
-            QMessageBox.warning(self, "Belge silinemedi", str(exc))
+            if QMessageBox.question(self, "Belgeyi Sil", "Belge STS dosyasından silinsin mi? Orijinal dosyaya dokunulmaz.") != QMessageBox.Yes:
+                return
+            try:
+                self.store.delete_contract_file(file_id)
+                self._mark_documents_changed()
+                self.render_contract_files()
+            except Exception as exc:
+                QMessageBox.warning(self, "Belge silinemedi", str(exc))
+        finally:
+            self._end_side_meta_modal_action()
 
     def show_contract_file_button_menu(self, file_id: int, button):
+        if not self._ensure_document_access(interactive=True):
+            return
         menu = QMenu(self)
         menu.addAction("Aç", lambda: self.open_contract_file(file_id))
         menu.addAction("Dışa Aktar", lambda: self.export_contract_file(file_id))
@@ -7216,8 +7506,12 @@ class ContractWorkWindow(QDialog):
         super().reject()
 
     def save_all(self):
-        # Değişiklik yoksa kaydetme
+        # Belgeler/klasörler STS veritabanına anında yazılır. Bu durumda Kaydet'e
+        # basıldığında "Değişiklik Yok" uyarısı gösterme; pencereyi normal kapat.
         if not self._is_dirty and not self.is_new_contract:
+            if self._documents_changed:
+                self._finish_persisted_side_meta_only_save()
+                return
             QMessageBox.information(
                 self,
                 "Değişiklik Yok",
@@ -7245,6 +7539,9 @@ class ContractWorkWindow(QDialog):
         # ── Değişiklik tespiti ──────────────────────────────────────────────
         if not self.is_new_contract:
             if self._make_data_snapshot() == self._initial_snapshot:
+                if self._documents_changed:
+                    self._finish_persisted_side_meta_only_save()
+                    return
                 QMessageBox.information(
                     self,
                     "Değişiklik Yok",
@@ -7328,10 +7625,11 @@ from src.ui.dialogs.workbook_start import WorkbookStartDialog
 from src.ui.contract import work_window_view as cw_view
 
 class MainWindow(QMainWindow):
-    def __init__(self, store: Optional[ExcelStore] = None, contract_index: Optional[List[dict]] = None, initial_path: Optional[Path] = None):
+    def __init__(self, store: Optional[ExcelStore] = None, contract_index: Optional[List[dict]] = None, initial_path: Optional[Path] = None, current_staff: Optional[dict] = None):
         super().__init__()
         self.path = Path(initial_path) if initial_path else (store.path if store else Path(DEFAULT_FILE))
         self.store = store
+        self.current_staff = current_staff or auth.current_staff
         self.contract_index = contract_index if contract_index is not None else []
         self._tag_color_map_cache: Optional[Dict[str, str]] = None
         self._loading = False
@@ -7886,7 +8184,11 @@ class MainWindow(QMainWindow):
                 QTimer.singleShot(0, self.position_query_logo_background)
         if obj is getattr(self, "side_meta_host", None) and event.type() in (QEvent.Resize, QEvent.Show):
             self.position_side_meta_popover()
-        _editing = getattr(self, "_tree_editing", False) or getattr(self, "_file_dialog_open", False)
+        _editing = (
+            getattr(self, "_tree_editing", False)
+            or getattr(self, "_file_dialog_open", False)
+            or getattr(self, "_side_meta_modal_open", False)
+        )
         if (
             event.type() in (QEvent.WindowDeactivate, QEvent.ApplicationDeactivate)
             and getattr(self, "_side_meta_open_panel", None)
@@ -8314,7 +8616,8 @@ class MainWindow(QMainWindow):
 
     def start_sts_load(self, path: Path):
         self.path = Path(path)
-        self.store = STSStore(self.path)
+        actor = str((self.current_staff or {}).get("full_name") or "Personel")
+        self.store = STSStore(self.path, actor=actor)
         self.contract_index = self.store.build_contract_index()
         self._tag_color_map_cache = None
         self._set_platform_items(self.store.platform_names())
@@ -8561,6 +8864,10 @@ class MainWindow(QMainWindow):
         if dlg.exec() and dlg.selected_path:
             sel = Path(dlg.selected_path)
             if sel.suffix.lower() == ".sts":
+                staff = auth.require_staff_login(sel, self)
+                if not staff:
+                    return
+                self.current_staff = staff
                 self.start_sts_load(sel)
             else:
                 self.start_excel_load(sel)
@@ -9220,7 +9527,38 @@ if __name__ == "__main__":
     icon_path = app_icon_path()
     if icon_path.exists():
         app.setWindowIcon(QIcon(str(icon_path)))
-    win = MainWindow()
+
+    # Startup uses modal dialogs before the main window exists.  Keep Qt from
+    # treating an accepted file/staff dialog as the last-window-close event;
+    # otherwise the first successful registration/login can request app quit
+    # before the real MainWindow event loop starts.
+    app.setQuitOnLastWindowClosed(False)
+
+    start_dialog = WorkbookStartDialog()
+    if not start_dialog.exec() or not start_dialog.selected_path:
+        sys.exit(0)
+
+    selected_path = Path(start_dialog.selected_path)
+    staff = None
+    if selected_path.suffix.lower() == ".sts":
+        staff = auth.require_staff_login(selected_path)
+        if not staff:
+            sys.exit(0)
+
+    win = MainWindow(initial_path=selected_path, current_staff=staff)
     win.show()
-    QTimer.singleShot(0, win.open_file)
+
+    def _start_initial_load():
+        app.setQuitOnLastWindowClosed(True)
+        try:
+            if selected_path.suffix.lower() == ".sts":
+                win.start_sts_load(selected_path)
+            else:
+                win.start_excel_load(selected_path)
+        except Exception as exc:
+            traceback.print_exc()
+            QMessageBox.critical(win, "Açılış hatası", f"Uygulama başlatılırken hata oluştu.\n\n{exc}")
+            app.quit()
+
+    QTimer.singleShot(0, _start_initial_load)
     sys.exit(app.exec())
