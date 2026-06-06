@@ -4805,7 +4805,11 @@ class ContractWorkWindow(QDialog):
     def eventFilter(self, obj, event):
         if obj is getattr(self, "side_meta_host", None) and event.type() in (QEvent.Resize, QEvent.Show):
             self.position_side_meta_popover()
-        _editing = getattr(self, "_tree_editing", False) or getattr(self, "_file_dialog_open", False)
+        _editing = (
+            getattr(self, "_tree_editing", False)
+            or getattr(self, "_file_dialog_open", False)
+            or getattr(self, "_side_meta_modal_open", False)
+        )
         if (
             event.type() in (QEvent.WindowDeactivate, QEvent.ApplicationDeactivate)
             and getattr(self, "_side_meta_open_panel", None)
@@ -6008,25 +6012,49 @@ class ContractWorkWindow(QDialog):
                 self._building_file_tree = False
             QMessageBox.warning(self, "Klasör adı değiştirilemedi", str(exc))
 
+    def _begin_side_meta_modal_action(self):
+        self._side_meta_modal_open = True
+        self._tree_editing = True
+
+    def _end_side_meta_modal_action(self):
+        self._side_meta_modal_open = False
+        self._tree_editing = False
+        if getattr(self, "_side_meta_last_panel", None) == "files":
+            QTimer.singleShot(0, self._restore_documents_popover_if_needed)
+
+    def _restore_documents_popover_if_needed(self):
+        popover = getattr(self, "side_meta_popover", None)
+        if popover is None or getattr(self, "_side_meta_last_panel", None) != "files":
+            return
+        self._side_meta_open_panel = "files"
+        self._sync_side_meta_controls()
+        self.position_side_meta_popover()
+        popover.show()
+        popover.raise_()
+
     def delete_contract_file_folder(self, folder_id, folder_name):
         if not self._ensure_document_access(interactive=True):
             return
-        file_count = sum(
-            1 for f in self._side_meta_files
-            if int(f.get("folder_id") or 0) == folder_id
-        )
-        msg = f'"{folder_name}" klasörünü silmek istediğinize emin misiniz?'
-        if file_count > 0:
-            msg += f"\n\nBu klasörde {file_count} dosya var. Dosyalar kökde kalacak."
-        reply = QMessageBox.question(self, "Klasörü Sil", msg,
-                                     QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
-        if reply != QMessageBox.Yes:
-            return
+        self._begin_side_meta_modal_action()
         try:
-            self.store.delete_contract_file_folder(folder_id)
-            self.render_contract_files()
-        except Exception as exc:
-            QMessageBox.warning(self, "Klasör silinemedi", str(exc))
+            file_count = sum(
+                1 for f in self._side_meta_files
+                if int(f.get("folder_id") or 0) == folder_id
+            )
+            msg = f'"{folder_name}" klasörünü silmek istediğinize emin misiniz?'
+            if file_count > 0:
+                msg += f"\n\nBu klasörde {file_count} dosya var. Dosyalar kökde kalacak."
+            reply = QMessageBox.question(self, "Klasörü Sil", msg,
+                                         QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if reply != QMessageBox.Yes:
+                return
+            try:
+                self.store.delete_contract_file_folder(folder_id)
+                self.render_contract_files()
+            except Exception as exc:
+                QMessageBox.warning(self, "Klasör silinemedi", str(exc))
+        finally:
+            self._end_side_meta_modal_action()
 
     def show_contract_file_tree_menu(self, pos):
         if not self._ensure_document_access(interactive=True):
@@ -6188,19 +6216,23 @@ class ContractWorkWindow(QDialog):
             return
         if not file_ids:
             return
-        reply = QMessageBox.question(
-            self, "Dosyaları Sil",
-            f"{len(file_ids)} dosyayı silmek istediğinize emin misiniz?\nBu işlem geri alınamaz.",
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
-        )
-        if reply != QMessageBox.Yes:
-            return
-        for fid in file_ids:
-            try:
-                self.store.delete_contract_file(fid)
-            except Exception:
-                pass
-        self.render_contract_files()
+        self._begin_side_meta_modal_action()
+        try:
+            reply = QMessageBox.question(
+                self, "Dosyaları Sil",
+                f"{len(file_ids)} dosyayı silmek istediğinize emin misiniz?\nBu işlem geri alınamaz.",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+            )
+            if reply != QMessageBox.Yes:
+                return
+            for fid in file_ids:
+                try:
+                    self.store.delete_contract_file(fid)
+                except Exception:
+                    pass
+            self.render_contract_files()
+        finally:
+            self._end_side_meta_modal_action()
 
     def _download_folder(self, folder_id: int, folder_name: str, as_zip: bool = True):
         """Klasör ve tüm alt klasörlerini/dosyalarını recursive indir."""
@@ -6452,13 +6484,17 @@ class ContractWorkWindow(QDialog):
     def delete_contract_file(self, file_id: int):
         if not self._ensure_document_access(interactive=True):
             return
-        if QMessageBox.question(self, "Belgeyi Sil", "Belge STS dosyasından silinsin mi? Orijinal dosyaya dokunulmaz.") != QMessageBox.Yes:
-            return
+        self._begin_side_meta_modal_action()
         try:
-            self.store.delete_contract_file(file_id)
-            self.render_contract_files()
-        except Exception as exc:
-            QMessageBox.warning(self, "Belge silinemedi", str(exc))
+            if QMessageBox.question(self, "Belgeyi Sil", "Belge STS dosyasından silinsin mi? Orijinal dosyaya dokunulmaz.") != QMessageBox.Yes:
+                return
+            try:
+                self.store.delete_contract_file(file_id)
+                self.render_contract_files()
+            except Exception as exc:
+                QMessageBox.warning(self, "Belge silinemedi", str(exc))
+        finally:
+            self._end_side_meta_modal_action()
 
     def show_contract_file_button_menu(self, file_id: int, button):
         if not self._ensure_document_access(interactive=True):
@@ -8124,7 +8160,11 @@ class MainWindow(QMainWindow):
                 QTimer.singleShot(0, self.position_query_logo_background)
         if obj is getattr(self, "side_meta_host", None) and event.type() in (QEvent.Resize, QEvent.Show):
             self.position_side_meta_popover()
-        _editing = getattr(self, "_tree_editing", False) or getattr(self, "_file_dialog_open", False)
+        _editing = (
+            getattr(self, "_tree_editing", False)
+            or getattr(self, "_file_dialog_open", False)
+            or getattr(self, "_side_meta_modal_open", False)
+        )
         if (
             event.type() in (QEvent.WindowDeactivate, QEvent.ApplicationDeactivate)
             and getattr(self, "_side_meta_open_panel", None)
