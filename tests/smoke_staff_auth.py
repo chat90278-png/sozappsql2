@@ -112,16 +112,22 @@ def test_document_lock_state_and_device_access():
     staff = build_current_staff(row)
     other_staff = {**staff, "device_name": "baska-cihaz"}
 
-    initial = get_document_lock_state(conn)
+    initial = get_document_lock_state(conn, 1)
     assert initial["is_locked"] == 0
+    assert initial["contract_id"] == 1
     assert can_current_staff_access_documents(initial, other_staff)
 
-    locked = lock_documents(conn, staff)
+    locked = lock_documents(conn, 1, staff)
     assert locked["is_locked"] == 1
+    assert locked["contract_id"] == 1
     assert locked["locked_by_staff_id"] == staff["id"]
     assert locked["locked_by_device_name"] == "kilitleyen-cihaz"
     assert can_current_staff_access_documents(locked, staff)
     assert not can_current_staff_access_documents(locked, other_staff)
+
+    other_contract = get_document_lock_state(conn, 2)
+    assert other_contract["is_locked"] == 0
+    assert other_contract["contract_id"] == 2
     assert verify_staff_password_by_id(conn, staff["id"], "gizli")
     assert not verify_staff_password_by_id(conn, staff["id"], "yanlis")
     assert not verify_staff_password_by_id(conn, 999999, "gizli")
@@ -131,8 +137,9 @@ def test_document_lock_state_and_device_access():
     conn.execute("UPDATE staff SET is_active=1 WHERE id=?", (staff["id"],))
     conn.commit()
 
-    unlocked = unlock_documents(conn)
+    unlocked = unlock_documents(conn, 1)
     assert unlocked["is_locked"] == 0
+    assert unlocked["contract_id"] == 1
     assert unlocked["locked_by_staff_id"] is None
     assert can_current_staff_access_documents(unlocked, other_staff)
 
@@ -152,7 +159,7 @@ def test_sts_database_initializes_staff_table(tmp_path):
     assert "document_locks" in stats["table_counts"]
     assert "sqlite_sequence" not in stats["table_counts"]
     assert {"device_name", "full_name", "password_hash", "role", "is_active"}.issubset(columns)
-    assert {"is_locked", "locked_by_staff_id", "locked_by_device_name", "locked_by_full_name"}.issubset(lock_columns)
+    assert {"contract_id", "is_locked", "locked_by_staff_id", "locked_by_device_name", "locked_by_full_name"}.issubset(lock_columns)
 
 
 if __name__ == "__main__":

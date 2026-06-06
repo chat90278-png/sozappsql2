@@ -37,6 +37,7 @@ def _connection_from(db_or_path: sqlite3.Connection | str | Path) -> tuple[sqlit
         return db_or_path, False
     conn = sqlite3.connect(str(Path(db_or_path)))
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=DELETE")
     return conn, True
 
 
@@ -364,14 +365,16 @@ def ensure_document_locks_table(db_or_path: sqlite3.Connection | str | Path) -> 
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS document_locks (
-                id INTEGER PRIMARY KEY CHECK (id = 1),
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                contract_id INTEGER NOT NULL UNIQUE,
                 is_locked INTEGER NOT NULL DEFAULT 0,
                 locked_by_staff_id INTEGER,
                 locked_by_device_name TEXT,
                 locked_by_full_name TEXT,
                 locked_at TEXT,
                 updated_at TEXT,
-                FOREIGN KEY(locked_by_staff_id) REFERENCES staff(id)
+                FOREIGN KEY(contract_id) REFERENCES contracts(id) ON DELETE CASCADE,
+                FOREIGN KEY(locked_by_staff_id) REFERENCES staff(id) ON DELETE SET NULL
             )
             """
         )
@@ -381,21 +384,25 @@ def ensure_document_locks_table(db_or_path: sqlite3.Connection | str | Path) -> 
             conn.close()
 
 
-def get_document_lock_state(db_or_path: sqlite3.Connection | str | Path) -> dict[str, Any]:
+def get_document_lock_state(
+    db_or_path: sqlite3.Connection | str | Path,
+    contract_id: int,
+) -> dict[str, Any]:
     ensure_document_locks_table(db_or_path)
     conn, should_close = _connection_from(db_or_path)
     try:
         row = conn.execute(
             """
-            SELECT id, is_locked, locked_by_staff_id, locked_by_device_name,
-                   locked_by_full_name, locked_at, updated_at
+            SELECT id, contract_id, is_locked, locked_by_staff_id,
+                   locked_by_device_name, locked_by_full_name, locked_at, updated_at
             FROM document_locks
-            WHERE id=1
-            """
+            WHERE contract_id=?
+            """,
+            (int(contract_id),),
         ).fetchone()
         if not row:
             return {
-                "id": 1,
+                "contract_id": int(contract_id),
                 "is_locked": 0,
                 "locked_by_staff_id": None,
                 "locked_by_device_name": None,
@@ -409,18 +416,22 @@ def get_document_lock_state(db_or_path: sqlite3.Connection | str | Path) -> dict
             conn.close()
 
 
-def lock_documents(db_or_path: sqlite3.Connection | str | Path, staff: dict[str, Any]) -> dict[str, Any]:
+def lock_documents(
+    db_or_path: sqlite3.Connection | str | Path,
+    contract_id: int,
+    staff: dict[str, Any],
+) -> dict[str, Any]:
     ensure_document_locks_table(db_or_path)
     conn, should_close = _connection_from(db_or_path)
     try:
         conn.execute(
             """
             INSERT INTO document_locks(
-                id, is_locked, locked_by_staff_id, locked_by_device_name,
-                locked_by_full_name, locked_at, updated_at
+                contract_id, is_locked, locked_by_staff_id,
+                locked_by_device_name, locked_by_full_name, locked_at, updated_at
             )
-            VALUES(1, 1, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-            ON CONFLICT(id) DO UPDATE SET
+            VALUES(?, 1, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            ON CONFLICT(contract_id) DO UPDATE SET
                 is_locked=1,
                 locked_by_staff_id=excluded.locked_by_staff_id,
                 locked_by_device_name=excluded.locked_by_device_name,
@@ -429,37 +440,42 @@ def lock_documents(db_or_path: sqlite3.Connection | str | Path, staff: dict[str,
                 updated_at=CURRENT_TIMESTAMP
             """,
             (
+                int(contract_id),
                 int(staff.get("id")) if staff and staff.get("id") is not None else None,
                 str((staff or {}).get("device_name") or ""),
                 str((staff or {}).get("full_name") or ""),
             ),
         )
         conn.commit()
-        return get_document_lock_state(conn)
+        return get_document_lock_state(conn, contract_id)
     finally:
         if should_close:
             conn.close()
 
 
-def unlock_documents(db_or_path: sqlite3.Connection | str | Path) -> dict[str, Any]:
+def unlock_documents(
+    db_or_path: sqlite3.Connection | str | Path,
+    contract_id: int,
+) -> dict[str, Any]:
     ensure_document_locks_table(db_or_path)
     conn, should_close = _connection_from(db_or_path)
     try:
         conn.execute(
             """
-            INSERT INTO document_locks(id, is_locked, updated_at)
-            VALUES(1, 0, CURRENT_TIMESTAMP)
-            ON CONFLICT(id) DO UPDATE SET
+            INSERT INTO document_locks(contract_id, is_locked, updated_at)
+            VALUES(?, 0, CURRENT_TIMESTAMP)
+            ON CONFLICT(contract_id) DO UPDATE SET
                 is_locked=0,
                 locked_by_staff_id=NULL,
                 locked_by_device_name=NULL,
                 locked_by_full_name=NULL,
                 locked_at=NULL,
                 updated_at=CURRENT_TIMESTAMP
-            """
+            """,
+            (int(contract_id),),
         )
         conn.commit()
-        return get_document_lock_state(conn)
+        return get_document_lock_state(conn, contract_id)
     finally:
         if should_close:
             conn.close()
@@ -551,7 +567,9 @@ def require_document_unlock_password(parent, db_or_path: sqlite3.Connection | st
             password_edit.setFocus()
             password_edit.selectAll()
             return
-        unlock_documents(db_or_path)
+        cid = lock_state.get("contract_id")
+        if cid is not None:
+            unlock_documents(db_or_path, int(cid))
         dlg.accept()
 
     cancel.clicked.connect(dlg.reject)
