@@ -37,6 +37,7 @@ def _connection_from(db_or_path: sqlite3.Connection | str | Path) -> tuple[sqlit
         return db_or_path, False
     conn = sqlite3.connect(str(Path(db_or_path)))
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=DELETE")
     return conn, True
 
 
@@ -371,7 +372,7 @@ def ensure_document_locks_table(db_or_path: sqlite3.Connection | str | Path) -> 
                 locked_by_full_name TEXT,
                 locked_at TEXT,
                 updated_at TEXT,
-                FOREIGN KEY(locked_by_staff_id) REFERENCES staff(id)
+                FOREIGN KEY(locked_by_staff_id) REFERENCES staff(id) ON DELETE SET NULL
             )
             """
         )

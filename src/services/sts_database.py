@@ -6,6 +6,7 @@ import re
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
+from typing import List
 
 from src.auth import ensure_document_locks_table, ensure_staff_table
 
@@ -55,7 +56,7 @@ class STSDatabase:
         self.conn = sqlite3.connect(str(self.path))
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA foreign_keys=ON")
-        self.conn.execute("PRAGMA journal_mode=WAL")
+        self.conn.execute("PRAGMA journal_mode=DELETE")
         self.conn.execute("PRAGMA synchronous=NORMAL")
         self.conn.execute("PRAGMA cache_size=-64000")
         migrated = self.init_schema()
@@ -152,7 +153,8 @@ CREATE INDEX IF NOT EXISTS idx_logs_entity ON activity_logs(entity_type,entity_i
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_contract_files_folder_id ON contract_files(folder_id)")
         ensure_staff_table(self.conn)
         ensure_document_locks_table(self.conn)
-        self.conn.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version','3')")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_document_locks_id ON document_locks(id)")
+        self.conn.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version','4')")
         self.conn.commit()
         return migrated
 
@@ -289,6 +291,7 @@ CREATE INDEX IF NOT EXISTS idx_logs_entity ON activity_logs(entity_type,entity_i
         dest = sqlite3.connect(str(target_path))
         try:
             self.conn.backup(dest)
+            dest.execute("PRAGMA journal_mode=DELETE")
             dest.commit()
         finally:
             dest.close()
