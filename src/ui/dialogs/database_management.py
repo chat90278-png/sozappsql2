@@ -61,7 +61,6 @@ TABLE_INFO = {
     "components": "Tanımlı bileşenler",
     "activity_logs": "İşlem geçmişi",
     "staff": "Personel giriş kayıtları",
-    "document_locks": "Belge kilit durumu",
     "component_platforms": "Bileşen platform yetkileri",
 }
 

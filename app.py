@@ -5287,47 +5287,19 @@ class ContractWorkWindow(QDialog):
     def _document_db_conn(self):
         return getattr(getattr(self.store, "db", None), "conn", None)
 
-    def _default_document_lock_state(self) -> dict:
-        return {
-            "is_locked": 0,
-            "locked_by_staff_id": None,
-            "locked_by_device_name": None,
-            "locked_by_full_name": None,
-            "locked_at": None,
-            "updated_at": None,
-        }
-
     def _load_document_lock_state(self) -> dict:
         conn = self._document_db_conn()
         if conn is None:
-            self._document_lock_state = self._default_document_lock_state()
-            return dict(self._document_lock_state)
-        try:
-            getter = getattr(auth, "get_document_lock_state", None)
-            if not callable(getter):
-                raise AttributeError("src.auth.get_document_lock_state bulunamadı")
-            self._document_lock_state = getter(conn)
-        except Exception:
-            traceback.print_exc()
-            # Belgeler paneli, lock state okunamadığında beyaz kalmasın;
-            # güvenli varsayılan olarak kilit açık kabul edilir.
-            self._document_lock_state = self._default_document_lock_state()
-        return dict(self._document_lock_state or self._default_document_lock_state())
+            self._document_lock_state = {"is_locked": 0}
+        else:
+            self._document_lock_state = auth.get_document_lock_state(conn)
+        return dict(self._document_lock_state or {"is_locked": 0})
 
     def _current_document_lock_state(self) -> dict:
         return dict(getattr(self, "_document_lock_state", {}) or self._load_document_lock_state())
 
     def _documents_access_allowed(self, lock_state: Optional[dict] = None) -> bool:
-        state = lock_state or self._current_document_lock_state()
-        checker = getattr(auth, "can_current_staff_access_documents", None)
-        if callable(checker):
-            return checker(state, self.current_staff)
-        if int((state or {}).get("is_locked") or 0) == 0:
-            return True
-        return bool(
-            self.current_staff
-            and str((self.current_staff or {}).get("device_name") or "") == str((state or {}).get("locked_by_device_name") or "")
-        )
+        return auth.can_current_staff_access_documents(lock_state or self._current_document_lock_state(), self.current_staff)
 
     def _document_lock_same_device(self, lock_state: Optional[dict] = None) -> bool:
         state = lock_state or self._current_document_lock_state()
@@ -9442,12 +9414,6 @@ if __name__ == "__main__":
     if icon_path.exists():
         app.setWindowIcon(QIcon(str(icon_path)))
 
-    # Startup uses modal dialogs before the main window exists.  Keep Qt from
-    # treating an accepted file/staff dialog as the last-window-close event;
-    # otherwise the first successful registration/login can request app quit
-    # before the real MainWindow event loop starts.
-    app.setQuitOnLastWindowClosed(False)
-
     start_dialog = WorkbookStartDialog()
     if not start_dialog.exec() or not start_dialog.selected_path:
         sys.exit(0)
@@ -9461,18 +9427,8 @@ if __name__ == "__main__":
 
     win = MainWindow(initial_path=selected_path, current_staff=staff)
     win.show()
-
-    def _start_initial_load():
-        app.setQuitOnLastWindowClosed(True)
-        try:
-            if selected_path.suffix.lower() == ".sts":
-                win.start_sts_load(selected_path)
-            else:
-                win.start_excel_load(selected_path)
-        except Exception as exc:
-            traceback.print_exc()
-            QMessageBox.critical(win, "Açılış hatası", f"Uygulama başlatılırken hata oluştu.\n\n{exc}")
-            app.quit()
-
-    QTimer.singleShot(0, _start_initial_load)
+    if selected_path.suffix.lower() == ".sts":
+        win.start_sts_load(selected_path)
+    else:
+        win.start_excel_load(selected_path)
     sys.exit(app.exec())
