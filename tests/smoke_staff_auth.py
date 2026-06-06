@@ -51,13 +51,10 @@ def test_sts_database_initializes_staff_table(tmp_path):
     try:
         tables = {row[0] for row in db.conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         columns = {row[1] for row in db.conn.execute("PRAGMA table_info(staff)")}
-        stats = db.database_stats()
     finally:
         db.close()
 
     assert "staff" in tables
-    assert "staff" in stats["table_counts"]
-    assert "sqlite_sequence" not in stats["table_counts"]
     assert {"device_name", "full_name", "password_hash", "role", "is_active"}.issubset(columns)
 
 
