@@ -1559,25 +1559,316 @@ class ComponentManagerDialog(StyledDialog):
 
 from src.ui.dialogs.platforms import PlatformManagerDialog, PlatformDialog
 
+class _UserRowWidget(QWidget):
+    """Dropdown içindeki tek kullanıcı satırı: avatar + isim + checkbox."""
+
+    toggled = Signal(str, bool)  # (name, is_checked)
+
+    _AVATAR_PALETTES = [
+        ("#e8f0fe", "#1e40af"),
+        ("#fce7f3", "#9d174d"),
+        ("#ecfdf5", "#065f46"),
+        ("#fef3c7", "#92400e"),
+        ("#ede9fe", "#5b21b6"),
+        ("#fee2e2", "#991b1b"),
+        ("#e0f2fe", "#075985"),
+        ("#d1fae5", "#065f46"),
+    ]
+
+    def __init__(self, name: str, palette_index: int, checked: bool = False, parent=None):
+        super().__init__(parent)
+        self._name = name
+        self._checked = checked
+        bg, fg = self._AVATAR_PALETTES[palette_index % len(self._AVATAR_PALETTES)]
+        self._bg = bg
+        self._fg = fg
+        self.setCursor(Qt.PointingHandCursor)
+        self.setFixedHeight(40)
+
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(10, 0, 12, 0)
+        lay.setSpacing(10)
+
+        # Avatar dairesi
+        self._avatar = QLabel(self._initials(name))
+        self._avatar.setFixedSize(26, 26)
+        self._avatar.setAlignment(Qt.AlignCenter)
+        self._avatar.setStyleSheet(
+            f"background:{bg};color:{fg};border-radius:13px;"
+            "font-size:10px;font-weight:700;"
+        )
+        lay.addWidget(self._avatar)
+
+        # İsim
+        self._label = QLabel(name)
+        self._label.setStyleSheet("font-size:13px;color:#0f172a;background:transparent;")
+        lay.addWidget(self._label, 1)
+
+        # Checkbox kutusu
+        self._check = QLabel()
+        self._check.setFixedSize(18, 18)
+        self._update_check_style()
+        lay.addWidget(self._check)
+
+        self._update_bg()
+
+    @staticmethod
+    def _initials(name: str) -> str:
+        parts = str(name or "").strip().split()
+        if len(parts) >= 2:
+            return (parts[0][0] + parts[-1][0]).upper()
+        return name[:2].upper() if name else "?"
+
+    def _update_check_style(self):
+        if self._checked:
+            self._check.setStyleSheet(
+                "background:#2563eb;border-radius:4px;border:1.5px solid #2563eb;"
+            )
+            self._check.setText("✓")
+            self._check.setAlignment(Qt.AlignCenter)
+            self._check.setStyleSheet(
+                "background:#2563eb;border-radius:4px;border:1.5px solid #2563eb;"
+                "color:white;font-size:11px;font-weight:700;"
+            )
+        else:
+            self._check.setText("")
+            self._check.setStyleSheet(
+                "background:white;border-radius:4px;border:1.5px solid #cbd5e1;"
+            )
+
+    def _update_bg(self):
+        if self._checked:
+            self.setStyleSheet("QWidget{background:#f0f7ff;}QWidget:hover{background:#e8f3ff;}")
+        else:
+            self.setStyleSheet("QWidget{background:white;}QWidget:hover{background:#f8fafc;}")
+
+    def set_checked(self, checked: bool):
+        self._checked = checked
+        self._update_check_style()
+        self._update_bg()
+
+    def is_checked(self) -> bool:
+        return self._checked
+
+    def name(self) -> str:
+        return self._name
+
+    def mousePressEvent(self, event):
+        self._checked = not self._checked
+        self._update_check_style()
+        self._update_bg()
+        self.toggled.emit(self._name, self._checked)
+
+    def matches_filter(self, query: str) -> bool:
+        return query.lower() in self._name.lower()
+
+
+class _MultiUserDropdown(QFrame):
+    """Açılır panel: arama + kullanıcı satırları + alt bilgi."""
+
+    selection_changed = Signal(list)  # List[str]
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("multiUserDropdown")
+        self.setStyleSheet(
+            "QFrame#multiUserDropdown{"
+            "background:white;border:1.5px solid #e2e8f0;"
+            "border-radius:10px;"
+            "}"
+        )
+        self.setWindowFlags(Qt.Popup | Qt.FramelessWindowHint)
+        self.setAttribute(Qt.WA_TranslucentBackground, False)
+
+        self._rows: List[_UserRowWidget] = []
+        self._selected: List[str] = []
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        # Arama satırı
+        search_row = QWidget()
+        search_row.setStyleSheet("background:white;border-bottom:1px solid #f1f5f9;")
+        sr = QHBoxLayout(search_row)
+        sr.setContentsMargins(10, 6, 10, 6)
+        sr.setSpacing(6)
+        lupe = QLabel("⌕")
+        lupe.setStyleSheet("color:#94a3b8;font-size:16px;background:transparent;")
+        sr.addWidget(lupe)
+        self._search = QLineEdit()
+        self._search.setPlaceholderText("Ara...")
+        self._search.setStyleSheet(
+            "border:none;outline:none;font-size:13px;color:#0f172a;"
+            "background:transparent;"
+        )
+        self._search.textChanged.connect(self._apply_filter)
+        sr.addWidget(self._search, 1)
+        root.addWidget(search_row)
+
+        # Scroll alan
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll.setFixedHeight(210)
+        scroll.setStyleSheet("QScrollArea{background:white;border:none;}")
+        self._list_container = QWidget()
+        self._list_container.setStyleSheet("background:white;")
+        self._list_layout = QVBoxLayout(self._list_container)
+        self._list_layout.setContentsMargins(0, 4, 0, 4)
+        self._list_layout.setSpacing(0)
+        scroll.setWidget(self._list_container)
+        root.addWidget(scroll)
+
+        # Alt satır
+        footer = QWidget()
+        footer.setStyleSheet(
+            "background:white;border-top:1px solid #f1f5f9;"
+        )
+        fr = QHBoxLayout(footer)
+        fr.setContentsMargins(12, 6, 12, 6)
+        self._count_lbl = QLabel("0 seçili")
+        self._count_lbl.setStyleSheet("font-size:11px;color:#64748b;background:transparent;")
+        fr.addWidget(self._count_lbl)
+        fr.addStretch()
+        clear_btn = QPushButton("Temizle")
+        clear_btn.setStyleSheet(
+            "QPushButton{border:none;background:transparent;color:#3b82f6;"
+            "font-size:11px;font-weight:700;padding:0;}"
+            "QPushButton:hover{color:#1d4ed8;}"
+        )
+        clear_btn.setCursor(Qt.PointingHandCursor)
+        clear_btn.clicked.connect(self._clear_all)
+        fr.addWidget(clear_btn)
+        root.addWidget(footer)
+
+    def populate(self, available: List[str], selected: List[str]):
+        # Mevcut satırları temizle
+        while self._list_layout.count():
+            item = self._list_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        self._rows.clear()
+        self._selected = list(selected)
+
+        for i, name in enumerate(available):
+            row = _UserRowWidget(name, i, name in self._selected)
+            row.toggled.connect(self._on_row_toggled)
+            self._list_layout.addWidget(row)
+            self._rows.append(row)
+
+        self._list_layout.addStretch()
+        self._update_count()
+        self._search.clear()
+
+    def _on_row_toggled(self, name: str, checked: bool):
+        if checked and name not in self._selected:
+            self._selected.append(name)
+        elif not checked:
+            self._selected = [x for x in self._selected if x != name]
+        self._update_count()
+        self.selection_changed.emit(list(self._selected))
+
+    def _clear_all(self):
+        self._selected.clear()
+        for row in self._rows:
+            row.set_checked(False)
+        self._update_count()
+        self.selection_changed.emit([])
+
+    def _update_count(self):
+        n = len(self._selected)
+        self._count_lbl.setText(f"{n} seçili" if n else "Seçim yok")
+
+    def _apply_filter(self, query: str):
+        for row in self._rows:
+            row.setVisible(row.matches_filter(query))
+
+    def selected_names(self) -> List[str]:
+        return list(self._selected)
+
+    def keyPressEvent(self, event):
+        if event.key() in (Qt.Key_Escape, Qt.Key_Return, Qt.Key_Enter):
+            self.hide()
+        else:
+            super().keyPressEvent(event)
+
+
 class MultiUserSelectWidget(QWidget):
+    """
+    Kullanıcı seçim widget'ı.
+
+    Public API (değişmez):
+        set_available_users(names)  — kullanılabilir kullanıcıları set eder
+        set_users(names)            — seçili kullanıcıları set eder
+        selected_users() -> List[str]
+        changed Signal
+    """
+
     changed = Signal()
+
+    _PILL_COLORS = [
+        ("#e8f0fe", "#1e40af"),
+        ("#fce7f3", "#9d174d"),
+        ("#ecfdf5", "#065f46"),
+        ("#fef3c7", "#92400e"),
+        ("#ede9fe", "#5b21b6"),
+        ("#fee2e2", "#991b1b"),
+        ("#e0f2fe", "#075985"),
+    ]
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self._available: List[str] = []
         self._selected: List[str] = []
-        lay = QHBoxLayout(self)
+        self._dropdown: Optional[_MultiUserDropdown] = None
+
+        lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
-        self.combo = QComboBox(self)
-        self.combo.setEditable(True)
-        self.combo.lineEdit().setReadOnly(True)
-        self.combo.lineEdit().setPlaceholderText("Kullanıcı seçiniz...")
-        self.combo.view().pressed.connect(self._on_item_pressed)
-        lay.addWidget(self.combo, 1)
-        self._sync()
+        lay.setSpacing(0)
+
+        # Tıklanabilir ana kutu
+        self._display = QFrame()
+        self._display.setObjectName("multiUserDisplay")
+        self._display.setCursor(Qt.PointingHandCursor)
+        self._display.setMinimumHeight(36)
+        self._display.setStyleSheet(
+            "QFrame#multiUserDisplay{"
+            "background:white;border:1.5px solid #d8e2ed;"
+            "border-radius:8px;padding:4px 8px;"
+            "}"
+            "QFrame#multiUserDisplay:hover{"
+            "border-color:#93c5fd;"
+            "}"
+        )
+        self._display_lay = QHBoxLayout(self._display)
+        self._display_lay.setContentsMargins(4, 3, 6, 3)
+        self._display_lay.setSpacing(4)
+
+        self._placeholder = QLabel("Kullanıcı seçiniz...")
+        self._placeholder.setStyleSheet(
+            "color:#94a3b8;font-size:13px;background:transparent;"
+        )
+        self._display_lay.addWidget(self._placeholder)
+        self._display_lay.addStretch()
+
+        self._chevron = QLabel("▾")
+        self._chevron.setStyleSheet(
+            "color:#94a3b8;font-size:13px;background:transparent;"
+        )
+        self._display_lay.addWidget(self._chevron)
+
+        lay.addWidget(self._display)
+        self._display.mousePressEvent = self._toggle_dropdown
+        self._render_pills()
+
+    # ── Public API ────────────────────────────────────────────────────────
 
     def set_available_users(self, user_names: List[str]):
-        seen = set()
-        vals = []
+        seen: set = set()
+        vals: List[str] = []
         for u in list(user_names or []):
             n = str(u or "").strip()
             if not n:
@@ -1589,12 +1880,11 @@ class MultiUserSelectWidget(QWidget):
             vals.append(n)
         self._available = vals
         self._selected = [x for x in self._selected if x in self._available]
-        self._rebuild_items()
-        self._sync()
+        self._render_pills()
 
     def set_users(self, user_names: List[str]):
-        seen = set()
-        vals = []
+        seen: set = set()
+        vals: List[str] = []
         for u in list(user_names or []):
             n = str(u or "").strip()
             if not n:
@@ -1605,45 +1895,98 @@ class MultiUserSelectWidget(QWidget):
             seen.add(k)
             vals.append(n)
         self._selected = vals
-        self._rebuild_items()
-        self._sync()
+        self._render_pills()
         self.changed.emit()
 
     def selected_users(self) -> List[str]:
         return list(self._selected)
 
-    def _sync(self):
-        txt = ", ".join(self._selected)
-        self.combo.lineEdit().setText(txt)
-        self.combo.setToolTip(txt)
+    # ── İç metodlar ──────────────────────────────────────────────────────
 
-    def _rebuild_items(self):
-        self.combo.blockSignals(True)
-        self.combo.clear()
-        for name in self._available:
-            self.combo.addItem(name)
-            it = self.combo.model().item(self.combo.count() - 1, 0)
-            if it is None:
-                continue
-            it.setFlags(Qt.ItemIsEnabled | Qt.ItemIsUserCheckable)
-            it.setData(Qt.Checked if name in self._selected else Qt.Unchecked, Qt.CheckStateRole)
-        self.combo.blockSignals(False)
+    def _pill_colors(self, name: str):
+        idx = sum(ord(c) for c in name) % len(self._PILL_COLORS)
+        return self._PILL_COLORS[idx]
 
-    def _on_item_pressed(self, idx):
-        it = self.combo.model().itemFromIndex(idx)
-        if it is None:
-            return
-        checked = it.data(Qt.CheckStateRole) == Qt.Checked
-        it.setData(Qt.Unchecked if checked else Qt.Checked, Qt.CheckStateRole)
-        name = str(it.text() or "").strip()
-        if not name:
-            return
-        if checked:
-            self._selected = [x for x in self._selected if x != name]
-        elif name not in self._selected:
-            self._selected.append(name)
-        self._sync()
+    def _render_pills(self):
+        # Display içini temizle
+        while self._display_lay.count():
+            item = self._display_lay.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        if not self._selected:
+            self._display_lay.addWidget(self._placeholder)
+            self._placeholder.show()
+        else:
+            self._placeholder.hide()
+            for name in self._selected:
+                bg, fg = self._pill_colors(name)
+                pill = QWidget()
+                pill.setStyleSheet(
+                    f"background:{bg};border-radius:10px;"
+                )
+                pill_lay = QHBoxLayout(pill)
+                pill_lay.setContentsMargins(7, 2, 5, 2)
+                pill_lay.setSpacing(3)
+                lbl = QLabel(name)
+                lbl.setStyleSheet(
+                    f"color:{fg};font-size:11px;font-weight:700;"
+                    "background:transparent;"
+                )
+                pill_lay.addWidget(lbl)
+                x_btn = QLabel("×")
+                x_btn.setStyleSheet(
+                    f"color:{fg};font-size:13px;background:transparent;"
+                    "padding:0 1px;"
+                )
+                x_btn.setCursor(Qt.PointingHandCursor)
+                _name = name
+                x_btn.mousePressEvent = lambda e, n=_name: self._remove_user(e, n)
+                pill_lay.addWidget(x_btn)
+                self._display_lay.addWidget(pill)
+
+        self._display_lay.addStretch()
+        self._display_lay.addWidget(self._chevron)
+        self._chevron.show()
+        tooltip = ", ".join(self._selected)
+        self._display.setToolTip(tooltip)
+
+    def _remove_user(self, event, name: str):
+        event.accept()
+        self._selected = [x for x in self._selected if x != name]
+        self._render_pills()
+        if self._dropdown and self._dropdown.isVisible():
+            self._dropdown.populate(self._available, self._selected)
         self.changed.emit()
+
+    def _toggle_dropdown(self, event=None):
+        if self._dropdown is None:
+            self._dropdown = _MultiUserDropdown(self)
+            self._dropdown.setFixedWidth(max(self.width(), 240))
+            self._dropdown.selection_changed.connect(self._on_dropdown_changed)
+
+        if self._dropdown.isVisible():
+            self._dropdown.hide()
+            return
+
+        self._dropdown.setFixedWidth(max(self.width(), 240))
+        self._dropdown.populate(self._available, self._selected)
+
+        # Konumlandır — widget'ın hemen altına
+        pos = self.mapToGlobal(self._display.rect().bottomLeft())
+        self._dropdown.move(pos.x(), pos.y() + 2)
+        self._dropdown.show()
+        self._dropdown.raise_()
+
+    def _on_dropdown_changed(self, names: List[str]):
+        self._selected = list(names)
+        self._render_pills()
+        self.changed.emit()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if self._dropdown:
+            self._dropdown.setFixedWidth(max(self.width(), 240))
 
 class ContractDialog(StyledDialog):
     def __init__(self, store: ExcelStore, parent=None):
