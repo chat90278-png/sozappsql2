@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from src.models.app_models import ComponentDef, ContractInfo, DeliveryInfo, SystemInfo, TagDef
 from src.services.sts_database import STSDatabase, now_iso
+from src import auth
 
 
 class STSStore:
@@ -114,6 +115,33 @@ class STSStore:
 
     def list_logs(self, limit=500, action=None, entity_type=None, platform=None, contract_no=None, search=None):
         return self.db.list_logs(limit=limit, action=action, entity_type=entity_type, platform=platform, contract_no=contract_no, search=search)
+
+
+    def document_lock_state(self):
+        return auth.get_document_lock_state(self.db.conn)
+
+    def lock_documents(self, current_staff):
+        state = auth.lock_documents(self.db.conn, current_staff or {})
+        self._log(
+            "documents_locked",
+            entity_type="document_lock",
+            source="Document Manager",
+            message="Belgeler kilitlendi",
+            payload={"locked_by_staff_id": (current_staff or {}).get("id"), "locked_by_device_name": (current_staff or {}).get("device_name")},
+            actor=str((current_staff or {}).get("full_name") or self.current_actor()),
+        )
+        return state
+
+    def unlock_documents(self, actor=None):
+        state = auth.unlock_documents(self.db.conn)
+        self._log(
+            "documents_unlocked",
+            entity_type="document_lock",
+            source="Document Manager",
+            message="Belgeler kilidi açıldı",
+            actor=str(actor or self.current_actor()),
+        )
+        return state
 
     def supports_activity_logs(self):
         return True
