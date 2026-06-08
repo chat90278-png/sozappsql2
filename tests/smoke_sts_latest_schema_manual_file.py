@@ -14,7 +14,7 @@ EXPECTED_COLUMNS = {
     "users": ["id", "name", "yi_yd", "active", "note", "created_at", "updated_at"],
     "components": ["id", "name", "version", "unit", "active", "usage", "payload_json", "created_at", "updated_at"],
     "component_platforms": ["id", "component_id", "platform_id", "enabled"],
-    "contracts": ["id", "platform_id", "user_id", "contract_no", "yi_yd", "contract_type", "type_display", "link_type", "status", "signed_date", "t0_date", "t0_months", "completion_date", "acceptance_date", "content", "note", "is_main", "parent_contract_id", "search_text", "payload_json", "created_at", "updated_at"],
+    "contracts": ["id", "platform_id", "contract_no", "yi_yd", "contract_type", "type_display", "link_type", "status", "signed_date", "t0_date", "t0_months", "completion_date", "acceptance_date", "content", "note", "is_main", "parent_contract_id", "search_text", "payload_json", "created_at", "updated_at"],
     "contract_users": ["contract_id", "user_id"],
     "systems": ["id", "contract_id", "name", "status", "completion_date", "acceptance_date", "note", "sort_order", "payload_json"],
     "system_components": ["id", "system_id", "component_id", "qty", "note"],

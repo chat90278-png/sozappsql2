@@ -13,11 +13,11 @@ with TemporaryDirectory() as td:
     assert db.conn.execute('PRAGMA busy_timeout').fetchone()[0] == 5000
     assert db.conn.execute('PRAGMA synchronous').fetchone()[0] == 1
     assert db.conn.execute('PRAGMA cache_size').fetchone()[0] == -64000
-    assert db.conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0] == '7'
+    assert db.conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0] == '8'
 
     expected_columns = {
         'component_platforms': {'component_id', 'platform_id'},
-        'contracts': {'platform_id', 'user_id'},
+        'contracts': {'platform_id'},
         'contract_users': {'contract_id', 'user_id'},
         'systems': {'contract_id'},
         'system_components': {'system_id', 'component_id', 'qty', 'note'},
@@ -32,7 +32,7 @@ with TemporaryDirectory() as td:
         actual = {r[1] for r in db.conn.execute(f'PRAGMA table_info({table})')}
         assert columns <= actual, (table, columns - actual)
     forbidden_columns = {
-        'component_platforms': {'platform_name'}, 'contracts': {'platform', 'user_name', 'user_' 'names', 'parent_contract_' 'no'},
+        'component_platforms': {'platform_name'}, 'contracts': {'platform', 'user_id', 'user_name', 'user_' 'names', 'parent_contract_' 'no'},
         'systems': {'delivery_user', 'delivery_user_id'}, 'system_components': {'component_name'},
         'delivery_components': {'component_name'}, 'contract_tags': {'tag_name'},
         'activity_logs': {'platform'},

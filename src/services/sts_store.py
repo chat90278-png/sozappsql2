@@ -859,7 +859,6 @@ class STSStore:
         if not users:
             users = self._normalize_users([], getattr(ci, "user", ""))
         user_display = self._user_display(users, getattr(ci, "user", ""))
-        user_id = self.get_user_id(users[0], create=True) if users else None
         search_text = " ".join([str(ci.platform or ""), str(ci.no or ""), str(ctype or ""), str(ci.note or ""), user_display, " ".join(users)]).strip()
         ci.user = user_display; ci.users = users
         row=self.db.conn.execute("SELECT id,status,note,completion_date,acceptance_date FROM contracts WHERE platform_id=? AND contract_no=? AND contract_type=?",(platform_id,ci.no,ctype)).fetchone()
@@ -876,9 +875,9 @@ class STSStore:
         with self.db.tx():
             if row:
                 cid=row[0]
-                self.db.conn.execute("UPDATE contracts SET user_id=?,yi_yd=?,status=?,signed_date=?,t0_date=?,t0_months=?,completion_date=?,acceptance_date=?,note=?,content=?,search_text=?,updated_at=? WHERE id=?",(user_id,ci.yi_yd,ci.status,ci.signature_date,ci.t0_date,int(ci.t0_months or 0),ci.completion_date,ci.acceptance_date,ci.note,ci.note,search_text,ts,cid))
+                self.db.conn.execute("UPDATE contracts SET yi_yd=?,status=?,signed_date=?,t0_date=?,t0_months=?,completion_date=?,acceptance_date=?,note=?,content=?,search_text=?,updated_at=? WHERE id=?",(ci.yi_yd,ci.status,ci.signature_date,ci.t0_date,int(ci.t0_months or 0),ci.completion_date,ci.acceptance_date,ci.note,ci.note,search_text,ts,cid))
             else:
-                self.db.conn.execute("INSERT INTO contracts(platform_id,user_id,contract_no,yi_yd,contract_type,type_display,link_type,status,signed_date,t0_date,t0_months,completion_date,acceptance_date,content,note,is_main,search_text,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(platform_id,user_id,ci.no,ci.yi_yd,ctype,ctype,"",ci.status,ci.signature_date,ci.t0_date,int(ci.t0_months or 0),ci.completion_date,ci.acceptance_date,ci.note,ci.note,1 if self._normalize_label(ctype)==self._normalize_label('Ana Sözleşme') else 0,search_text,ts,ts))
+                self.db.conn.execute("INSERT INTO contracts(platform_id,contract_no,yi_yd,contract_type,type_display,link_type,status,signed_date,t0_date,t0_months,completion_date,acceptance_date,content,note,is_main,search_text,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(platform_id,ci.no,ci.yi_yd,ctype,ctype,"",ci.status,ci.signature_date,ci.t0_date,int(ci.t0_months or 0),ci.completion_date,ci.acceptance_date,ci.note,ci.note,1 if self._normalize_label(ctype)==self._normalize_label('Ana Sözleşme') else 0,search_text,ts,ts))
                 cid=self.db.conn.execute("SELECT last_insert_rowid()").fetchone()[0]
             self._replace_contract_users(int(cid), users)
 

@@ -167,21 +167,34 @@ class STSDatabase:
         select_columns.append("user_id" if "user_id" in columns else "NULL AS user_id")
         select_columns.append(LEGACY_CONTRACT_USERS_COLUMN if LEGACY_CONTRACT_USERS_COLUMN in columns else f"NULL AS {LEGACY_CONTRACT_USERS_COLUMN}")
         changed = False
+        if "user_id" in columns:
+            cursor = self.conn.execute(
+                """
+                INSERT OR IGNORE INTO contract_users(contract_id, user_id)
+                SELECT lc.id, lc.user_id
+                FROM contracts AS lc
+                WHERE lc.user_id IS NOT NULL
+                  AND NOT EXISTS (
+                    SELECT 1 FROM contract_users cu
+                    WHERE cu.contract_id = lc.id
+                      AND cu.user_id = lc.user_id
+                  )
+                """
+            )
+            changed = changed or bool(cursor.rowcount and cursor.rowcount > 0)
         for row in self.conn.execute(f"SELECT {', '.join(select_columns)} FROM contracts").fetchall():
-            existing = int(self.conn.execute("SELECT COUNT(*) FROM contract_users WHERE contract_id=?", (int(row[0]),)).fetchone()[0] or 0)
-            if existing:
-                continue
             names = self._legacy_user_list(row[2], row[1])
             for name in names:
                 uid = self._user_id_for_bridge(name)
-                self.conn.execute("INSERT OR IGNORE INTO contract_users(contract_id,user_id) VALUES(?,?)", (int(row[0]), uid))
-                changed = True
+                cursor = self.conn.execute("INSERT OR IGNORE INTO contract_users(contract_id,user_id) VALUES(?,?)", (int(row[0]), uid))
+                changed = changed or bool(cursor.rowcount and cursor.rowcount > 0)
         return changed
 
-    def _rebuild_contracts_without_legacy_columns(self) -> bool:
+    def _rebuild_contracts_without_legacy_columns(self) -> set[str]:
         columns = self._table_columns("contracts")
-        if not ({LEGACY_CONTRACT_PARENT_NO_COLUMN, LEGACY_CONTRACT_USERS_COLUMN} & columns):
-            return False
+        removed = ({LEGACY_CONTRACT_PARENT_NO_COLUMN, LEGACY_CONTRACT_USERS_COLUMN, "user_id"} & columns)
+        if not removed:
+            return set()
         self.conn.commit()
         self.conn.execute("PRAGMA foreign_keys=OFF")
         self.conn.execute("PRAGMA legacy_alter_table=ON")
@@ -192,7 +205,6 @@ class STSDatabase:
                 CREATE TABLE contracts(
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     platform_id INTEGER NOT NULL,
-                    user_id INTEGER,
                     contract_no TEXT NOT NULL,
                     yi_yd TEXT,
                     contract_type TEXT,
@@ -214,13 +226,12 @@ class STSDatabase:
                     updated_at TEXT,
                     UNIQUE(platform_id,contract_no,contract_type),
                     FOREIGN KEY(platform_id) REFERENCES platforms(id) ON DELETE RESTRICT,
-                    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE SET NULL,
                     FOREIGN KEY(parent_contract_id) REFERENCES contracts(id) ON DELETE SET NULL
                 )
                 """
             )
             copy_columns = [
-                "id", "platform_id", "user_id", "contract_no", "yi_yd", "contract_type", "type_display",
+                "id", "platform_id", "contract_no", "yi_yd", "contract_type", "type_display",
                 "link_type", "status", "signed_date", "t0_date", "t0_months", "completion_date",
                 "acceptance_date", "content", "note", "is_main", "parent_contract_id", "search_text",
                 "payload_json", "created_at", "updated_at",
@@ -235,7 +246,7 @@ class STSDatabase:
         finally:
             self.conn.execute("PRAGMA legacy_alter_table=OFF")
             self.conn.execute("PRAGMA foreign_keys=ON")
-        return True
+        return removed
 
     def _delivery_system_id(self, row: sqlite3.Row, has_legacy_name: bool) -> int | None:
         current = row["system_id"] if "system_id" in row.keys() else None
@@ -367,7 +378,7 @@ CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT 
 CREATE TABLE IF NOT EXISTS components(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT UNIQUE NOT NULL,version TEXT,unit TEXT DEFAULT 'Adet',active INTEGER DEFAULT 1,usage REAL DEFAULT 1,payload_json TEXT,created_at TEXT,updated_at TEXT);
 CREATE TABLE IF NOT EXISTS component_platforms(id INTEGER PRIMARY KEY AUTOINCREMENT,component_id INTEGER NOT NULL,platform_id INTEGER NOT NULL,enabled INTEGER DEFAULT 1,UNIQUE(component_id,platform_id),FOREIGN KEY(component_id) REFERENCES components(id) ON DELETE CASCADE,FOREIGN KEY(platform_id) REFERENCES platforms(id) ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS tags(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT UNIQUE NOT NULL,color TEXT,kind TEXT DEFAULT 'contract',created_at TEXT,updated_at TEXT);
-CREATE TABLE IF NOT EXISTS contracts(id INTEGER PRIMARY KEY AUTOINCREMENT,platform_id INTEGER NOT NULL,user_id INTEGER,contract_no TEXT NOT NULL,yi_yd TEXT,contract_type TEXT,type_display TEXT,link_type TEXT,status TEXT,signed_date TEXT,t0_date TEXT,t0_months INTEGER,completion_date TEXT,acceptance_date TEXT,content TEXT,note TEXT,is_main INTEGER DEFAULT 1,parent_contract_id INTEGER,search_text TEXT,payload_json TEXT,created_at TEXT,updated_at TEXT,UNIQUE(platform_id,contract_no,contract_type),FOREIGN KEY(platform_id) REFERENCES platforms(id) ON DELETE RESTRICT,FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE SET NULL,FOREIGN KEY(parent_contract_id) REFERENCES contracts(id) ON DELETE SET NULL);
+CREATE TABLE IF NOT EXISTS contracts(id INTEGER PRIMARY KEY AUTOINCREMENT,platform_id INTEGER NOT NULL,contract_no TEXT NOT NULL,yi_yd TEXT,contract_type TEXT,type_display TEXT,link_type TEXT,status TEXT,signed_date TEXT,t0_date TEXT,t0_months INTEGER,completion_date TEXT,acceptance_date TEXT,content TEXT,note TEXT,is_main INTEGER DEFAULT 1,parent_contract_id INTEGER,search_text TEXT,payload_json TEXT,created_at TEXT,updated_at TEXT,UNIQUE(platform_id,contract_no,contract_type),FOREIGN KEY(platform_id) REFERENCES platforms(id) ON DELETE RESTRICT,FOREIGN KEY(parent_contract_id) REFERENCES contracts(id) ON DELETE SET NULL);
 CREATE TABLE IF NOT EXISTS contract_users(contract_id INTEGER NOT NULL REFERENCES contracts(id) ON DELETE CASCADE,user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,PRIMARY KEY(contract_id,user_id));
 CREATE TABLE IF NOT EXISTS systems(id INTEGER PRIMARY KEY AUTOINCREMENT,contract_id INTEGER NOT NULL,name TEXT NOT NULL,status TEXT,completion_date TEXT,acceptance_date TEXT,note TEXT,sort_order INTEGER DEFAULT 0,payload_json TEXT,FOREIGN KEY(contract_id) REFERENCES contracts(id) ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS system_components(id INTEGER PRIMARY KEY AUTOINCREMENT,system_id INTEGER NOT NULL,component_id INTEGER NOT NULL,qty REAL DEFAULT 0,note TEXT,UNIQUE(system_id,component_id),FOREIGN KEY(system_id) REFERENCES systems(id) ON DELETE CASCADE,FOREIGN KEY(component_id) REFERENCES components(id) ON DELETE CASCADE);
@@ -381,8 +392,12 @@ CREATE TABLE IF NOT EXISTS activity_logs(id INTEGER PRIMARY KEY AUTOINCREMENT,cr
         )
         if self._migrate_contract_user_bridge():
             migrated.append("contract_users")
-        if self._rebuild_contracts_without_legacy_columns():
-            migrated.append("contracts.cleaned_model")
+        removed_contract_columns = self._rebuild_contracts_without_legacy_columns()
+        if removed_contract_columns:
+            if "user_id" in removed_contract_columns:
+                migrated.append("contracts.user_id")
+            if {LEGACY_CONTRACT_PARENT_NO_COLUMN, LEGACY_CONTRACT_USERS_COLUMN} & removed_contract_columns:
+                migrated.append("contracts.cleaned_model")
         if self._rebuild_deliveries_without_legacy_system_label():
             migrated.append("deliveries.cleaned_model")
         self._create_runtime_indexes()
@@ -422,7 +437,7 @@ CREATE TABLE IF NOT EXISTS activity_logs(id INTEGER PRIMARY KEY AUTOINCREMENT,cr
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_document_locks_contract_id "
             "ON document_locks(contract_id)"
         )
-        self.conn.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version','7')")
+        self.conn.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version','8')")
         self.conn.commit()
         return migrated
 
