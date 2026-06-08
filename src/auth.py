@@ -60,10 +60,12 @@ PERMISSION_GROUPS = [
     (
         "Personel Yönetimi",
         [
-            ("manage_staff", "Personel Listeleme / Ekleme / Düzenleme", "Personel kayıtlarını görüntüler ve düzenler."),
-            ("change_staff_roles", "Rol / Yetki Değiştirme", "Kullanıcı rolünü ve rol yetkilerini düzenler."),
+            ("manage_staff", "Personel Listeleme", "Kullanıcı listesini görüntüler."),
+            ("create_staff", "Personel Ekleme", "Yeni kullanıcı oluşturur."),
+            ("edit_staff", "Personel Düzenleme", "Kullanıcı bilgilerini günceller."),
+            ("manage_roles", "Rol / Yetki Değiştirme", "Kullanıcı rolü ve rol yetkilerini düzenler."),
+            ("change_staff_roles", "Personel Rolü Değiştirme", "Personelin bağlı olduğu rolü değiştirir."),
             ("reset_staff_passwords", "Şifre Sıfırlama", "Personel şifresini yeniler."),
-            ("manage_roles", "Yetki Yönetimi", "Rol/yetki yönetimi penceresini açar."),
         ],
     ),
     (
@@ -104,8 +106,9 @@ DEFAULT_ROLE_PERMISSIONS = {
         "manage_acceptances", "manage_terms", "manage_labels", "manage_platforms", "manage_components",
         "open_sql_panel", "sql_read", "sql_write", "terminal_full_access",
         "view_action_history", "access_database_tools", "lock_documents", "unlock_own_documents",
+        "unlock_all_documents",
     },
-    "personnel": {"view_contracts", "create_contracts", "edit_contracts", "open_sql_panel", "sql_read", "lock_documents", "unlock_own_documents"},
+    "personnel": {"view_contracts", "create_contracts", "edit_contracts", "export_data", "open_sql_panel", "sql_read", "lock_documents", "unlock_own_documents"},
     "viewer": {"view_contracts"},
 }
 
@@ -211,11 +214,18 @@ def ensure_authorization_schema(db_or_path: sqlite3.Connection | str | Path) -> 
             ("last_login_at", "TEXT"),
             ("created_at", "TEXT DEFAULT CURRENT_TIMESTAMP"),
             ("updated_at", "TEXT"),
+            ("device_name", "TEXT"),
         ):
             if name not in columns:
                 conn.execute(f"ALTER TABLE staff ADD COLUMN {name} {ddl}")
         if "role" not in columns:
             conn.execute("ALTER TABLE staff ADD COLUMN role TEXT DEFAULT 'personnel'")
+        columns = _table_columns(conn, "staff")
+        if "device_name" in columns:
+            fallback_columns = [name for name in ("username", "device", "hostname") if name in columns]
+            for fallback in fallback_columns:
+                conn.execute(f"UPDATE staff SET device_name={fallback} WHERE (device_name IS NULL OR TRIM(device_name)='') AND {fallback} IS NOT NULL AND TRIM({fallback})<>''")
+            conn.execute("UPDATE staff SET device_name='STAFF-' || id WHERE device_name IS NULL OR TRIM(device_name)=''")
         _seed_authorization_defaults(conn)
         _migrate_staff_roles(conn)
         conn.commit()
@@ -552,10 +562,23 @@ def _would_keep_full_access_user(conn: sqlite3.Connection, changed_staff_id: int
     return False
 
 
-def update_staff_record(db_or_path: sqlite3.Connection | str | Path, actor: Optional[dict[str, Any]], staff_id: int, *, full_name: str | None = None, role_id: int | None = None, is_active: int | None = None) -> None:
-    require_permission(actor, "manage_staff", db_or_path)
+def _has_any_permission(actor: Optional[dict[str, Any]], db_or_path: sqlite3.Connection | str | Path | None, *permission_codes: str) -> bool:
+    return any(has_permission(actor, code, db_or_path) for code in permission_codes)
+
+
+def require_any_permission(actor: Optional[dict[str, Any]], db_or_path: sqlite3.Connection | str | Path | None, *permission_codes: str) -> None:
+    if not _has_any_permission(actor, db_or_path, *permission_codes):
+        joined = " / ".join(permission_codes)
+        raise PermissionError(f"Bu işlem için '{joined}' yetkilerinden biri gerekli.")
+
+
+def update_staff_record(db_or_path: sqlite3.Connection | str | Path, actor: Optional[dict[str, Any]], staff_id: int, *, full_name: str | None = None, device_name: str | None = None, role_id: int | None = None, is_active: int | None = None) -> None:
+    if full_name is not None or device_name is not None:
+        require_any_permission(actor, db_or_path, "edit_staff", "manage_staff")
     if role_id is not None:
-        require_permission(actor, "change_staff_roles", db_or_path)
+        require_any_permission(actor, db_or_path, "change_staff_roles", "manage_roles")
+    if is_active is not None:
+        require_permission(actor, "manage_staff", db_or_path)
     ensure_authorization_schema(db_or_path)
     conn, should_close = _connection_from(db_or_path)
     try:
@@ -566,6 +589,9 @@ def update_staff_record(db_or_path: sqlite3.Connection | str | Path, actor: Opti
         if full_name is not None:
             assignments.append("full_name=?")
             params.append(str(full_name or "").strip())
+        if device_name is not None:
+            assignments.append("device_name=?")
+            params.append(str(device_name or "").strip())
         if role_id is not None:
             role = conn.execute("SELECT name FROM roles WHERE id=?", (int(role_id),)).fetchone()
             if not role:
@@ -588,10 +614,13 @@ def update_staff_record(db_or_path: sqlite3.Connection | str | Path, actor: Opti
             conn.close()
 
 
-def create_staff_by_admin(db_or_path: sqlite3.Connection | str | Path, actor: Optional[dict[str, Any]], device_name: str, full_name: str, password: str, role_id: int) -> None:
-    require_permission(actor, "manage_staff", db_or_path)
-    require_permission(actor, "change_staff_roles", db_or_path)
-    create_staff(db_or_path, device_name, full_name, password, int(role_id))
+def create_staff_by_admin(db_or_path: sqlite3.Connection | str | Path, actor: Optional[dict[str, Any]], device_name: str, full_name: str, password: str, role_id: int, is_active: int = 1) -> None:
+    require_any_permission(actor, db_or_path, "create_staff", "manage_staff")
+    if role_id is not None:
+        require_any_permission(actor, db_or_path, "change_staff_roles", "manage_roles")
+    row = create_staff(db_or_path, device_name, full_name, password, int(role_id))
+    if int(is_active) != 1:
+        update_staff_record(db_or_path, actor, int(row["id"]), is_active=int(is_active))
 
 
 def reset_staff_password(db_or_path: sqlite3.Connection | str | Path, actor: Optional[dict[str, Any]], staff_id: int, new_password: str) -> None:
@@ -849,7 +878,7 @@ def _build_staff_login_dialog(db_or_path: sqlite3.Connection | str | Path, row, 
 
         def _submit(self):
             if int(row["is_active"] if row["is_active"] is not None else 1) == 0:
-                QMessageBox.warning(self, "Personel pasif", "Bu personel kaydı pasif durumda.")
+                QMessageBox.warning(self, "Personel pasif", "Bu kullanıcı pasif durumdadır. Sistem yöneticinizle iletişime geçin.")
                 return
             password = self.password_edit.text()
             if not password:
@@ -885,7 +914,7 @@ def _show_staff_inactive_message(parent=None) -> None:
     try:
         from PySide6.QtWidgets import QMessageBox
 
-        QMessageBox.warning(parent, "Personel pasif", "Bu personel kaydı pasif durumda.")
+        QMessageBox.warning(parent, "Personel pasif", "Bu kullanıcı pasif durumdadır. Sistem yöneticinizle iletişime geçin.")
     except Exception:
         pass
 
