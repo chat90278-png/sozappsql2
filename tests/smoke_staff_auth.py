@@ -55,7 +55,7 @@ def test_staff_table_create_and_current_staff_payload():
     assert current_staff["full_name"] == "Test Personel"
     assert current_staff["role"] == "admin"
     assert current_staff["role_id"] is not None
-    assert current_staff["role_display_name"] == "Yönetici"
+    assert current_staff["role_display_name"] == "Admin"
     assert current_staff["is_active"] == 1
 
 
@@ -107,19 +107,20 @@ def test_permission_defaults_and_last_full_access_guard():
     roles = {r["name"]: r for r in list_roles(conn)}
     permissions = {p["code"] for p in list_permissions(conn)}
     assert {"admin", "manager", "personnel", "viewer"}.issubset(roles)
-    assert {"manage_staff", "manage_roles", "open_sql_panel", "sql_read", "sql_write"}.issubset(permissions)
+    assert {"manage_staff", "manage_roles", "open_sql_panel", "sql_read", "sql_write", "view_action_history", "create_staff", "edit_staff", "reset_staff_passwords"}.issubset(permissions)
 
     manager = create_staff(conn, "manager-cihaz", "Manager", "gizli", role_id=roles["manager"]["id"])
     manager_user = enrich_staff_permissions(conn, build_current_staff(manager))
-    assert has_permission(manager_user, "manage_staff", conn)
-    assert not has_permission(manager_user, "sql_write", conn)
+    assert not has_permission(manager_user, "manage_staff", conn)
+    assert has_permission(manager_user, "sql_write", conn)
+    assert has_permission(manager_user, "view_action_history", conn)
 
     try:
         update_staff_record(conn, admin, admin["id"], is_active=0)
     except ValueError as exc:
-        assert "tam yetkili" in str(exc)
+        assert "yetkili kullanıcı" in str(exc)
     else:
-        raise AssertionError("Son tam yetkili kullanıcı pasifleştirilememeli")
+        raise AssertionError("Son yetkili kullanıcı pasifleştirilememeli")
 
     set_role_permission(conn, admin, roles["manager"]["id"], "sql_write", True)
     manager_user = enrich_staff_permissions(conn, build_current_staff(get_staff_by_device(conn, "manager-cihaz")))

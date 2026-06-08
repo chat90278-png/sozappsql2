@@ -5226,7 +5226,7 @@ class ContractWorkWindow(QDialog):
     def require_permission_ui(self, permission_code: str, title: str = "Yetki gerekli") -> bool:
         if self.has_permission(permission_code):
             return True
-        QMessageBox.warning(self, title, f"Bu işlem için '{permission_code}' yetkisi gerekli.")
+        QMessageBox.warning(self, "Yetkisiz İşlem", "Bu işlemi yapmak için gerekli yetkiye sahip değilsiniz.")
         return False
 
     def _set_dirty(self) -> None:
@@ -5793,6 +5793,8 @@ class ContractWorkWindow(QDialog):
         QMessageBox.critical(self, "Hata", f"Excel işlemi sırasında hata:\n{message}")
 
     def delete_contract(self):
+        if not self.require_permission_ui("delete_contracts", "Sözleşmeyi Sil"):
+            return
         no = str(self.ci.no or "").strip()
         platform = str(self.ci.platform or "").strip()
         if not no or not platform:
@@ -6182,6 +6184,15 @@ class ContractWorkWindow(QDialog):
         self._document_lock_anim = anim
 
     def _toggle_document_lock(self):
+        state = self._load_document_lock_state()
+        if int(state.get("is_locked") or 0) == 0:
+            if not self.require_permission_ui("lock_documents", "Belge Kilitleme"):
+                return
+        elif self._document_lock_same_device(state):
+            if not self.require_permission_ui("unlock_own_documents", "Belge Kilidi"):
+                return
+        elif not self.require_permission_ui("unlock_all_documents", "Belge Kilidi"):
+            return
         conn = self._document_db_conn()
         if conn is None:
             QMessageBox.information(self, "Belgeler", "Belge kilidi yalnızca STS veri dosyalarında desteklenir.")
@@ -8323,6 +8334,9 @@ class ContractWorkWindow(QDialog):
         super().reject()
 
     def save_all(self):
+        required_permission = "create_contracts" if self.is_new_contract else "edit_contracts"
+        if not self.require_permission_ui(required_permission, "Sözleşme Kaydet"):
+            return
         # Belgeler/klasörler STS veritabanına anında yazılır. Bu durumda Kaydet'e
         # basıldığında "Değişiklik Yok" uyarısı gösterme; pencereyi normal kapat.
         if not self._is_dirty and not self.is_new_contract:
@@ -8557,6 +8571,8 @@ class MainWindow(QMainWindow):
         dlg.exec()
 
     def open_activity_logs(self):
+        if not self.require_permission_ui("view_action_history", "İşlem Geçmişi"):
+            return
         if not self.store:
             QMessageBox.information(self, "Veri dosyası gerekli", "Önce bir STS veri dosyası açın.")
             return
@@ -8570,7 +8586,9 @@ class MainWindow(QMainWindow):
     def _permission_db(self):
         if self.store is not None and getattr(self.store, "db", None) is not None:
             return self.store.db.conn
-        return self.path
+        if str(self.path).lower().endswith(".sts"):
+            return self.path
+        return (self.current_staff or {}).get("db_path") or (self.current_staff or {}).get("_db_path")
 
     def has_permission(self, permission_code: str) -> bool:
         return auth.has_permission(self.current_staff, permission_code, self._permission_db())
@@ -8578,7 +8596,7 @@ class MainWindow(QMainWindow):
     def require_permission_ui(self, permission_code: str, title: str = "Yetki gerekli") -> bool:
         if self.has_permission(permission_code):
             return True
-        QMessageBox.warning(self, title, f"Bu işlem için '{permission_code}' yetkisi gerekli.")
+        QMessageBox.warning(self, "Yetkisiz İşlem", "Bu işlemi yapmak için gerekli yetkiye sahip değilsiniz.")
         return False
 
     def open_staff_management(self):
@@ -8595,7 +8613,7 @@ class MainWindow(QMainWindow):
         if not self.store:
             QMessageBox.information(self, "Veri dosyası gerekli", "Önce bir STS veri dosyası açın.")
             return
-        if not self.require_permission_ui("manage_roles", "Roller ve Yetkiler"):
+        if not self.require_permission_ui("manage_roles", "Yetki Yönetimi"):
             return
         from src.ui.dialogs.staff_permissions import RolePermissionsDialog
         dlg = RolePermissionsDialog(self._permission_db(), self.current_staff, self)
@@ -8644,16 +8662,16 @@ class MainWindow(QMainWindow):
         self.top_actions_menu.addAction("Performans Takip", self.open_performance_tracking)
         self.top_actions_menu.addAction("Platform Yönetimi", self.manage_platforms)
         self.top_actions_menu.addSeparator()
-        self.staff_management_action = self.top_actions_menu.addAction("Personel Yönetimi", self.open_staff_management)
-        self.role_permissions_action = self.top_actions_menu.addAction("Roller ve Yetkiler", self.open_role_permissions)
         self.top_actions_menu.addAction("Kullanıcı Yönetimi", self.manage_users)
+        self.role_permissions_action = self.top_actions_menu.addAction("Yetki Yönetimi", self.open_role_permissions)
         self.top_actions_menu.addAction("Etiket Yönetimi", self.manage_tags)
         self.top_actions_menu.addAction("Bileşen Yönetimi", self.manage_components)
-        self.top_actions_menu.addAction("İşlem Geçmişi", self.open_activity_logs)
+        self.activity_logs_action = self.top_actions_menu.addAction("İşlem Geçmişi", self.open_activity_logs)
         self.top_actions_menu.addSeparator()
         self.top_actions_menu.addAction("📘 Kullanım Kılavuzu", self.open_usage_guide)
         self.top_actions_menu.aboutToShow.connect(self._refresh_permission_actions)
         self.top_actions_btn.setMenu(self.top_actions_menu)
+        self._refresh_permission_actions()
         tl.addWidget(self.top_actions_btn)
         main.addWidget(top, 0)
 
@@ -9003,10 +9021,10 @@ class MainWindow(QMainWindow):
         )
 
     def _refresh_permission_actions(self):
-        if hasattr(self, "staff_management_action"):
-            self.staff_management_action.setVisible(self.has_permission("manage_staff"))
         if hasattr(self, "role_permissions_action"):
             self.role_permissions_action.setVisible(self.has_permission("manage_roles"))
+        if hasattr(self, "activity_logs_action"):
+            self.activity_logs_action.setVisible(self.has_permission("view_action_history"))
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -9766,6 +9784,8 @@ class MainWindow(QMainWindow):
         self.show_contract_summary(row, rows[row])
 
     def manage_platforms(self):
+        if not self.require_permission_ui("manage_platforms", "Platform Yönetimi"):
+            return
         if not self.store:
             QMessageBox.information(self, "Excel gerekli", "Önce bir Excel dosyası bağlayın.")
             return
@@ -9789,6 +9809,8 @@ class MainWindow(QMainWindow):
         self.manage_platforms()
 
     def manage_users(self):
+        if not self.require_permission_ui("manage_staff", "Kullanıcı Yönetimi"):
+            return
         if not self.store:
             QMessageBox.information(self, "Excel gerekli", "Önce bir Excel dosyası bağlayın.")
             return
@@ -9797,6 +9819,8 @@ class MainWindow(QMainWindow):
             self.request_refresh(scope="ui")
 
     def manage_tags(self):
+        if not self.require_permission_ui("manage_labels", "Etiket Yönetimi"):
+            return
         if not self.store:
             QMessageBox.information(self, "Excel gerekli", "Önce bir Excel dosyası bağlayın.")
             return
@@ -9811,6 +9835,8 @@ class MainWindow(QMainWindow):
             self.request_refresh(select_platform=current_platform, scope="tags")
 
     def manage_components(self):
+        if not self.require_permission_ui("manage_components", "Bileşen Yönetimi"):
+            return
         if not self.store:
             QMessageBox.information(self, "Excel gerekli", "Önce bir Excel dosyası bağlayın.")
             return
@@ -9848,6 +9874,8 @@ class MainWindow(QMainWindow):
         return bool(work.exec())
 
     def new_contract(self):
+        if not self.require_permission_ui("create_contracts", "Sözleşme Ekleme"):
+            return
         if not self.store:
             QMessageBox.information(self, "Excel gerekli", "Önce bir Excel dosyası bağlayın.")
             return
