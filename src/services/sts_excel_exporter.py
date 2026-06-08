@@ -86,7 +86,21 @@ def export_sts_to_excel(db, output_path, options=None, progress_cb=None):
         for c in comp_used: headers.extend([f'{c} Sözleşme Adedi', f'{c} Teslim Edilen', f'{c} Kalan'])
         ws.append(headers)
 
-        contracts = conn.execute("SELECT c.id,c.contract_type,c.contract_no,u.name,c.yi_yd,c.status,c.signed_date,c.t0_date,c.t0_months,c.completion_date,c.acceptance_date,c.note,c.content FROM contracts c JOIN platforms p ON p.id=c.platform_id LEFT JOIN users u ON u.id=c.user_id WHERE p.name=? ORDER BY c.id", (p,)).fetchall()
+        contracts = conn.execute(
+            """
+            SELECT c.id,c.contract_type,c.contract_no,
+                   COALESCE(GROUP_CONCAT(u.name, ', '), '') AS contract_user_display,
+                   c.yi_yd,c.status,c.signed_date,c.t0_date,c.t0_months,c.completion_date,c.acceptance_date,c.note,c.content
+            FROM contracts c
+            JOIN platforms p ON p.id=c.platform_id
+            LEFT JOIN contract_users cu ON cu.contract_id=c.id
+            LEFT JOIN users u ON u.id=cu.user_id
+            WHERE p.name=?
+            GROUP BY c.id
+            ORDER BY c.id
+            """,
+            (p,),
+        ).fetchall()
         for c in contracts:
             cid = c[0]
             tag_names = [r[0] for r in conn.execute('SELECT t.name FROM contract_tags ct JOIN tags t ON t.id=ct.tag_id WHERE ct.contract_id=? ORDER BY t.name', (cid,)).fetchall()]
@@ -112,7 +126,7 @@ def export_sts_to_excel(db, output_path, options=None, progress_cb=None):
                         q = qmap.get(n, 0.0); d = dmap.get(n, 0.0); row.extend([q,d,q-d])
                     ws.append(row)
                 if opts.get('include_delivery_rows', True):
-                    dels = conn.execute('SELECT id,name FROM deliveries WHERE contract_id=? AND system_name=? ORDER BY sort_order,id', (cid, sname)).fetchall()
+                    dels = conn.execute('SELECT id,name FROM deliveries WHERE contract_id=? AND system_id=? ORDER BY sort_order,id', (cid, sid)).fetchall()
                     for did, dname in dels:
                         mp = {r[0]: (float(r[1] or 0), float(r[2] or 0)) for r in conn.execute('SELECT c.name,dc.planned,dc.delivered FROM delivery_components dc JOIN components c ON c.id=dc.component_id WHERE dc.delivery_id=?', (did,)).fetchall()}
                         row = base + [sname, dname, 'Kabul']

@@ -106,10 +106,10 @@ with TemporaryDirectory() as td:
 
     too_large = root / "buyuk.txt"
     with too_large.open("wb") as stream:
-        stream.truncate(25 * 1024 * 1024 + 1)
+        stream.truncate(50 * 1024 * 1024 + 1)
     expect_value_error(
         lambda: store.add_contract_file("AKINCI", second.no, too_large, second.contract_type),
-        "Dosya boyutu 25 MB üstünde olamaz.",
+        "Dosya boyutu 50 MB üstünde olamaz.",
     )
     risky = root / "calistirma.exe"
     risky.write_bytes(b"not executable")

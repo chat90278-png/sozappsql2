@@ -23,8 +23,8 @@ def acceptance_coverage_issues(systems: Iterable[object], deliveries: dict[str, 
     """
     issues: list[dict] = []
     for system in systems or []:
-        system_name = str(getattr(system, "name", "") or "")
-        system_deliveries = list((deliveries or {}).get(system_name, []) or [])
+        system_label = str(getattr(system, "name", "") or "")
+        system_deliveries = list((deliveries or {}).get(system_label, []) or [])
         for delivery in system_deliveries:
             for component, raw_delivered_qty in (getattr(delivery, "delivered", {}) or {}).items():
                 planned_qty = _number((getattr(delivery, "planned", {}) or {}).get(component, 0))
@@ -32,7 +32,7 @@ def acceptance_coverage_issues(systems: Iterable[object], deliveries: dict[str, 
                 if delivered_qty - planned_qty > EPSILON:
                     issues.append({
                         "kind": "delivery_over_planned",
-                        "system": system_name,
+                        "system": system_label,
                         "delivery": str(getattr(delivery, "name", "") or ""),
                         "component": str(component),
                         "planned_qty": planned_qty,
@@ -48,7 +48,7 @@ def acceptance_coverage_issues(systems: Iterable[object], deliveries: dict[str, 
             if planned_qty - contract_qty > EPSILON:
                 issues.append({
                     "kind": "over_assigned",
-                    "system": system_name,
+                    "system": system_label,
                     "component": str(component),
                     "contract_qty": contract_qty,
                     "planned_qty": planned_qty,
@@ -58,7 +58,7 @@ def acceptance_coverage_issues(systems: Iterable[object], deliveries: dict[str, 
             if contract_qty - planned_qty > EPSILON:
                 issues.append({
                     "kind": "unassigned",
-                    "system": system_name,
+                    "system": system_label,
                     "component": str(component),
                     "contract_qty": contract_qty,
                     "planned_qty": planned_qty,
@@ -68,7 +68,7 @@ def acceptance_coverage_issues(systems: Iterable[object], deliveries: dict[str, 
             if delivered_qty - contract_qty > EPSILON:
                 issues.append({
                     "kind": "over_delivered",
-                    "system": system_name,
+                    "system": system_label,
                     "component": str(component),
                     "contract_qty": contract_qty,
                     "planned_qty": planned_qty,
