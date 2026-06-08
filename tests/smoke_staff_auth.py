@@ -107,7 +107,7 @@ def test_permission_defaults_and_last_full_access_guard():
     roles = {r["name"]: r for r in list_roles(conn)}
     permissions = {p["code"] for p in list_permissions(conn)}
     assert {"admin", "manager", "personnel", "viewer"}.issubset(roles)
-    assert {"manage_staff", "manage_roles", "open_sql_panel", "sql_read", "sql_write", "view_action_history", "create_staff", "edit_staff", "reset_staff_passwords"}.issubset(permissions)
+    assert {"manage_staff", "manage_roles", "open_sql_panel", "sql_read", "sql_write", "view_action_history", "change_staff_roles", "reset_staff_passwords"}.issubset(permissions)
 
     manager = create_staff(conn, "manager-cihaz", "Manager", "gizli", role_id=roles["manager"]["id"])
     manager_user = enrich_staff_permissions(conn, build_current_staff(manager))
