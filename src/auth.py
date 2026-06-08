@@ -147,7 +147,9 @@ def _connection_from(db_or_path: sqlite3.Connection | str | Path) -> tuple[sqlit
         return db_or_path, False
     conn = sqlite3.connect(str(Path(db_or_path)))
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys=ON")
     conn.execute("PRAGMA journal_mode=DELETE")
+    conn.execute("PRAGMA busy_timeout=5000")
     return conn, True
 
 
@@ -375,6 +377,8 @@ def create_staff(db_or_path: sqlite3.Connection | str | Path, device_name: str, 
 
 
 def build_current_staff(row) -> dict[str, Any]:
+    # staff.role TEXT is a migration remnant kept only as a display fallback;
+    # authorization decisions must use role_id/role_permissions instead.
     role_name = str(row["role_name"] if "role_name" in row.keys() and row["role_name"] else row["role"] or "personnel")
     return {
         "id": int(row["id"]),
@@ -426,7 +430,7 @@ def has_permission(current_user: Optional[dict[str, Any]], permission_code: str,
             SELECT COALESCE(rp.is_allowed, 0) AS is_allowed
             FROM staff s
             LEFT JOIN role_permissions rp ON rp.role_id=s.role_id AND rp.permission_code=?
-            WHERE s.id=? AND COALESCE(s.is_active, 1)=1
+            WHERE s.id=? AND COALESCE(s.is_active, 1)=1 AND s.role_id IS NOT NULL
             """,
             (canonical_code, int(user.get("id"))),
         ).fetchone()
@@ -438,7 +442,7 @@ def has_permission(current_user: Optional[dict[str, Any]], permission_code: str,
                 SELECT COALESCE(rp.is_allowed, 0) AS is_allowed
                 FROM staff s
                 LEFT JOIN role_permissions rp ON rp.role_id=s.role_id AND rp.permission_code=?
-                WHERE s.id=? AND COALESCE(s.is_active, 1)=1
+                WHERE s.id=? AND COALESCE(s.is_active, 1)=1 AND s.role_id IS NOT NULL
                 """,
                 (alias_code, int(user.get("id"))),
             ).fetchone()
