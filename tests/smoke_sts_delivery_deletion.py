@@ -49,7 +49,7 @@ with TemporaryDirectory() as td:
     assert conn.execute("SELECT COUNT(*) FROM deliveries WHERE id=?", (kabul_2_id,)).fetchone()[0] == 0
     assert all(conn.execute("SELECT COUNT(*) FROM delivery_components WHERE id=?", (item_id,)).fetchone()[0] == 0 for item_id in kabul_2_component_ids)
     assert conn.execute("SELECT id,qty FROM system_components").fetchone()[:] == component_before[:]
-    delivered = conn.execute("SELECT SUM(dc.delivered) FROM delivery_components dc JOIN deliveries d ON d.id=dc.delivery_id WHERE d.system_name='Sistem 1'").fetchone()[0]
+    delivered = conn.execute("SELECT SUM(dc.delivered) FROM delivery_components dc JOIN deliveries d ON d.id=dc.delivery_id JOIN systems s ON s.id=d.system_id WHERE s.name='Sistem 1'").fetchone()[0]
     assert delivered == 1
     assert component_before[1] - delivered == 1
     assert conn.execute("SELECT status,acceptance_date FROM systems WHERE name='Sistem 1'").fetchone()[:] == ("Parçalı Teslimat", "")

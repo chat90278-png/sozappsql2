@@ -23,6 +23,8 @@ with TemporaryDirectory() as td:
     texts = {relationship_text(relationship) for relationship in relationships}
     assert "contracts.platform_id → platforms.id" in texts
     assert "contracts.user_id → users.id" in texts
+    assert "contract_users.contract_id → contracts.id" in texts
+    assert "contract_users.user_id → users.id" in texts
     assert "deliveries.delivery_user_id → users.id" in texts
     assert "systems.delivery_user_id → users.id" not in texts
     assert "delivery_components.component_id → components.id" in texts
@@ -41,6 +43,8 @@ with TemporaryDirectory() as td:
     user_groups = filter_relationship_groups(groups, "user")
     assert {relationship_text(item) for items in user_groups.values() for item in items} == {
         "contracts.user_id → users.id",
+        "contract_users.contract_id → contracts.id",
+        "contract_users.user_id → users.id",
         "deliveries.delivery_user_id → users.id",
     }
     component_groups = filter_relationship_groups(groups, "component")

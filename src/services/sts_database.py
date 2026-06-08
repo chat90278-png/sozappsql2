@@ -48,6 +48,11 @@ def quote_identifier(identifier: str) -> str:
     return '"' + str(identifier or "").replace('"', '""') + '"'
 
 
+LEGACY_CONTRACT_PARENT_NO_COLUMN = "parent_contract_" "no"
+LEGACY_CONTRACT_USERS_COLUMN = "user_" "names"
+LEGACY_DELIVERY_SYSTEM_LABEL_COLUMN = "system_" "name"
+
+
 class STSDatabase:
     def __init__(self, path: Path | str, source: str = "Main UI"):
         self.path = Path(path)
@@ -93,6 +98,265 @@ class STSDatabase:
             return True
         return False
 
+    def _table_column_info(self, table: str) -> dict[str, sqlite3.Row]:
+        return {str(row[1]): row for row in self.conn.execute(f"PRAGMA table_info({quote_identifier(table)})").fetchall()}
+
+    def _legacy_user_list(self, raw, fallback_user_id=None) -> list[str]:
+        values: list[str] = []
+        txt = str(raw or "").strip()
+        if txt:
+            try:
+                parsed = json.loads(txt)
+                if isinstance(parsed, list):
+                    values = [str(item or "").strip() for item in parsed]
+                else:
+                    values = [part.strip() for part in txt.split(",")]
+            except Exception:
+                values = [part.strip() for part in txt.split(",")]
+        if not values and fallback_user_id is not None:
+            row = self.conn.execute("SELECT name FROM users WHERE id=?", (int(fallback_user_id),)).fetchone()
+            if row:
+                values = [str(row[0] or "").strip()]
+        out: list[str] = []
+        seen: set[str] = set()
+        for value in values:
+            if not value:
+                continue
+            key = value.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(value)
+        return out
+
+    def _user_id_for_bridge(self, name: str) -> int:
+        clean = str(name or "").strip()
+        row = self.conn.execute("SELECT id FROM users WHERE name=?", (clean,)).fetchone()
+        if row:
+            return int(row[0])
+        ts = now_iso()
+        columns = self._table_columns("users")
+        names = ["name"]
+        values = [clean]
+        if "yi_yd" in columns:
+            names.append("yi_yd"); values.append("Yİ")
+        if "active" in columns:
+            names.append("active"); values.append(1)
+        if "created_at" in columns:
+            names.append("created_at"); values.append(ts)
+        if "updated_at" in columns:
+            names.append("updated_at"); values.append(ts)
+        placeholders = ",".join("?" for _ in names)
+        self.conn.execute(f"INSERT INTO users({','.join(names)}) VALUES({placeholders})", values)
+        return int(self.conn.execute("SELECT last_insert_rowid()").fetchone()[0])
+
+    def _migrate_contract_user_bridge(self) -> bool:
+        self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS contract_users (
+                contract_id INTEGER NOT NULL REFERENCES contracts(id) ON DELETE CASCADE,
+                user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                PRIMARY KEY(contract_id, user_id)
+            )
+            """
+        )
+        columns = self._table_columns("contracts")
+        if not columns:
+            return False
+        select_columns = ["id"]
+        select_columns.append("user_id" if "user_id" in columns else "NULL AS user_id")
+        select_columns.append(LEGACY_CONTRACT_USERS_COLUMN if LEGACY_CONTRACT_USERS_COLUMN in columns else f"NULL AS {LEGACY_CONTRACT_USERS_COLUMN}")
+        changed = False
+        for row in self.conn.execute(f"SELECT {', '.join(select_columns)} FROM contracts").fetchall():
+            existing = int(self.conn.execute("SELECT COUNT(*) FROM contract_users WHERE contract_id=?", (int(row[0]),)).fetchone()[0] or 0)
+            if existing:
+                continue
+            names = self._legacy_user_list(row[2], row[1])
+            for name in names:
+                uid = self._user_id_for_bridge(name)
+                self.conn.execute("INSERT OR IGNORE INTO contract_users(contract_id,user_id) VALUES(?,?)", (int(row[0]), uid))
+                changed = True
+        return changed
+
+    def _rebuild_contracts_without_legacy_columns(self) -> bool:
+        columns = self._table_columns("contracts")
+        if not ({LEGACY_CONTRACT_PARENT_NO_COLUMN, LEGACY_CONTRACT_USERS_COLUMN} & columns):
+            return False
+        self.conn.commit()
+        self.conn.execute("PRAGMA foreign_keys=OFF")
+        self.conn.execute("PRAGMA legacy_alter_table=ON")
+        try:
+            self.conn.execute("ALTER TABLE contracts RENAME TO contracts_legacy_model")
+            self.conn.execute(
+                """
+                CREATE TABLE contracts(
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    platform_id INTEGER NOT NULL,
+                    user_id INTEGER,
+                    contract_no TEXT NOT NULL,
+                    yi_yd TEXT,
+                    contract_type TEXT,
+                    type_display TEXT,
+                    link_type TEXT,
+                    status TEXT,
+                    signed_date TEXT,
+                    t0_date TEXT,
+                    t0_months INTEGER,
+                    completion_date TEXT,
+                    acceptance_date TEXT,
+                    content TEXT,
+                    note TEXT,
+                    is_main INTEGER DEFAULT 1,
+                    parent_contract_id INTEGER,
+                    search_text TEXT,
+                    payload_json TEXT,
+                    created_at TEXT,
+                    updated_at TEXT,
+                    UNIQUE(platform_id,contract_no,contract_type),
+                    FOREIGN KEY(platform_id) REFERENCES platforms(id) ON DELETE RESTRICT,
+                    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE SET NULL,
+                    FOREIGN KEY(parent_contract_id) REFERENCES contracts(id) ON DELETE SET NULL
+                )
+                """
+            )
+            copy_columns = [
+                "id", "platform_id", "user_id", "contract_no", "yi_yd", "contract_type", "type_display",
+                "link_type", "status", "signed_date", "t0_date", "t0_months", "completion_date",
+                "acceptance_date", "content", "note", "is_main", "parent_contract_id", "search_text",
+                "payload_json", "created_at", "updated_at",
+            ]
+            available = self._table_columns("contracts_legacy_model")
+            select_exprs = [name if name in available else "NULL" for name in copy_columns]
+            self.conn.execute(
+                f"INSERT INTO contracts({', '.join(copy_columns)}) SELECT {', '.join(select_exprs)} FROM contracts_legacy_model"
+            )
+            self.conn.execute("DROP TABLE contracts_legacy_model")
+            self.conn.commit()
+        finally:
+            self.conn.execute("PRAGMA legacy_alter_table=OFF")
+            self.conn.execute("PRAGMA foreign_keys=ON")
+        return True
+
+    def _delivery_system_id(self, row: sqlite3.Row, has_legacy_name: bool) -> int | None:
+        current = row["system_id"] if "system_id" in row.keys() else None
+        if current is not None:
+            return int(current)
+        label = str(row[LEGACY_DELIVERY_SYSTEM_LABEL_COLUMN] if has_legacy_name else "" or "Sistem").strip() or "Sistem"
+        contract_id = int(row["contract_id"])
+        system_columns = self._table_columns("systems")
+        order_by = "sort_order,id" if "sort_order" in system_columns else "id"
+        found = self.conn.execute(
+            f"SELECT id FROM systems WHERE contract_id=? AND name=? ORDER BY {order_by} LIMIT 1",
+            (contract_id, label),
+        ).fetchone()
+        if found:
+            return int(found[0])
+        names = ["contract_id", "name"]
+        values = [contract_id, label]
+        if "status" in system_columns:
+            names.append("status"); values.append("Başlanmadı")
+        if "sort_order" in system_columns:
+            sort_order = int(self.conn.execute("SELECT COALESCE(MAX(sort_order), -1) + 1 FROM systems WHERE contract_id=?", (contract_id,)).fetchone()[0] or 0)
+            names.append("sort_order"); values.append(sort_order)
+        placeholders = ",".join("?" for _ in names)
+        self.conn.execute(f"INSERT INTO systems({','.join(names)}) VALUES({placeholders})", values)
+        return int(self.conn.execute("SELECT last_insert_rowid()").fetchone()[0])
+
+    def _rebuild_deliveries_without_legacy_system_label(self) -> bool:
+        info = self._table_column_info("deliveries")
+        if not info:
+            return False
+        needs_rebuild = LEGACY_DELIVERY_SYSTEM_LABEL_COLUMN in info or not bool(info.get("system_id") and int(info["system_id"][3] or 0) == 1)
+        if not needs_rebuild:
+            return False
+        has_legacy_name = LEGACY_DELIVERY_SYSTEM_LABEL_COLUMN in info
+        normalized = []
+        def raw_value(row, key, default=None):
+            return row[key] if key in row.keys() else default
+        for raw in self.conn.execute("SELECT * FROM deliveries").fetchall():
+            sid = self._delivery_system_id(raw, has_legacy_name)
+            if sid is None:
+                continue
+            normalized.append({
+                "id": raw["id"],
+                "contract_id": raw["contract_id"],
+                "system_id": sid,
+                "delivery_user_id": raw_value(raw, "delivery_user_id"),
+                "name": raw_value(raw, "name", "Teslimat"),
+                "status": raw_value(raw, "status"),
+                "acceptance_date": raw_value(raw, "acceptance_date"),
+                "note": raw_value(raw, "note"),
+                "sort_order": raw_value(raw, "sort_order", 0),
+                "payload_json": raw_value(raw, "payload_json"),
+            })
+        self.conn.commit()
+        self.conn.execute("PRAGMA foreign_keys=OFF")
+        self.conn.execute("PRAGMA legacy_alter_table=ON")
+        try:
+            self.conn.execute("ALTER TABLE deliveries RENAME TO deliveries_legacy_model")
+            self.conn.execute(
+                """
+                CREATE TABLE deliveries(
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    contract_id INTEGER NOT NULL,
+                    system_id INTEGER NOT NULL,
+                    delivery_user_id INTEGER,
+                    name TEXT NOT NULL,
+                    status TEXT,
+                    acceptance_date TEXT,
+                    note TEXT,
+                    sort_order INTEGER DEFAULT 0,
+                    payload_json TEXT,
+                    FOREIGN KEY(contract_id) REFERENCES contracts(id) ON DELETE CASCADE,
+                    FOREIGN KEY(system_id) REFERENCES systems(id) ON DELETE CASCADE,
+                    FOREIGN KEY(delivery_user_id) REFERENCES users(id) ON DELETE SET NULL
+                )
+                """
+            )
+            for row in normalized:
+                self.conn.execute(
+                    """
+                    INSERT INTO deliveries(id,contract_id,system_id,delivery_user_id,name,status,acceptance_date,note,sort_order,payload_json)
+                    VALUES(:id,:contract_id,:system_id,:delivery_user_id,:name,:status,:acceptance_date,:note,:sort_order,:payload_json)
+                    """,
+                    row,
+                )
+            self.conn.execute("DROP TABLE deliveries_legacy_model")
+            self.conn.commit()
+        finally:
+            self.conn.execute("PRAGMA legacy_alter_table=OFF")
+            self.conn.execute("PRAGMA foreign_keys=ON")
+        return True
+
+    def _create_runtime_indexes(self) -> None:
+        self.conn.executescript(
+            """
+            CREATE INDEX IF NOT EXISTS idx_contracts_platform_id ON contracts(platform_id);
+            CREATE INDEX IF NOT EXISTS idx_contracts_platform_status ON contracts(platform_id,status);
+            CREATE INDEX IF NOT EXISTS idx_contracts_completion_date ON contracts(completion_date);
+            CREATE INDEX IF NOT EXISTS idx_contracts_contract_no ON contracts(contract_no);
+            CREATE INDEX IF NOT EXISTS idx_contracts_contract_type ON contracts(contract_type);
+            CREATE INDEX IF NOT EXISTS idx_contracts_parent_contract_id ON contracts(parent_contract_id);
+            CREATE INDEX IF NOT EXISTS idx_contract_users_user_id ON contract_users(user_id);
+            CREATE INDEX IF NOT EXISTS idx_systems_contract_id ON systems(contract_id);
+            CREATE INDEX IF NOT EXISTS idx_systems_completion_date ON systems(completion_date);
+            CREATE INDEX IF NOT EXISTS idx_systems_contract_name ON systems(contract_id, name);
+            CREATE INDEX IF NOT EXISTS idx_system_components_component_id ON system_components(component_id);
+            CREATE INDEX IF NOT EXISTS idx_deliveries_contract_id ON deliveries(contract_id);
+            CREATE INDEX IF NOT EXISTS idx_deliveries_system_id ON deliveries(system_id);
+            CREATE INDEX IF NOT EXISTS idx_deliveries_contract_system ON deliveries(contract_id,system_id);
+            CREATE INDEX IF NOT EXISTS idx_deliveries_acceptance_date ON deliveries(acceptance_date);
+            CREATE INDEX IF NOT EXISTS idx_delivery_components_component_id ON delivery_components(component_id);
+            CREATE INDEX IF NOT EXISTS idx_contract_file_folders_contract_id ON contract_file_folders(contract_id);
+            CREATE INDEX IF NOT EXISTS idx_contract_file_folders_parent_id ON contract_file_folders(parent_id);
+            CREATE INDEX IF NOT EXISTS idx_contract_files_contract_id ON contract_files(contract_id);
+            CREATE INDEX IF NOT EXISTS idx_logs_created_at ON activity_logs(created_at);
+            CREATE INDEX IF NOT EXISTS idx_logs_action ON activity_logs(action);
+            CREATE INDEX IF NOT EXISTS idx_logs_entity ON activity_logs(entity_type,entity_id);
+            CREATE INDEX IF NOT EXISTS idx_activity_logs_platform_contract ON activity_logs(platform_id, contract_no);
+            """
+        )
+
     def init_schema(self):
         migrated = []
         self.conn.executescript(
@@ -103,39 +367,25 @@ CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT 
 CREATE TABLE IF NOT EXISTS components(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT UNIQUE NOT NULL,version TEXT,unit TEXT DEFAULT 'Adet',active INTEGER DEFAULT 1,usage REAL DEFAULT 1,payload_json TEXT,created_at TEXT,updated_at TEXT);
 CREATE TABLE IF NOT EXISTS component_platforms(id INTEGER PRIMARY KEY AUTOINCREMENT,component_id INTEGER NOT NULL,platform_id INTEGER NOT NULL,enabled INTEGER DEFAULT 1,UNIQUE(component_id,platform_id),FOREIGN KEY(component_id) REFERENCES components(id) ON DELETE CASCADE,FOREIGN KEY(platform_id) REFERENCES platforms(id) ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS tags(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT UNIQUE NOT NULL,color TEXT,kind TEXT DEFAULT 'contract',created_at TEXT,updated_at TEXT);
-CREATE TABLE IF NOT EXISTS contracts(id INTEGER PRIMARY KEY AUTOINCREMENT,platform_id INTEGER NOT NULL,user_id INTEGER,contract_no TEXT NOT NULL,user_names TEXT,yi_yd TEXT,contract_type TEXT,type_display TEXT,link_type TEXT,status TEXT,signed_date TEXT,t0_date TEXT,t0_months INTEGER,completion_date TEXT,acceptance_date TEXT,content TEXT,note TEXT,is_main INTEGER DEFAULT 1,parent_contract_id INTEGER,parent_contract_no TEXT,search_text TEXT,payload_json TEXT,created_at TEXT,updated_at TEXT,UNIQUE(platform_id,contract_no,contract_type),FOREIGN KEY(platform_id) REFERENCES platforms(id) ON DELETE RESTRICT,FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE SET NULL,FOREIGN KEY(parent_contract_id) REFERENCES contracts(id) ON DELETE SET NULL);
+CREATE TABLE IF NOT EXISTS contracts(id INTEGER PRIMARY KEY AUTOINCREMENT,platform_id INTEGER NOT NULL,user_id INTEGER,contract_no TEXT NOT NULL,yi_yd TEXT,contract_type TEXT,type_display TEXT,link_type TEXT,status TEXT,signed_date TEXT,t0_date TEXT,t0_months INTEGER,completion_date TEXT,acceptance_date TEXT,content TEXT,note TEXT,is_main INTEGER DEFAULT 1,parent_contract_id INTEGER,search_text TEXT,payload_json TEXT,created_at TEXT,updated_at TEXT,UNIQUE(platform_id,contract_no,contract_type),FOREIGN KEY(platform_id) REFERENCES platforms(id) ON DELETE RESTRICT,FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE SET NULL,FOREIGN KEY(parent_contract_id) REFERENCES contracts(id) ON DELETE SET NULL);
+CREATE TABLE IF NOT EXISTS contract_users(contract_id INTEGER NOT NULL REFERENCES contracts(id) ON DELETE CASCADE,user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,PRIMARY KEY(contract_id,user_id));
 CREATE TABLE IF NOT EXISTS systems(id INTEGER PRIMARY KEY AUTOINCREMENT,contract_id INTEGER NOT NULL,name TEXT NOT NULL,status TEXT,completion_date TEXT,acceptance_date TEXT,note TEXT,sort_order INTEGER DEFAULT 0,payload_json TEXT,FOREIGN KEY(contract_id) REFERENCES contracts(id) ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS system_components(id INTEGER PRIMARY KEY AUTOINCREMENT,system_id INTEGER NOT NULL,component_id INTEGER NOT NULL,qty REAL DEFAULT 0,note TEXT,UNIQUE(system_id,component_id),FOREIGN KEY(system_id) REFERENCES systems(id) ON DELETE CASCADE,FOREIGN KEY(component_id) REFERENCES components(id) ON DELETE CASCADE);
-CREATE TABLE IF NOT EXISTS deliveries(id INTEGER PRIMARY KEY AUTOINCREMENT,contract_id INTEGER NOT NULL,system_id INTEGER,delivery_user_id INTEGER,system_name TEXT NOT NULL,name TEXT NOT NULL,status TEXT,acceptance_date TEXT,note TEXT,sort_order INTEGER DEFAULT 0,payload_json TEXT,FOREIGN KEY(contract_id) REFERENCES contracts(id) ON DELETE CASCADE,FOREIGN KEY(system_id) REFERENCES systems(id) ON DELETE SET NULL,FOREIGN KEY(delivery_user_id) REFERENCES users(id) ON DELETE SET NULL);
+CREATE TABLE IF NOT EXISTS deliveries(id INTEGER PRIMARY KEY AUTOINCREMENT,contract_id INTEGER NOT NULL,system_id INTEGER NOT NULL,delivery_user_id INTEGER,name TEXT NOT NULL,status TEXT,acceptance_date TEXT,note TEXT,sort_order INTEGER DEFAULT 0,payload_json TEXT,FOREIGN KEY(contract_id) REFERENCES contracts(id) ON DELETE CASCADE,FOREIGN KEY(system_id) REFERENCES systems(id) ON DELETE CASCADE,FOREIGN KEY(delivery_user_id) REFERENCES users(id) ON DELETE SET NULL);
 CREATE TABLE IF NOT EXISTS delivery_components(id INTEGER PRIMARY KEY AUTOINCREMENT,delivery_id INTEGER NOT NULL,component_id INTEGER NOT NULL,planned REAL DEFAULT 0,delivered REAL DEFAULT 0,UNIQUE(delivery_id,component_id),FOREIGN KEY(delivery_id) REFERENCES deliveries(id) ON DELETE CASCADE,FOREIGN KEY(component_id) REFERENCES components(id) ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS contract_tags(id INTEGER PRIMARY KEY AUTOINCREMENT,contract_id INTEGER NOT NULL,tag_id INTEGER NOT NULL,UNIQUE(contract_id,tag_id),FOREIGN KEY(contract_id) REFERENCES contracts(id) ON DELETE CASCADE,FOREIGN KEY(tag_id) REFERENCES tags(id) ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS contract_file_folders(id INTEGER PRIMARY KEY AUTOINCREMENT,contract_id INTEGER NOT NULL,parent_id INTEGER,name TEXT NOT NULL,created_at TEXT,updated_at TEXT,UNIQUE(contract_id,parent_id,name),FOREIGN KEY(contract_id) REFERENCES contracts(id) ON DELETE CASCADE,FOREIGN KEY(parent_id) REFERENCES contract_file_folders(id) ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS contract_files(id INTEGER PRIMARY KEY AUTOINCREMENT,contract_id INTEGER NOT NULL,folder_id INTEGER,filename TEXT NOT NULL,original_path TEXT,file_ext TEXT,mime_type TEXT,size_bytes INTEGER NOT NULL DEFAULT 0,content_blob BLOB NOT NULL,note TEXT,created_at TEXT,updated_at TEXT,FOREIGN KEY(contract_id) REFERENCES contracts(id) ON DELETE CASCADE,FOREIGN KEY(folder_id) REFERENCES contract_file_folders(id) ON DELETE SET NULL);
 CREATE TABLE IF NOT EXISTS activity_logs(id INTEGER PRIMARY KEY AUTOINCREMENT,created_at TEXT NOT NULL,actor TEXT,source TEXT,device_name TEXT,action TEXT NOT NULL,entity_type TEXT,entity_id TEXT,entity_key TEXT,platform_id INTEGER,contract_no TEXT,message TEXT,before_json TEXT,after_json TEXT,payload_json TEXT,FOREIGN KEY(platform_id) REFERENCES platforms(id) ON DELETE SET NULL);
-CREATE INDEX IF NOT EXISTS idx_contracts_platform_id ON contracts(platform_id);
-CREATE INDEX IF NOT EXISTS idx_contracts_platform_status ON contracts(platform_id,status);
-CREATE INDEX IF NOT EXISTS idx_contracts_completion_date ON contracts(completion_date);
-CREATE INDEX IF NOT EXISTS idx_contracts_contract_no ON contracts(contract_no);
-CREATE INDEX IF NOT EXISTS idx_contracts_contract_type ON contracts(contract_type);
-CREATE INDEX IF NOT EXISTS idx_contracts_parent_contract_id ON contracts(parent_contract_id);
-CREATE INDEX IF NOT EXISTS idx_systems_contract_id ON systems(contract_id);
-CREATE INDEX IF NOT EXISTS idx_systems_completion_date ON systems(completion_date);
-CREATE INDEX IF NOT EXISTS idx_systems_contract_name ON systems(contract_id, name);
-CREATE INDEX IF NOT EXISTS idx_system_components_component_id ON system_components(component_id);
-CREATE INDEX IF NOT EXISTS idx_deliveries_contract_id ON deliveries(contract_id);
-CREATE INDEX IF NOT EXISTS idx_deliveries_system_id ON deliveries(system_id);
-CREATE INDEX IF NOT EXISTS idx_deliveries_contract_system ON deliveries(contract_id,system_id);
-CREATE INDEX IF NOT EXISTS idx_deliveries_acceptance_date ON deliveries(acceptance_date);
-CREATE INDEX IF NOT EXISTS idx_delivery_components_component_id ON delivery_components(component_id);
-CREATE INDEX IF NOT EXISTS idx_contract_file_folders_contract_id ON contract_file_folders(contract_id);
-CREATE INDEX IF NOT EXISTS idx_contract_file_folders_parent_id ON contract_file_folders(parent_id);
-CREATE INDEX IF NOT EXISTS idx_contract_files_contract_id ON contract_files(contract_id);
-CREATE INDEX IF NOT EXISTS idx_logs_created_at ON activity_logs(created_at);
-CREATE INDEX IF NOT EXISTS idx_logs_action ON activity_logs(action);
-CREATE INDEX IF NOT EXISTS idx_logs_entity ON activity_logs(entity_type,entity_id);
-CREATE INDEX IF NOT EXISTS idx_activity_logs_platform_contract ON activity_logs(platform_id, contract_no);
             """
         )
+        if self._migrate_contract_user_bridge():
+            migrated.append("contract_users")
+        if self._rebuild_contracts_without_legacy_columns():
+            migrated.append("contracts.cleaned_model")
+        if self._rebuild_deliveries_without_legacy_system_label():
+            migrated.append("deliveries.cleaned_model")
+        self._create_runtime_indexes()
         # Existing v2 files may predate delivery-level responsibility. SQLite
         # cannot add foreign-key constraints with ALTER TABLE, but adding the
         # nullable column keeps those files readable and writable. New files
@@ -157,6 +407,7 @@ CREATE INDEX IF NOT EXISTS idx_activity_logs_platform_contract ON activity_logs(
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_contract_file_folders_contract_id ON contract_file_folders(contract_id)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_contract_file_folders_parent_id ON contract_file_folders(parent_id)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_contract_files_folder_id ON contract_files(folder_id)")
+        self._create_runtime_indexes()
         ensure_staff_table(self.conn)
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_staff_role_id ON staff(role_id)")
         ensure_document_locks_table(self.conn)
@@ -171,7 +422,7 @@ CREATE INDEX IF NOT EXISTS idx_activity_logs_platform_contract ON activity_logs(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_document_locks_contract_id "
             "ON document_locks(contract_id)"
         )
-        self.conn.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version','6')")
+        self.conn.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version','7')")
         self.conn.commit()
         return migrated
 
