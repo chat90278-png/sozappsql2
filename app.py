@@ -8586,9 +8586,7 @@ class MainWindow(QMainWindow):
     def _permission_db(self):
         if self.store is not None and getattr(self.store, "db", None) is not None:
             return self.store.db.conn
-        if str(self.path).lower().endswith(".sts"):
-            return self.path
-        return (self.current_staff or {}).get("db_path") or (self.current_staff or {}).get("_db_path")
+        return self.path
 
     def has_permission(self, permission_code: str) -> bool:
         return auth.has_permission(self.current_staff, permission_code, self._permission_db())
@@ -8662,6 +8660,7 @@ class MainWindow(QMainWindow):
         self.top_actions_menu.addAction("Performans Takip", self.open_performance_tracking)
         self.top_actions_menu.addAction("Platform Yönetimi", self.manage_platforms)
         self.top_actions_menu.addSeparator()
+        self.staff_management_action = self.top_actions_menu.addAction("Personel Yönetimi", self.open_staff_management)
         self.top_actions_menu.addAction("Kullanıcı Yönetimi", self.manage_users)
         self.role_permissions_action = self.top_actions_menu.addAction("Yetki Yönetimi", self.open_role_permissions)
         self.top_actions_menu.addAction("Etiket Yönetimi", self.manage_tags)
@@ -8671,7 +8670,6 @@ class MainWindow(QMainWindow):
         self.top_actions_menu.addAction("📘 Kullanım Kılavuzu", self.open_usage_guide)
         self.top_actions_menu.aboutToShow.connect(self._refresh_permission_actions)
         self.top_actions_btn.setMenu(self.top_actions_menu)
-        self._refresh_permission_actions()
         tl.addWidget(self.top_actions_btn)
         main.addWidget(top, 0)
 
@@ -9021,6 +9019,8 @@ class MainWindow(QMainWindow):
         )
 
     def _refresh_permission_actions(self):
+        if hasattr(self, "staff_management_action"):
+            self.staff_management_action.setVisible(self.has_permission("manage_staff"))
         if hasattr(self, "role_permissions_action"):
             self.role_permissions_action.setVisible(self.has_permission("manage_roles"))
         if hasattr(self, "activity_logs_action"):
