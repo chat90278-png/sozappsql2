@@ -38,6 +38,15 @@ from PySide6.QtWidgets import (
 
 from src.ui.theme import STYLE
 from src import auth
+from src.ui.dialogs.database_access import (
+    SQL_RESTRICTED_TABLES,
+    TABLE_ACCESS,
+    TABLE_INFO,
+    can_access_table,
+    contains_restricted_table_sql,
+    table_required_permission,
+    visible_table_names,
+)
 from src.services.sts_database import should_audit_sql, sql_operation
 from src.ui.dialogs.schema_relationships import (
     compact_relationship_text,
@@ -48,26 +57,6 @@ from src.ui.dialogs.schema_relationships import (
     relationship_key,
     relationship_text,
 )
-
-TABLE_INFO = {
-    "contracts": "Ana sözleşme ve SD kayıtları",
-    "systems": "Sözleşmelere bağlı sistemler",
-    "deliveries": "Kabul / teslimat kayıtları",
-    "system_components": "Sistem bileşen adetleri",
-    "delivery_components": "Kabul bazlı plan/teslim",
-    "contract_tags": "Sözleşme etiket bağlantıları",
-    "contract_file_folders": "Sözleşme belge klasörleri",
-    "contract_files": "Sözleşmeye gömülü belgeler",
-    "users": "Kullanıcı / kurum tanımları",
-    "tags": "Etiket tanımları",
-    "platforms": "Platform adları ve logolar",
-    "components": "Tanımlı bileşenler",
-    "activity_logs": "İşlem geçmişi",
-    "staff": "Personel giriş kayıtları",
-    "document_locks": "Belge kilit durumu",
-    "component_platforms": "Bileşen platform yetkileri",
-}
-
 
 class SchemaView(QGraphicsView):
     def __init__(self, dialog, parent=None):
@@ -215,7 +204,7 @@ class DatabaseManagementDialog(QDialog):
 
         self.stats: Dict = {}
         self.table_names: List[str] = []
-        self.active_table: str = ""
+        self.active_table: Optional[str] = None
         self._current_rows: List[dict] = []
         self._current_columns: List[str] = []
         self._sort_column: Optional[str] = None
@@ -379,6 +368,18 @@ QLabel#sqlHint { color:#94a3b8; font-size:11px; }
 
     def _show_permission_error(self, permission_code: str):
         QMessageBox.warning(self, "Yetkisiz İşlem", "Bu işlemi yapmak için gerekli yetkiye sahip değilsiniz.")
+
+    def _table_required_permission(self, table: str) -> Optional[str]:
+        return table_required_permission(table)
+
+    def _can_access_table(self, table: str) -> bool:
+        return can_access_table(table, self.has_permission)
+
+    def _visible_table_names(self) -> List[str]:
+        return visible_table_names(self.table_names, self.has_permission)
+
+    def _can_access_sql_restricted_tables(self) -> bool:
+        return self.has_permission("manage_staff") and self.has_permission("sql_write")
 
     def _build(self):
         root = QVBoxLayout(self)
@@ -587,8 +588,9 @@ QLabel#sqlHint { color:#94a3b8; font-size:11px; }
     def refresh_all(self):
         self.stats = self.store.database_stats()
         self.table_names = sorted(list((self.stats.get("table_counts") or {}).keys()))
-        if not self.active_table and self.table_names:
-            self.active_table = self.table_names[0]
+        visible_tables = self._visible_table_names()
+        if self.active_table not in visible_tables:
+            self.active_table = visible_tables[0] if visible_tables else None
         self._refresh_sidebar()
         self._refresh_active_table()
         self._render_schema()
@@ -597,8 +599,12 @@ QLabel#sqlHint { color:#94a3b8; font-size:11px; }
         q = self.table_search.text().strip().lower()
         counts = self.stats.get("table_counts") or {}
         self.table_list.clear()
-        for t in self.table_names:
-            desc = TABLE_INFO.get(t, "")
+        visible_tables = self._visible_table_names()
+        if self.active_table not in visible_tables:
+            self.active_table = visible_tables[0] if visible_tables else None
+        shown = 0
+        for t in visible_tables:
+            desc = TABLE_INFO.get(t) or ""
             if q and q not in t.lower() and q not in desc.lower():
                 continue
             cnt = counts.get(t, 0)
@@ -609,8 +615,14 @@ QLabel#sqlHint { color:#94a3b8; font-size:11px; }
             item.setData(Qt.UserRole, t)
             item.setToolTip(f"{t}\n{desc}\nKayıt: {cnt}")
             self.table_list.addItem(item)
+            shown += 1
             if t == self.active_table:
                 item.setSelected(True)
+        if shown == 0:
+            text = "Bu ekrana erişim yetkiniz yok" if not visible_tables else "Arama ile eşleşen tablo yok"
+            item = QListWidgetItem(text)
+            item.setFlags(item.flags() & ~Qt.ItemIsSelectable & ~Qt.ItemIsEnabled)
+            self.table_list.addItem(item)
 
     def _on_table_selected(self):
         items = self.table_list.selectedItems()
@@ -621,7 +633,14 @@ QLabel#sqlHint { color:#94a3b8; font-size:11px; }
         self._highlight_schema()
 
     def _refresh_active_table(self):
-        if not self.active_table:
+        if not self.active_table or not self._can_access_table(self.active_table):
+            self.active_table = None
+            self._current_rows = []
+            self._current_columns = []
+            if hasattr(self, "grid"):
+                self.grid.setRowCount(0); self.grid.setColumnCount(0)
+            if hasattr(self, "table_status_lbl"):
+                self.table_status_lbl.setText("Bu ekrana erişim yetkiniz yok")
             return
         try:
             limit = int(self.limit_combo.currentText())
@@ -719,7 +738,7 @@ QLabel#sqlHint { color:#94a3b8; font-size:11px; }
             self.schema_cards.clear()
             self.schema_rel_lines = []
             counts = self.stats.get("table_counts") or {}
-            tables = list(self.table_names)
+            tables = self._visible_table_names()
 
             col_count = 4
             x_start, y_start = 40, 30
@@ -767,7 +786,13 @@ QLabel#sqlHint { color:#94a3b8; font-size:11px; }
         conn = getattr(getattr(self.store, "db", None), "conn", None)
         if conn is None:
             return []
-        return read_schema_relationships(conn, self.table_names)
+        visible_tables = set(self._visible_table_names())
+        relationships = read_schema_relationships(conn, visible_tables)
+        return [
+            relationship
+            for relationship in relationships
+            if relationship["source_table"] in visible_tables and relationship["target_table"] in visible_tables
+        ]
 
     def _schema_columns(self, table: str) -> List[dict]:
         by_source = {
@@ -960,6 +985,9 @@ QLabel#sqlHint { color:#94a3b8; font-size:11px; }
             return
         op = self._sql_operation(sql)
         read_only_op = self._is_read_only_sql(sql, op)
+        if self._contains_restricted_table_sql(sql) and not self._can_access_sql_restricted_tables():
+            self._set_sql_status("Bu tabloya erişim yetkiniz yok.", error=True)
+            return
         if not self.has_permission("sql_write") and self._contains_blocked_write_sql(sql):
             self._show_permission_error("sql_write")
             return
@@ -1039,6 +1067,9 @@ QLabel#sqlHint { color:#94a3b8; font-size:11px; }
         if op == "PRAGMA":
             return bool(re.match(r"^\s*PRAGMA\s+table_info\s*\(", str(sql or ""), flags=re.I))
         return False
+
+    def _contains_restricted_table_sql(self, sql: str) -> bool:
+        return contains_restricted_table_sql(sql)
 
     def _contains_blocked_write_sql(self, sql: str) -> bool:
         text = str(sql or "")
