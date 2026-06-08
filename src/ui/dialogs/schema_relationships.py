@@ -8,7 +8,6 @@ HIDDEN_SCHEMA_COLUMNS = {("systems", "delivery_user_id")}
 
 FALLBACK_RELATIONSHIPS = [
     ("contracts", "platform_id", "platforms", "id"),
-    ("contracts", "user_id", "users", "id"),
     ("contract_users", "contract_id", "contracts", "id"),
     ("contract_users", "user_id", "users", "id"),
     ("systems", "contract_id", "contracts", "id"),
