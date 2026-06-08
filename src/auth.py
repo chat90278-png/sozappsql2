@@ -11,9 +11,43 @@ from typing import Any, Optional
 ROLE_LABELS = {
     "admin": "Yönetici",
     "manager": "Birim Sorumlusu",
-    "staff": "Personel",
+    "personnel": "Personel",
     "viewer": "Görüntüleyici",
+    # Legacy value kept only for old rows until migrated to roles.role_id.
+    "staff": "Personel",
 }
+
+DEFAULT_PERMISSIONS = [
+    ("list_contracts", "Sözleşme listeleme", "Ana sözleşme tablosunu görüntüler.", "Sözleşme İşlemleri"),
+    ("create_contract", "Sözleşme ekleme", "Yeni sözleşme kaydı oluşturur.", "Sözleşme İşlemleri"),
+    ("edit_contract", "Sözleşme düzenleme", "Mevcut sözleşme bilgilerini değiştirir.", "Sözleşme İşlemleri"),
+    ("delete_contract", "Sözleşme silme", "Sözleşme kaydını sistemden kaldırır.", "Sözleşme İşlemleri"),
+    ("export_data", "Dışa aktarma", "Excel veya rapor çıktısı alır.", "Sözleşme İşlemleri"),
+    ("open_sql_panel", "SQL paneli erişimi", "Database sorgu ekranını açar.", "SQL / Terminal"),
+    ("sql_read", "SQL sorgu çalıştırma", "SELECT ve güvenli okuma sorguları çalıştırır.", "SQL / Terminal"),
+    ("sql_write", "SQL veri değiştirme", "INSERT, UPDATE, DELETE gibi işlemleri yapar.", "SQL / Terminal"),
+    ("terminal_full_access", "Terminal tam erişim", "Terminali kısıtlamasız kullanır.", "SQL / Terminal"),
+    ("manage_staff", "Personel listeleme", "Kullanıcı listesini görüntüler ve personel yönetimi ekranına erişir.", "Personel Yönetimi"),
+    ("create_staff", "Personel ekleme", "Yeni kullanıcı oluşturur.", "Personel Yönetimi"),
+    ("assign_roles", "Rol / yetki değiştirme", "Kullanıcı rolü ve rol yetkilerini düzenler.", "Personel Yönetimi"),
+    ("manage_roles", "Rol yetkileri yönetimi", "Rollerin yetkilerini checkbox ile düzenler.", "Personel Yönetimi"),
+    ("reset_staff_password", "Şifre sıfırlama", "Personel şifresini yeniler.", "Personel Yönetimi"),
+    ("view_activity_logs", "İşlem geçmişi görüntüleme", "Uygulama içi yapılan işlemleri görüntüler.", "Diğer"),
+    ("manage_system_settings", "Sistem ayarları yönetimi", "Genel uygulama ayarlarını değiştirir.", "Diğer"),
+    ("database_tools", "Yedekleme / database araçları", "Yedek alma ve database araçlarına erişir.", "Diğer"),
+]
+
+DEFAULT_ROLE_PERMISSIONS = {
+    "admin": {code for code, *_ in DEFAULT_PERMISSIONS},
+    "manager": {
+        "list_contracts", "create_contract", "edit_contract", "delete_contract", "export_data",
+        "open_sql_panel", "sql_read", "sql_write", "terminal_full_access",
+        "view_activity_logs", "database_tools",
+    },
+    "personnel": {"list_contracts", "create_contract", "edit_contract", "export_data", "open_sql_panel", "sql_read"},
+    "viewer": {"list_contracts"},
+}
+FULL_ACCESS_PERMISSIONS = set(DEFAULT_ROLE_PERMISSIONS["admin"])
 
 current_staff: Optional[dict[str, Any]] = None
 
@@ -23,12 +57,25 @@ CREATE TABLE IF NOT EXISTS staff (
     device_name TEXT NOT NULL UNIQUE,
     full_name TEXT NOT NULL,
     password_hash TEXT NOT NULL,
-    role TEXT DEFAULT 'staff',
+    role TEXT DEFAULT 'personnel',
+    role_id INTEGER,
     is_active INTEGER DEFAULT 1,
+    last_login_at TEXT,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-    updated_at TEXT
+    updated_at TEXT,
+    FOREIGN KEY(role_id) REFERENCES roles(id) ON DELETE SET NULL
 );
 """
+
+
+def _database_path_from_connection(conn: sqlite3.Connection) -> str:
+    try:
+        row = conn.execute("PRAGMA database_list").fetchone()
+        if row:
+            return str(row[2] if not isinstance(row, sqlite3.Row) else row["file"])
+    except Exception:
+        pass
+    return ""
 
 
 def _connection_from(db_or_path: sqlite3.Connection | str | Path) -> tuple[sqlite3.Connection, bool]:
@@ -41,14 +88,125 @@ def _connection_from(db_or_path: sqlite3.Connection | str | Path) -> tuple[sqlit
     return conn, True
 
 
+def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
+    try:
+        return {str(row[1]) for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    except Exception:
+        return set()
+
+
 def ensure_staff_table(db_or_path: sqlite3.Connection | str | Path) -> None:
     conn, should_close = _connection_from(db_or_path)
     try:
-        conn.execute(_STAFF_TABLE_SQL)
+        ensure_authorization_schema(conn)
         conn.commit()
     finally:
         if should_close:
             conn.close()
+
+
+def ensure_authorization_schema(db_or_path: sqlite3.Connection | str | Path) -> None:
+    conn, should_close = _connection_from(db_or_path)
+    try:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS roles (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE,
+                display_name TEXT NOT NULL,
+                is_system INTEGER DEFAULT 1,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS permissions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                code TEXT NOT NULL UNIQUE,
+                display_name TEXT NOT NULL,
+                description TEXT,
+                category TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS role_permissions (
+                role_id INTEGER NOT NULL,
+                permission_code TEXT NOT NULL,
+                is_allowed INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY(role_id, permission_code),
+                FOREIGN KEY(role_id) REFERENCES roles(id) ON DELETE CASCADE,
+                FOREIGN KEY(permission_code) REFERENCES permissions(code) ON DELETE CASCADE
+            )
+            """
+        )
+        conn.execute(_STAFF_TABLE_SQL)
+        columns = _table_columns(conn, "staff")
+        for name, ddl in (
+            ("role_id", "INTEGER"),
+            ("is_active", "INTEGER DEFAULT 1"),
+            ("last_login_at", "TEXT"),
+            ("created_at", "TEXT DEFAULT CURRENT_TIMESTAMP"),
+            ("updated_at", "TEXT"),
+        ):
+            if name not in columns:
+                conn.execute(f"ALTER TABLE staff ADD COLUMN {name} {ddl}")
+        if "role" not in columns:
+            conn.execute("ALTER TABLE staff ADD COLUMN role TEXT DEFAULT 'personnel'")
+        _seed_authorization_defaults(conn)
+        _migrate_staff_roles(conn)
+        conn.commit()
+    finally:
+        if should_close:
+            conn.close()
+
+
+def _seed_authorization_defaults(conn: sqlite3.Connection) -> None:
+    roles = [
+        ("admin", "Yönetici", 1),
+        ("manager", "Birim Sorumlusu", 1),
+        ("personnel", "Personel", 1),
+        ("viewer", "Görüntüleyici", 1),
+    ]
+    for name, display, is_system in roles:
+        conn.execute(
+            "INSERT INTO roles(name, display_name, is_system, created_at) VALUES(?,?,?,CURRENT_TIMESTAMP) "
+            "ON CONFLICT(name) DO UPDATE SET display_name=excluded.display_name, is_system=excluded.is_system",
+            (name, display, is_system),
+        )
+    for code, display, desc, category in DEFAULT_PERMISSIONS:
+        conn.execute(
+            "INSERT INTO permissions(code, display_name, description, category) VALUES(?,?,?,?) "
+            "ON CONFLICT(code) DO UPDATE SET display_name=excluded.display_name, description=excluded.description, category=excluded.category",
+            (code, display, desc, category),
+        )
+    role_ids = {str(r["name"]): int(r["id"]) for r in conn.execute("SELECT id,name FROM roles")}
+    for role_name, allowed in DEFAULT_ROLE_PERMISSIONS.items():
+        role_id = role_ids.get(role_name)
+        if role_id is None:
+            continue
+        for code, *_ in DEFAULT_PERMISSIONS:
+            conn.execute(
+                "INSERT OR IGNORE INTO role_permissions(role_id, permission_code, is_allowed) VALUES(?,?,?)",
+                (role_id, code, 1 if code in allowed else 0),
+            )
+
+
+def _migrate_staff_roles(conn: sqlite3.Connection) -> None:
+    role_ids = {str(r["name"]): int(r["id"]) for r in conn.execute("SELECT id,name FROM roles")}
+    default_role_id = role_ids.get("personnel")
+    for row in conn.execute("SELECT id, role, role_id FROM staff").fetchall():
+        if row["role_id"] is not None:
+            continue
+        legacy = str(row["role"] or "personnel").strip()
+        normalized = "personnel" if legacy == "staff" else legacy
+        conn.execute(
+            "UPDATE staff SET role_id=?, role=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
+            (role_ids.get(normalized, default_role_id), normalized, int(row["id"])),
+        )
 
 
 def get_device_name() -> str:
@@ -85,58 +243,301 @@ def verify_password(password: str, stored_password_hash: str) -> bool:
     return hmac.compare_digest(digest, expected)
 
 
+def _staff_select_sql(where: str = "") -> str:
+    return f"""
+        SELECT s.id, s.device_name, s.full_name, s.password_hash, s.role, s.role_id,
+               s.is_active, s.last_login_at, s.created_at, s.updated_at,
+               r.name AS role_name, r.display_name AS role_display_name
+        FROM staff s
+        LEFT JOIN roles r ON r.id=s.role_id
+        {where}
+    """
+
+
 def get_staff_by_device(db_or_path: sqlite3.Connection | str | Path, device_name: str):
     ensure_staff_table(db_or_path)
     conn, should_close = _connection_from(db_or_path)
     try:
-        return conn.execute(
-            "SELECT id, device_name, full_name, password_hash, role, is_active FROM staff WHERE device_name=?",
-            (str(device_name or ""),),
-        ).fetchone()
+        return conn.execute(_staff_select_sql("WHERE s.device_name=?"), (str(device_name or ""),)).fetchone()
     finally:
         if should_close:
             conn.close()
 
 
-def create_staff(db_or_path: sqlite3.Connection | str | Path, device_name: str, full_name: str, password: str):
+def _default_role_for_new_staff(conn: sqlite3.Connection) -> int:
+    has_staff = int(conn.execute("SELECT COUNT(*) FROM staff").fetchone()[0] or 0) > 0
+    role_name = "personnel" if has_staff else "admin"
+    row = conn.execute("SELECT id FROM roles WHERE name=?", (role_name,)).fetchone()
+    return int(row["id"])
+
+
+def create_staff(db_or_path: sqlite3.Connection | str | Path, device_name: str, full_name: str, password: str, role_id: int | None = None):
     ensure_staff_table(db_or_path)
     conn, should_close = _connection_from(db_or_path)
     try:
+        rid = int(role_id) if role_id is not None else _default_role_for_new_staff(conn)
+        role = conn.execute("SELECT name FROM roles WHERE id=?", (rid,)).fetchone()
+        if not role:
+            raise ValueError("Geçersiz rol")
         conn.execute(
             """
-            INSERT INTO staff(device_name, full_name, password_hash, role, is_active)
-            VALUES(?, ?, ?, 'staff', 1)
+            INSERT INTO staff(device_name, full_name, password_hash, role, role_id, is_active, created_at, updated_at)
+            VALUES(?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
             """,
-            (str(device_name or ""), str(full_name or "").strip(), hash_password(password)),
+            (str(device_name or ""), str(full_name or "").strip(), hash_password(password), str(role["name"]), rid),
         )
         conn.commit()
-        return conn.execute(
-            "SELECT id, device_name, full_name, password_hash, role, is_active FROM staff WHERE device_name=?",
-            (str(device_name or ""),),
-        ).fetchone()
+        return conn.execute(_staff_select_sql("WHERE s.device_name=?"), (str(device_name or ""),)).fetchone()
     finally:
         if should_close:
             conn.close()
 
 
 def build_current_staff(row) -> dict[str, Any]:
+    role_name = str(row["role_name"] if "role_name" in row.keys() and row["role_name"] else row["role"] or "personnel")
     return {
         "id": int(row["id"]),
         "device_name": str(row["device_name"] or ""),
         "full_name": str(row["full_name"] or ""),
-        "role": str(row["role"] or "staff"),
+        "role": role_name,
+        "role_id": int(row["role_id"]) if row["role_id"] is not None else None,
+        "role_display_name": str(row["role_display_name"] if "role_display_name" in row.keys() and row["role_display_name"] else ROLE_LABELS.get(role_name, role_name)),
         "is_active": int(row["is_active"] if row["is_active"] is not None else 1),
     }
 
 
 def has_role(role: str, staff: Optional[dict[str, Any]] = None) -> bool:
-    candidate = staff if staff is not None else current_staff
-    return bool(candidate and str(candidate.get("role") or "") == str(role or ""))
+    raise RuntimeError("Sabit rol kontrolü kullanılmamalı; has_permission(current_user, permission_code) kullanın.")
 
 
-def staff_has_permission(permission: str, staff: Optional[dict[str, Any]] = None) -> bool:
-    # Yetki kuralları sonraki aşamada tanımlanacak. Şimdilik sadece altyapı hazır.
-    return bool(staff if staff is not None else current_staff)
+def _staff_permission_rows(conn: sqlite3.Connection, staff_id: int):
+    return conn.execute(
+        """
+        SELECT p.code, COALESCE(rp.is_allowed, 0) AS is_allowed
+        FROM permissions p
+        JOIN staff s ON s.id=?
+        LEFT JOIN role_permissions rp ON rp.role_id=s.role_id AND rp.permission_code=p.code
+        WHERE COALESCE(s.is_active, 1)=1
+        """,
+        (int(staff_id),),
+    ).fetchall()
+
+
+def has_permission(current_user: Optional[dict[str, Any]], permission_code: str, db_or_path: sqlite3.Connection | str | Path | None = None) -> bool:
+    user = current_user if current_user is not None else current_staff
+    code = str(permission_code or "").strip()
+    if not user or not code or int(user.get("is_active") if user.get("is_active") is not None else 1) == 0:
+        return False
+    if code in set(user.get("permissions") or []):
+        return True
+    if db_or_path is None:
+        db_or_path = user.get("db_path") or user.get("_db_path")
+    if db_or_path is None:
+        return False
+    ensure_authorization_schema(db_or_path)
+    conn, should_close = _connection_from(db_or_path)
+    try:
+        row = conn.execute(
+            """
+            SELECT COALESCE(rp.is_allowed, 0) AS is_allowed
+            FROM staff s
+            LEFT JOIN role_permissions rp ON rp.role_id=s.role_id AND rp.permission_code=?
+            WHERE s.id=? AND COALESCE(s.is_active, 1)=1
+            """,
+            (code, int(user.get("id"))),
+        ).fetchone()
+        return bool(row and int(row["is_allowed"] or 0) == 1)
+    finally:
+        if should_close:
+            conn.close()
+
+
+def staff_has_permission(permission: str, staff: Optional[dict[str, Any]] = None, db_or_path: sqlite3.Connection | str | Path | None = None) -> bool:
+    return has_permission(staff if staff is not None else current_staff, permission, db_or_path)
+
+
+def enrich_staff_permissions(db_or_path: sqlite3.Connection | str | Path, staff: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
+    if not staff:
+        return staff
+    ensure_authorization_schema(db_or_path)
+    conn, should_close = _connection_from(db_or_path)
+    try:
+        permissions = {str(r["code"]) for r in _staff_permission_rows(conn, int(staff["id"])) if int(r["is_allowed"] or 0) == 1}
+        out = dict(staff)
+        out["permissions"] = permissions
+        path = _database_path_from_connection(conn)
+        if path:
+            out["db_path"] = path
+        return out
+    finally:
+        if should_close:
+            conn.close()
+
+
+def require_permission(current_user: Optional[dict[str, Any]], permission_code: str, db_or_path: sqlite3.Connection | str | Path | None = None) -> None:
+    if not has_permission(current_user, permission_code, db_or_path):
+        raise PermissionError(f"Bu işlem için '{permission_code}' yetkisi gerekli.")
+
+
+def list_roles(db_or_path: sqlite3.Connection | str | Path) -> list[dict[str, Any]]:
+    ensure_authorization_schema(db_or_path)
+    conn, should_close = _connection_from(db_or_path)
+    try:
+        return [dict(r) for r in conn.execute("SELECT id,name,display_name,is_system,created_at,updated_at FROM roles ORDER BY id").fetchall()]
+    finally:
+        if should_close:
+            conn.close()
+
+
+def list_permissions(db_or_path: sqlite3.Connection | str | Path) -> list[dict[str, Any]]:
+    ensure_authorization_schema(db_or_path)
+    conn, should_close = _connection_from(db_or_path)
+    try:
+        return [dict(r) for r in conn.execute("SELECT id,code,display_name,description,category FROM permissions ORDER BY category, id").fetchall()]
+    finally:
+        if should_close:
+            conn.close()
+
+
+def get_role_permission_map(db_or_path: sqlite3.Connection | str | Path) -> dict[int, dict[str, bool]]:
+    ensure_authorization_schema(db_or_path)
+    conn, should_close = _connection_from(db_or_path)
+    try:
+        out: dict[int, dict[str, bool]] = {}
+        for r in conn.execute("SELECT role_id, permission_code, is_allowed FROM role_permissions").fetchall():
+            out.setdefault(int(r["role_id"]), {})[str(r["permission_code"])] = bool(int(r["is_allowed"] or 0))
+        return out
+    finally:
+        if should_close:
+            conn.close()
+
+
+def list_staff(db_or_path: sqlite3.Connection | str | Path) -> list[dict[str, Any]]:
+    ensure_authorization_schema(db_or_path)
+    conn, should_close = _connection_from(db_or_path)
+    try:
+        return [dict(r) for r in conn.execute(_staff_select_sql("ORDER BY s.full_name COLLATE NOCASE, s.id")).fetchall()]
+    finally:
+        if should_close:
+            conn.close()
+
+
+def _role_has_full_access(conn: sqlite3.Connection, role_id: int) -> bool:
+    rows = conn.execute("SELECT permission_code, is_allowed FROM role_permissions WHERE role_id=?", (int(role_id),)).fetchall()
+    allowed = {str(r["permission_code"]) for r in rows if int(r["is_allowed"] or 0) == 1}
+    return FULL_ACCESS_PERMISSIONS.issubset(allowed)
+
+
+def count_full_access_users(db_or_path: sqlite3.Connection | str | Path, excluding_staff_id: int | None = None) -> int:
+    ensure_authorization_schema(db_or_path)
+    conn, should_close = _connection_from(db_or_path)
+    try:
+        count = 0
+        for row in conn.execute("SELECT id, role_id FROM staff WHERE COALESCE(is_active,1)=1 AND role_id IS NOT NULL").fetchall():
+            if excluding_staff_id is not None and int(row["id"]) == int(excluding_staff_id):
+                continue
+            if _role_has_full_access(conn, int(row["role_id"])):
+                count += 1
+        return count
+    finally:
+        if should_close:
+            conn.close()
+
+
+def _would_keep_full_access_user(conn: sqlite3.Connection, changed_staff_id: int | None = None, changed_role_id: int | None = None, changed_role_permissions: dict[str, bool] | None = None, changed_active: int | None = None) -> bool:
+    for row in conn.execute("SELECT id, role_id, is_active FROM staff").fetchall():
+        sid = int(row["id"])
+        active = int(row["is_active"] if row["is_active"] is not None else 1)
+        role_id = int(row["role_id"]) if row["role_id"] is not None else None
+        if changed_staff_id is not None and sid == int(changed_staff_id):
+            if changed_active is not None:
+                active = int(changed_active)
+            if changed_role_id is not None:
+                role_id = int(changed_role_id)
+        if active != 1 or role_id is None:
+            continue
+        if changed_role_id is not None and role_id == int(changed_role_id) and changed_role_permissions is not None:
+            if FULL_ACCESS_PERMISSIONS.issubset({c for c, ok in changed_role_permissions.items() if ok}):
+                return True
+        elif _role_has_full_access(conn, role_id):
+            return True
+    return False
+
+
+def update_staff_record(db_or_path: sqlite3.Connection | str | Path, actor: Optional[dict[str, Any]], staff_id: int, *, full_name: str | None = None, role_id: int | None = None, is_active: int | None = None) -> None:
+    require_permission(actor, "manage_staff", db_or_path)
+    if role_id is not None:
+        require_permission(actor, "assign_roles", db_or_path)
+    ensure_authorization_schema(db_or_path)
+    conn, should_close = _connection_from(db_or_path)
+    try:
+        if is_active is not None and int(is_active) == 0 and not _would_keep_full_access_user(conn, changed_staff_id=int(staff_id), changed_active=0):
+            raise ValueError("Sistemde en az bir tam yetkili aktif kullanıcı kalmalıdır.")
+        assignments = []
+        params: list[Any] = []
+        if full_name is not None:
+            assignments.append("full_name=?")
+            params.append(str(full_name or "").strip())
+        if role_id is not None:
+            role = conn.execute("SELECT name FROM roles WHERE id=?", (int(role_id),)).fetchone()
+            if not role:
+                raise ValueError("Geçersiz rol")
+            if not _would_keep_full_access_user(conn, changed_staff_id=int(staff_id), changed_role_id=int(role_id)):
+                raise ValueError("Sistemde en az bir tam yetkili aktif kullanıcı kalmalıdır.")
+            assignments.extend(["role_id=?", "role=?"])
+            params.extend([int(role_id), str(role["name"])])
+        if is_active is not None:
+            assignments.append("is_active=?")
+            params.append(1 if int(is_active) else 0)
+        if not assignments:
+            return
+        assignments.append("updated_at=CURRENT_TIMESTAMP")
+        params.append(int(staff_id))
+        conn.execute(f"UPDATE staff SET {', '.join(assignments)} WHERE id=?", params)
+        conn.commit()
+    finally:
+        if should_close:
+            conn.close()
+
+
+def create_staff_by_admin(db_or_path: sqlite3.Connection | str | Path, actor: Optional[dict[str, Any]], device_name: str, full_name: str, password: str, role_id: int) -> None:
+    require_permission(actor, "manage_staff", db_or_path)
+    require_permission(actor, "create_staff", db_or_path)
+    require_permission(actor, "assign_roles", db_or_path)
+    create_staff(db_or_path, device_name, full_name, password, int(role_id))
+
+
+def reset_staff_password(db_or_path: sqlite3.Connection | str | Path, actor: Optional[dict[str, Any]], staff_id: int, new_password: str) -> None:
+    require_permission(actor, "reset_staff_password", db_or_path)
+    ensure_authorization_schema(db_or_path)
+    conn, should_close = _connection_from(db_or_path)
+    try:
+        conn.execute("UPDATE staff SET password_hash=?, updated_at=CURRENT_TIMESTAMP WHERE id=?", (hash_password(new_password), int(staff_id)))
+        conn.commit()
+    finally:
+        if should_close:
+            conn.close()
+
+
+def set_role_permission(db_or_path: sqlite3.Connection | str | Path, actor: Optional[dict[str, Any]], role_id: int, permission_code: str, is_allowed: bool) -> None:
+    require_permission(actor, "manage_roles", db_or_path)
+    ensure_authorization_schema(db_or_path)
+    conn, should_close = _connection_from(db_or_path)
+    try:
+        permissions = {str(r["permission_code"]): bool(int(r["is_allowed"] or 0)) for r in conn.execute("SELECT permission_code,is_allowed FROM role_permissions WHERE role_id=?", (int(role_id),)).fetchall()}
+        permissions[str(permission_code)] = bool(is_allowed)
+        if not _would_keep_full_access_user(conn, changed_role_id=int(role_id), changed_role_permissions=permissions):
+            raise ValueError("Sistemde en az bir tam yetkili aktif kullanıcı kalmalıdır.")
+        conn.execute(
+            "INSERT INTO role_permissions(role_id, permission_code, is_allowed) VALUES(?,?,?) "
+            "ON CONFLICT(role_id, permission_code) DO UPDATE SET is_allowed=excluded.is_allowed",
+            (int(role_id), str(permission_code), 1 if is_allowed else 0),
+        )
+        conn.execute("UPDATE roles SET updated_at=CURRENT_TIMESTAMP WHERE id=?", (int(role_id),))
+        conn.commit()
+    finally:
+        if should_close:
+            conn.close()
 
 
 
@@ -230,7 +631,7 @@ def _build_staff_register_dialog(db_or_path: sqlite3.Connection | str | Path, de
             except sqlite3.IntegrityError:
                 QMessageBox.warning(self, "Kayıt mevcut", "Bu cihaz için personel kaydı zaten mevcut. Lütfen giriş yapın.")
                 return
-            self.staff = build_current_staff(row)
+            self.staff = enrich_staff_permissions(db_or_path, build_current_staff(row))
             self.accept()
 
     return StaffRegisterDialog()
@@ -309,7 +710,7 @@ def _build_staff_login_dialog(db_or_path: sqlite3.Connection | str | Path, row, 
                 self.password_edit.setFocus()
                 self.password_edit.selectAll()
                 return
-            self.staff = build_current_staff(row)
+            self.staff = enrich_staff_permissions(db_or_path, build_current_staff(row))
             self.accept()
 
     return StaffLoginDialog()
@@ -351,9 +752,17 @@ def require_staff_login(db_or_path: sqlite3.Connection | str | Path, parent=None
         # device_name STS içinde tekildir; kayıtlı ve aktif cihazlar için tekrar
         # şifre sormadan personel oturumunu aç. Şifre yine kilitli belgeleri
         # farklı cihazdan açmak için staff.password_hash üzerinde kullanılmaya devam eder.
-        staff = build_current_staff(row)
+        conn, should_close = _connection_from(db_or_path)
+        try:
+            conn.execute("UPDATE staff SET last_login_at=CURRENT_TIMESTAMP WHERE id=?", (int(row["id"]),))
+            conn.commit()
+        finally:
+            if should_close:
+                conn.close()
+        staff = enrich_staff_permissions(db_or_path, build_current_staff(row))
     else:
         staff = show_staff_register_dialog(db_or_path, device_name, parent)
+        staff = enrich_staff_permissions(db_or_path, staff)
     current_staff = staff
     return staff
 
@@ -494,10 +903,7 @@ def get_staff_by_id(db_or_path: sqlite3.Connection | str | Path, staff_id: int):
     ensure_staff_table(db_or_path)
     conn, should_close = _connection_from(db_or_path)
     try:
-        return conn.execute(
-            "SELECT id, device_name, full_name, password_hash, role, is_active FROM staff WHERE id=?",
-            (int(staff_id),),
-        ).fetchone()
+        return conn.execute(_staff_select_sql("WHERE s.id=?"), (int(staff_id),)).fetchone()
     finally:
         if should_close:
             conn.close()

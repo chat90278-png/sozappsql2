@@ -18,6 +18,12 @@ from src.auth import (
     can_current_staff_access_documents,
     verify_staff_password_by_id,
     verify_password,
+    enrich_staff_permissions,
+    has_permission,
+    list_roles,
+    list_permissions,
+    set_role_permission,
+    update_staff_record,
 )
 from src.services.sts_database import STSDatabase
 import src.auth as auth_module
@@ -41,16 +47,16 @@ def test_staff_table_create_and_current_staff_payload():
     saved = get_staff_by_device(conn, "cihaz-1")
     current_staff = build_current_staff(saved)
 
-    assert row["role"] == "staff"
-    assert ROLE_LABELS["staff"] == "Personel"
+    assert row["role"] == "admin"
+    assert ROLE_LABELS["personnel"] == "Personel"
     assert verify_password("gizli", saved["password_hash"])
-    assert current_staff == {
-        "id": saved["id"],
-        "device_name": "cihaz-1",
-        "full_name": "Test Personel",
-        "role": "staff",
-        "is_active": 1,
-    }
+    assert current_staff["id"] == saved["id"]
+    assert current_staff["device_name"] == "cihaz-1"
+    assert current_staff["full_name"] == "Test Personel"
+    assert current_staff["role"] == "admin"
+    assert current_staff["role_id"] is not None
+    assert current_staff["role_display_name"] == "Yönetici"
+    assert current_staff["is_active"] == 1
 
 
 def test_require_staff_login_sets_current_staff_for_register_and_auto_device_login():
@@ -87,6 +93,37 @@ def test_require_staff_login_sets_current_staff_for_register_and_auto_device_log
         auth_module.show_staff_register_dialog = original_register
         auth_module.show_staff_login_dialog = original_login
         auth_module.current_staff = None
+
+
+def test_permission_defaults_and_last_full_access_guard():
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    ensure_staff_table(conn)
+    admin_row = create_staff(conn, "admin-cihaz", "Admin", "gizli")
+    admin = enrich_staff_permissions(conn, build_current_staff(admin_row))
+    assert has_permission(admin, "manage_roles", conn)
+    assert has_permission(admin, "sql_write", conn)
+
+    roles = {r["name"]: r for r in list_roles(conn)}
+    permissions = {p["code"] for p in list_permissions(conn)}
+    assert {"admin", "manager", "personnel", "viewer"}.issubset(roles)
+    assert {"manage_staff", "create_staff", "manage_roles", "open_sql_panel", "sql_read", "sql_write"}.issubset(permissions)
+
+    manager = create_staff(conn, "manager-cihaz", "Manager", "gizli", role_id=roles["manager"]["id"])
+    manager_user = enrich_staff_permissions(conn, build_current_staff(manager))
+    assert has_permission(manager_user, "sql_write", conn)
+    assert not has_permission(manager_user, "manage_staff", conn)
+
+    try:
+        update_staff_record(conn, admin, admin["id"], is_active=0)
+    except ValueError as exc:
+        assert "tam yetkili" in str(exc)
+    else:
+        raise AssertionError("Son tam yetkili kullanıcı pasifleştirilememeli")
+
+    set_role_permission(conn, admin, roles["manager"]["id"], "manage_staff", True)
+    manager_user = enrich_staff_permissions(conn, build_current_staff(get_staff_by_device(conn, "manager-cihaz")))
+    assert has_permission(manager_user, "manage_staff", conn)
 
 
 def test_document_lock_helpers_are_exported():
@@ -154,11 +191,14 @@ def test_sts_database_initializes_staff_table(tmp_path):
     finally:
         db.close()
 
-    assert "staff" in tables
+    assert {"roles", "permissions", "role_permissions", "staff"}.issubset(tables)
     assert "staff" in stats["table_counts"]
+    assert "roles" in stats["table_counts"]
+    assert "permissions" in stats["table_counts"]
+    assert "role_permissions" in stats["table_counts"]
     assert "document_locks" in stats["table_counts"]
     assert "sqlite_sequence" not in stats["table_counts"]
-    assert {"device_name", "full_name", "password_hash", "role", "is_active"}.issubset(columns)
+    assert {"device_name", "full_name", "password_hash", "role", "role_id", "is_active", "last_login_at", "created_at", "updated_at"}.issubset(columns)
     assert {"contract_id", "is_locked", "locked_by_staff_id", "locked_by_device_name", "locked_by_full_name"}.issubset(lock_columns)
 
 
@@ -166,6 +206,7 @@ if __name__ == "__main__":
     test_password_hashing_uses_salt_and_verifies()
     test_staff_table_create_and_current_staff_payload()
     test_require_staff_login_sets_current_staff_for_register_and_auto_device_login()
+    test_permission_defaults_and_last_full_access_guard()
     test_document_lock_helpers_are_exported()
     test_document_lock_state_and_device_access()
     import tempfile
