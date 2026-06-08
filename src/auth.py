@@ -39,16 +39,6 @@ PERMISSION_GROUPS = [
         ],
     ),
     (
-        "Operasyon Yönetimi",
-        [
-            ("manage_acceptances", "Kabul Yönetimi", "Kabul ve teslimat kayıtlarını yönetir."),
-            ("manage_terms", "Termin Yönetimi", "Termin/takvim bilgilerini yönetir."),
-            ("manage_labels", "Etiket Yönetimi", "Etiket tanımlarını yönetir."),
-            ("manage_platforms", "Platform Yönetimi", "Platform tanımlarını yönetir."),
-            ("manage_components", "Bileşen Yönetimi", "Bileşen tanımlarını yönetir."),
-        ],
-    ),
-    (
         "SQL / Terminal",
         [
             ("open_sql_panel", "SQL Paneli Erişimi", "Database sorgu ekranını açar."),
@@ -60,10 +50,11 @@ PERMISSION_GROUPS = [
     (
         "Personel Yönetimi",
         [
-            ("manage_staff", "Personel Listeleme / Ekleme / Düzenleme", "Personel kayıtlarını görüntüler ve düzenler."),
-            ("change_staff_roles", "Rol / Yetki Değiştirme", "Kullanıcı rolünü ve rol yetkilerini düzenler."),
+            ("manage_staff", "Personel Listeleme", "Kullanıcı listesini görüntüler."),
+            ("create_staff", "Personel Ekleme", "Yeni kullanıcı oluşturur."),
+            ("edit_staff", "Personel Düzenleme", "Kullanıcı bilgilerini günceller."),
+            ("manage_roles", "Rol / Yetki Değiştirme", "Kullanıcı rolü ve rol yetkilerini düzenler."),
             ("reset_staff_passwords", "Şifre Sıfırlama", "Personel şifresini yeniler."),
-            ("manage_roles", "Yetki Yönetimi", "Rol/yetki yönetimi penceresini açar."),
         ],
     ),
     (
@@ -71,20 +62,30 @@ PERMISSION_GROUPS = [
         [
             ("view_action_history", "İşlem Geçmişi Görüntüleme", "Uygulama içi yapılan işlemleri görüntüler."),
             ("access_settings", "Sistem Ayarları Yönetimi", "Genel uygulama ayarlarını değiştirir."),
-            ("access_backup", "Yedekleme", "Yedekleme işlemlerini çalıştırır."),
-            ("access_database_tools", "Database Araçları", "Database araçlarına erişir."),
-            ("lock_documents", "Belge Kilitleme", "Sözleşme belgelerini kilitler."),
-            ("unlock_own_documents", "Kendi Kilidini Açma", "Kendi kilitlediği belgelerin kilidini açar."),
-            ("unlock_all_documents", "Tüm Kilitleri Açma", "Tüm belge kilitlerini açar."),
+            ("access_database_tools", "Yedekleme / Database Araçları", "Yedek alma ve database araçlarına erişir."),
+            ("lock_documents", "Belge Kilitleme", "Belge erişimini kilitler."),
+            ("unlock_own_documents", "Kendi Kilidini Açma", "Kendi oluşturduğu kilidi kaldırır."),
+            ("unlock_all_documents", "Tüm Kilitleri Açma", "Tüm belge kilitlerini kaldırır."),
         ],
     ),
+]
+
+# Internal permissions that remain database-backed for existing application
+# gates, but are not shown in the simplified role-focused management screen.
+EXTRA_PERMISSIONS = [
+    ("manage_acceptances", "Kabul Yönetimi", "Kabul ve teslimat kayıtlarını yönetir.", "Operasyon Yönetimi"),
+    ("manage_terms", "Termin Yönetimi", "Termin/takvim bilgilerini yönetir.", "Operasyon Yönetimi"),
+    ("manage_labels", "Etiket Yönetimi", "Etiket tanımlarını yönetir.", "Operasyon Yönetimi"),
+    ("manage_platforms", "Platform Yönetimi", "Platform tanımlarını yönetir.", "Operasyon Yönetimi"),
+    ("manage_components", "Bileşen Yönetimi", "Bileşen tanımlarını yönetir.", "Operasyon Yönetimi"),
+    ("access_backup", "Yedekleme", "Yedekleme işlemlerini çalıştırır.", "Diğer"),
 ]
 
 DEFAULT_PERMISSIONS = [
     (code, display, desc, category)
     for category, permissions in PERMISSION_GROUPS
     for code, display, desc in permissions
-]
+] + EXTRA_PERMISSIONS
 
 # Backward-compatible aliases are seeded and checked, but new code should use
 # the canonical permission codes above.
@@ -103,9 +104,9 @@ DEFAULT_ROLE_PERMISSIONS = {
         "view_contracts", "create_contracts", "edit_contracts", "delete_contracts", "export_data",
         "manage_acceptances", "manage_terms", "manage_labels", "manage_platforms", "manage_components",
         "open_sql_panel", "sql_read", "sql_write", "terminal_full_access",
-        "view_action_history", "access_database_tools", "lock_documents", "unlock_own_documents",
+        "view_action_history", "access_database_tools", "lock_documents", "unlock_own_documents", "unlock_all_documents",
     },
-    "personnel": {"view_contracts", "create_contracts", "edit_contracts", "open_sql_panel", "sql_read", "lock_documents", "unlock_own_documents"},
+    "personnel": {"view_contracts", "create_contracts", "edit_contracts", "export_data", "open_sql_panel", "sql_read", "lock_documents", "unlock_own_documents"},
     "viewer": {"view_contracts"},
 }
 
@@ -554,8 +555,10 @@ def _would_keep_full_access_user(conn: sqlite3.Connection, changed_staff_id: int
 
 def update_staff_record(db_or_path: sqlite3.Connection | str | Path, actor: Optional[dict[str, Any]], staff_id: int, *, full_name: str | None = None, role_id: int | None = None, is_active: int | None = None) -> None:
     require_permission(actor, "manage_staff", db_or_path)
+    if full_name is not None:
+        require_permission(actor, "edit_staff", db_or_path)
     if role_id is not None:
-        require_permission(actor, "change_staff_roles", db_or_path)
+        require_permission(actor, "manage_roles", db_or_path)
     ensure_authorization_schema(db_or_path)
     conn, should_close = _connection_from(db_or_path)
     try:
@@ -590,7 +593,8 @@ def update_staff_record(db_or_path: sqlite3.Connection | str | Path, actor: Opti
 
 def create_staff_by_admin(db_or_path: sqlite3.Connection | str | Path, actor: Optional[dict[str, Any]], device_name: str, full_name: str, password: str, role_id: int) -> None:
     require_permission(actor, "manage_staff", db_or_path)
-    require_permission(actor, "change_staff_roles", db_or_path)
+    require_permission(actor, "create_staff", db_or_path)
+    require_permission(actor, "manage_roles", db_or_path)
     create_staff(db_or_path, device_name, full_name, password, int(role_id))
 
 
@@ -651,6 +655,42 @@ def set_role_permissions_bulk(
                     (role_id, code, 1 if is_allowed else 0),
                 )
             conn.execute("UPDATE roles SET updated_at=CURRENT_TIMESTAMP WHERE id=?", (role_id,))
+        conn.commit()
+    finally:
+        if should_close:
+            conn.close()
+
+
+
+def reset_role_permissions_to_default(
+    db_or_path: sqlite3.Connection | str | Path,
+    actor: Optional[dict[str, Any]],
+    role_id: int,
+) -> None:
+    require_permission(actor, "manage_roles", db_or_path)
+    ensure_authorization_schema(db_or_path)
+    conn, should_close = _connection_from(db_or_path)
+    try:
+        role = conn.execute("SELECT id,name FROM roles WHERE id=?", (int(role_id),)).fetchone()
+        if not role:
+            raise ValueError("Geçersiz rol")
+        allowed = DEFAULT_ROLE_PERMISSIONS.get(str(role["name"]), set())
+        permissions = {code: code in allowed for code, *_ in DEFAULT_PERMISSIONS}
+        if not _would_keep_full_access_user(conn, changed_role_id=int(role_id), changed_role_permissions=permissions):
+            raise ValueError("Bu işlem yapılamaz. Sistemde en az bir yetkili kullanıcı kalmalıdır.")
+        for code, is_allowed in permissions.items():
+            conn.execute(
+                "INSERT INTO role_permissions(role_id, permission_code, is_allowed) VALUES(?,?,?) "
+                "ON CONFLICT(role_id, permission_code) DO UPDATE SET is_allowed=excluded.is_allowed",
+                (int(role_id), code, 1 if is_allowed else 0),
+            )
+        for legacy_code, canonical_code in LEGACY_PERMISSION_ALIASES.items():
+            conn.execute(
+                "INSERT INTO role_permissions(role_id, permission_code, is_allowed) VALUES(?,?,?) "
+                "ON CONFLICT(role_id, permission_code) DO UPDATE SET is_allowed=excluded.is_allowed",
+                (int(role_id), legacy_code, 1 if permissions.get(canonical_code) else 0),
+            )
+        conn.execute("UPDATE roles SET updated_at=CURRENT_TIMESTAMP WHERE id=?", (int(role_id),))
         conn.commit()
     finally:
         if should_close:
