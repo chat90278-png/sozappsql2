@@ -378,7 +378,7 @@ QLabel#sqlHint { color:#94a3b8; font-size:11px; }
         return auth.has_permission(self.current_staff, permission_code, self._permission_db())
 
     def _show_permission_error(self, permission_code: str):
-        QMessageBox.warning(self, "Yetki gerekli", f"Bu işlem için '{permission_code}' yetkisi gerekli.")
+        QMessageBox.warning(self, "Yetkisiz İşlem", "Bu işlemi yapmak için gerekli yetkiye sahip değilsiniz.")
 
     def _build(self):
         root = QVBoxLayout(self)
@@ -960,6 +960,9 @@ QLabel#sqlHint { color:#94a3b8; font-size:11px; }
             return
         op = self._sql_operation(sql)
         read_only_op = self._is_read_only_sql(sql, op)
+        if not self.has_permission("sql_write") and self._contains_blocked_write_sql(sql):
+            self._show_permission_error("sql_write")
+            return
         if read_only_op and not self.has_permission("sql_read"):
             self._show_permission_error("sql_read")
             return
@@ -1029,11 +1032,20 @@ QLabel#sqlHint { color:#94a3b8; font-size:11px; }
         return sql_operation(sql)
 
     def _is_read_only_sql(self, sql: str, op: str) -> bool:
+        if self._contains_blocked_write_sql(sql):
+            return False
         if op in {"SELECT", "WITH", "EXPLAIN"}:
             return True
         if op == "PRAGMA":
             return bool(re.match(r"^\s*PRAGMA\s+table_info\s*\(", str(sql or ""), flags=re.I))
         return False
+
+    def _contains_blocked_write_sql(self, sql: str) -> bool:
+        text = str(sql or "")
+        blocked = r"\b(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|REPLACE|VACUUM|ATTACH|DETACH|TRUNCATE)\b"
+        if re.search(blocked, text, flags=re.I):
+            return True
+        return bool(re.search(r"\bPRAGMA\s+(writable_schema|journal_mode)\b|\bPRAGMA\s+foreign_keys\s*=\s*OFF\b", text, flags=re.I))
 
     def _confirm_sql_operation(self, op: str) -> bool:
         if op in {"SELECT", "PRAGMA", "WITH", "EXPLAIN"}:
