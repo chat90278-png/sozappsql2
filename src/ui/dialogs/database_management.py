@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import re
+import sqlite3
 import time
+from pathlib import Path
 from typing import Dict, List, Optional
 
 from PySide6.QtCore import Qt, QRectF, QTimer
@@ -35,6 +37,7 @@ from PySide6.QtWidgets import (
 )
 
 from src.ui.theme import STYLE
+from src import auth
 from src.services.sts_database import should_audit_sql, sql_operation
 from src.ui.dialogs.schema_relationships import (
     compact_relationship_text,
@@ -199,9 +202,10 @@ class SchemaTableItem(QGraphicsObject):
 
 
 class DatabaseManagementDialog(QDialog):
-    def __init__(self, store, parent=None):
+    def __init__(self, store, parent=None, current_staff: Optional[dict] = None):
         super().__init__(parent)
         self.store = store
+        self.current_staff = current_staff or getattr(parent, "current_staff", None) or auth.current_staff
         self.setObjectName("databaseEditorDialog")
         self.setWindowTitle("Database Yönetimi - STS")
         self.resize(1400, 820)
@@ -367,6 +371,15 @@ QLabel#sqlHint { color:#94a3b8; font-size:11px; }
     def _local_style(self) -> str:
         return self.apply_database_editor_styles()
 
+    def _permission_db(self):
+        return getattr(getattr(self.store, "db", None), "conn", None)
+
+    def has_permission(self, permission_code: str) -> bool:
+        return auth.has_permission(self.current_staff, permission_code, self._permission_db())
+
+    def _show_permission_error(self, permission_code: str):
+        QMessageBox.warning(self, "Yetki gerekli", f"Bu işlem için '{permission_code}' yetkisi gerekli.")
+
     def _build(self):
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -375,10 +388,11 @@ QLabel#sqlHint { color:#94a3b8; font-size:11px; }
         self.page_stack = QStackedWidget()
         self.tables_page = self.build_tables_tab()
         self.schema_page = self.build_relationships_tab()
-        self.sql_page = self.build_sql_tab()
+        self.sql_page = self.build_sql_tab() if self.has_permission("open_sql_panel") else None
         self.page_stack.addWidget(self.tables_page)
         self.page_stack.addWidget(self.schema_page)
-        self.page_stack.addWidget(self.sql_page)
+        if self.sql_page is not None:
+            self.page_stack.addWidget(self.sql_page)
         root.addWidget(self.page_stack, 1)
         self.switch_database_tab("tables")
 
@@ -432,11 +446,13 @@ QLabel#sqlHint { color:#94a3b8; font-size:11px; }
         )
 
         self.top_tabs = {}
-        for name, icon_svg, label in (
+        tab_specs = [
             ("tables",  _ICON_TABLES,    "Tablolar"),
             ("schema",  _ICON_RELATIONS, "İlişkiler"),
-            ("sql",     _ICON_SQL,       "SQL Terminali"),
-        ):
+        ]
+        if self.has_permission("open_sql_panel"):
+            tab_specs.append(("sql", _ICON_SQL, "SQL Terminali"))
+        for name, icon_svg, label in tab_specs:
             tab = self._make_tab_button(icon_svg, label, name)
             lay.addWidget(tab)
             self.top_tabs[name] = tab
@@ -549,7 +565,9 @@ QLabel#sqlHint { color:#94a3b8; font-size:11px; }
                 '</svg>'
             ),
         }
-        indexes = {"tables": 0, "schema": 1, "sql": 2}
+        indexes = {"tables": 0, "schema": 1}
+        if self.sql_page is not None:
+            indexes["sql"] = 2
         page = page if page in indexes else "tables"
         self.page_stack.setCurrentIndex(indexes[page])
         for name, tab in self.top_tabs.items():
@@ -931,6 +949,9 @@ QLabel#sqlHint { color:#94a3b8; font-size:11px; }
         self.sql_result_badge.setText("0 satır · 0ms")
 
     def _run_sql_terminal(self):
+        if not self.has_permission("open_sql_panel"):
+            self._show_permission_error("open_sql_panel")
+            return
         sql = self.sql_editor.toPlainText().strip()
         if not sql:
             return
@@ -938,12 +959,27 @@ QLabel#sqlHint { color:#94a3b8; font-size:11px; }
             self._set_sql_status("Lütfen tek SQL komutu çalıştırın.", error=True)
             return
         op = self._sql_operation(sql)
+        read_only_op = self._is_read_only_sql(sql, op)
+        if read_only_op and not self.has_permission("sql_read"):
+            self._show_permission_error("sql_read")
+            return
+        if not read_only_op and not self.has_permission("sql_write"):
+            self._show_permission_error("sql_write")
+            return
         if not self._confirm_sql_operation(op):
             return
-        conn = getattr(getattr(self.store, "db", None), "conn", None)
-        if conn is None:
+        base_conn = getattr(getattr(self.store, "db", None), "conn", None)
+        if base_conn is None:
             self._set_sql_status("SQL hatası: Veritabanı bağlantısı yok.", error=True)
             return
+        ro_conn = None
+        conn = base_conn
+        if read_only_op and not self.has_permission("sql_write"):
+            db_path = Path(str(getattr(getattr(self.store, "db", None), "path", "")))
+            ro_conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+            ro_conn.row_factory = sqlite3.Row
+            ro_conn.execute("PRAGMA query_only = ON")
+            conn = ro_conn
         started = time.perf_counter()
         changed = should_audit_sql(op)
         try:
@@ -972,6 +1008,9 @@ QLabel#sqlHint { color:#94a3b8; font-size:11px; }
             except Exception:
                 pass
             self._set_sql_status(f"SQL hatası: {exc}", error=True)
+        finally:
+            if ro_conn is not None:
+                ro_conn.close()
 
     def _show_sql_result(self, cols, rows):
         self.sql_result.setRowCount(len(rows))
@@ -988,6 +1027,13 @@ QLabel#sqlHint { color:#94a3b8; font-size:11px; }
 
     def _sql_operation(self, sql: str) -> str:
         return sql_operation(sql)
+
+    def _is_read_only_sql(self, sql: str, op: str) -> bool:
+        if op in {"SELECT", "WITH", "EXPLAIN"}:
+            return True
+        if op == "PRAGMA":
+            return bool(re.match(r"^\s*PRAGMA\s+table_info\s*\(", str(sql or ""), flags=re.I))
+        return False
 
     def _confirm_sql_operation(self, op: str) -> bool:
         if op in {"SELECT", "PRAGMA", "WITH", "EXPLAIN"}:
