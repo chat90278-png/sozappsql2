@@ -1,7 +1,35 @@
 from __future__ import annotations
+
 import time
-from collections import defaultdict
 from pathlib import Path
+
+
+BASE_HEADERS = [
+    "Sözleşme No",
+    "Sözleşme Türü",
+    "Sistem Adı",
+    "Kabul Adı",
+    "Kullanıcı",
+    "Yİ/YD",
+    "Durum",
+    "İmza Tarihi",
+    "T0 Tarihi",
+    "T0 Ay",
+    "Termin Tarihi",
+    "Kabul Tarihi",
+    "Etiketler",
+    "Not",
+]
+
+STATUS_STYLES = {
+    "tamamlandı": ("C6EFCE", "276221"),
+    "tamamlandi": ("C6EFCE", "276221"),
+    "devam ediyor": ("DDEEFF", "1F4E79"),
+    "gecikti": ("FFD7D7", "9C0006"),
+    "başlanmadı": ("F2F2F2", "595959"),
+    "baslanmadi": ("F2F2F2", "595959"),
+    "plan": ("F2F2F2", "595959"),
+}
 
 
 def _safe_sheet_name(name: str, used: set[str]) -> str:
@@ -15,6 +43,184 @@ def _safe_sheet_name(name: str, used: set[str]) -> str:
         i += 1
     used.add(n)
     return n
+
+
+def _norm_status(value: str) -> str:
+    text = str(value or "").strip().lower()
+    return (
+        text.replace("ı", "i")
+        .replace("İ", "i")
+        .replace("ş", "s")
+        .replace("ğ", "g")
+        .replace("ü", "u")
+        .replace("ö", "o")
+        .replace("ç", "c")
+    )
+
+
+def _display_status(value: str) -> str:
+    text = str(value or "").strip()
+    if not text or text.upper() == "PLAN":
+        return "Başlanmadı"
+    return text
+
+
+def _number(value) -> float:
+    try:
+        return float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _component_names_for_platform(conn, platform_id: int) -> list[str]:
+    assignment_count = conn.execute(
+        "SELECT COUNT(*) FROM component_platforms WHERE platform_id=?",
+        (platform_id,),
+    ).fetchone()[0]
+    if assignment_count:
+        rows = conn.execute(
+            """
+            SELECT c.name
+            FROM component_platforms cp
+            JOIN components c ON c.id=cp.component_id
+            WHERE cp.platform_id=? AND cp.enabled=1 AND c.active=1
+            ORDER BY c.name COLLATE NOCASE, c.name
+            """,
+            (platform_id,),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT name FROM components WHERE active=1 ORDER BY name COLLATE NOCASE, name"
+        ).fetchall()
+    return [str(row[0]) for row in rows]
+
+
+def _tag_text(conn, contract_id: int) -> str:
+    rows = conn.execute(
+        """
+        SELECT t.name
+        FROM contract_tags ct
+        JOIN tags t ON t.id=ct.tag_id
+        WHERE ct.contract_id=?
+        ORDER BY t.name COLLATE NOCASE, t.name
+        """,
+        (contract_id,),
+    ).fetchall()
+    return ", ".join(str(row[0]) for row in rows)
+
+
+def _contract_user_text(conn, contract_id: int) -> str:
+    rows = conn.execute(
+        """
+        SELECT u.name
+        FROM contract_users cu
+        JOIN users u ON u.id=cu.user_id
+        WHERE cu.contract_id=?
+        ORDER BY u.name COLLATE NOCASE, u.name
+        """,
+        (contract_id,),
+    ).fetchall()
+    return ", ".join(str(row[0]) for row in rows)
+
+
+def _write_summary_sheet(wb, conn, db, platforms: list[str], all_platforms: list[str], comp_count: int):
+    summary = wb.create_sheet('Özet')
+    c_count = conn.execute('SELECT COUNT(*) FROM contracts').fetchone()[0]
+    s_count = conn.execute('SELECT COUNT(*) FROM systems').fetchone()[0]
+    d_count = conn.execute('SELECT COUNT(*) FROM deliveries').fetchone()[0]
+    l_count = conn.execute('SELECT COUNT(*) FROM activity_logs').fetchone()[0]
+    summary.append(['Öğe', 'Değer'])
+    summary.append(['Oluşturma zamanı', time.strftime('%Y-%m-%d %H:%M:%S')])
+    summary.append(['Kaynak STS', str(getattr(db, 'path', ''))])
+    summary.append(['Platform sayısı', len(platforms) if platforms else len(all_platforms)])
+    summary.append(['Sözleşme sayısı', c_count])
+    summary.append(['Sistem sayısı', s_count])
+    summary.append(['Kabul/Teslimat sayısı', d_count])
+    summary.append(['Bileşen sayısı', comp_count])
+    summary.append(['Log sayısı', l_count])
+    summary.append([])
+    summary.append(['Platform', 'Sözleşme Sayısı', 'Sistem Sayısı', 'Teslimat Sayısı'])
+    for platform in (platforms if platforms else all_platforms):
+        p_contracts = conn.execute('SELECT COUNT(*) FROM contracts c JOIN platforms p ON p.id=c.platform_id WHERE p.name=?', (platform,)).fetchone()[0]
+        p_systems = conn.execute('SELECT COUNT(*) FROM systems s JOIN contracts c ON c.id=s.contract_id JOIN platforms p ON p.id=c.platform_id WHERE p.name=?', (platform,)).fetchone()[0]
+        p_delivs = conn.execute('SELECT COUNT(*) FROM deliveries d JOIN contracts c ON c.id=d.contract_id JOIN platforms p ON p.id=c.platform_id WHERE p.name=?', (platform,)).fetchone()[0]
+        summary.append([platform, p_contracts, p_systems, p_delivs])
+
+
+def _apply_platform_formatting(ws, max_row: int, max_col: int, component_start_col: int, row_groups: list[dict]):
+    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+    from openpyxl.utils import get_column_letter
+
+    header_fill = PatternFill("solid", fgColor="0D2B55")
+    white_fill = PatternFill("solid", fgColor="FFFFFF")
+    zebra_fill = PatternFill("solid", fgColor="F7FAFF")
+    remaining_fill = PatternFill("solid", fgColor="FFF2CC")
+    thin = Side(style="thin", color="D9E2EF")
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+    ws.row_dimensions[1].height = 22
+    for cell in ws[1]:
+        cell.fill = header_fill
+        cell.font = Font(color="FFFFFF", bold=True)
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        cell.border = border
+
+    for row_idx in range(2, max_row + 1):
+        fill = white_fill if row_idx % 2 else zebra_fill
+        for col_idx in range(1, max_col + 1):
+            cell = ws.cell(row_idx, col_idx)
+            cell.fill = fill
+            cell.alignment = Alignment(vertical="center", wrap_text=True)
+            cell.border = border
+
+        status_cell = ws.cell(row_idx, 7)
+        key = _norm_status(status_cell.value)
+        status_colors = STATUS_STYLES.get(key)
+        if status_colors:
+            status_cell.fill = PatternFill("solid", fgColor=status_colors[0])
+            status_cell.font = Font(color=status_colors[1], bold=True)
+
+        for col_idx in range(component_start_col + 2, max_col + 1, 3):
+            cell = ws.cell(row_idx, col_idx)
+            if _number(cell.value) > 0:
+                cell.fill = remaining_fill
+            else:
+                cell.fill = white_fill
+
+    def merge_ranges(column: int, key_name: str):
+        start = 2
+        last_key = None
+        for offset, group in enumerate(row_groups, start=2):
+            key = group[key_name]
+            if last_key is None:
+                last_key = key
+                start = offset
+            elif key != last_key:
+                if offset - 1 > start:
+                    ws.merge_cells(start_row=start, start_column=column, end_row=offset - 1, end_column=column)
+                    ws.cell(start, column).alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+                start = offset
+                last_key = key
+        if last_key is not None and max_row > start:
+            ws.merge_cells(start_row=start, start_column=column, end_row=max_row, end_column=column)
+            ws.cell(start, column).alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+    merge_ranges(1, "contract_id")
+    merge_ranges(2, "contract_id")
+    merge_ranges(3, "system_id")
+
+    ws.auto_filter.ref = f"A1:{get_column_letter(max_col)}{max_row}"
+    ws.freeze_panes = "A2"
+
+    for col_idx in range(1, max_col + 1):
+        letter = get_column_letter(col_idx)
+        max_len = 0
+        for cell in ws[letter]:
+            value = cell.value
+            if value is None:
+                continue
+            max_len = max(max_len, len(str(value)))
+        ws.column_dimensions[letter].width = min(max(max_len + 2, 10), 45)
 
 
 def export_sts_to_excel(db, output_path, options=None, progress_cb=None):
@@ -33,9 +239,17 @@ def export_sts_to_excel(db, output_path, options=None, progress_cb=None):
     except Exception as exc:
         raise RuntimeError('Excel aktarımı için openpyxl kurulu olmalıdır.') from exc
 
-    t0 = time.time(); conn = db.conn; out = Path(output_path); wb = Workbook(write_only=True)
-    comp_names = [r[0] for r in conn.execute("SELECT name FROM components WHERE active=1 ORDER BY name").fetchall()]
-    all_platforms = [r[0] for r in conn.execute("SELECT name FROM platforms WHERE is_active=1 ORDER BY sort_order,name").fetchall()]
+    t0 = time.time()
+    conn = db.conn
+    out = Path(output_path)
+    wb = Workbook(write_only=False)
+    wb.remove(wb.active)
+
+    platform_rows = conn.execute(
+        "SELECT id,name FROM platforms WHERE is_active=1 ORDER BY sort_order,name"
+    ).fetchall()
+    all_platforms = [row[1] for row in platform_rows]
+    platform_ids = {row[1]: int(row[0]) for row in platform_rows}
     scope = str(opts.get('scope') or 'all')
     if scope == 'selected':
         platforms = [p for p in (opts.get('platforms') or []) if p in all_platforms]
@@ -47,95 +261,125 @@ def export_sts_to_excel(db, output_path, options=None, progress_cb=None):
     else:
         platforms = list(all_platforms)
 
-    c_count = conn.execute('SELECT COUNT(*) FROM contracts').fetchone()[0]
-    s_count = conn.execute('SELECT COUNT(*) FROM systems').fetchone()[0]
-    d_count = conn.execute('SELECT COUNT(*) FROM deliveries').fetchone()[0]
-    l_count = conn.execute('SELECT COUNT(*) FROM activity_logs').fetchone()[0]
-
+    active_component_count = conn.execute("SELECT COUNT(*) FROM components WHERE active=1").fetchone()[0]
     if opts.get('include_summary', True):
-        if progress_cb: progress_cb(5, "Özet hazırlanıyor...")
-        summary = wb.create_sheet('Özet')
-        summary.append(['Öğe', 'Değer'])
-        summary.append(['Oluşturma zamanı', time.strftime('%Y-%m-%d %H:%M:%S')])
-        summary.append(['Kaynak STS', str(getattr(db, 'path', ''))])
-        summary.append(['Platform sayısı', len(platforms) if platforms else len(all_platforms)])
-        summary.append(['Sözleşme sayısı', c_count]); summary.append(['Sistem sayısı', s_count])
-        summary.append(['Kabul/Teslimat sayısı', d_count]); summary.append(['Bileşen sayısı', len(comp_names)])
-        summary.append(['Log sayısı', l_count]); summary.append([])
-        summary.append(['Platform', 'Sözleşme Sayısı', 'Sistem Sayısı', 'Teslimat Sayısı'])
-        for p in (platforms if platforms else all_platforms):
-            p_contracts = conn.execute('SELECT COUNT(*) FROM contracts c JOIN platforms p ON p.id=c.platform_id WHERE p.name=?', (p,)).fetchone()[0]
-            p_systems = conn.execute('SELECT COUNT(*) FROM systems s JOIN contracts c ON c.id=s.contract_id JOIN platforms p ON p.id=c.platform_id WHERE p.name=?', (p,)).fetchone()[0]
-            p_delivs = conn.execute('SELECT COUNT(*) FROM deliveries d JOIN contracts c ON c.id=d.contract_id JOIN platforms p ON p.id=c.platform_id WHERE p.name=?', (p,)).fetchone()[0]
-            summary.append([p, p_contracts, p_systems, p_delivs])
-
-    if progress_cb: progress_cb(10, "Platformlar hazırlanıyor...")
-    used = {'Özet'}
-    main_headers = ['Sözleşme Türü','Sözleşme No','Kullanıcı','Yİ/YD','Durum','İmza Tarihi','T0 Tarihi','T0 Ay','Termin Tarihi','Kabul Tarihi','İçerik / Not']
-    if opts.get('include_tags', True): main_headers.append('Etiketler')
-    main_headers.extend(['Sistem','Kabul / Teslimat','Satır Türü'])
-    comp_used = comp_names if opts.get('include_component_columns', True) else []
-
-    for pi,p in enumerate(platforms):
         if progress_cb:
-            pct = 10 + int((pi / max(1, len(platforms))) * 80)
-            progress_cb(pct, f"{p} platformu yazılıyor...")
-        ws = wb.create_sheet(_safe_sheet_name(p, used))
-        ws.append([f'Platform: {p}']); ws.append([])
-        headers = list(main_headers)
-        for c in comp_used: headers.extend([f'{c} Sözleşme Adedi', f'{c} Teslim Edilen', f'{c} Kalan'])
+            progress_cb(5, "Özet hazırlanıyor...")
+        _write_summary_sheet(wb, conn, db, platforms, all_platforms, active_component_count)
+
+    if progress_cb:
+        progress_cb(10, "Platformlar hazırlanıyor...")
+    used = {'Özet'} if 'Özet' in wb.sheetnames else set()
+
+    for platform_index, platform in enumerate(platforms):
+        if progress_cb:
+            pct = 10 + int((platform_index / max(1, len(platforms))) * 80)
+            progress_cb(pct, f"{platform} platformu yazılıyor...")
+
+        platform_id = platform_ids[platform]
+        components = _component_names_for_platform(conn, platform_id) if opts.get('include_component_columns', True) else []
+        headers = list(BASE_HEADERS)
+        if not opts.get('include_tags', True):
+            headers[12] = "Etiketler"
+        for component in components:
+            headers.extend([
+                f"{component} Teslim Edilecek",
+                f"{component} Teslim Edilen",
+                f"{component} Kalan",
+            ])
+
+        ws = wb.create_sheet(_safe_sheet_name(platform, used))
         ws.append(headers)
+        row_groups = []
 
-        contracts = conn.execute(
+        deliveries = conn.execute(
             """
-            SELECT c.id,c.contract_type,c.contract_no,
-                   COALESCE(GROUP_CONCAT(u.name, ', '), '') AS contract_user_display,
-                   c.yi_yd,c.status,c.signed_date,c.t0_date,c.t0_months,c.completion_date,c.acceptance_date,c.note,c.content
-            FROM contracts c
+            SELECT
+                c.id AS contract_id,
+                c.contract_no,
+                c.contract_type,
+                c.yi_yd,
+                c.status AS contract_status,
+                c.signed_date,
+                c.t0_date,
+                c.t0_months,
+                c.completion_date,
+                c.acceptance_date AS contract_acceptance_date,
+                c.note AS contract_note,
+                s.id AS system_id,
+                s.name AS system_name,
+                d.id AS delivery_id,
+                d.name AS delivery_name,
+                d.status AS delivery_status,
+                d.acceptance_date AS delivery_acceptance_date,
+                d.note AS delivery_note,
+                u.name AS delivery_user
+            FROM deliveries d
+            JOIN contracts c ON c.id=d.contract_id
             JOIN platforms p ON p.id=c.platform_id
-            LEFT JOIN contract_users cu ON cu.contract_id=c.id
-            LEFT JOIN users u ON u.id=cu.user_id
+            JOIN systems s ON s.id=d.system_id
+            LEFT JOIN users u ON u.id=d.delivery_user_id
             WHERE p.name=?
-            GROUP BY c.id
-            ORDER BY c.id
+            ORDER BY c.contract_no COLLATE NOCASE, c.contract_type COLLATE NOCASE, c.id, s.sort_order, s.id, d.sort_order, d.id
             """,
-            (p,),
+            (platform,),
         ).fetchall()
-        for c in contracts:
-            cid = c[0]
-            tag_names = [r[0] for r in conn.execute('SELECT t.name FROM contract_tags ct JOIN tags t ON t.id=ct.tag_id WHERE ct.contract_id=? ORDER BY t.name', (cid,)).fetchall()]
-            tag_txt = ', '.join(tag_names)
-            base = [c[1], c[2], c[3], c[4], c[5], c[6], c[7], c[8], c[9], c[10], c[12] or c[11]]
-            if opts.get('include_tags', True): base.append(tag_txt)
-            systems = conn.execute('SELECT id,name FROM systems WHERE contract_id=? ORDER BY sort_order,id', (cid,)).fetchall()
-            if opts.get('include_contract_rows', True):
-                sys_qty = defaultdict(float); sys_del = defaultdict(float)
-                for r in conn.execute('SELECT c.name,SUM(sc.qty) FROM system_components sc JOIN components c ON c.id=sc.component_id JOIN systems s ON s.id=sc.system_id WHERE s.contract_id=? GROUP BY c.name', (cid,)).fetchall(): sys_qty[r[0]] = float(r[1] or 0)
-                for r in conn.execute('SELECT c.name,SUM(dc.delivered) FROM delivery_components dc JOIN components c ON c.id=dc.component_id JOIN deliveries d ON d.id=dc.delivery_id WHERE d.contract_id=? GROUP BY c.name', (cid,)).fetchall(): sys_del[r[0]] = float(r[1] or 0)
-                row = base + ['GENEL', 'Ana Sözleşme Toplamı', 'Sözleşme Toplamı']
-                for n in comp_used:
-                    q = sys_qty.get(n, 0.0); d = sys_del.get(n, 0.0); row.extend([q,d,q-d])
-                ws.append(row)
 
-            for sid, sname in systems:
-                qmap = {r[0]: float(r[1] or 0) for r in conn.execute('SELECT c.name,sc.qty FROM system_components sc JOIN components c ON c.id=sc.component_id WHERE sc.system_id=?', (sid,)).fetchall()}
-                dmap = {r[0]: float(r[1] or 0) for r in conn.execute('SELECT c.name,SUM(dc.delivered) FROM delivery_components dc JOIN components c ON c.id=dc.component_id JOIN deliveries d ON d.id=dc.delivery_id WHERE d.system_id=? GROUP BY c.name', (sid,)).fetchall()}
-                if opts.get('include_system_rows', True):
-                    row = base + [sname, 'Sistem Toplamı', 'Sistem Toplamı']
-                    for n in comp_used:
-                        q = qmap.get(n, 0.0); d = dmap.get(n, 0.0); row.extend([q,d,q-d])
-                    ws.append(row)
-                if opts.get('include_delivery_rows', True):
-                    dels = conn.execute('SELECT id,name FROM deliveries WHERE contract_id=? AND system_id=? ORDER BY sort_order,id', (cid, sid)).fetchall()
-                    for did, dname in dels:
-                        mp = {r[0]: (float(r[1] or 0), float(r[2] or 0)) for r in conn.execute('SELECT c.name,dc.planned,dc.delivered FROM delivery_components dc JOIN components c ON c.id=dc.component_id WHERE dc.delivery_id=?', (did,)).fetchall()}
-                        row = base + [sname, dname, 'Kabul']
-                        for n in comp_used:
-                            pl, dl = mp.get(n, (0.0, 0.0)); row.extend([pl,dl,pl-dl])
-                        ws.append(row)
+        for item in deliveries:
+            contract_id = int(item[0])
+            system_id = int(item[11])
+            delivery_id = int(item[13])
+            contract_users = _contract_user_text(conn, contract_id)
+            tag_txt = _tag_text(conn, contract_id) if opts.get('include_tags', True) else ""
+            user_txt = str(item[18] or "").strip() or contract_users
+            status_txt = _display_status(item[15] or item[4])
+            note_txt = str(item[17] or item[10] or "")
+            row = [
+                item[1] or "",
+                item[2] or "",
+                item[12] or "",
+                item[14] or "",
+                user_txt,
+                item[3] or "",
+                status_txt,
+                item[5] or "",
+                item[6] or "",
+                item[7] or 0,
+                item[8] or "",
+                item[16] or item[9] or "",
+                tag_txt,
+                note_txt,
+            ]
+            component_values = {
+                str(r[0]): (_number(r[1]), _number(r[2]))
+                for r in conn.execute(
+                    """
+                    SELECT c.name, dc.planned, dc.delivered
+                    FROM delivery_components dc
+                    JOIN components c ON c.id=dc.component_id
+                    WHERE dc.delivery_id=?
+                    """,
+                    (delivery_id,),
+                ).fetchall()
+            }
+            for component in components:
+                planned, delivered = component_values.get(component, (0.0, 0.0))
+                row.extend([planned, delivered, planned - delivered])
+            ws.append(row)
+            row_groups.append({"contract_id": contract_id, "system_id": system_id})
 
-    if progress_cb: progress_cb(95, "Excel dosyası kaydediliyor...")
+        max_row = max(ws.max_row, 1)
+        max_col = max(ws.max_column, len(headers))
+        _apply_platform_formatting(ws, max_row, max_col, len(BASE_HEADERS) + 1, row_groups)
+
+    if not wb.sheetnames:
+        wb.create_sheet('Özet')
+
+    if progress_cb:
+        progress_cb(95, "Excel dosyası kaydediliyor...")
     wb.save(str(out))
     duration = round(time.time() - t0, 3)
-    if progress_cb: progress_cb(100, "Excel dosyası oluşturuldu.")
+    if progress_cb:
+        progress_cb(100, "Excel dosyası oluşturuldu.")
+    c_count = conn.execute('SELECT COUNT(*) FROM contracts').fetchone()[0]
     return {'output_path': str(out), 'platform_count': len(platforms), 'contract_count': c_count, 'duration_sec': duration}
