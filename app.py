@@ -8598,8 +8598,8 @@ class MainWindow(QMainWindow):
         return False
 
     def open_staff_permissions_dialog(self, initial_tab: str = "staffRoles"):
-        if not self.store:
-            QMessageBox.information(self, "Veri dosyası gerekli", "Önce bir STS veri dosyası açın.")
+        if not self.store or not self.is_sts_mode():
+            QMessageBox.information(self, "Veri dosyası gerekli", "Kullanıcı ve yetki yönetimi için önce bir STS veri dosyası açın.")
             return
         required_permission = "manage_roles" if initial_tab == "rolePermissions" else "manage_staff"
         if not self.require_permission_ui(required_permission, "Kullanıcı ve Yetki Yönetimi"):
@@ -8668,7 +8668,7 @@ class MainWindow(QMainWindow):
         self.top_actions_menu.addAction("Bileşen Yönetimi", self.manage_components)
         self.activity_logs_action = self.top_actions_menu.addAction("İşlem Geçmişi", self.open_activity_logs)
         self.top_actions_menu.addSeparator()
-        self.top_actions_menu.addAction("📘 Kullanım Kılavuzu", self.open_usage_guide)
+        self.top_actions_menu.addAction("Kullanım Kılavuzu", self.open_usage_guide)
         self.top_actions_menu.aboutToShow.connect(self._refresh_permission_actions)
         self.top_actions_btn.setMenu(self.top_actions_menu)
         tl.addWidget(self.top_actions_btn)
@@ -9019,13 +9019,24 @@ class MainWindow(QMainWindow):
             Qt.SmoothTransformation
         )
 
+    def _has_permission_context(self) -> bool:
+        return bool(self.current_staff and self.is_sts_mode())
+
+    def _permission_action_visible(self, permission_code: str) -> bool:
+        # Excel/başlangıç modunda personel oturumu yoktur; menü öğelerini saklamak
+        # kullanıcıda "menüden silinmiş" hissi yaratır. Gerçek STS oturumu varsa
+        # görünürlük merkezi has_permission kontrolüyle belirlenir.
+        if not self._has_permission_context():
+            return True
+        return self.has_permission(permission_code)
+
     def _refresh_permission_actions(self):
         if hasattr(self, "user_management_action"):
-            self.user_management_action.setVisible(self.has_permission("manage_staff"))
+            self.user_management_action.setVisible(self._permission_action_visible("manage_staff"))
         if hasattr(self, "role_permissions_action"):
-            self.role_permissions_action.setVisible(self.has_permission("manage_roles"))
+            self.role_permissions_action.setVisible(self._permission_action_visible("manage_roles"))
         if hasattr(self, "activity_logs_action"):
-            self.activity_logs_action.setVisible(self.has_permission("view_action_history"))
+            self.activity_logs_action.setVisible(self._permission_action_visible("view_action_history"))
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
