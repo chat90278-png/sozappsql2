@@ -57,6 +57,7 @@ class STSDatabase:
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA foreign_keys=ON")
         self.conn.execute("PRAGMA journal_mode=DELETE")
+        self.conn.execute("PRAGMA busy_timeout=5000")
         self.conn.execute("PRAGMA synchronous=NORMAL")
         self.conn.execute("PRAGMA cache_size=-64000")
         migrated = self.init_schema()
@@ -114,8 +115,12 @@ CREATE TABLE IF NOT EXISTS activity_logs(id INTEGER PRIMARY KEY AUTOINCREMENT,cr
 CREATE INDEX IF NOT EXISTS idx_contracts_platform_id ON contracts(platform_id);
 CREATE INDEX IF NOT EXISTS idx_contracts_platform_status ON contracts(platform_id,status);
 CREATE INDEX IF NOT EXISTS idx_contracts_completion_date ON contracts(completion_date);
+CREATE INDEX IF NOT EXISTS idx_contracts_contract_no ON contracts(contract_no);
+CREATE INDEX IF NOT EXISTS idx_contracts_contract_type ON contracts(contract_type);
+CREATE INDEX IF NOT EXISTS idx_contracts_parent_contract_id ON contracts(parent_contract_id);
 CREATE INDEX IF NOT EXISTS idx_systems_contract_id ON systems(contract_id);
 CREATE INDEX IF NOT EXISTS idx_systems_completion_date ON systems(completion_date);
+CREATE INDEX IF NOT EXISTS idx_systems_contract_name ON systems(contract_id, name);
 CREATE INDEX IF NOT EXISTS idx_system_components_component_id ON system_components(component_id);
 CREATE INDEX IF NOT EXISTS idx_deliveries_contract_id ON deliveries(contract_id);
 CREATE INDEX IF NOT EXISTS idx_deliveries_system_id ON deliveries(system_id);
@@ -128,6 +133,7 @@ CREATE INDEX IF NOT EXISTS idx_contract_files_contract_id ON contract_files(cont
 CREATE INDEX IF NOT EXISTS idx_logs_created_at ON activity_logs(created_at);
 CREATE INDEX IF NOT EXISTS idx_logs_action ON activity_logs(action);
 CREATE INDEX IF NOT EXISTS idx_logs_entity ON activity_logs(entity_type,entity_id);
+CREATE INDEX IF NOT EXISTS idx_activity_logs_platform_contract ON activity_logs(platform_id, contract_no);
             """
         )
         # Existing v2 files may predate delivery-level responsibility. SQLite
@@ -152,6 +158,7 @@ CREATE INDEX IF NOT EXISTS idx_logs_entity ON activity_logs(entity_type,entity_i
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_contract_file_folders_parent_id ON contract_file_folders(parent_id)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_contract_files_folder_id ON contract_files(folder_id)")
         ensure_staff_table(self.conn)
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_staff_role_id ON staff(role_id)")
         ensure_document_locks_table(self.conn)
         if "contract_id" not in self._table_columns("document_locks"):
             # Legacy document_locks was a single global row constrained to id=1.
@@ -164,7 +171,7 @@ CREATE INDEX IF NOT EXISTS idx_logs_entity ON activity_logs(entity_type,entity_i
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_document_locks_contract_id "
             "ON document_locks(contract_id)"
         )
-        self.conn.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version','5')")
+        self.conn.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version','6')")
         self.conn.commit()
         return migrated
 

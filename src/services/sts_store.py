@@ -5,6 +5,7 @@ import os
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+from src.config.app_config import MAX_CONTRACT_FILE_SIZE_BYTES
 from src.models.app_models import ComponentDef, ContractInfo, DeliveryInfo, SystemInfo, TagDef
 from src.services.sts_database import STSDatabase, now_iso
 from src import auth
@@ -710,8 +711,8 @@ class STSStore:
         if ext in blocked or ext not in allowed:
             raise ValueError("Bu dosya türü desteklenmiyor.")
         size = source.stat().st_size
-        if size > 25 * 1024 * 1024:
-            raise ValueError("Dosya boyutu 25 MB üstünde olamaz.")
+        if size > MAX_CONTRACT_FILE_SIZE_BYTES:
+            raise ValueError("Dosya boyutu 50 MB üstünde olamaz.")
         try:
             content = source.read_bytes()
         except OSError as exc:
