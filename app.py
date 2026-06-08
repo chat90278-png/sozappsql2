@@ -5219,6 +5219,16 @@ class ContractWorkWindow(QDialog):
             self._apply_derived_statuses(self.ci, self.systems, self.deliveries)
         self._initial_snapshot = self._make_data_snapshot()
 
+    def has_permission(self, permission_code: str) -> bool:
+        db_conn = getattr(getattr(self.store, "db", None), "conn", None)
+        return auth.has_permission(self.current_staff, permission_code, db_conn)
+
+    def require_permission_ui(self, permission_code: str, title: str = "Yetki gerekli") -> bool:
+        if self.has_permission(permission_code):
+            return True
+        QMessageBox.warning(self, title, f"Bu işlem için '{permission_code}' yetkisi gerekli.")
+        return False
+
     def _set_dirty(self) -> None:
         """Kullanıcı bir değişiklik yaptığında çağrılır."""
         self._is_dirty = True
@@ -6969,6 +6979,8 @@ class ContractWorkWindow(QDialog):
 
     def _bulk_download_files(self, file_ids: list):
         """Seçili dosyaları klasöre indir."""
+        if not self.require_permission_ui("export_data", "Belge Dışa Aktar"):
+            return
         if not self._ensure_document_access(interactive=True):
             return
         if not file_ids:
@@ -6996,6 +7008,8 @@ class ContractWorkWindow(QDialog):
 
     def _bulk_zip_files(self, file_ids: list):
         """Seçili dosyaları ZIP olarak indir."""
+        if not self.require_permission_ui("export_data", "Belge Dışa Aktar"):
+            return
         if not self._ensure_document_access(interactive=True):
             return
         if not file_ids:
@@ -7050,6 +7064,8 @@ class ContractWorkWindow(QDialog):
 
     def _download_folder(self, folder_id: int, folder_name: str, as_zip: bool = True):
         """Klasör ve tüm alt klasörlerini/dosyalarını recursive indir."""
+        if not self.require_permission_ui("export_data", "Belge Dışa Aktar"):
+            return
         if not self._ensure_document_access(interactive=True):
             return
         # Tüm dosya ve klasör verisini yükle
@@ -7284,6 +7300,8 @@ class ContractWorkWindow(QDialog):
             QMessageBox.warning(self, "Belge açılamadı", str(exc))
 
     def export_contract_file(self, file_id: int):
+        if not self.require_permission_ui("export_data", "Belge Dışa Aktar"):
+            return
         if not self._ensure_document_access(interactive=True):
             return
         try:
@@ -8458,6 +8476,8 @@ class MainWindow(QMainWindow):
 
 
     def export_sts_to_excel(self):
+        if not self.require_permission_ui("export_data", "Excel’e Aktar"):
+            return
         if not self.store:
             QMessageBox.information(self, "Veri dosyası gerekli", "Önce bir STS veri dosyası açın.")
             return
@@ -8515,7 +8535,7 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Database Yönetimi", "Database yönetimi yalnızca STS veri dosyalarında desteklenir.")
             return
         from src.ui.dialogs.database_management import DatabaseManagementDialog
-        dlg = DatabaseManagementDialog(self.store, self)
+        dlg = DatabaseManagementDialog(self.store, self, current_staff=self.current_staff)
         dlg.exec()
 
 
@@ -8545,6 +8565,40 @@ class MainWindow(QMainWindow):
             return
         from src.ui.dialogs.activity_logs import ActivityLogDialog
         dlg = ActivityLogDialog(self.store, self)
+        dlg.exec()
+
+    def _permission_db(self):
+        if self.store is not None and getattr(self.store, "db", None) is not None:
+            return self.store.db.conn
+        return self.path
+
+    def has_permission(self, permission_code: str) -> bool:
+        return auth.has_permission(self.current_staff, permission_code, self._permission_db())
+
+    def require_permission_ui(self, permission_code: str, title: str = "Yetki gerekli") -> bool:
+        if self.has_permission(permission_code):
+            return True
+        QMessageBox.warning(self, title, f"Bu işlem için '{permission_code}' yetkisi gerekli.")
+        return False
+
+    def open_staff_management(self):
+        if not self.store:
+            QMessageBox.information(self, "Veri dosyası gerekli", "Önce bir STS veri dosyası açın.")
+            return
+        if not self.require_permission_ui("manage_staff", "Personel Yönetimi"):
+            return
+        from src.ui.dialogs.staff_permissions import StaffManagementDialog
+        dlg = StaffManagementDialog(self._permission_db(), self.current_staff, self)
+        dlg.exec()
+
+    def open_role_permissions(self):
+        if not self.store:
+            QMessageBox.information(self, "Veri dosyası gerekli", "Önce bir STS veri dosyası açın.")
+            return
+        if not self.require_permission_ui("manage_roles", "Roller ve Yetkiler"):
+            return
+        from src.ui.dialogs.staff_permissions import RolePermissionsDialog
+        dlg = RolePermissionsDialog(self._permission_db(), self.current_staff, self)
         dlg.exec()
 
     def open_usage_guide(self):
@@ -8590,12 +8644,15 @@ class MainWindow(QMainWindow):
         self.top_actions_menu.addAction("Performans Takip", self.open_performance_tracking)
         self.top_actions_menu.addAction("Platform Yönetimi", self.manage_platforms)
         self.top_actions_menu.addSeparator()
+        self.staff_management_action = self.top_actions_menu.addAction("Personel Yönetimi", self.open_staff_management)
+        self.role_permissions_action = self.top_actions_menu.addAction("Roller ve Yetkiler", self.open_role_permissions)
         self.top_actions_menu.addAction("Kullanıcı Yönetimi", self.manage_users)
         self.top_actions_menu.addAction("Etiket Yönetimi", self.manage_tags)
         self.top_actions_menu.addAction("Bileşen Yönetimi", self.manage_components)
         self.top_actions_menu.addAction("İşlem Geçmişi", self.open_activity_logs)
         self.top_actions_menu.addSeparator()
         self.top_actions_menu.addAction("📘 Kullanım Kılavuzu", self.open_usage_guide)
+        self.top_actions_menu.aboutToShow.connect(self._refresh_permission_actions)
         self.top_actions_btn.setMenu(self.top_actions_menu)
         tl.addWidget(self.top_actions_btn)
         main.addWidget(top, 0)
@@ -8944,6 +9001,12 @@ class MainWindow(QMainWindow):
             Qt.KeepAspectRatio,
             Qt.SmoothTransformation
         )
+
+    def _refresh_permission_actions(self):
+        if hasattr(self, "staff_management_action"):
+            self.staff_management_action.setVisible(self.has_permission("manage_staff"))
+        if hasattr(self, "role_permissions_action"):
+            self.role_permissions_action.setVisible(self.has_permission("manage_roles"))
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
