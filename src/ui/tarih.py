@@ -97,7 +97,7 @@ class CalendarMorePopup(QFrame):
 
     def _event_label(self, ev: dict) -> str:
         if ev.get("mode") == "system":
-            return f"• {ev.get('no', '')} · {ev.get('system_name', '')}"
+            return f"• {ev.get('no', '')} · {ev.get('system_label', '')}"
         return f"• {ev.get('no', '')} · {ev.get('platform', '')}"
 
     def _tooltip(self, ev: dict) -> str:
@@ -106,7 +106,7 @@ class CalendarMorePopup(QFrame):
             f"Platform: {ev.get('platform', '')}",
         ]
         if ev.get("mode") == "system":
-            parts.append(f"Sistem: {ev.get('system_name', '')}")
+            parts.append(f"Sistem: {ev.get('system_label', '')}")
         parts.extend([
             f"Kullanıcı: {ev.get('user', '')}",
             f"Tür: {ev.get('type', '')}",
@@ -427,7 +427,7 @@ class ContractCalendarWindow(QDialog):
             "status_class": cls,
             "deadline": deadline,
             "content": str(base.get("content", "") or ""),
-            "system_name": str(system.name or ""),
+            "system_label": str(system.name or ""),
         }
 
     def _build_system_events(self) -> List[dict]:
@@ -505,8 +505,8 @@ class ContractCalendarWindow(QDialog):
         lay.setContentsMargins(10, 8, 10, 8)
         lay.setSpacing(2)
         no_text = f"#{ev['no']}"
-        if ev.get("mode") == self.MODE_SYSTEM and ev.get("system_name"):
-            no_text += f" · {ev['system_name']}"
+        if ev.get("mode") == self.MODE_SYSTEM and ev.get("system_label"):
+            no_text += f" · {ev['system_label']}"
         no = QLabel(no_text)
         no.setObjectName("eventCardNo")
         sub_bits = [ev.get("platform", ""), ev.get("user", "")]
@@ -598,13 +598,13 @@ class ContractCalendarWindow(QDialog):
 
     def _event_label(self, ev: dict) -> str:
         if ev.get("mode") == self.MODE_SYSTEM:
-            return f"• {ev.get('no', '')} · {ev.get('system_name', '')}"
+            return f"• {ev.get('no', '')} · {ev.get('system_label', '')}"
         return f"• {ev.get('no', '')} · {ev.get('platform', '')}"
 
     def _tooltip(self, ev: dict) -> str:
         parts = [f"Sözleşme: {ev.get('no', '')}", f"Platform: {ev.get('platform', '')}"]
         if ev.get("mode") == self.MODE_SYSTEM:
-            parts.append(f"Sistem: {ev.get('system_name', '')}")
+            parts.append(f"Sistem: {ev.get('system_label', '')}")
         parts.extend([
             f"Kullanıcı: {ev.get('user', '')}",
             f"Tür: {ev.get('type', '')}",

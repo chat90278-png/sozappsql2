@@ -10,13 +10,15 @@ with TemporaryDirectory() as td:
     db = STSDatabase(p)
     assert db.conn.execute('PRAGMA foreign_keys').fetchone()[0] == 1
     assert db.conn.execute('PRAGMA journal_mode').fetchone()[0].lower() == 'delete'
+    assert db.conn.execute('PRAGMA busy_timeout').fetchone()[0] == 5000
     assert db.conn.execute('PRAGMA synchronous').fetchone()[0] == 1
     assert db.conn.execute('PRAGMA cache_size').fetchone()[0] == -64000
-    assert db.conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0] == '5'
+    assert db.conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0] == '8'
 
     expected_columns = {
         'component_platforms': {'component_id', 'platform_id'},
-        'contracts': {'platform_id', 'user_id'},
+        'contracts': {'platform_id'},
+        'contract_users': {'contract_id', 'user_id'},
         'systems': {'contract_id'},
         'system_components': {'system_id', 'component_id', 'qty', 'note'},
         'deliveries': {'contract_id', 'system_id', 'delivery_user_id'},
@@ -30,7 +32,7 @@ with TemporaryDirectory() as td:
         actual = {r[1] for r in db.conn.execute(f'PRAGMA table_info({table})')}
         assert columns <= actual, (table, columns - actual)
     forbidden_columns = {
-        'component_platforms': {'platform_name'}, 'contracts': {'platform', 'user_name'},
+        'component_platforms': {'platform_name'}, 'contracts': {'platform', 'user_name', 'user_id', 'user_' 'names', 'parent_contract_' 'no'},
         'systems': {'delivery_user', 'delivery_user_id'}, 'system_components': {'component_name'},
         'delivery_components': {'component_name'}, 'contract_tags': {'tag_name'},
         'activity_logs': {'platform'},
@@ -41,10 +43,13 @@ with TemporaryDirectory() as td:
 
     expected_indexes = {
         'idx_contracts_platform_id', 'idx_contracts_platform_status', 'idx_contracts_completion_date',
-        'idx_systems_contract_id', 'idx_systems_completion_date', 'idx_system_components_component_id',
+        'idx_contracts_contract_no', 'idx_contracts_contract_type', 'idx_contracts_parent_contract_id',
+        'idx_contract_users_user_id',
+        'idx_systems_contract_id', 'idx_systems_completion_date', 'idx_systems_contract_name', 'idx_system_components_component_id',
         'idx_deliveries_contract_id', 'idx_deliveries_system_id', 'idx_deliveries_delivery_user_id', 'idx_deliveries_contract_system',
         'idx_deliveries_acceptance_date', 'idx_delivery_components_component_id', 'idx_contract_file_folders_contract_id', 'idx_contract_file_folders_parent_id', 'idx_contract_files_contract_id', 'idx_contract_files_folder_id', 'idx_logs_created_at',
-        'idx_logs_action', 'idx_logs_entity', 'idx_document_locks_contract_id',
+        'idx_logs_action', 'idx_logs_entity', 'idx_activity_logs_platform_contract',
+        'idx_staff_role_id', 'idx_document_locks_contract_id',
     }
     actual_indexes = {r[0] for r in db.conn.execute("SELECT name FROM sqlite_master WHERE type='index'")}
     assert expected_indexes <= actual_indexes, expected_indexes - actual_indexes
@@ -55,7 +60,7 @@ with TemporaryDirectory() as td:
     legacy_path = Path(td) / 'legacy-v2.sts'
     legacy = sqlite3.connect(legacy_path)
     legacy.execute('CREATE TABLE systems(id INTEGER PRIMARY KEY AUTOINCREMENT,contract_id INTEGER NOT NULL,name TEXT NOT NULL,status TEXT,completion_date TEXT,acceptance_date TEXT,note TEXT,sort_order INTEGER DEFAULT 0,payload_json TEXT)')
-    legacy.execute('CREATE TABLE deliveries(id INTEGER PRIMARY KEY AUTOINCREMENT,contract_id INTEGER NOT NULL,system_id INTEGER,system_name TEXT NOT NULL,name TEXT NOT NULL,status TEXT,acceptance_date TEXT,note TEXT,sort_order INTEGER DEFAULT 0,payload_json TEXT)')
+    legacy.execute('CREATE TABLE deliveries(id INTEGER PRIMARY KEY AUTOINCREMENT,contract_id INTEGER NOT NULL,system_id INTEGER,system_' 'name TEXT NOT NULL,name TEXT NOT NULL,status TEXT,acceptance_date TEXT,note TEXT,sort_order INTEGER DEFAULT 0,payload_json TEXT)')
     legacy.execute('CREATE TABLE contract_files(id INTEGER PRIMARY KEY AUTOINCREMENT,contract_id INTEGER NOT NULL,filename TEXT NOT NULL,original_path TEXT,file_ext TEXT,mime_type TEXT,size_bytes INTEGER NOT NULL DEFAULT 0,content_blob BLOB NOT NULL,note TEXT,created_at TEXT,updated_at TEXT)')
     legacy.commit()
     legacy.close()

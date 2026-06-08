@@ -8,7 +8,8 @@ HIDDEN_SCHEMA_COLUMNS = {("systems", "delivery_user_id")}
 
 FALLBACK_RELATIONSHIPS = [
     ("contracts", "platform_id", "platforms", "id"),
-    ("contracts", "user_id", "users", "id"),
+    ("contract_users", "contract_id", "contracts", "id"),
+    ("contract_users", "user_id", "users", "id"),
     ("systems", "contract_id", "contracts", "id"),
     ("deliveries", "contract_id", "contracts", "id"),
     ("deliveries", "system_id", "systems", "id"),
@@ -31,6 +32,7 @@ FALLBACK_RELATIONSHIPS = [
 
 RELATIONSHIP_GROUP_ORDER = (
     "contracts",
+    "contract_users",
     "contract_file_folders",
     "contract_files",
     "deliveries",

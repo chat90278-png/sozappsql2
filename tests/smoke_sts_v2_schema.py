@@ -20,9 +20,10 @@ with TemporaryDirectory() as td:
     store.write_contract(ci, systems, deliveries)
 
     conn = store.db.conn
-    contract = conn.execute('SELECT platform_id,user_id FROM contracts').fetchone()
+    contract = conn.execute('SELECT platform_id FROM contracts').fetchone()
     assert contract['platform_id'] == store.get_platform_id('AKINCI')
-    assert contract['user_id'] == store.get_user_id('U1')
+    assert 'user_id' not in {row[1] for row in conn.execute('PRAGMA table_info(contracts)')}
+    assert conn.execute('SELECT COUNT(*) FROM contract_users WHERE user_id=?', (store.get_user_id('U1'),)).fetchone()[0] == 1
     assert {r[0] for r in conn.execute('SELECT c.name FROM system_components sc JOIN components c ON c.id=sc.component_id')} == {'C1'}
     assert {r[0] for r in conn.execute('SELECT c.name FROM delivery_components dc JOIN components c ON c.id=dc.component_id')} == {'C1', 'C2'}
     assert conn.execute("SELECT dc.planned,dc.delivered FROM delivery_components dc JOIN components c ON c.id=dc.component_id WHERE c.name='C2'").fetchone()[:] == (0.0, 4.0)

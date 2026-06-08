@@ -1266,7 +1266,7 @@ class ExcelStore:
             return False
         return n.endswith(" toplami") or n.endswith(" toplam")
 
-    def _extract_system_name_from_total(self, delivery_name: str, activity: str, fallback_index: int) -> str:
+    def _extract_system_label_from_total(self, delivery_name: str, activity: str, fallback_index: int) -> str:
         raw = str(delivery_name or "").strip()
         act = str(activity or "").strip()
         cleaned = re.sub(r"[?]+$", "", raw).strip()
@@ -1748,7 +1748,7 @@ class ExcelStore:
             if not self._is_system_total_row(delivery):
                 continue
             activity = str(self.cell_value(ws, r, 5) or "").strip()
-            sys_name = self._extract_system_name_from_total(delivery, activity, len(sys_starts) + 1)
+            sys_name = self._extract_system_label_from_total(delivery, activity, len(sys_starts) + 1)
             sys_starts.append((r, sys_name))
         for i, (sr, sys_name) in enumerate(sys_starts):
             er = (sys_starts[i + 1][0] - 1) if i + 1 < len(sys_starts) else end
@@ -2615,7 +2615,7 @@ class ExcelStore:
                 continue
 
             if self._is_system_total_row(delivery_name):
-                sys_name = self._extract_system_name_from_total(
+                sys_name = self._extract_system_label_from_total(
                     delivery_name, activity, len(systems) + 1
                 )
                 sys_comps = {}
