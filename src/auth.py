@@ -9,8 +9,8 @@ from pathlib import Path
 from typing import Any, Optional
 
 ROLE_LABELS = {
-    "admin": "Yönetici",
-    "manager": "Birim Sorumlusu",
+    "admin": "Admin",
+    "manager": "Yönetici",
     "personnel": "Personel",
     "viewer": "Görüntüleyici",
     # Legacy value kept only for old rows until migrated to roles.role_id.
@@ -20,32 +20,93 @@ ROLE_LABELS = {
 FULL_ACCESS_PERMISSIONS = {
     "manage_staff",
     "manage_roles",
-    "assign_roles",
-    "reset_staff_password",
-    "open_sql_panel",
-    "sql_read",
-    "sql_write",
-    "terminal_full_access",
-    "export_data",
 }
 
+AUTHORIZATION_REQUIRED_PERMISSIONS = {
+    "manage_staff",
+    "manage_roles",
+}
+
+PERMISSION_GROUPS = [
+    (
+        "Sözleşme İşlemleri",
+        [
+            ("view_contracts", "Sözleşme Listeleme", "Ana sözleşme tablosunu görüntüler."),
+            ("create_contracts", "Sözleşme Ekleme", "Yeni sözleşme kaydı oluşturur."),
+            ("edit_contracts", "Sözleşme Düzenleme", "Mevcut sözleşme bilgilerini değiştirir."),
+            ("delete_contracts", "Sözleşme Silme", "Sözleşme kaydını sistemden kaldırır."),
+            ("export_data", "Dışa Aktarma", "Excel veya rapor çıktısı alır."),
+        ],
+    ),
+    (
+        "Operasyon Yönetimi",
+        [
+            ("manage_acceptances", "Kabul Yönetimi", "Kabul ve teslimat kayıtlarını yönetir."),
+            ("manage_terms", "Termin Yönetimi", "Termin/takvim bilgilerini yönetir."),
+            ("manage_labels", "Etiket Yönetimi", "Etiket tanımlarını yönetir."),
+            ("manage_platforms", "Platform Yönetimi", "Platform tanımlarını yönetir."),
+            ("manage_components", "Bileşen Yönetimi", "Bileşen tanımlarını yönetir."),
+        ],
+    ),
+    (
+        "SQL / Terminal",
+        [
+            ("open_sql_panel", "SQL Paneli Erişimi", "Database sorgu ekranını açar."),
+            ("sql_read", "SQL Sorgu Çalıştırma", "SELECT ve güvenli okuma sorguları çalıştırır."),
+            ("sql_write", "SQL Veri Değiştirme", "INSERT, UPDATE, DELETE gibi işlemleri yapar."),
+            ("terminal_full_access", "Terminal Tam Erişim", "Terminali kısıtlamasız kullanır."),
+        ],
+    ),
+    (
+        "Personel Yönetimi",
+        [
+            ("manage_staff", "Personel Listeleme / Ekleme / Düzenleme", "Personel kayıtlarını görüntüler ve düzenler."),
+            ("change_staff_roles", "Rol / Yetki Değiştirme", "Kullanıcı rolünü ve rol yetkilerini düzenler."),
+            ("reset_staff_passwords", "Şifre Sıfırlama", "Personel şifresini yeniler."),
+            ("manage_roles", "Yetki Yönetimi", "Rol/yetki yönetimi penceresini açar."),
+        ],
+    ),
+    (
+        "Diğer",
+        [
+            ("view_action_history", "İşlem Geçmişi Görüntüleme", "Uygulama içi yapılan işlemleri görüntüler."),
+            ("access_settings", "Sistem Ayarları Yönetimi", "Genel uygulama ayarlarını değiştirir."),
+            ("access_backup", "Yedekleme", "Yedekleme işlemlerini çalıştırır."),
+            ("access_database_tools", "Database Araçları", "Database araçlarına erişir."),
+            ("lock_documents", "Belge Kilitleme", "Sözleşme belgelerini kilitler."),
+            ("unlock_own_documents", "Kendi Kilidini Açma", "Kendi kilitlediği belgelerin kilidini açar."),
+            ("unlock_all_documents", "Tüm Kilitleri Açma", "Tüm belge kilitlerini açar."),
+        ],
+    ),
+]
+
 DEFAULT_PERMISSIONS = [
-    ("manage_staff", "Personel yönetimi", "Personel listeleme, ekleme, düzenleme, pasifleştirme ve şifre sıfırlama işlemleri.", "Yönetim"),
-    ("manage_roles", "Rol ve yetki yönetimi", "Rollerin yetkilerini düzenleme ve güvenlik kontrolü işlemleri.", "Yönetim"),
-    ("assign_roles", "Rol atama", "Personellere rol atama yetkisi.", "Yönetim"),
-    ("reset_staff_password", "Şifre sıfırlama", "Personel şifrelerini sıfırlama yetkisi.", "Yönetim"),
-    ("open_sql_panel", "SQL panelini açma", "Database yönetim ekranındaki SQL panelini görme yetkisi.", "SQL"),
-    ("sql_read", "SQL okuma", "SELECT, PRAGMA table_info ve EXPLAIN gibi okuma sorgularını çalıştırma yetkisi.", "SQL"),
-    ("sql_write", "SQL yazma", "INSERT, UPDATE, DELETE, DROP, ALTER, CREATE ve benzeri yazma/yapı değiştirme sorgularını çalıştırma yetkisi.", "SQL"),
-    ("terminal_full_access", "Terminal tam erişim", "Terminal/SQL terminali gibi güçlü araçları kullanma yetkisi.", "SQL"),
-    ("export_data", "Dışa aktarma", "STS verisini veya belgeleri dışa aktarma yetkisi.", "Veri"),
+    (code, display, desc, category)
+    for category, permissions in PERMISSION_GROUPS
+    for code, display, desc in permissions
+]
+
+# Backward-compatible aliases are seeded and checked, but new code should use
+# the canonical permission codes above.
+LEGACY_PERMISSION_ALIASES = {
+    "assign_roles": "change_staff_roles",
+    "reset_staff_password": "reset_staff_passwords",
+}
+LEGACY_PERMISSIONS = [
+    ("assign_roles", "Rol atama", "Eski sürümlerden gelen rol atama yetkisi.", "Personel Yönetimi"),
+    ("reset_staff_password", "Şifre sıfırlama", "Eski sürümlerden gelen şifre sıfırlama yetkisi.", "Personel Yönetimi"),
 ]
 
 DEFAULT_ROLE_PERMISSIONS = {
-    "admin": set(FULL_ACCESS_PERMISSIONS),
-    "manager": {"manage_staff", "assign_roles", "reset_staff_password", "open_sql_panel", "sql_read", "export_data"},
-    "personnel": {"open_sql_panel", "sql_read", "export_data"},
-    "viewer": set(),
+    "admin": {code for code, *_ in DEFAULT_PERMISSIONS},
+    "manager": {
+        "view_contracts", "create_contracts", "edit_contracts", "delete_contracts", "export_data",
+        "manage_acceptances", "manage_terms", "manage_labels", "manage_platforms", "manage_components",
+        "open_sql_panel", "sql_read", "sql_write", "terminal_full_access",
+        "view_action_history", "access_database_tools", "lock_documents", "unlock_own_documents",
+    },
+    "personnel": {"view_contracts", "create_contracts", "edit_contracts", "open_sql_panel", "sql_read", "lock_documents", "unlock_own_documents"},
+    "viewer": {"view_contracts"},
 }
 
 current_staff: Optional[dict[str, Any]] = None
@@ -165,8 +226,8 @@ def ensure_authorization_schema(db_or_path: sqlite3.Connection | str | Path) -> 
 
 def _seed_authorization_defaults(conn: sqlite3.Connection) -> None:
     roles = [
-        ("admin", "Yönetici", 1),
-        ("manager", "Birim Sorumlusu", 1),
+        ("admin", "Admin", 1),
+        ("manager", "Yönetici", 1),
         ("personnel", "Personel", 1),
         ("viewer", "Görüntüleyici", 1),
     ]
@@ -176,34 +237,43 @@ def _seed_authorization_defaults(conn: sqlite3.Connection) -> None:
             "ON CONFLICT(name) DO UPDATE SET display_name=excluded.display_name, is_system=excluded.is_system",
             (name, display, is_system),
         )
-    for code, display, desc, category in DEFAULT_PERMISSIONS:
+    for code, display, desc, category in [*DEFAULT_PERMISSIONS, *LEGACY_PERMISSIONS]:
         conn.execute(
             "INSERT INTO permissions(code, display_name, description, category) VALUES(?,?,?,?) "
             "ON CONFLICT(code) DO UPDATE SET display_name=excluded.display_name, description=excluded.description, category=excluded.category",
             (code, display, desc, category),
         )
-    existing = conn.execute("SELECT COUNT(*) FROM role_permissions").fetchone()[0]
-    if int(existing or 0) == 0:
-        role_ids = {str(r["name"]): int(r["id"]) for r in conn.execute("SELECT id,name FROM roles")}
-        for role_name, allowed in DEFAULT_ROLE_PERMISSIONS.items():
-            role_id = role_ids.get(role_name)
-            if role_id is None:
-                continue
-            for code, *_ in DEFAULT_PERMISSIONS:
-                conn.execute(
-                    "INSERT OR REPLACE INTO role_permissions(role_id, permission_code, is_allowed) VALUES(?,?,?)",
-                    (role_id, code, 1 if code in allowed else 0),
-                )
+
+    role_ids = {str(r["name"]): int(r["id"]) for r in conn.execute("SELECT id,name FROM roles")}
+    canonical_codes = [code for code, *_ in DEFAULT_PERMISSIONS]
+    for role_name, allowed in DEFAULT_ROLE_PERMISSIONS.items():
+        role_id = role_ids.get(role_name)
+        if role_id is None:
+            continue
+        for code in canonical_codes:
+            # Preserve existing admin/user customizations, but initialize missing
+            # role_permission rows whenever new permissions are introduced.
+            conn.execute(
+                "INSERT OR IGNORE INTO role_permissions(role_id, permission_code, is_allowed) VALUES(?,?,?)",
+                (role_id, code, 1 if code in allowed else 0),
+            )
+        for legacy_code, canonical_code in LEGACY_PERMISSION_ALIASES.items():
+            conn.execute(
+                "INSERT OR IGNORE INTO role_permissions(role_id, permission_code, is_allowed) VALUES(?,?,?)",
+                (role_id, legacy_code, 1 if canonical_code in allowed else 0),
+            )
 
 
 def _migrate_staff_roles(conn: sqlite3.Connection) -> None:
     role_ids = {str(r["name"]): int(r["id"]) for r in conn.execute("SELECT id,name FROM roles")}
     default_role_id = role_ids.get("personnel")
-    for row in conn.execute("SELECT id, role, role_id FROM staff").fetchall():
+    staff_rows = conn.execute("SELECT id, role, role_id FROM staff").fetchall()
+    single_staff_id = int(staff_rows[0]["id"]) if len(staff_rows) == 1 else None
+    for row in staff_rows:
         if row["role_id"] is not None:
             continue
         legacy = str(row["role"] or "personnel").strip()
-        normalized = "personnel" if legacy == "staff" else legacy
+        normalized = "admin" if single_staff_id == int(row["id"]) else ("personnel" if legacy == "staff" else legacy)
         conn.execute(
             "UPDATE staff SET role_id=?, role=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
             (role_ids.get(normalized, default_role_id), normalized, int(row["id"])),
@@ -300,7 +370,9 @@ def build_current_staff(row) -> dict[str, Any]:
         "id": int(row["id"]),
         "device_name": str(row["device_name"] or ""),
         "full_name": str(row["full_name"] or ""),
+        "username": str(row["device_name"] or ""),
         "role": role_name,
+        "role_name": role_name,
         "role_id": int(row["role_id"]) if row["role_id"] is not None else None,
         "role_display_name": str(row["role_display_name"] if "role_display_name" in row.keys() and row["role_display_name"] else ROLE_LABELS.get(role_name, role_name)),
         "is_active": int(row["is_active"] if row["is_active"] is not None else 1),
@@ -329,12 +401,13 @@ def has_permission(current_user: Optional[dict[str, Any]], permission_code: str,
     code = str(permission_code or "").strip()
     if not user or not code or int(user.get("is_active") if user.get("is_active") is not None else 1) == 0:
         return False
-    if code in set(user.get("permissions") or []):
-        return True
+    canonical_code = LEGACY_PERMISSION_ALIASES.get(code, code)
+    alias_codes = {legacy for legacy, canonical in LEGACY_PERMISSION_ALIASES.items() if canonical == canonical_code}
     if db_or_path is None:
         db_or_path = user.get("db_path") or user.get("_db_path")
     if db_or_path is None:
-        return False
+        user_permissions = set(user.get("permissions") or [])
+        return canonical_code in user_permissions or bool(alias_codes & user_permissions)
     ensure_authorization_schema(db_or_path)
     conn, should_close = _connection_from(db_or_path)
     try:
@@ -345,9 +418,23 @@ def has_permission(current_user: Optional[dict[str, Any]], permission_code: str,
             LEFT JOIN role_permissions rp ON rp.role_id=s.role_id AND rp.permission_code=?
             WHERE s.id=? AND COALESCE(s.is_active, 1)=1
             """,
-            (code, int(user.get("id"))),
+            (canonical_code, int(user.get("id"))),
         ).fetchone()
-        return bool(row and int(row["is_allowed"] or 0) == 1)
+        if row and int(row["is_allowed"] or 0) == 1:
+            return True
+        for alias_code in alias_codes:
+            row = conn.execute(
+                """
+                SELECT COALESCE(rp.is_allowed, 0) AS is_allowed
+                FROM staff s
+                LEFT JOIN role_permissions rp ON rp.role_id=s.role_id AND rp.permission_code=?
+                WHERE s.id=? AND COALESCE(s.is_active, 1)=1
+                """,
+                (alias_code, int(user.get("id"))),
+            ).fetchone()
+            if row and int(row["is_allowed"] or 0) == 1:
+                return True
+        return False
     finally:
         if should_close:
             conn.close()
@@ -426,7 +513,7 @@ def list_staff(db_or_path: sqlite3.Connection | str | Path) -> list[dict[str, An
 def _role_has_full_access(conn: sqlite3.Connection, role_id: int) -> bool:
     rows = conn.execute("SELECT permission_code, is_allowed FROM role_permissions WHERE role_id=?", (int(role_id),)).fetchall()
     allowed = {str(r["permission_code"]) for r in rows if int(r["is_allowed"] or 0) == 1}
-    return FULL_ACCESS_PERMISSIONS.issubset(allowed)
+    return AUTHORIZATION_REQUIRED_PERMISSIONS.issubset(allowed)
 
 
 def count_full_access_users(db_or_path: sqlite3.Connection | str | Path, excluding_staff_id: int | None = None) -> int:
@@ -458,7 +545,7 @@ def _would_keep_full_access_user(conn: sqlite3.Connection, changed_staff_id: int
         if active != 1 or role_id is None:
             continue
         if changed_role_id is not None and role_id == int(changed_role_id) and changed_role_permissions is not None:
-            if FULL_ACCESS_PERMISSIONS.issubset({c for c, ok in changed_role_permissions.items() if ok}):
+            if AUTHORIZATION_REQUIRED_PERMISSIONS.issubset({c for c, ok in changed_role_permissions.items() if ok}):
                 return True
         elif _role_has_full_access(conn, role_id):
             return True
@@ -468,12 +555,12 @@ def _would_keep_full_access_user(conn: sqlite3.Connection, changed_staff_id: int
 def update_staff_record(db_or_path: sqlite3.Connection | str | Path, actor: Optional[dict[str, Any]], staff_id: int, *, full_name: str | None = None, role_id: int | None = None, is_active: int | None = None) -> None:
     require_permission(actor, "manage_staff", db_or_path)
     if role_id is not None:
-        require_permission(actor, "assign_roles", db_or_path)
+        require_permission(actor, "change_staff_roles", db_or_path)
     ensure_authorization_schema(db_or_path)
     conn, should_close = _connection_from(db_or_path)
     try:
         if is_active is not None and int(is_active) == 0 and not _would_keep_full_access_user(conn, changed_staff_id=int(staff_id), changed_active=0):
-            raise ValueError("Sistemde en az bir tam yetkili aktif kullanıcı kalmalıdır.")
+            raise ValueError("Bu işlem yapılamaz. Sistemde en az bir yetkili kullanıcı kalmalıdır.")
         assignments = []
         params: list[Any] = []
         if full_name is not None:
@@ -484,7 +571,7 @@ def update_staff_record(db_or_path: sqlite3.Connection | str | Path, actor: Opti
             if not role:
                 raise ValueError("Geçersiz rol")
             if not _would_keep_full_access_user(conn, changed_staff_id=int(staff_id), changed_role_id=int(role_id)):
-                raise ValueError("Sistemde en az bir tam yetkili aktif kullanıcı kalmalıdır.")
+                raise ValueError("Bu işlem yapılamaz. Sistemde en az bir yetkili kullanıcı kalmalıdır.")
             assignments.extend(["role_id=?", "role=?"])
             params.extend([int(role_id), str(role["name"])])
         if is_active is not None:
@@ -503,12 +590,12 @@ def update_staff_record(db_or_path: sqlite3.Connection | str | Path, actor: Opti
 
 def create_staff_by_admin(db_or_path: sqlite3.Connection | str | Path, actor: Optional[dict[str, Any]], device_name: str, full_name: str, password: str, role_id: int) -> None:
     require_permission(actor, "manage_staff", db_or_path)
-    require_permission(actor, "assign_roles", db_or_path)
+    require_permission(actor, "change_staff_roles", db_or_path)
     create_staff(db_or_path, device_name, full_name, password, int(role_id))
 
 
 def reset_staff_password(db_or_path: sqlite3.Connection | str | Path, actor: Optional[dict[str, Any]], staff_id: int, new_password: str) -> None:
-    require_permission(actor, "reset_staff_password", db_or_path)
+    require_permission(actor, "reset_staff_passwords", db_or_path)
     ensure_authorization_schema(db_or_path)
     conn, should_close = _connection_from(db_or_path)
     try:
@@ -527,7 +614,7 @@ def set_role_permission(db_or_path: sqlite3.Connection | str | Path, actor: Opti
         permissions = {str(r["permission_code"]): bool(int(r["is_allowed"] or 0)) for r in conn.execute("SELECT permission_code,is_allowed FROM role_permissions WHERE role_id=?", (int(role_id),)).fetchall()}
         permissions[str(permission_code)] = bool(is_allowed)
         if not _would_keep_full_access_user(conn, changed_role_id=int(role_id), changed_role_permissions=permissions):
-            raise ValueError("Sistemde en az bir tam yetkili aktif kullanıcı kalmalıdır.")
+            raise ValueError("Bu işlem yapılamaz. Sistemde en az bir yetkili kullanıcı kalmalıdır.")
         conn.execute(
             "INSERT INTO role_permissions(role_id, permission_code, is_allowed) VALUES(?,?,?) "
             "ON CONFLICT(role_id, permission_code) DO UPDATE SET is_allowed=excluded.is_allowed",
@@ -539,6 +626,70 @@ def set_role_permission(db_or_path: sqlite3.Connection | str | Path, actor: Opti
         if should_close:
             conn.close()
 
+
+
+def set_role_permissions_bulk(
+    db_or_path: sqlite3.Connection | str | Path,
+    actor: Optional[dict[str, Any]],
+    role_permission_map: dict[int, dict[str, bool]],
+) -> None:
+    require_permission(actor, "manage_roles", db_or_path)
+    ensure_authorization_schema(db_or_path)
+    conn, should_close = _connection_from(db_or_path)
+    try:
+        normalized = {int(role_id): {str(code): bool(allowed) for code, allowed in permissions.items()} for role_id, permissions in role_permission_map.items()}
+        for role_id, permissions in normalized.items():
+            existing = {str(r["permission_code"]): bool(int(r["is_allowed"] or 0)) for r in conn.execute("SELECT permission_code,is_allowed FROM role_permissions WHERE role_id=?", (role_id,)).fetchall()}
+            existing.update(permissions)
+            if not _would_keep_full_access_user(conn, changed_role_id=role_id, changed_role_permissions=existing):
+                raise ValueError("Bu işlem yapılamaz. Sistemde en az bir yetkili kullanıcı kalmalıdır.")
+        for role_id, permissions in normalized.items():
+            for code, is_allowed in permissions.items():
+                conn.execute(
+                    "INSERT INTO role_permissions(role_id, permission_code, is_allowed) VALUES(?,?,?) "
+                    "ON CONFLICT(role_id, permission_code) DO UPDATE SET is_allowed=excluded.is_allowed",
+                    (role_id, code, 1 if is_allowed else 0),
+                )
+            conn.execute("UPDATE roles SET updated_at=CURRENT_TIMESTAMP WHERE id=?", (role_id,))
+        conn.commit()
+    finally:
+        if should_close:
+            conn.close()
+
+
+def reset_role_permissions_to_defaults(db_or_path: sqlite3.Connection | str | Path, actor: Optional[dict[str, Any]]) -> None:
+    require_permission(actor, "manage_roles", db_or_path)
+    ensure_authorization_schema(db_or_path)
+    conn, should_close = _connection_from(db_or_path)
+    try:
+        role_ids = {str(r["name"]): int(r["id"]) for r in conn.execute("SELECT id,name FROM roles")}
+        codes = [code for code, *_ in DEFAULT_PERMISSIONS]
+        role_permission_map = {
+            role_ids[role_name]: {code: code in allowed for code in codes}
+            for role_name, allowed in DEFAULT_ROLE_PERMISSIONS.items()
+            if role_name in role_ids
+        }
+        for role_id, permissions in role_permission_map.items():
+            if not _would_keep_full_access_user(conn, changed_role_id=role_id, changed_role_permissions=permissions):
+                raise ValueError("Bu işlem yapılamaz. Sistemde en az bir yetkili kullanıcı kalmalıdır.")
+        for role_id, permissions in role_permission_map.items():
+            for code, is_allowed in permissions.items():
+                conn.execute(
+                    "INSERT INTO role_permissions(role_id, permission_code, is_allowed) VALUES(?,?,?) "
+                    "ON CONFLICT(role_id, permission_code) DO UPDATE SET is_allowed=excluded.is_allowed",
+                    (role_id, code, 1 if is_allowed else 0),
+                )
+            for legacy_code, canonical_code in LEGACY_PERMISSION_ALIASES.items():
+                conn.execute(
+                    "INSERT INTO role_permissions(role_id, permission_code, is_allowed) VALUES(?,?,?) "
+                    "ON CONFLICT(role_id, permission_code) DO UPDATE SET is_allowed=excluded.is_allowed",
+                    (role_id, legacy_code, 1 if permissions.get(canonical_code) else 0),
+                )
+            conn.execute("UPDATE roles SET updated_at=CURRENT_TIMESTAMP WHERE id=?", (role_id,))
+        conn.commit()
+    finally:
+        if should_close:
+            conn.close()
 
 
 def _build_staff_register_dialog(db_or_path: sqlite3.Connection | str | Path, device_name: str, parent=None):

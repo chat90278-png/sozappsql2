@@ -191,56 +191,150 @@ class StaffManagementDialog(QDialog):
 
 
 class RolePermissionsDialog(QDialog):
+    ROLE_ORDER = ["admin", "manager", "personnel", "viewer"]
+
     def __init__(self, db_or_path, current_user: Optional[dict[str, Any]], parent=None):
         super().__init__(parent)
         auth.require_permission(current_user, "manage_roles", db_or_path)
         self.db_or_path = db_or_path
         self.current_user = current_user
-        self.setWindowTitle("Roller ve Yetkiler")
-        self.resize(1100, 700)
-        self.setStyleSheet(STYLE)
+        self.checkboxes: dict[tuple[int, str], QCheckBox] = {}
+        self.setWindowTitle("Yetki Yönetimi")
+        self.resize(980, 720)
+        self.setStyleSheet(STYLE + self._local_style())
         root = QVBoxLayout(self)
-        root.addWidget(QLabel("Roller ve Yetkiler", objectName="mainTitle"))
-        root.addWidget(QLabel("Her rolün yetkilerini checkbox ile düzenleyebilirsiniz. Son tam yetkili aktif kullanıcıyı kaldıran değişiklikler engellenir."))
+        root.setContentsMargins(16, 16, 16, 12)
+        root.setSpacing(10)
+
+        header = QHBoxLayout()
+        icon = QLabel("▢"); icon.setObjectName("permissionIcon")
+        title = QLabel("Yetki Yönetimi"); title.setObjectName("mainTitle")
+        header.addWidget(icon); header.addWidget(title); header.addStretch(1)
+        root.addLayout(header)
+
+        tab_bar = QFrame(); tab_bar.setObjectName("roleTabs")
+        tab_layout = QHBoxLayout(tab_bar); tab_layout.setContentsMargins(8, 8, 8, 0); tab_layout.setSpacing(0)
+        self.roles = sorted(auth.list_roles(self.db_or_path), key=lambda r: self.ROLE_ORDER.index(r["name"]) if r.get("name") in self.ROLE_ORDER else 99)
+        for role in self.roles:
+            lbl = QLabel(f"♟  {role['display_name']}")
+            lbl.setObjectName("roleTab")
+            if str(role.get("name")) == "admin":
+                lbl.setProperty("active", "true")
+            tab_layout.addWidget(lbl, 1)
+        root.addWidget(tab_bar)
+
+        info = QLabel("ℹ  Rol seçerek ilgili rolün modül ve işlem yetkilerini düzenleyebilirsiniz.")
+        info.setObjectName("permissionInfo")
+        root.addWidget(info)
+        selected = QLabel("Seçili rol: Admin")
+        selected.setObjectName("selectedRole")
+        root.addWidget(selected)
+
         self.table = QTableWidget(0, 0)
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        self.table.setObjectName("permissionMatrix")
+        self.table.verticalHeader().hide()
+        self.table.setAlternatingRowColors(False)
+        self.table.setShowGrid(True)
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         root.addWidget(self.table, 1)
-        buttons = QHBoxLayout(); buttons.addStretch(1)
-        close = QPushButton("Kapat"); close.clicked.connect(self.accept); buttons.addWidget(close)
+
+        buttons = QHBoxLayout()
+        defaults = QPushButton("↺ Varsayılanlara Dön"); defaults.clicked.connect(self.restore_defaults)
+        buttons.addWidget(defaults); buttons.addStretch(1)
+        cancel = QPushButton("İptal"); cancel.clicked.connect(self.reject)
+        save = QPushButton("▣ Kaydet"); save.setObjectName("primaryBtn"); save.clicked.connect(self.save)
+        buttons.addWidget(cancel); buttons.addWidget(save)
         root.addLayout(buttons)
         self.refresh()
 
-    def refresh(self):
-        self.roles = auth.list_roles(self.db_or_path)
-        self.permissions = auth.list_permissions(self.db_or_path)
-        role_map = auth.get_role_permission_map(self.db_or_path)
-        self.table.blockSignals(True)
-        self.table.setRowCount(len(self.permissions))
-        self.table.setColumnCount(2 + len(self.roles))
-        self.table.setHorizontalHeaderLabels(["Kategori", "Yetki"] + [r["display_name"] for r in self.roles])
-        for r, perm in enumerate(self.permissions):
-            self.table.setItem(r, 0, QTableWidgetItem(str(perm.get("category") or "")))
-            self.table.setItem(r, 1, QTableWidgetItem(f"{perm['display_name']}\n{perm['code']}"))
-            for c, role in enumerate(self.roles, start=2):
-                box = QCheckBox()
-                box.setChecked(bool(role_map.get(int(role["id"]), {}).get(str(perm["code"]), False)))
-                box.setProperty("role_id", int(role["id"]))
-                box.setProperty("permission_code", str(perm["code"]))
-                box.stateChanged.connect(self._permission_changed)
-                wrapper = QWidget(); lay = QHBoxLayout(wrapper); lay.setContentsMargins(0,0,0,0); lay.addWidget(box, 0, Qt.AlignCenter)
-                self.table.setCellWidget(r, c, wrapper)
-        self.table.blockSignals(False)
+    def _local_style(self) -> str:
+        return """
+        QDialog { background:#f4f7fb; }
+        QLabel#permissionIcon { background:#eef5ff; color:#1d4ed8; border:1px solid #d7e7ff; border-radius:6px; padding:2px 6px; font-weight:900; }
+        QFrame#roleTabs { background:#ffffff; border:1px solid #d8e2ed; border-radius:10px; }
+        QLabel#roleTab { background:#ffffff; color:#0f172a; font-weight:800; padding:12px 18px; border-bottom:3px solid transparent; }
+        QLabel#roleTab[active='true'] { color:#1459e6; border-bottom:3px solid #1d5cff; }
+        QLabel#permissionInfo { background:#f8fbff; border:1px solid #d7e6fb; border-radius:8px; padding:9px 12px; color:#1f3b58; font-size:12px; }
+        QLabel#selectedRole { background:#ffffff; border:1px dashed #cbdcf0; border-radius:8px; padding:9px 12px; color:#1f3b58; font-size:12px; }
+        QTableWidget#permissionMatrix { background:#ffffff; border:1px solid #d8e2ed; border-radius:8px; gridline-color:#e7eef7; selection-background-color:#eef5ff; }
+        QHeaderView::section { background:#f8fbff; color:#0f1e35; border:0; border-bottom:1px solid #d8e2ed; padding:8px; font-weight:900; }
+        QPushButton#primaryBtn { background:#1d5bd8; color:white; border:0; border-radius:8px; padding:8px 18px; font-weight:900; }
+        """
 
-    def _permission_changed(self, _state):
-        box = self.sender()
-        if box is None:
-            return
-        role_id = int(box.property("role_id"))
-        code = str(box.property("permission_code"))
+    def refresh(self):
+        self.roles = sorted(auth.list_roles(self.db_or_path), key=lambda r: self.ROLE_ORDER.index(r["name"]) if r.get("name") in self.ROLE_ORDER else 99)
+        permission_rows = []
+        for category, permissions in auth.PERMISSION_GROUPS:
+            permission_rows.append((category, None, None, None))
+            for code, display, desc in permissions:
+                permission_rows.append((category, code, display, desc))
+        role_map = auth.get_role_permission_map(self.db_or_path)
+        self.checkboxes.clear()
+        self.table.setRowCount(len(permission_rows))
+        self.table.setColumnCount(1 + len(self.roles))
+        self.table.setHorizontalHeaderLabels(["Modül / İşlem"] + [r["display_name"] for r in self.roles])
+        for row_index, (_category, code, display, desc) in enumerate(permission_rows):
+            if code is None:
+                item = QTableWidgetItem(f"▼ {_category}")
+                item.setFlags(Qt.ItemIsEnabled)
+                font = item.font(); font.setBold(True); item.setFont(font)
+                self.table.setItem(row_index, 0, item)
+                for c in range(1, 1 + len(self.roles)):
+                    filler = QTableWidgetItem(""); filler.setFlags(Qt.ItemIsEnabled); self.table.setItem(row_index, c, filler)
+                self.table.setSpan(row_index, 0, 1, 1 + len(self.roles))
+                self.table.setRowHeight(row_index, 30)
+                continue
+            item = QTableWidgetItem(f"{display}\n{desc or code}")
+            item.setFlags(Qt.ItemIsEnabled)
+            self.table.setItem(row_index, 0, item)
+            self.table.setRowHeight(row_index, 38)
+            for col_index, role in enumerate(self.roles, start=1):
+                box = QCheckBox()
+                role_id = int(role["id"])
+                box.setChecked(bool(role_map.get(role_id, {}).get(str(code), False)))
+                wrapper = QWidget(); lay = QHBoxLayout(wrapper); lay.setContentsMargins(0, 0, 0, 0); lay.addWidget(box, 0, Qt.AlignCenter)
+                self.table.setCellWidget(row_index, col_index, wrapper)
+                self.checkboxes[(role_id, str(code))] = box
+        self.table.resizeRowsToContents()
+
+    def _collect_permissions(self) -> dict[int, dict[str, bool]]:
+        out: dict[int, dict[str, bool]] = {}
+        for (role_id, code), box in self.checkboxes.items():
+            out.setdefault(role_id, {})[code] = bool(box.isChecked())
+        return out
+
+    def save(self):
         try:
-            auth.set_role_permission(self.db_or_path, self.current_user, role_id, code, bool(box.isChecked()))
+            auth.set_role_permissions_bulk(self.db_or_path, self.current_user, self._collect_permissions())
+            if self.current_user is not None:
+                refreshed = auth.enrich_staff_permissions(self.db_or_path, self.current_user)
+                if refreshed:
+                    self.current_user.update(refreshed)
+                    auth.current_staff = self.current_user
+            if self.parent() is not None and hasattr(self.parent(), "_refresh_permission_actions"):
+                self.parent()._refresh_permission_actions()
+            QMessageBox.information(self, "Yetki Yönetimi", "Yetkiler kaydedildi.")
+            self.accept()
+        except PermissionError:
+            QMessageBox.warning(self, "Yetkisiz İşlem", "Bu işlemi yapmak için gerekli yetkiye sahip değilsiniz.")
         except Exception as exc:
-            box.blockSignals(True)
-            box.setChecked(not bool(box.isChecked()))
-            box.blockSignals(False)
-            QMessageBox.warning(self, "Yetki Güncelleme", str(exc))
+            QMessageBox.warning(self, "Yetki Yönetimi", str(exc))
+
+    def restore_defaults(self):
+        answer = QMessageBox.question(
+            self,
+            "Varsayılanlara Dön",
+            "Varsayılan rol/yetki şablonu geri yüklensin mi?",
+        )
+        if answer != QMessageBox.Yes:
+            return
+        try:
+            auth.reset_role_permissions_to_defaults(self.db_or_path, self.current_user)
+            self.refresh()
+            if self.parent() is not None and hasattr(self.parent(), "_refresh_permission_actions"):
+                self.parent()._refresh_permission_actions()
+            QMessageBox.information(self, "Yetki Yönetimi", "Varsayılan yetkiler geri yüklendi.")
+        except PermissionError:
+            QMessageBox.warning(self, "Yetkisiz İşlem", "Bu işlemi yapmak için gerekli yetkiye sahip değilsiniz.")
+        except Exception as exc:
+            QMessageBox.warning(self, "Yetki Yönetimi", str(exc))
