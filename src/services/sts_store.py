@@ -231,7 +231,50 @@ class STSStore:
             raise
 
     def platform_names(self):
-        return [r[0] for r in self.db.conn.execute("SELECT name FROM platforms WHERE is_active=1 ORDER BY sort_order,name").fetchall()]
+        return [r[0] for r in self.db.conn.execute("SELECT name FROM platforms WHERE is_active=1 AND is_excluded=0 ORDER BY sort_order,name").fetchall()]
+
+    def load_platforms(self):
+        rows = self.db.conn.execute(
+            """
+            SELECT
+                p.id,
+                p.name,
+                p.is_active,
+                p.is_excluded,
+                p.sort_order,
+                COALESCE(SUM(CASE WHEN cp.enabled=1 THEN 1 ELSE 0 END), 0) AS comp_count
+            FROM platforms p
+            LEFT JOIN component_platforms cp ON cp.platform_id=p.id
+            GROUP BY p.id,p.name,p.is_active,p.is_excluded,p.sort_order
+            ORDER BY p.sort_order,p.name
+            """
+        ).fetchall()
+        return [{"id": int(r[0]), "name": r[1], "is_active": bool(r[2]), "is_excluded": bool(r[3]), "sort_order": int(r[4] or 0), "comp_count": int(r[5] or 0)} for r in rows]
+
+    def update_platform(self, old_name, new_name, is_active, is_excluded, sort_order=None, logo_source=None):
+        old = str(old_name or "").strip()
+        new = str(new_name or "").strip()
+        if not old or not new:
+            return
+        ts = now_iso()
+        if sort_order is None:
+            self.db.conn.execute(
+                "UPDATE platforms SET name=?,display_name=?,is_active=?,is_excluded=?,updated_at=? WHERE name=?",
+                (new, new, 1 if is_active else 0, 1 if is_excluded else 0, ts, old),
+            )
+        else:
+            self.db.conn.execute(
+                "UPDATE platforms SET name=?,display_name=?,is_active=?,is_excluded=?,sort_order=?,updated_at=? WHERE name=?",
+                (new, new, 1 if is_active else 0, 1 if is_excluded else 0, int(sort_order or 0), ts, old),
+            )
+        self.db.conn.commit()
+        self._clear_id_cache("platform")
+        self._log("platform_updated", entity_type="platform", entity_key=new, platform=new, message="Platform güncellendi", before={"name": old}, after={"name": new, "is_active": bool(is_active), "is_excluded": bool(is_excluded)})
+        if logo_source:
+            raw = Path(logo_source).read_bytes()
+            ext = Path(logo_source).suffix.lower().lstrip('.')
+            self.set_platform_logo_bytes(new, raw, ext=ext)
+
     def create_platform(self, name, logo_source=None):
         nm = str(name or "").strip()
         if not nm:
@@ -318,13 +361,50 @@ class STSStore:
 
     def load_components(self):
         out=[]
-        for r in self.db.conn.execute("SELECT id,name,version,unit,active,usage FROM components ORDER BY name"):
+        for r in self.db.conn.execute("SELECT id,name,version,unit,active,usage,note FROM components ORDER BY name"):
             plats={x[0]:bool(x[1]) for x in self.db.conn.execute("SELECT p.name,cp.enabled FROM component_platforms cp JOIN platforms p ON p.id=cp.platform_id WHERE cp.component_id=?",(r[0],))}
-            out.append(ComponentDef(name=r[1],version=r[2] or "",unit=r[3] or "Adet",active=bool(r[4]),usage=int(r[5] or 1),platforms=plats))
+            comp = ComponentDef(name=r[1],version=r[2] or "",unit=r[3] or "Adet",active=bool(r[4]),usage=int(r[5] or 1),platforms=plats)
+            comp.note = r[6] or ""
+            out.append(comp)
         return out
+
+    def load_components_full(self):
+        rows = self.db.conn.execute("SELECT id,name,unit,active,note FROM components ORDER BY name").fetchall()
+        out = []
+        for r in rows:
+            plats = {x[0]: bool(x[1]) for x in self.db.conn.execute("SELECT p.name,cp.enabled FROM component_platforms cp JOIN platforms p ON p.id=cp.platform_id WHERE cp.component_id=?", (r[0],))}
+            out.append({"id": int(r[0]), "name": r[1], "unit": r[2] or "Adet", "active": bool(r[3]), "note": r[4] or "", "platforms": plats})
+        return out
+
+    def write_component(self, comp_dict, actor=None):
+        payload = dict(comp_dict or {})
+        old_name = str(payload.get("old_name") or payload.get("name") or "").strip()
+        items = self.load_components_full()
+        replaced = False
+        for idx, item in enumerate(items):
+            if str(item.get("name") or "") == old_name or (payload.get("id") and int(item.get("id") or 0) == int(payload.get("id") or 0)):
+                merged = dict(item)
+                merged.update(payload)
+                merged.pop("old_name", None)
+                items[idx] = merged
+                replaced = True
+                break
+        if not replaced:
+            payload.pop("old_name", None)
+            items.append(payload)
+        self.write_components(items, actor=actor or self.current_actor())
+
+    def delete_component(self, name):
+        nm = str(name or "").strip()
+        if not nm:
+            return
+        self.db.conn.execute("DELETE FROM components WHERE name=?", (nm,))
+        self.db.conn.commit()
+        self._clear_id_cache("component")
+        self._log("component_deleted", entity_type="component", entity_key=nm, message="Bileşen silindi")
     def write_components(self, components_payload, actor=None):
         ts = now_iso()
-        before_components = {str(row["name"]): {"version": row["version"] or "", "unit": row["unit"] or "Adet", "active": bool(row["active"]), "usage": float(row["usage"] or 1)} for row in self.db.conn.execute("SELECT name,version,unit,active,usage FROM components")}
+        before_components = {str(row["name"]): {"version": row["version"] or "", "unit": row["unit"] or "Adet", "active": bool(row["active"]), "usage": float(row["usage"] or 1), "note": row["note"] or ""} for row in self.db.conn.execute("SELECT name,version,unit,active,usage,note FROM components")}
         normalized = []
         seen = set()
         for c in list(components_payload or []):
@@ -339,13 +419,14 @@ class STSStore:
             unit = str((c.get("unit") if isinstance(c, dict) else getattr(c, "unit", "Adet")) or "Adet")
             active = 1 if bool((c.get("active") if isinstance(c, dict) else getattr(c, "active", True))) else 0
             usage = float((c.get("usage") if isinstance(c, dict) else getattr(c, "usage", 1)) or 1)
+            note = str((c.get("note") if isinstance(c, dict) else getattr(c, "note", "")) or "")
             platforms = dict((c.get("platforms") if isinstance(c, dict) else getattr(c, "platforms", {})) or {})
-            normalized.append((name, version, unit, active, usage, platforms))
+            normalized.append((name, version, unit, active, usage, note, platforms))
         self._clear_id_cache("component")
         with self.db.tx():
             keep = []
-            for name, version, unit, active, usage, platforms in normalized:
-                self.db.conn.execute("INSERT INTO components(name,version,unit,active,usage,created_at,updated_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(name) DO UPDATE SET version=excluded.version,unit=excluded.unit,active=excluded.active,usage=excluded.usage,updated_at=excluded.updated_at",(name,version,unit,active,usage,ts,ts))
+            for name, version, unit, active, usage, note, platforms in normalized:
+                self.db.conn.execute("INSERT INTO components(name,version,unit,active,usage,note,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(name) DO UPDATE SET version=excluded.version,unit=excluded.unit,active=excluded.active,usage=excluded.usage,note=excluded.note,updated_at=excluded.updated_at",(name,version,unit,active,usage,note,ts,ts))
                 cid = self.get_component_id(name)
                 keep.append(cid)
                 self.db.conn.execute("DELETE FROM component_platforms WHERE component_id=?", (cid,))
@@ -360,7 +441,7 @@ class STSStore:
                 self.db.conn.execute("DELETE FROM components")
         self._clear_id_cache("component")
         audit_actor = actor or self.current_actor()
-        after_components = {name: {"version": version, "unit": unit, "active": bool(active), "usage": float(usage)} for name, version, unit, active, usage, _platforms in normalized}
+        after_components = {name: {"version": version, "unit": unit, "active": bool(active), "usage": float(usage), "note": note} for name, version, unit, active, usage, note, _platforms in normalized}
         for name in sorted(set(before_components) | set(after_components)):
             before_component, after_component = before_components.get(name), after_components.get(name)
             action = "component_created" if before_component is None else ("component_deleted" if after_component is None else ("component_updated" if before_component != after_component else ""))

@@ -223,6 +223,98 @@ def _apply_platform_formatting(ws, max_row: int, max_col: int, component_start_c
         ws.column_dimensions[letter].width = min(max(max_len + 2, 10), 45)
 
 
+def _component_totals(rows) -> dict[str, tuple[float, float]]:
+    totals: dict[str, list[float]] = {}
+    for name, planned, delivered in rows:
+        key = str(name)
+        current = totals.setdefault(key, [0.0, 0.0])
+        current[0] += _number(planned)
+        current[1] += _number(delivered)
+    return {key: (value[0], value[1]) for key, value in totals.items()}
+
+
+def _system_component_totals(conn, system_id: int) -> dict[str, tuple[float, float]]:
+    planned_rows = conn.execute(
+        """
+        SELECT c.name, sc.qty
+        FROM system_components sc
+        JOIN components c ON c.id=sc.component_id
+        WHERE sc.system_id=?
+        """,
+        (system_id,),
+    ).fetchall()
+    delivered_rows = conn.execute(
+        """
+        SELECT c.name, SUM(dc.delivered)
+        FROM deliveries d
+        JOIN delivery_components dc ON dc.delivery_id=d.id
+        JOIN components c ON c.id=dc.component_id
+        WHERE d.system_id=?
+        GROUP BY c.name
+        """,
+        (system_id,),
+    ).fetchall()
+    totals: dict[str, list[float]] = {}
+    for name, planned in planned_rows:
+        totals.setdefault(str(name), [0.0, 0.0])[0] += _number(planned)
+    for name, delivered in delivered_rows:
+        totals.setdefault(str(name), [0.0, 0.0])[1] += _number(delivered)
+    return {key: (value[0], value[1]) for key, value in totals.items()}
+
+
+def _contract_component_totals(conn, contract_id: int) -> dict[str, tuple[float, float]]:
+    planned_rows = conn.execute(
+        """
+        SELECT c.name, SUM(sc.qty)
+        FROM systems s
+        JOIN system_components sc ON sc.system_id=s.id
+        JOIN components c ON c.id=sc.component_id
+        WHERE s.contract_id=?
+        GROUP BY c.name
+        """,
+        (contract_id,),
+    ).fetchall()
+    delivered_rows = conn.execute(
+        """
+        SELECT c.name, SUM(dc.delivered)
+        FROM deliveries d
+        JOIN delivery_components dc ON dc.delivery_id=d.id
+        JOIN components c ON c.id=dc.component_id
+        WHERE d.contract_id=?
+        GROUP BY c.name
+        """,
+        (contract_id,),
+    ).fetchall()
+    totals: dict[str, list[float]] = {}
+    for name, planned in planned_rows:
+        totals.setdefault(str(name), [0.0, 0.0])[0] += _number(planned)
+    for name, delivered in delivered_rows:
+        totals.setdefault(str(name), [0.0, 0.0])[1] += _number(delivered)
+    return {key: (value[0], value[1]) for key, value in totals.items()}
+
+
+def _delivery_component_totals(conn, delivery_id: int) -> dict[str, tuple[float, float]]:
+    return _component_totals(
+        conn.execute(
+            """
+            SELECT c.name, dc.planned, dc.delivered
+            FROM delivery_components dc
+            JOIN components c ON c.id=dc.component_id
+            WHERE dc.delivery_id=?
+            """,
+            (delivery_id,),
+        ).fetchall()
+    )
+
+
+def _append_export_row(ws, base_values: list, components: list[str], component_values: dict[str, tuple[float, float]]):
+    row = list(base_values)
+    for component in components:
+        planned, delivered = component_values.get(component, (0.0, 0.0))
+        row.extend([planned, delivered, planned - delivered])
+    ws.append(row)
+
+
 def export_sts_to_excel(db, output_path, options=None, progress_cb=None):
     opts = {
         "scope": "all", "platforms": None, "include_summary": True,
@@ -292,81 +384,137 @@ def export_sts_to_excel(db, output_path, options=None, progress_cb=None):
         ws.append(headers)
         row_groups = []
 
-        deliveries = conn.execute(
+        contracts = conn.execute(
             """
             SELECT
-                c.id AS contract_id,
+                c.id,
                 c.contract_no,
                 c.contract_type,
                 c.yi_yd,
-                c.status AS contract_status,
+                c.status,
                 c.signed_date,
                 c.t0_date,
                 c.t0_months,
                 c.completion_date,
-                c.acceptance_date AS contract_acceptance_date,
-                c.note AS contract_note,
-                s.id AS system_id,
-                s.name AS system_name,
-                d.id AS delivery_id,
-                d.name AS delivery_name,
-                d.status AS delivery_status,
-                d.acceptance_date AS delivery_acceptance_date,
-                d.note AS delivery_note,
-                u.name AS delivery_user
-            FROM deliveries d
-            JOIN contracts c ON c.id=d.contract_id
+                c.acceptance_date,
+                c.note
+            FROM contracts c
             JOIN platforms p ON p.id=c.platform_id
-            JOIN systems s ON s.id=d.system_id
-            LEFT JOIN users u ON u.id=d.delivery_user_id
             WHERE p.name=?
-            ORDER BY c.contract_no COLLATE NOCASE, c.contract_type COLLATE NOCASE, c.id, s.sort_order, s.id, d.sort_order, d.id
+            ORDER BY c.contract_no COLLATE NOCASE, c.contract_type COLLATE NOCASE, c.id
             """,
             (platform,),
         ).fetchall()
 
-        for item in deliveries:
-            contract_id = int(item[0])
-            system_id = int(item[11])
-            delivery_id = int(item[13])
+        for contract in contracts:
+            contract_id = int(contract[0])
             contract_users = _contract_user_text(conn, contract_id)
             tag_txt = _tag_text(conn, contract_id) if opts.get('include_tags', True) else ""
-            user_txt = str(item[18] or "").strip() or contract_users
-            status_txt = _display_status(item[15] or item[4])
-            note_txt = str(item[17] or item[10] or "")
-            row = [
-                item[1] or "",
-                item[2] or "",
-                item[12] or "",
-                item[14] or "",
-                user_txt,
-                item[3] or "",
-                status_txt,
-                item[5] or "",
-                item[6] or "",
-                item[7] or 0,
-                item[8] or "",
-                item[16] or item[9] or "",
+            contract_base = [
+                contract[1] or "",
+                contract[2] or "",
+                "GENEL",
+                "Sözleşme Toplamı",
+                contract_users,
+                contract[3] or "",
+                _display_status(contract[4]),
+                contract[5] or "",
+                contract[6] or "",
+                contract[7] or 0,
+                contract[8] or "",
+                contract[9] or "",
                 tag_txt,
-                note_txt,
+                contract[10] or "",
             ]
-            component_values = {
-                str(r[0]): (_number(r[1]), _number(r[2]))
-                for r in conn.execute(
+            if opts.get('include_contract_rows', True):
+                _append_export_row(
+                    ws,
+                    contract_base,
+                    components,
+                    _contract_component_totals(conn, contract_id),
+                )
+                row_groups.append({"contract_id": contract_id, "system_id": f"contract:{contract_id}:summary"})
+
+            systems = conn.execute(
+                """
+                SELECT id, name, status, completion_date, acceptance_date, note
+                FROM systems
+                WHERE contract_id=?
+                ORDER BY sort_order, id
+                """,
+                (contract_id,),
+            ).fetchall()
+            for system in systems:
+                system_id = int(system[0])
+                deliveries = conn.execute(
                     """
-                    SELECT c.name, dc.planned, dc.delivered
-                    FROM delivery_components dc
-                    JOIN components c ON c.id=dc.component_id
-                    WHERE dc.delivery_id=?
+                    SELECT
+                        d.id,
+                        d.name,
+                        d.status,
+                        d.acceptance_date,
+                        d.note,
+                        u.name AS delivery_user
+                    FROM deliveries d
+                    LEFT JOIN users u ON u.id=d.delivery_user_id
+                    WHERE d.contract_id=? AND d.system_id=?
+                    ORDER BY d.sort_order, d.id
                     """,
-                    (delivery_id,),
+                    (contract_id, system_id),
                 ).fetchall()
-            }
-            for component in components:
-                planned, delivered = component_values.get(component, (0.0, 0.0))
-                row.extend([planned, delivered, planned - delivered])
-            ws.append(row)
-            row_groups.append({"contract_id": contract_id, "system_id": system_id})
+
+                if deliveries:
+                    if not opts.get('include_delivery_rows', True):
+                        continue
+                    for delivery in deliveries:
+                        user_txt = str(delivery[5] or "").strip() or contract_users
+                        row_base = [
+                            contract[1] or "",
+                            contract[2] or "",
+                            system[1] or "",
+                            delivery[1] or "",
+                            user_txt,
+                            contract[3] or "",
+                            _display_status(delivery[2] or contract[4]),
+                            contract[5] or "",
+                            contract[6] or "",
+                            contract[7] or 0,
+                            contract[8] or "",
+                            delivery[3] or contract[9] or "",
+                            tag_txt,
+                            delivery[4] or contract[10] or "",
+                        ]
+                        _append_export_row(
+                            ws,
+                            row_base,
+                            components,
+                            _delivery_component_totals(conn, int(delivery[0])),
+                        )
+                        row_groups.append({"contract_id": contract_id, "system_id": system_id})
+                elif opts.get('include_system_rows', True):
+                    row_base = [
+                        contract[1] or "",
+                        contract[2] or "",
+                        system[1] or "",
+                        "Sistem Toplamı",
+                        contract_users,
+                        contract[3] or "",
+                        _display_status(system[2] or contract[4]),
+                        contract[5] or "",
+                        contract[6] or "",
+                        contract[7] or 0,
+                        system[3] or contract[8] or "",
+                        system[4] or contract[9] or "",
+                        tag_txt,
+                        system[5] or contract[10] or "",
+                    ]
+                    _append_export_row(
+                        ws,
+                        row_base,
+                        components,
+                        _system_component_totals(conn, system_id),
+                    )
+                    row_groups.append({"contract_id": contract_id, "system_id": system_id})
 
         max_row = max(ws.max_row, 1)
         max_col = max(ws.max_column, len(headers))

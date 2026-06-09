@@ -600,6 +600,62 @@ class ExcelStore:
         self._platform_names_cache = list(items)
         return list(items)
 
+    def load_platforms(self) -> List[dict]:
+        excluded = set(self.load_excluded_platforms())
+        components = self.load_components_full()
+        rows = []
+        for i, name in enumerate(self.all_sheet_names()):
+            rows.append({
+                "id": i + 1,
+                "name": name,
+                "is_active": name not in excluded,
+                "is_excluded": name in excluded,
+                "sort_order": i,
+                "comp_count": sum(1 for comp in components if (comp.get("platforms") or {}).get(name)),
+            })
+        return rows
+
+    def update_platform(self, old_name, new_name, is_active, is_excluded, sort_order=None, logo_source=None):
+        old = safe_sheet_name(old_name)
+        new = safe_sheet_name(new_name)
+        if not old or not new:
+            return
+        if old in self.wb.sheetnames and old != new:
+            self.wb[old].title = new
+        excluded = set(self.load_excluded_platforms())
+        if bool(is_excluded) or not bool(is_active):
+            excluded.add(new)
+        else:
+            excluded.discard(new)
+        if old != new:
+            excluded.discard(old)
+            comps = self.load_components_full()
+            for comp in comps:
+                platforms = dict(comp.get("platforms") or {})
+                if old in platforms:
+                    platforms[new] = platforms.pop(old)
+                comp["platforms"] = platforms
+            self.write_components(comps, actor=self.current_actor())
+        self.save_excluded_platforms(sorted(excluded))
+        self.ensure_platform_column_in_components(new)
+        if logo_source:
+            self.set_platform_logo(new, logo_source)
+        self.save()
+
+    def delete_platform(self, name):
+        nm = safe_sheet_name(name)
+        if nm in self.wb.sheetnames:
+            del self.wb[nm]
+        excluded = [x for x in self.load_excluded_platforms() if x != nm]
+        comps = self.load_components_full()
+        for comp in comps:
+            platforms = dict(comp.get("platforms") or {})
+            platforms.pop(nm, None)
+            comp["platforms"] = platforms
+        self.write_components(comps, actor=self.current_actor())
+        self.save_excluded_platforms(excluded)
+        self.save()
+
     def all_sheet_names(self) -> List[str]:
         """Sistem sayfaları dışındaki tüm görünür sayfalar (excluded dahil)."""
         items = []
@@ -708,6 +764,25 @@ class ExcelStore:
         ws.cell(r, 1, safe_sheet_name(platform))
         ws.cell(r, 2, b64)
         ws.cell(r, 3, ext.lstrip("."))
+        ws.cell(r, 4, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+        self.save()
+        return True
+
+    def set_platform_logo_bytes(self, platform: str, data: bytes, ext: str | None = None) -> bool:
+        raw = bytes(data or b"")
+        if not raw:
+            return False
+        if len(raw) > 2 * 1024 * 1024:
+            raise ValueError("Logo dosyasi 2 MB ustunde olamaz.")
+        extv = str(ext or "").lower().strip().lstrip(".") or "png"
+        if extv not in {"png", "jpg", "jpeg", "bmp", "webp"}:
+            extv = "png"
+        b64 = base64.b64encode(raw).decode("ascii")
+        ws = self._logo_sheet()
+        r = self._logo_row(platform)
+        ws.cell(r, 1, safe_sheet_name(platform))
+        ws.cell(r, 2, b64)
+        ws.cell(r, 3, extv)
         ws.cell(r, 4, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
         self.save()
         return True
@@ -1336,6 +1411,39 @@ class ExcelStore:
             items.append(comp)
         return items
 
+    def load_components_full(self) -> List[dict]:
+        return [{
+            "id": i + 1,
+            "name": str(c.name or ""),
+            "unit": str(c.unit or "Adet"),
+            "active": bool(c.active),
+            "note": str(getattr(c, "note", "") or ""),
+            "platforms": dict(c.platforms or {}),
+        } for i, c in enumerate(self.load_components())]
+
+    def write_component(self, comp_dict, actor: str = "Sistem"):
+        payload = dict(comp_dict or {})
+        old_name = str(payload.get("old_name") or payload.get("name") or "").strip()
+        items = self.load_components_full()
+        replaced = False
+        for idx, item in enumerate(items):
+            if str(item.get("name") or "") == old_name:
+                merged = dict(item)
+                merged.update(payload)
+                merged.pop("old_name", None)
+                items[idx] = merged
+                replaced = True
+                break
+        if not replaced:
+            payload.pop("old_name", None)
+            items.append(payload)
+        self.write_components(items, actor=actor)
+
+    def delete_component(self, name):
+        nm = str(name or "").strip()
+        items = [c for c in self.load_components_full() if str(c.get("name") or "") != nm]
+        self.write_components(items, actor=self.current_actor())
+
     def write_components(self, components: List[ComponentDef], actor: str = "Sistem"):
         old_components = {c.name: c for c in self.load_components()}
         ws = self.wb[COMP_SHEET] if COMP_SHEET in self.wb.sheetnames else self.wb.create_sheet(COMP_SHEET)
@@ -1344,7 +1452,16 @@ class ExcelStore:
         headers = ["Bileşen Adı", "Birim", "Aktif", "Kullanım"] + platforms
         for c, h in enumerate(headers, 1):
             ws.cell(1, c, h)
-        for r, comp in enumerate(components, 2):
+        normalized = []
+        for raw in components:
+            if isinstance(raw, dict):
+                comp = ComponentDef(name=str(raw.get("name") or "").strip(), version="", unit=str(raw.get("unit") or "Adet"), active=bool(raw.get("active", True)), usage=int(raw.get("usage") or 1), platforms=dict(raw.get("platforms") or {}))
+                comp.note = str(raw.get("note") or "")
+            else:
+                comp = raw
+            if str(comp.name or "").strip():
+                normalized.append(comp)
+        for r, comp in enumerate(normalized, 2):
             ws.cell(r, 1, comp.name)
             ws.cell(r, 2, comp.unit or "Adet")
             ws.cell(r, 3, "Evet" if comp.active else "Hayır")
@@ -1356,7 +1473,7 @@ class ExcelStore:
                     cell.fill = PatternFill("solid", fgColor=GREEN)
         self.style_component_sheet()
         self.save()
-        new_components = {c.name: c for c in components}
+        new_components = {c.name: c for c in normalized}
         logs: List[dict] = []
         ts = datetime.now()
         all_names = sorted(set(old_components.keys()) | set(new_components.keys()))

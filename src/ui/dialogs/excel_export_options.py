@@ -102,6 +102,7 @@ QFrame#exportCard { background:#ffffff; border:1px solid #dbe5f1; border-radius:
 QLabel#exportCardHeader { color:#12345a; font-size:14px; font-weight:850; }
 QPushButton#exportPrimaryButton { background:#2563eb; color:white; border:none; border-radius:10px; padding:10px 14px; font-weight:900; min-width:130px; }
 QPushButton#exportSecondaryButton { background:#ffffff; color:#244767; border:1px solid #d6e2f0; border-radius:10px; padding:10px 14px; font-weight:800; min-width:90px; }
+QPushButton#exportTinyButton { background:#ffffff; color:#244767; border:1px solid #d6e2f0; border-radius:8px; padding:5px 9px; font-weight:800; }
 QScrollArea#platformScroll { border:1px solid #dbe5f1; border-radius:10px; background:#ffffff; }
 QScrollArea#platformScroll QScrollBar:vertical { width:10px; background:#f5f8fc; margin:8px 2px; border-radius:5px; }
 QScrollArea#platformScroll QScrollBar::handle:vertical { background:#b4c6de; border-radius:5px; min-height:28px; }
@@ -123,16 +124,26 @@ QDialog#excelExportDialog QLabel, QDialog#excelExportDialog QCheckBox { backgrou
         pl.setContentsMargins(10, 10, 10, 10)
         ph = QHBoxLayout()
         ph.addWidget(QLabel("Platformlar", objectName="exportCardHeader")); ph.addStretch(1)
+        select_all_btn = QPushButton("Tümünü Seç")
+        select_all_btn.setObjectName("exportTinyButton")
+        select_all_btn.clicked.connect(self.select_all_platforms)
+        clear_btn = QPushButton("Seçimi Temizle")
+        clear_btn.setObjectName("exportTinyButton")
+        clear_btn.clicked.connect(self.clear_platform_selection)
+        ph.addWidget(select_all_btn)
+        ph.addWidget(clear_btn)
         pl.addLayout(ph)
 
         self.platform_container = QWidget()
         self.platform_layout = QVBoxLayout(self.platform_container)
         self.platform_layout.setContentsMargins(8, 8, 8, 8)
         self.platform_layout.setSpacing(6)
-        for p in (self.store.platform_names() if hasattr(self.store, "platform_names") else []):
+        platform_names = [str(p) for p in (self.store.platform_names() if hasattr(self.store, "platform_names") else [])]
+        use_active_platform = bool(self.active_platform and self.active_platform in platform_names)
+        for p in platform_names:
             c = self._platform_counts.get(str(p), 0)
             row = PlatformRow(str(p), c, self._on_platform_item_changed)
-            row.set_checked(str(p) == self.active_platform, silent=True)
+            row.set_checked((str(p) == self.active_platform) if use_active_platform else True, silent=True)
             self.platform_rows.append(row)
             self.platform_layout.addWidget(row)
         self.platform_layout.addStretch(1)
@@ -159,6 +170,14 @@ QDialog#excelExportDialog QLabel, QDialog#excelExportDialog QCheckBox { backgrou
 
     def _on_platform_item_changed(self):
         return
+
+    def select_all_platforms(self):
+        for row in self.platform_rows:
+            row.set_checked(True, silent=True)
+
+    def clear_platform_selection(self):
+        for row in self.platform_rows:
+            row.set_checked(False, silent=True)
 
     def accept_options(self):
         plats = self._selected_platforms()
