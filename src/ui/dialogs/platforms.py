@@ -1,3 +1,4 @@
+"""Deprecated: platform/component management now lives in platform_component_manager.py."""
 from __future__ import annotations
 
 import re

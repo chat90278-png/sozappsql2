@@ -68,6 +68,7 @@ from src.ui.tarih import ContractCalendarWindow
 from src.ui.ozet import ContractSummaryDialog
 from src.ui.date_picker import build_date_input as _build_date_input
 from src.ui.kullanim_kilavuzu import UsageGuideDialog
+from src.ui.dialogs.platform_component_manager import PlatformComponentManagerDialog
 
 from PySide6.QtCore import Qt, QDate, QObject, QThread, Signal, QTimer, QPoint, QSize, QEvent, QPropertyAnimation, QEasingCurve, QUrl
 from PySide6.QtGui import QFont, QColor, QPixmap, QIcon, QPainter, QAction, QCursor, QCloseEvent, QDesktopServices
@@ -429,7 +430,7 @@ class ElidedLabel(QLabel):
 from src.services.excel_store import ExcelStore
 from src.services.sts_store import STSStore
 from src import auth
-from src.workers import ExcelLoadWorker, ComponentSaveWorker, UserSaveWorker, ContractSaveWorker, AnalyzeDialog
+from src.workers import ExcelLoadWorker, UserSaveWorker, ContractSaveWorker, AnalyzeDialog
 
 
 COL_PLATFORM = 0
@@ -1215,453 +1216,6 @@ class UserManagerDialog(StyledDialog):
         QMessageBox.critical(self, "Kullanıcı kaydetme hatası", f"Kaydetme sırasında hata oluştu:\n\n{error_text}")
 
 
-class ComponentManagerDialog(StyledDialog):
-    def __init__(self, store: ExcelStore, parent=None):
-        super().__init__("Bileşen Yönetimi", parent)
-        self.store = store
-        self.components = store.load_components()
-        self.changed = False
-        self._save_thread: Optional[QThread] = None
-        self._save_worker: Optional[ComponentSaveWorker] = None
-        self._save_payload: List[dict] = []
-        self._saving = False
-        self._syncing_selection = False
-        self.resize(860, 560)
-        self.build()
-        self.load_table()
-
-    def build(self):
-        root = QVBoxLayout(self)
-        root.setContentsMargins(12, 12, 12, 12)
-        root.setSpacing(10)
-
-        hero = QFrame()
-        hero.setObjectName("componentHero")
-        hero_lay = QVBoxLayout(hero)
-        hero_lay.setContentsMargins(16, 12, 16, 12)
-        hero_lay.setSpacing(6)
-        title = QLabel("Bileşen Yönetimi")
-        title.setObjectName("dialogTitle")
-        hero_lay.addWidget(title)
-        root.addWidget(hero)
-
-        btns = QHBoxLayout()
-        btns.setSpacing(8)
-        add = QPushButton("+ Bileşen Ekle")
-        add.clicked.connect(self.add_component)
-        delb = QPushButton("Seçili Bileşeni Sil")
-        delb.setObjectName("danger")
-        delb.clicked.connect(self.delete_selected)
-        btns.addWidget(add)
-        btns.addWidget(delb)
-        btns.addStretch()
-        root.addLayout(btns)
-
-        tbl_row = QHBoxLayout()
-        tbl_row.setSpacing(10)
-        tbl_row.setContentsMargins(0, 0, 0, 0)
-
-        left_panel = QFrame()
-        left_panel.setObjectName("componentPanel")
-        left_panel.setFixedWidth(360)
-        left_layout = QVBoxLayout(left_panel)
-        left_layout.setContentsMargins(0, 0, 0, 0)
-        left_layout.setSpacing(0)
-        left_head = QFrame()
-        left_head.setObjectName("componentPanelHead")
-        lh = QHBoxLayout(left_head)
-        lh.setContentsMargins(12, 0, 12, 0)
-        lh.addWidget(QLabel("Bileşen Bilgileri"))
-        lh.addStretch()
-        left_layout.addWidget(left_head)
-
-        self.frozen_table = QTableWidget()
-        self.frozen_table.setAlternatingRowColors(True)
-        self.frozen_table.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.frozen_table.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.frozen_table.verticalHeader().setVisible(False)
-        self.frozen_table.setColumnCount(4)
-        self.frozen_table.setHorizontalHeaderLabels(["#", "Bileşen Adı", "Birim", "Aktif Mi"])
-        self.frozen_table.setSelectionBehavior(QTableWidget.SelectRows)
-        self.frozen_table.setSelectionMode(QTableWidget.SingleSelection)
-        self.frozen_table.itemSelectionChanged.connect(self.sync_selection_from_left)
-        self.frozen_table.cellClicked.connect(lambda r, c: self.select_row(r))
-        self.frozen_table.horizontalHeader().setSectionResizeMode(QHeaderView.Fixed)
-        self.frozen_table.setColumnWidth(0, 36)
-        self.frozen_table.setColumnWidth(1, 160)
-        self.frozen_table.setColumnWidth(2, 72)
-        self.frozen_table.setColumnWidth(3, 84)
-        self.frozen_table.horizontalHeader().setStretchLastSection(True)
-        self.frozen_table.setStyleSheet("""
-            QTableWidget { border:0; gridline-color:#d8e4f0; background:#ffffff; alternate-background-color:#f6faff; }
-            QHeaderView::section { background:#eaf0f6; color:#405a7d; font-weight:800; border:1px solid #d8e4f0; height:34px; }
-            QTableWidget::item { border-color:#d8e4f0; padding:4px; }
-            QTableWidget::item:selected { background:#eef6ff; color:#002b5c; }
-        """)
-        left_layout.addWidget(self.frozen_table, 1)
-        tbl_row.addWidget(left_panel, 0)
-
-        right_panel = QFrame()
-        right_panel.setObjectName("componentPanel")
-        self.right_panel = right_panel
-        right_layout = QVBoxLayout(right_panel)
-        right_layout.setContentsMargins(0, 0, 0, 0)
-        right_layout.setSpacing(0)
-        right_head = QFrame()
-        right_head.setObjectName("componentPanelHead")
-        rh = QHBoxLayout(right_head)
-        rh.setContentsMargins(12, 0, 8, 0)
-        rh.addWidget(QLabel("Platform Yetkilendirmeleri"))
-        rh.addStretch()
-        self.platform_search = QLineEdit()
-        self.platform_search.setPlaceholderText("Platform ara...")
-        self.platform_search.setFixedWidth(180)
-        self.platform_search.textChanged.connect(self.apply_platform_filter)
-        show_all = QPushButton("Tümünü Göster")
-        show_all.setObjectName("secondary")
-        show_all.clicked.connect(lambda: self.platform_search.clear())
-        rh.addWidget(self.platform_search)
-        rh.addWidget(show_all)
-        right_layout.addWidget(right_head)
-
-        self.table = QTableWidget()
-        self.table.setAlternatingRowColors(True)
-        self.table.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self.table.verticalHeader().setVisible(False)
-        self.table.setSelectionBehavior(QTableWidget.SelectRows)
-        self.table.setSelectionMode(QTableWidget.SingleSelection)
-        self.table.cellClicked.connect(self.on_component_cell_clicked)
-        self.table.itemSelectionChanged.connect(self.sync_selection_from_right)
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Fixed)
-        self.table.horizontalHeader().setStretchLastSection(True)
-        self.table.setStyleSheet("""
-            QTableWidget { border:0; gridline-color:#d8e4f0; background:#ffffff; alternate-background-color:#f6faff; }
-            QHeaderView::section { background:#eaf0f6; color:#405a7d; font-weight:800; border:1px solid #d8e4f0; height:34px; }
-            QTableWidget::item { border-color:#d8e4f0; padding:4px; }
-            QTableWidget::item:selected { background:#eef6ff; color:#002b5c; }
-        """)
-        right_layout.addWidget(self.table, 1)
-        tbl_row.addWidget(right_panel, 1)
-        root.addLayout(tbl_row, 1)
-
-        self.frozen_table.verticalScrollBar().valueChanged.connect(self.table.verticalScrollBar().setValue)
-        self.table.verticalScrollBar().valueChanged.connect(self.frozen_table.verticalScrollBar().setValue)
-
-        foot = QHBoxLayout()
-        self.footer_status = self.make_footer_status_label()
-        foot.addWidget(self.footer_status, 1, Qt.AlignVCenter)
-        foot.addStretch()
-        self.save_btn = QPushButton("Kaydet")
-        self.save_btn.clicked.connect(self.save)
-        self.close_btn = QPushButton("Kapat")
-        self.close_btn.setObjectName("secondary")
-        self.close_btn.clicked.connect(self.reject)
-        foot.addWidget(self.save_btn)
-        foot.addWidget(self.close_btn)
-        root.addLayout(foot)
-
-        self.setStyleSheet(self.styleSheet() + """
-            QFrame#componentHero { background:#eef4fa; border-radius:6px; }
-            QFrame#componentPanel { background:#ffffff; border:1px solid #d8e4f0; border-radius:8px; }
-            QFrame#componentPanelHead { background:#eef3f8; border-bottom:1px solid #d8e4f0; min-height:40px; max-height:40px; }
-            QFrame#componentPanelHead QLabel { color:#314d72; font-weight:800; }
-        """)
-
-        self.busy_overlay = QFrame(self)
-        self.busy_overlay.setStyleSheet("QFrame { background: rgba(248, 251, 255, 0.86); }")
-        self.busy_overlay.hide()
-        self.busy_card = QFrame(self.busy_overlay)
-        self.busy_card.setStyleSheet(
-            "QFrame { background: rgba(255,255,255,0.97); border: 1px solid #d8e2ed; border-radius: 10px; }"
-        )
-        bl = QVBoxLayout(self.busy_card)
-        bl.setContentsMargins(18, 14, 18, 14)
-        bl.setSpacing(8)
-        self.busy_label = QLabel("İşlem yapılıyor...")
-        self.busy_label.setObjectName("mainTitle")
-        self.busy_label.setAlignment(Qt.AlignCenter)
-        self.busy_progress = QProgressBar()
-        self.busy_progress.setRange(0, 100)
-        self.busy_progress.setValue(0)
-        self.busy_progress.setTextVisible(True)
-        self.busy_progress.setFormat("%p%")
-        bl.addWidget(self.busy_label)
-        bl.addWidget(self.busy_progress)
-        self._busy_cursor_on = False
-        self.position_busy_overlay()
-
-    def _make_platform_item(self, checked: bool) -> QTableWidgetItem:
-        it = QTableWidgetItem("✓" if checked else "")
-        it.setTextAlignment(Qt.AlignCenter)
-        it.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
-        it.setData(Qt.UserRole, bool(checked))
-        it.setForeground(QColor("#0f7a31") if checked else QColor("#64748b"))
-        if checked:
-            it.setBackground(QColor("#e9fff1"))
-        return it
-
-    def select_row(self, row: int):
-        if row < 0:
-            return
-        self._syncing_selection = True
-        try:
-            self.frozen_table.selectRow(row)
-            self.table.selectRow(row)
-            self.frozen_table.setCurrentCell(row, max(0, self.frozen_table.currentColumn()))
-            self.table.setCurrentCell(row, max(0, self.table.currentColumn()))
-        finally:
-            self._syncing_selection = False
-
-    def sync_selection_from_left(self):
-        if self._syncing_selection:
-            return
-        self.select_row(self.frozen_table.currentRow())
-
-    def sync_selection_from_right(self):
-        if self._syncing_selection:
-            return
-        self.select_row(self.table.currentRow())
-
-    def apply_platform_filter(self):
-        text = (self.platform_search.text() if hasattr(self, 'platform_search') else '').strip().lower()
-        for c in range(self.table.columnCount()):
-            header = self.table.horizontalHeaderItem(c)
-            name = (header.text() if header else '').lower()
-            self.table.setColumnHidden(c, bool(text) and text not in name)
-
-    def position_busy_overlay(self):
-        if not hasattr(self, "busy_overlay"):
-            return
-        self.busy_overlay.setGeometry(self.rect())
-        w, h = 420, 130
-        x = max((self.busy_overlay.width() - w) // 2, 0)
-        y = max((self.busy_overlay.height() - h) // 2, 0)
-        self.busy_card.setGeometry(x, y, w, h)
-        self.busy_overlay.raise_()
-
-    def set_busy(self, visible: bool, message: str = "İşlem yapılıyor...", percent: int = 0):
-        if not hasattr(self, "busy_overlay"):
-            return
-        self._saving = bool(visible)
-        if visible:
-            self.busy_label.setText(str(message or "İşlem yapılıyor..."))
-            self.busy_progress.setValue(int(max(0, min(100, percent))))
-            self.position_busy_overlay()
-            self.save_btn.setEnabled(False)
-            self.close_btn.setEnabled(False)
-            self.table.setEnabled(False)
-            self.frozen_table.setEnabled(False)
-            self.busy_overlay.show()
-            if not self._busy_cursor_on:
-                QApplication.setOverrideCursor(Qt.WaitCursor)
-                self._busy_cursor_on = True
-            QApplication.processEvents()
-        else:
-            self.busy_overlay.hide()
-            self.save_btn.setEnabled(True)
-            self.close_btn.setEnabled(True)
-            self.table.setEnabled(True)
-            self.frozen_table.setEnabled(True)
-            if self._busy_cursor_on:
-                QApplication.restoreOverrideCursor()
-                self._busy_cursor_on = False
-            QApplication.processEvents()
-
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        self.position_busy_overlay()
-
-    def closeEvent(self, event):
-        if self._saving:
-            event.ignore()
-            return
-        super().closeEvent(event)
-
-    def load_table(self):
-        platforms = self.store.platform_names()
-        n = len(self.components)
-
-        self.frozen_table.blockSignals(True)
-        self.table.blockSignals(True)
-        self.frozen_table.setRowCount(n)
-        self.table.setRowCount(n)
-        self.table.setColumnCount(len(platforms))
-        self.table.setHorizontalHeaderLabels(platforms)
-
-        for r, comp in enumerate(self.components):
-            vals = [str(r + 1), comp.name, comp.unit or "Adet", "Evet" if comp.active else "Hayır"]
-            for c, val in enumerate(vals):
-                item = QTableWidgetItem(val)
-                item.setTextAlignment(Qt.AlignCenter if c in (0, 2, 3) else Qt.AlignVCenter | Qt.AlignLeft)
-                if c == 0:
-                    item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
-                    item.setForeground(QColor("#245ce7"))
-                    item.setBackground(QColor("#e8f0f8"))
-                    font = item.font(); font.setBold(True); item.setFont(font)
-                self.frozen_table.setItem(r, c, item)
-            self.frozen_table.setRowHeight(r, 36)
-
-            for i, p in enumerate(platforms):
-                checked = bool(comp.platforms.get(p, False))
-                self.table.setItem(r, i, self._make_platform_item(checked))
-            self.table.setRowHeight(r, 36)
-
-        for i in range(len(platforms)):
-            self.table.horizontalHeader().setSectionResizeMode(i, QHeaderView.Fixed)
-            self.table.setColumnWidth(i, 86)
-
-        # Platform az olduğunda son sütun panelin sonuna kadar uzasın;
-        # platform çok olduğunda sabit genişlikler korunur ve yatay scroll çalışır.
-        self.table.horizontalHeader().setStretchLastSection(True)
-        if hasattr(self, "right_panel"):
-            platform_area = max(300, min(560, len(platforms) * 86 + 18))
-            self.right_panel.setMaximumWidth(platform_area)
-
-        self.frozen_table.blockSignals(False)
-        self.table.blockSignals(False)
-        # Aktif Mi sütununa (col 3) dropdown delegate
-        self.frozen_table.setItemDelegateForColumn(3, DropdownDelegate(["Evet", "Hayır"], self.frozen_table))
-        if n:
-            self.select_row(0)
-        self.apply_platform_filter()
-
-    def on_component_cell_clicked(self, row: int, col: int):
-        self.select_row(row)
-        it = self.table.item(row, col)
-        if not it:
-            return
-        checked = not bool(it.data(Qt.UserRole))
-        new_item = self._make_platform_item(checked)
-        self.table.setItem(row, col, new_item)
-        self.table.setCurrentCell(row, col)
-
-    def _sync_table_to_components(self):
-        """Tablodaki hücre değerlerini self.components listesine yansıt."""
-        platforms = self.store.platform_names()
-        for r in range(min(self.frozen_table.rowCount(), len(self.components))):
-            comp = self.components[r]
-            if self.frozen_table.item(r, 1):
-                comp.name = self.frozen_table.item(r, 1).text().strip() or comp.name
-            if self.frozen_table.item(r, 2):
-                comp.unit = self.frozen_table.item(r, 2).text().strip() or comp.unit
-            if self.frozen_table.item(r, 3):
-                comp.active = self.frozen_table.item(r, 3).text().strip().lower() in ["evet", "true", "1", "aktif"]
-            for i, p in enumerate(platforms):
-                it = self.table.item(r, i)
-                if it is not None:
-                    comp.platforms[p] = bool(it.data(Qt.UserRole))
-
-    def add_component(self):
-        self._sync_table_to_components()   # ← önce mevcut değerleri koru
-        self.components.append(ComponentDef(name="Yeni Bileşen", unit="Adet", active=True, usage=1))
-        self.load_table()
-        new_row = len(self.components) - 1
-        self.select_row(new_row)
-        self.frozen_table.editItem(self.frozen_table.item(new_row, 1))
-
-    def delete_selected(self):
-        r = self.frozen_table.currentRow()
-        if r < 0:
-            r = self.table.currentRow()
-        if r >= 0:
-            self._sync_table_to_components()   # ← önce mevcut değerleri koru
-            self.components.pop(r)
-            self.load_table()
-
-    def save(self):
-        platforms = self.store.platform_names()
-        old_usage = {str(c.name or "").strip().lower(): int(c.usage or 1) for c in self.components}
-        result = []
-        seen = set()
-        for r in range(self.frozen_table.rowCount()):
-            name = (self.frozen_table.item(r, 1).text() if self.frozen_table.item(r, 1) else "").strip()
-            if not name:
-                continue
-            if name.lower() in seen:
-                QMessageBox.warning(self, "Uyarı", f"Tekrarlanan bileşen: {name}")
-                return
-            seen.add(name.lower())
-            comp = ComponentDef(
-                name=name,
-                version="",
-                unit=(self.frozen_table.item(r, 2).text() if self.frozen_table.item(r, 2) else "Adet"),
-                active=(self.frozen_table.item(r, 3).text() if self.frozen_table.item(r, 3) else "Evet").strip().lower() in ["evet", "true", "1", "aktif"],
-                usage=old_usage.get(name.lower(), 1),
-                platforms={}
-            )
-            for i, p in enumerate(platforms):
-                it = self.table.item(r, i)
-                comp.platforms[p] = bool(it and it.data(Qt.UserRole))
-            result.append(comp)
-        payload: List[dict] = []
-        for comp in result:
-            payload.append({
-                "name": str(comp.name or "").strip(),
-                "version": str(comp.version or ""),
-                "unit": str(comp.unit or "Adet"),
-                "active": bool(comp.active),
-                "usage": int(comp.usage or 1),
-                "platforms": dict(comp.platforms or {}),
-            })
-        self._save_payload = payload
-        if _is_sts_store(self.store):
-            try:
-                self.set_busy(True, "Bileşenler kaydediliyor...", 25)
-                self.store.write_components(result, actor=self.store.current_actor())
-                self.store.save()
-                self.on_save_finished({})
-            except Exception as exc:
-                self.on_save_failed(str(exc))
-            return
-        self._start_async_save()
-
-    def _start_async_save(self):
-        if self._save_thread and self._save_thread.isRunning():
-            return
-        self.set_busy(True, "Bileşen güncellemesi başlatılıyor...", 5)
-        self._save_thread = QThread(self)
-        self._save_worker = ComponentSaveWorker(self.store.path, self._save_payload, self.store.current_actor())
-        self._save_worker.moveToThread(self._save_thread)
-        self._save_thread.started.connect(self._save_worker.run)
-        self._save_worker.progress.connect(self.on_save_progress)
-        self._save_worker.finished.connect(self.on_save_finished)
-        self._save_worker.failed.connect(self.on_save_failed)
-        self._save_worker.finished.connect(self._save_thread.quit)
-        self._save_worker.failed.connect(self._save_thread.quit)
-        self._save_thread.finished.connect(self._save_worker.deleteLater)
-        self._save_thread.finished.connect(self._save_thread.deleteLater)
-        self._save_thread.finished.connect(self._clear_save_refs)
-        self._save_thread.start()
-
-    def _clear_save_refs(self):
-        self._save_worker = None
-        self._save_thread = None
-
-    def on_save_progress(self, percent: int, message: str):
-        self.set_busy(True, str(message or "İşlem yapılıyor..."), int(max(0, min(100, int(percent or 0)))))
-
-    def on_save_finished(self, _result: object):
-        try:
-            self.set_busy(True, "Yerel önbellek yenileniyor...", 98)
-            self.store.reload_from_disk()
-            self.components = self.store.load_components()
-            self.changed = True
-            self.set_busy(False)
-            self.load_table()
-            self.show_footer_status("Bileşenler kaydedildi", kind="success")
-        except Exception as exc:
-            self.set_busy(False)
-            self.show_footer_status("Bileşenler kaydedildi, yenileme hatası oluştu.", kind="error", duration=4000)
-            QMessageBox.critical(self, "Hata", f"Bileşenler kaydedildi ancak yenileme sırasında hata oluştu:\n\n{exc}")
-
-    def on_save_failed(self, error_text: str):
-        self.set_busy(False)
-        self.show_footer_status("Kaydetme hatası! Detay için loga bakın.", kind="error", duration=4000)
-        QMessageBox.critical(self, "Bileşen kaydetme hatası", f"Kaydetme sırasında hata oluştu:\n\n{error_text}")
-
-
-
-from src.ui.dialogs.platforms import PlatformManagerDialog, PlatformDialog
 
 
 class _PlatformRowWidget(QWidget):
@@ -8661,12 +8215,11 @@ class MainWindow(QMainWindow):
         self.top_actions_menu.addAction("Excel’e Aktar", self.export_sts_to_excel)
         self.top_actions_menu.addAction("Database Yönetimi", self.open_database_management)
         self.top_actions_menu.addAction("Performans Takip", self.open_performance_tracking)
-        self.top_actions_menu.addAction("Platform Yönetimi", self.manage_platforms)
+        self.top_actions_menu.addAction("Platform & Bileşen", self.manage_platforms)
         self.top_actions_menu.addSeparator()
         self.user_management_action = self.top_actions_menu.addAction("Kullanıcı Yönetimi", self.open_user_management)
         self.role_permissions_action = self.top_actions_menu.addAction("Yetki Yönetimi", self.open_role_permissions)
         self.top_actions_menu.addAction("Etiket Yönetimi", self.manage_tags)
-        self.top_actions_menu.addAction("Bileşen Yönetimi", self.manage_components)
         self.activity_logs_action = self.top_actions_menu.addAction("İşlem Geçmişi", self.open_activity_logs)
         self.top_actions_menu.addSeparator()
         self.top_actions_menu.addAction("Kullanım Kılavuzu", self.open_usage_guide)
@@ -9802,7 +9355,7 @@ class MainWindow(QMainWindow):
         if not self.store:
             QMessageBox.information(self, "Excel gerekli", "Önce bir Excel dosyası bağlayın.")
             return
-        dlg = PlatformManagerDialog(self.store, self)
+        dlg = PlatformComponentManagerDialog(self.store, self, initial_tab=0)
         saved_via_signal = False
 
         def refresh_after_platform_save():
@@ -9847,7 +9400,7 @@ class MainWindow(QMainWindow):
         if not self.store:
             QMessageBox.information(self, "Excel gerekli", "Önce bir Excel dosyası bağlayın.")
             return
-        dlg=ComponentManagerDialog(self.store,self)
+        dlg = PlatformComponentManagerDialog(self.store, self, initial_tab=1)
         if dlg.exec():
             self.request_refresh(scope="ui")
 
