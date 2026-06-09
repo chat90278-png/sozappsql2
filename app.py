@@ -8520,6 +8520,7 @@ class MainWindow(QMainWindow):
         self._export_progress.setAutoReset(False)
         self._export_progress.setValue(0)
         self._export_progress.show()
+        QApplication.processEvents()
 
         self._export_thread = QThread(self)
         self._export_worker = ExcelExportWorker(self.store, out, opts)

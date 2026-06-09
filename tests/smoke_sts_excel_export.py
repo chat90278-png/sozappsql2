@@ -1,6 +1,9 @@
+import os
 import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.models.app_models import ComponentDef, ContractInfo, DeliveryInfo, SystemInfo
@@ -18,6 +21,10 @@ def rgb_endswith(cell, suffix):
     return str(value).upper().endswith(suffix)
 
 
+def rows_by_acceptance(ws, acceptance_name):
+    return [row for row in ws.iter_rows(min_row=2, values_only=True) if row[3] == acceptance_name]
+
+
 with TemporaryDirectory() as td:
     db = Path(td) / 'e.sts'
     s = STSStore(db)
@@ -29,15 +36,21 @@ with TemporaryDirectory() as td:
         ComponentDef(name='C2', platforms={'AKINCI': True, 'TB2': False}),
     ])
 
-    ci1 = ContractInfo(no='K1', platform='AKINCI', user='U1', yi_yd='Yİ', contract_type='Ana Sözleşme', signature_date='2026-01-01', t0_date='2026-01-02', t0_months=3, completion_date='2026-04-02')
-    ci2 = ContractInfo(no='K2', platform='TB2', user='U1', yi_yd='Yİ', contract_type='Ana Sözleşme', signature_date='', t0_date='', t0_months=0, completion_date='')
+    ci_no_system = ContractInfo(no='K0', platform='AKINCI', user='U1', yi_yd='Yİ', contract_type='Ana Sözleşme', signature_date='', t0_date='', t0_months=0, completion_date='')
+    ci_with_delivery = ContractInfo(no='K1', platform='AKINCI', user='U1', yi_yd='Yİ', contract_type='Ana Sözleşme', signature_date='2026-01-01', t0_date='2026-01-02', t0_months=3, completion_date='2026-04-02')
+    ci_other_platform = ContractInfo(no='K2', platform='TB2', user='U1', yi_yd='Yİ', contract_type='Ana Sözleşme', signature_date='', t0_date='', t0_months=0, completion_date='')
+    ci_system_only = ContractInfo(no='K3', platform='AKINCI', user='U1', yi_yd='Yİ', contract_type='Ana Sözleşme', signature_date='', t0_date='', t0_months=0, completion_date='')
+
     systems = [SystemInfo(name='S1', components={'C1':3,'C2':2}), SystemInfo(name='S2', components={'C1':1})]
     deliveries = {
         'S1':[DeliveryInfo(name='Kabul 1', status='Devam Ediyor', acceptance_date='', note='N1', planned={'C1':2,'C2':2}, delivered={'C1':1,'C2':2})],
         'S2':[DeliveryInfo(name='Kabul 2', status='Tamamlandı', acceptance_date='2026-03-01', note='', planned={'C1':1}, delivered={'C1':1})],
     }
-    s.write_contract(ci1, systems, deliveries)
-    s.write_contract(ci2, systems, deliveries)
+
+    s.write_contract(ci_no_system, [], {})
+    s.write_contract(ci_with_delivery, systems, deliveries)
+    s.write_contract(ci_other_platform, systems, deliveries)
+    s.write_contract(ci_system_only, [SystemInfo(name='Sistem Kabul Yok', components={'C1':5,'C2':4})], {})
 
     progress = []
     out1 = Path(td)/'full.xlsx'
@@ -59,10 +72,21 @@ with TemporaryDirectory() as td:
         'C1 Teslim Edilecek', 'C1 Teslim Edilen', 'C1 Kalan',
         'C2 Teslim Edilecek', 'C2 Teslim Edilen', 'C2 Kalan',
     ]
-    assert ws.max_row == 3  # her kabul/teslimat ayrı satır
-    assert [ws.cell(row=i, column=4).value for i in range(2, 4)] == ['Kabul 1', 'Kabul 2']
-    assert ws.cell(row=2, column=17).value == 1  # C1 kalan = 2 - 1, formülsüz sayı
-    assert ws.cell(row=2, column=20).value == 0  # C2 kalan = 2 - 2
+
+    all_rows = list(ws.iter_rows(min_row=2, values_only=True))
+    assert any(row[0] == 'K0' and row[2] == 'GENEL' and row[3] == 'Sözleşme Toplamı' for row in all_rows)
+    assert any(row[2] == 'Sistem Kabul Yok' and row[3] == 'Sistem Toplamı' for row in all_rows)
+    assert rows_by_acceptance(ws, 'Kabul 1') and rows_by_acceptance(ws, 'Kabul 2')
+
+    k1_total = next(row for row in all_rows if row[0] == 'K1' and row[3] == 'Sözleşme Toplamı')
+    assert k1_total[14:20] == (4, 2, 2, 2, 2, 0)
+    k3_system = next(row for row in all_rows if row[2] == 'Sistem Kabul Yok' and row[3] == 'Sistem Toplamı')
+    assert k3_system[14:20] == (5, 0, 5, 4, 0, 4)
+
+    kabul1_row_index, kabul1 = next((idx, row) for idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2) if row[3] == 'Kabul 1')
+    kabul2_row_index, kabul2 = next((idx, row) for idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2) if row[3] == 'Kabul 2')
+    assert kabul1[16] == 1  # C1 kalan = 2 - 1, formülsüz sayı
+    assert kabul1[19] == 0  # C2 kalan = 2 - 2
 
     assert rgb_endswith(ws['A1'], '0D2B55')
     assert ws['A1'].font.bold is True
@@ -70,12 +94,12 @@ with TemporaryDirectory() as td:
     assert ws.row_dimensions[1].height == 22
     assert ws.freeze_panes == 'A2'
     assert ws.auto_filter.ref == f'A1:T{ws.max_row}'
-    assert rgb_endswith(ws['Q2'], 'FFF2CC')
-    assert rgb_endswith(ws['T2'], 'FFFFFF')
-    assert rgb_endswith(ws['G2'], 'DDEEFF')
-    assert rgb_endswith(ws['G3'], 'C6EFCE')
-    assert 'A2:A3' in {str(rng) for rng in ws.merged_cells.ranges}
-    assert 'B2:B3' in {str(rng) for rng in ws.merged_cells.ranges}
+    assert rgb_endswith(ws.cell(row=kabul1_row_index, column=17), 'FFF2CC')
+    assert rgb_endswith(ws.cell(row=kabul1_row_index, column=20), 'FFFFFF')
+    assert rgb_endswith(ws.cell(row=kabul1_row_index, column=7), 'DDEEFF')
+    assert rgb_endswith(ws.cell(row=kabul2_row_index, column=7), 'C6EFCE')
+    assert any(str(rng).startswith('A') for rng in ws.merged_cells.ranges)
+    assert any(str(rng).startswith('B') for rng in ws.merged_cells.ranges)
 
     ws_tb2 = wb1['TB2']
     tb2_headers = [cell.value for cell in ws_tb2[1]]
@@ -91,6 +115,34 @@ with TemporaryDirectory() as td:
     s.export_to_excel(out3, options={'scope':'summary_only'})
     wb3 = load_workbook(out3, read_only=True)
     assert wb3.sheetnames == ['Özet']
+
+    try:
+        from PySide6.QtWidgets import QApplication
+        from src.ui.dialogs.excel_export_options import ExcelExportDialog
+    except Exception:
+        print('skip: PySide6 not installed')
+    else:
+        app = QApplication.instance() or QApplication([])
+        dlg_all = ExcelExportDialog(s, active_platform=None, contract_index=[])
+        assert {row.platform_name for row in dlg_all.platform_rows if row.is_checked()} == {'AKINCI', 'TB2'}
+        dlg_all.accept_options()
+        assert dlg_all.result_options == {
+            'scope': 'selected',
+            'platforms': ['AKINCI', 'TB2'],
+            'include_summary': True,
+            'include_contract_rows': True,
+            'include_system_rows': True,
+            'include_delivery_rows': True,
+            'include_component_columns': True,
+            'include_tags': True,
+        }
+
+        dlg_active = ExcelExportDialog(s, active_platform='AKINCI', contract_index=[])
+        assert [row.platform_name for row in dlg_active.platform_rows if row.is_checked()] == ['AKINCI']
+        dlg_active.clear_platform_selection()
+        assert not dlg_active._selected_platforms()
+        dlg_active.select_all_platforms()
+        assert {row.platform_name for row in dlg_active.platform_rows if row.is_checked()} == {'AKINCI', 'TB2'}
 
     logs = s.list_logs(limit=200)
     ex = [x for x in logs if x.get('action') == 'excel_exported']
