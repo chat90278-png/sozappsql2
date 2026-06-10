@@ -22,6 +22,11 @@ FULL_ACCESS_PERMISSIONS = {
     "manage_roles",
 }
 
+# Development switch: keep the authorization schema, roles and permission
+# definitions in place, but temporarily stop permission checks from blocking
+# users. Flip this back to True when the restrictions should be enforced again.
+PERMISSION_RESTRICTIONS_ENABLED = False
+
 AUTHORIZATION_REQUIRED_PERMISSIONS = {
     "manage_staff",
     "manage_roles",
@@ -413,7 +418,11 @@ def _staff_permission_rows(conn: sqlite3.Connection, staff_id: int):
 def has_permission(current_user: Optional[dict[str, Any]], permission_code: str, db_or_path: sqlite3.Connection | str | Path | None = None) -> bool:
     user = current_user if current_user is not None else current_staff
     code = str(permission_code or "").strip()
-    if not user or not code or int(user.get("is_active") if user.get("is_active") is not None else 1) == 0:
+    if not code:
+        return False
+    if not PERMISSION_RESTRICTIONS_ENABLED:
+        return True
+    if not user or int(user.get("is_active") if user.get("is_active") is not None else 1) == 0:
         return False
     canonical_code = LEGACY_PERMISSION_ALIASES.get(code, code)
     alias_codes = {legacy for legacy, canonical in LEGACY_PERMISSION_ALIASES.items() if canonical == canonical_code}

@@ -101,6 +101,8 @@ def test_permission_defaults_and_last_full_access_guard():
     ensure_staff_table(conn)
     admin_row = create_staff(conn, "admin-cihaz", "Admin", "gizli")
     admin = enrich_staff_permissions(conn, build_current_staff(admin_row))
+    assert auth_module.PERMISSION_RESTRICTIONS_ENABLED is False
+    assert has_permission(None, "manage_roles", conn)
     assert has_permission(admin, "manage_roles", conn)
     assert has_permission(admin, "sql_write", conn)
 
@@ -111,9 +113,18 @@ def test_permission_defaults_and_last_full_access_guard():
 
     manager = create_staff(conn, "manager-cihaz", "Manager", "gizli", role_id=roles["manager"]["id"])
     manager_user = enrich_staff_permissions(conn, build_current_staff(manager))
-    assert not has_permission(manager_user, "manage_staff", conn)
+    assert has_permission(manager_user, "manage_staff", conn)
     assert has_permission(manager_user, "sql_write", conn)
     assert has_permission(manager_user, "view_action_history", conn)
+
+    original_restrictions_enabled = auth_module.PERMISSION_RESTRICTIONS_ENABLED
+    try:
+        auth_module.PERMISSION_RESTRICTIONS_ENABLED = True
+        assert not has_permission(manager_user, "manage_staff", conn)
+        assert has_permission(manager_user, "sql_write", conn)
+        assert has_permission(manager_user, "view_action_history", conn)
+    finally:
+        auth_module.PERMISSION_RESTRICTIONS_ENABLED = original_restrictions_enabled
 
     try:
         update_staff_record(conn, admin, admin["id"], is_active=0)
