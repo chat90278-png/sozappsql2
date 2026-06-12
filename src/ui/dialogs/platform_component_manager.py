@@ -57,24 +57,24 @@ class ComponentCellDelegate(QStyledItemDelegate):
         dot_color = QColor("#16A34A" if active else "#94A3B8")
         painter.setBrush(dot_color)
         painter.setPen(Qt.NoPen)
-        painter.drawEllipse(rect.left() + 10, rect.top() + 21, 6, 6)
+        painter.drawEllipse(rect.left() + 10, rect.top() + 23, 6, 6)
 
         painter.setPen(QColor("#081426"))
         font = painter.font()
         font.setBold(True)
         font.setPointSize(9)
         painter.setFont(font)
-        painter.drawText(QRect(rect.left() + 24, rect.top() + 8, rect.width() - 34, 18), Qt.AlignLeft | Qt.AlignVCenter, str(data.get("name") or ""))
+        painter.drawText(QRect(rect.left() + 24, rect.top() + 10, rect.width() - 34, 18), Qt.AlignLeft | Qt.AlignVCenter, str(data.get("name") or ""))
 
         font.setBold(False)
-        font.setPointSize(8)
+        font.setPointSize(9)
         painter.setFont(font)
         painter.setPen(QColor(MUTED))
         meta = str(data.get("unit") or "Adet")
         note = str(data.get("note") or "").strip()
         if note:
             meta = f"{meta} · {note}"
-        painter.drawText(QRect(rect.left() + 24, rect.top() + 27, rect.width() - 34, 18), Qt.AlignLeft | Qt.AlignVCenter, meta)
+        painter.drawText(QRect(rect.left() + 24, rect.top() + 30, rect.width() - 34, 18), Qt.AlignLeft | Qt.AlignVCenter, meta)
         painter.restore()
 
 
@@ -90,7 +90,7 @@ class AssignmentDelegate(QStyledItemDelegate):
         size = 20
         box = QRect(rect.center().x() - size // 2, rect.center().y() - size // 2, size, size)
         painter.setPen(Qt.NoPen)
-        painter.setBrush(QColor(PALE_GREEN if checked else CELL_OFF))
+        painter.setBrush(QColor("#DCFCE7" if checked else "#EEF2F8"))
         painter.drawRoundedRect(box, 6, 6)
         if checked:
             painter.setPen(QColor("#16A34A"))
@@ -102,13 +102,51 @@ class AssignmentDelegate(QStyledItemDelegate):
         painter.restore()
 
 
+
+class ToggleSwitch(QWidget):
+    """HTML sw benzeri kayan toggle switch."""
+    toggled = __import__('PySide6.QtCore', fromlist=['Signal']).Signal(bool)
+
+    def __init__(self, checked: bool = True, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(42, 24)
+        self._checked = checked
+        self.setCursor(__import__('PySide6.QtCore', fromlist=['Qt']).Qt.PointingHandCursor)
+
+    def isChecked(self) -> bool:
+        return self._checked
+
+    def setChecked(self, v: bool):
+        self._checked = bool(v)
+        self.update()
+
+    def mousePressEvent(self, e):
+        self._checked = not self._checked
+        self.toggled.emit(self._checked)
+        self.update()
+
+    def paintEvent(self, e):
+        from PySide6.QtGui import QPainter, QColor, QPainterPath
+        from PySide6.QtCore import QRectF
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        track_color = QColor('#3B6FE8') if self._checked else QColor('#CBD5E1')
+        p.setBrush(track_color)
+        p.setPen(__import__('PySide6.QtCore', fromlist=['Qt']).Qt.NoPen)
+        p.drawRoundedRect(QRectF(0, 2, 42, 20), 10, 10)
+        thumb_x = 20.0 if self._checked else 2.0
+        p.setBrush(QColor('#FFFFFF'))
+        p.drawEllipse(QRectF(thumb_x, 4, 16, 16))
+        p.end()
+
+
 class PlatformHeader(QHeaderView):
     def __init__(self, orientation, parent=None):
         super().__init__(orientation, parent)
         self.platforms: list[dict[str, Any]] = []
         self.setDefaultAlignment(Qt.AlignCenter)
         self.setSectionsClickable(True)
-        self.setFixedHeight(72)
+        self.setFixedHeight(80)
 
     def set_platforms(self, platforms: list[dict[str, Any]]):
         self.platforms = list(platforms or [])
@@ -116,7 +154,7 @@ class PlatformHeader(QHeaderView):
 
     def sizeHint(self) -> QSize:
         s = super().sizeHint()
-        s.setHeight(72)
+        s.setHeight(80)
         return s
 
     def paintSection(self, painter: QPainter, rect: QRect, logicalIndex: int):
@@ -125,36 +163,60 @@ class PlatformHeader(QHeaderView):
         platform = self.platforms[logicalIndex] if 0 <= logicalIndex < len(self.platforms) else {}
         name = str(platform.get("name") or "")
         count = int(platform.get("comp_count") or 0)
-        active = bool(platform.get("is_active", True))
         excluded = bool(platform.get("is_excluded", False))
-        colors = ["#DBEAFE", "#DCFCE7", "#FFEDD5", "#F3E8FF", "#CCFBF1", "#FCE7F3"]
-        avatar_color = colors[logicalIndex % len(colors)]
+
+        # HTML'deki _PLAT_COLORS ile birebir aynı
+        bg_colors = ["#EFF6FF","#F0FDF4","#FFF7ED","#FDF4FF","#F0FDFA","#FEF3C7","#FEE2E2","#E0F2FE"]
+        fg_colors = ["#1D4ED8","#15803D","#C2410C","#7E22CE","#0D9488","#92400E","#991B1B","#075985"]
+        av_bg = bg_colors[logicalIndex % len(bg_colors)]
+        av_fg = fg_colors[logicalIndex % len(fg_colors)]
+
         painter.save()
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        # lacivert arka plan
         painter.fillRect(rect, QColor(NAVY))
-        painter.setPen(QPen(QColor("#B7C6DC")))
+
+        # sağ ayırıcı çizgi
+        painter.setPen(QPen(QColor("rgba(255,255,255,0.08)")))
         painter.drawLine(rect.topRight(), rect.bottomRight())
 
-        av = QRect(rect.center().x() - 10, rect.top() + 8, 20, 16)
+        cx = rect.center().x()
+
+        # avatar daire (HTML: 30x30, border-radius:8px)
+        av_size = 30
+        av_x = cx - av_size // 2
+        av_y = rect.top() + 10
+        av_rect = QRect(av_x, av_y, av_size, av_size)
         painter.setPen(Qt.NoPen)
-        painter.setBrush(QColor(avatar_color))
-        painter.drawRoundedRect(av, 5, 5)
-        painter.setPen(QColor("#0B2344"))
+        painter.setBrush(QColor(av_bg))
+        painter.drawRoundedRect(av_rect, 8, 8)
+
+        # avatar harf
+        painter.setPen(QColor(av_fg))
         f = painter.font()
         f.setBold(True)
-        f.setPointSize(8)
+        f.setPointSize(11)
         painter.setFont(f)
-        painter.drawText(av, Qt.AlignCenter, (name[:1] or "?").upper())
+        painter.drawText(av_rect, Qt.AlignCenter, (name[:1] or "?").upper())
 
-        painter.setPen(QColor("#FFFFFF" if active else "#AAB6C7"))
-        f.setPointSize(7)
+        # platform adı (beyaz, bold, 10pt, letter-spacing)
+        painter.setPen(QColor("#FFFFFF"))
+        f.setPointSize(10)
+        f.setBold(True)
         painter.setFont(f)
-        painter.drawText(QRect(rect.left() + 4, rect.top() + 29, rect.width() - 8, 15), Qt.AlignCenter, name.upper())
-        painter.setPen(QColor("#89A2C0"))
+        name_rect = QRect(rect.left() + 4, av_y + av_size + 5, rect.width() - 8, 16)
+        painter.drawText(name_rect, Qt.AlignCenter, name.upper())
+
+        # bileşen sayısı (soluk, 9pt)
+        painter.setPen(QColor("#FFFFFF"))
+        f.setPointSize(8)
         f.setBold(False)
-        f.setPointSize(6)
         painter.setFont(f)
         suffix = " · hariç" if excluded else ""
-        painter.drawText(QRect(rect.left() + 4, rect.top() + 46, rect.width() - 8, 14), Qt.AlignCenter, f"{count} bileşen{suffix}")
+        cnt_rect = QRect(rect.left() + 4, name_rect.bottom() + 1, rect.width() - 8, 14)
+        painter.drawText(cnt_rect, Qt.AlignCenter, f"{count} bileşen{suffix}")
+
         painter.restore()
 
 
@@ -172,11 +234,11 @@ class PlatformComponentManagerDialog(QDialog):
         self._logo_path = ""
         self._syncing_scroll = False
         self.setWindowTitle("Platform & Bileşen")
-        self.resize(980, 620)
-        self.setMinimumSize(780, 500)
-        self.setWindowFlags(self.windowFlags() | Qt.Window)
+        self.setMinimumSize(600, 460)
+        self.setWindowFlags(self.windowFlags() | Qt.Window | Qt.WindowMaximizeButtonHint)
         self._build()
         self._load_data()
+        self._auto_size()
 
     def _build(self):
         outer = QStackedLayout(self)
@@ -197,22 +259,28 @@ class PlatformComponentManagerDialog(QDialog):
         add_component.clicked.connect(lambda: self._open_component_popover(None))
         add_platform = QPushButton("+ Platform", objectName="pcTopButton")
         add_platform.clicked.connect(lambda: self._open_platform_popover(None))
-        close = QPushButton("✕", objectName="pcCloseButton")
-        close.clicked.connect(self.reject)
         top.addWidget(brand)
         top.addWidget(file_name, 1)
         top.addWidget(add_component)
         top.addWidget(add_platform)
-        top.addWidget(close)
         root.addWidget(self.topbar)
 
         self.toolbar = QFrame(objectName="pcToolbar")
         self.toolbar.setFixedHeight(38)
         tb = QHBoxLayout(self.toolbar)
         tb.setContentsMargins(14, 0, 14, 0)
-        hint = QLabel("Hücreye tıkla → ata / kaldır · Başlığa çift tık veya sağ tık → düzenle / aktifle al / sil", objectName="pcHint")
+        hint = QLabel("Hücreye tıkla → ata / kaldır · Başlığa çift tık veya sağ tık → düzenle / aktife al / sil", objectName="pcHint")
+        # Arama çubuğu
+        self.search_box = QLineEdit()
+        self.search_box.setObjectName("pcSearch")
+        self.search_box.setPlaceholderText("🔍  Bileşen ara...")
+        self.search_box.setFixedWidth(200)
+        self.search_box.setFixedHeight(26)
+        self.search_box.textChanged.connect(self._filter_components)
         self.change_badge = QLabel("Değişiklik yok", objectName="pcBadge")
         tb.addWidget(hint, 1)
+        tb.addWidget(self.search_box)
+        tb.addSpacing(8)
         tb.addWidget(self.change_badge)
         root.addWidget(self.toolbar)
 
@@ -226,10 +294,11 @@ class PlatformComponentManagerDialog(QDialog):
         self.frozen.setFixedWidth(220)
         self.frozen.setColumnCount(1)
         self.frozen.setHorizontalHeaderLabels(["BİLEŞEN ↓"])
-        self.frozen.horizontalHeader().setFixedHeight(72)
+        self.frozen.horizontalHeader().setMinimumHeight(80)
+        self.frozen.horizontalHeader().setMaximumHeight(80)
         self.frozen.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         self.frozen.verticalHeader().setVisible(False)
-        self.frozen.setShowGrid(False)
+        self.frozen.setShowGrid(True)
         self.frozen.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.frozen.setSelectionMode(QAbstractItemView.NoSelection)
         self.frozen.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -242,7 +311,7 @@ class PlatformComponentManagerDialog(QDialog):
 
         self.matrix = QTableWidget()
         self.matrix.setObjectName("pcMatrix")
-        self.matrix.setShowGrid(False)
+        self.matrix.setShowGrid(True)
         self.matrix.verticalHeader().setVisible(False)
         self.matrix.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.matrix.setSelectionMode(QAbstractItemView.NoSelection)
@@ -258,33 +327,46 @@ class PlatformComponentManagerDialog(QDialog):
         matrix_lay.addWidget(self.matrix, 1)
         root.addWidget(self.matrix_area, 1)
 
-        self.frozen.verticalScrollBar().valueChanged.connect(self.matrix.verticalScrollBar().setValue)
-        self.matrix.verticalScrollBar().valueChanged.connect(self.frozen.verticalScrollBar().setValue)
+        def _frozen_scrolled(val):
+            if self._syncing_scroll: return
+            self._syncing_scroll = True
+            self.matrix.verticalScrollBar().setValue(val)
+            self._syncing_scroll = False
+
+        def _matrix_scrolled(val):
+            if self._syncing_scroll: return
+            self._syncing_scroll = True
+            self.frozen.verticalScrollBar().setValue(val)
+            self._syncing_scroll = False
+
+        self.frozen.verticalScrollBar().valueChanged.connect(_frozen_scrolled)
+        self.matrix.verticalScrollBar().valueChanged.connect(_matrix_scrolled)
 
         self.footer = QFrame(objectName="pcFooter")
-        self.footer.setFixedHeight(46)
+        self.footer.setFixedHeight(52)
         ft = QHBoxLayout(self.footer)
         ft.setContentsMargins(14, 0, 14, 0)
-        self.footer_msg = QLabel("Değişiklik yok", objectName="pcFooterMsg")
+        self.footer_msg = QLabel("", objectName="pcFooterMsg")
         cancel = QPushButton("Vazgeç", objectName="pcFooterButton")
+        cancel.setFixedSize(110, 36)
         cancel.clicked.connect(self.reject)
         save = QPushButton("Kaydet", objectName="pcPrimaryButton")
+        save.setFixedSize(110, 36)
         save.clicked.connect(self._save_and_close)
+        self.footer_msg.hide()
         ft.addWidget(self.footer_msg, 1)
+        ft.addStretch(1)
         ft.addWidget(cancel)
+        ft.addSpacing(8)
         ft.addWidget(save)
         root.addWidget(self.footer)
 
+        # Overlay sadece karartma katmanı — içinde widget yok
         self.overlay = QWidget(self)
         self.overlay.setObjectName("pcOverlay")
         self.overlay.hide()
-        overlay_lay = QVBoxLayout(self.overlay)
-        overlay_lay.setContentsMargins(0, 0, 0, 0)
-        overlay_lay.addStretch(1)
-        self.popover = QFrame(objectName="pcPopover")
-        self.popover.hide()
-        overlay_lay.addWidget(self.popover, 0, Qt.AlignCenter)
-        overlay_lay.addStretch(1)
+        # Popover: her açılışta _clear_popover ile yeniden oluşturulur
+        self.popover = None
         outer.addWidget(self.overlay)
         outer.setCurrentWidget(page)
 
@@ -294,13 +376,15 @@ class PlatformComponentManagerDialog(QDialog):
         self.setStyleSheet(f"""
 QDialog {{ background:#DCE4EF; }}
 QFrame#pcTopbar {{ background:{NAVY}; border-top-left-radius:10px; border-top-right-radius:10px; }}
-QLabel#pcBrand {{ color:white; background:#23385F; border-radius:5px; padding:3px 9px; font-weight:900; }}
-QLabel#pcFile {{ color:#8EA3C3; background:#1B2E51; border-radius:5px; padding:3px 9px; font-size:10px; }}
-QPushButton#pcTopButton {{ background:#243B63; color:white; border:1px solid #647795; border-radius:5px; padding:5px 12px; font-weight:800; font-size:11px; }}
-QPushButton#pcCloseButton {{ background:#203453; color:#B9C5D8; border:none; border-radius:8px; min-width:24px; min-height:24px; font-weight:900; }}
-QFrame#pcToolbar {{ background:#F8FAFC; border-bottom:1px solid {GRID}; }}
-QLabel#pcHint, QLabel#pcFooterMsg {{ color:{MUTED}; font-size:10px; }}
+QLabel#pcBrand {{ color:white; background:transparent; padding:3px 9px; font-weight:900; font-size:13px; letter-spacing:.06em; }}
+QLabel#pcFile {{ color:rgba(255,255,255,.45); background:rgba(255,255,255,.08); border-radius:20px; padding:3px 11px; font-size:11px; }}
+QPushButton#pcTopButton {{ background:rgba(255,255,255,.13); color:white; border:1.5px solid rgba(255,255,255,.2); border-radius:7px; padding:5px 13px; font-weight:700; font-size:12px; }}
+QPushButton#pcTopButton:hover {{ background:rgba(255,255,255,.22); }}
+QFrame#pcToolbar {{ background:#F0F4F9; border-bottom:1px solid {GRID}; }}
+QLabel#pcHint, QLabel#pcFooterMsg {{ color:{MUTED}; font-size:10px; background:transparent; }}
 QLabel#pcBadge {{ color:#91A0B8; background:#F0F4FA; border:1px solid #E2E8F0; border-radius:6px; padding:4px 9px; font-size:10px; }}
+QLineEdit#pcSearch {{ border:1.5px solid #DDE3EE; border-radius:6px; padding:3px 10px; background:#FFFFFF; color:#334155; font-size:12px; }}
+QLineEdit#pcSearch:focus {{ border-color:#3B6FE8; }}
 QFrame#pcMatrixArea {{ background:white; }}
 QTableWidget#pcFrozen, QTableWidget#pcMatrix {{ background:white; border:none; gridline-color:{GRID}; alternate-background-color:{ROW_ALT}; }}
 QTableWidget#pcFrozen QHeaderView::section {{ background:{NAVY}; color:#84A0C2; border-right:1px solid #B7C6DC; border-bottom:1px solid #B7C6DC; font-weight:900; font-size:9px; padding-left:8px; }}
@@ -308,27 +392,137 @@ QScrollBar:vertical {{ background:#F1F5F9; width:10px; }}
 QScrollBar::handle:vertical {{ background:#CBD5E1; border-radius:5px; min-height:24px; }}
 QScrollBar:horizontal {{ background:#F1F5F9; height:10px; }}
 QScrollBar::handle:horizontal {{ background:#CBD5E1; border-radius:5px; min-width:24px; }}
-QFrame#pcFooter {{ background:#F8FAFC; border-top:1px solid {GRID}; border-bottom-left-radius:10px; border-bottom-right-radius:10px; }}
-QPushButton#pcFooterButton {{ background:white; color:#0F1F3D; border:1px solid #D5DEEA; border-radius:7px; padding:7px 14px; font-weight:800; }}
-QPushButton#pcPrimaryButton {{ background:#3769E8; color:white; border:none; border-radius:7px; padding:7px 16px; font-weight:900; }}
+QFrame#pcFooter {{ background:#FFFFFF; border-top:1px solid {GRID}; border-bottom-left-radius:10px; border-bottom-right-radius:10px; }}
+QPushButton#pcFooterButton {{ background:white; color:#334155; border:1.5px solid #DDE3EE; border-radius:7px; font-size:12px; font-weight:500; }}
+QPushButton#pcPrimaryButton {{ background:#3769E8; color:white; border:none; border-radius:7px; font-size:12px; font-weight:700; }}
 QWidget#pcOverlay {{ background:rgba(15,31,61,90); }}
-QFrame#pcPopover {{ background:white; border:1px solid #D8E2EF; border-radius:12px; }}
+QFrame#pcPopover {{ background:white; border:1.5px solid #DDE3EE; border-radius:14px; }}
+QFrame#popHead {{ background:white; border-radius:14px 14px 0 0; }}
+QFrame#popFoot {{ background:#F8FAFC; border-radius:0 0 14px 14px; }}
+QFrame#popSep  {{ color:#E8EFF8; max-height:1px; border:none; border-top:1px solid #E8EFF8; }}
+QWidget#popBody {{ background:white; }}
+QLabel#popIconComp {{ background:#F0FDFA; color:#0D9488; border-radius:10px; font-size:18px; font-weight:900; }}
+QLabel#popIconPlat {{ background:#EFF6FF; color:#1D4ED8; border-radius:10px; font-size:18px; font-weight:900; }}
+QPushButton#popXBtn {{ background:#F1F5F9; color:#64748B; border:none; border-radius:7px; font-size:13px; font-weight:700; }}
+QPushButton#popXBtn:hover {{ background:#E2E8F0; }}
+QPushButton#logoPickBtn {{ background:#F5F8FF; color:#3B6FE8; border:1.5px dashed #BFDBFE; border-radius:8px; padding:10px 14px; font-size:12px; font-weight:700; text-align:left; }}
 QLabel#popTitle {{ color:#12223D; font-size:14px; font-weight:900; }}
 QLabel#popSub {{ color:#94A3B8; font-size:10px; }}
 QLabel#popField {{ color:#53657E; font-size:10px; font-weight:900; }}
-QLineEdit, QComboBox {{ border:1px solid #CBD7E7; border-radius:6px; padding:7px; background:white; }}
+QFrame#pcPopover QLineEdit {{
+    border:1.5px solid #DDE3EE; border-radius:7px;
+    padding:7px 10px; background:#FFFFFF; color:#0D1117;
+    font-size:13px; selection-background-color:#BFDBFE;
+}}
+QFrame#pcPopover QLineEdit:focus {{
+    border-color:#3B6FE8; background:#FFFFFF;
+}}
+QFrame#pcPopover QComboBox {{
+    border:1.5px solid #DDE3EE; border-radius:7px;
+    padding:6px 10px; background:#FFFFFF; color:#0D1117;
+    font-size:13px;
+}}
+QFrame#pcPopover QComboBox:focus {{
+    border-color:#3B6FE8;
+}}
+QFrame#pcPopover QComboBox::drop-down {{
+    border:none; background:transparent; width:20px;
+}}
+QFrame#pcPopover QComboBox QAbstractItemView {{
+    background:#FFFFFF; border:1.5px solid #DDE3EE;
+    selection-background-color:#EBF1FD; color:#0D1117;
+    outline:none;
+}}
+QFrame#pcPopover QCheckBox {{
+    font-size:12px; color:#334155; spacing:7px;
+}}
+QFrame#pcPopover QCheckBox::indicator {{
+    width:18px; height:18px; border-radius:5px;
+    border:1.5px solid #CBD7E7; background:#FFFFFF;
+}}
+QFrame#pcPopover QCheckBox::indicator:checked {{
+    background:#3B6FE8; border-color:#3B6FE8;
+}}
 QPushButton#dangerButton {{ background:#FFF5F5; color:#DC2626; border:1px solid #FCA5A5; border-radius:7px; padding:7px 14px; font-weight:800; }}
 """)
+
+    def _auto_size(self):
+        """Dialog genişliğine göre sütun genişliğini dinamik ayarla."""
+        frozen_w  = 220
+        n_plat    = max(1, len(self.platforms))
+        avail_w   = self.width() - frozen_w - 20  # scrollbar payı
+        # Mevcut genişliğe göre sütun hesapla — min 90, max 140
+        col_w = max(90, min(140, avail_w // n_plat))
+        mh = self.matrix.horizontalHeader()
+        for ci in range(n_plat):
+            mh.setSectionResizeMode(ci, QHeaderView.Fixed)
+            self.matrix.setColumnWidth(ci, col_w)
+        # İlk açılışta boyutu ayarla (sadece bir kez)
+        if not getattr(self, "_sized_once", False):
+            self._sized_once = True
+            default_col = 104
+            content_w = frozen_w + n_plat * default_col + 20
+            target_w = max(640, min(content_w, 1200))
+            target_h = max(460, min(200 + len(self.components) * 52 + 52 + 38 + 46, 760))
+            self.resize(target_w, target_h)
+
+    def keyPressEvent(self, event):
+        from PySide6.QtCore import Qt as _Qt
+        if event.key() == _Qt.Key_Escape:
+            if self.popover and self.popover.isVisible():
+                self._hide_popover()
+                return
+            # Popover kapalı — değişiklik varsa uyar
+            if self.changed and self.change_count > 0:
+                from PySide6.QtWidgets import QMessageBox as _MB
+                mb = _MB(self)
+                mb.setWindowTitle("Çıkmak istiyor musunuz?")
+                mb.setText(f"{self.change_count} kaydedilmemiş değişiklik var. Çıkmak istiyor musunuz?")
+                mb.setIcon(_MB.Question)
+                mb.setStandardButtons(_MB.Yes | _MB.No)
+                mb.setDefaultButton(_MB.No)
+                mb.setStyleSheet("QLabel { background: transparent; color: #334155; selection-background-color: transparent; }")
+                if mb.exec() == _MB.Yes:
+                    self.reject()
+            else:
+                self.reject()
+            return
+        super().keyPressEvent(event)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
         if hasattr(self, "overlay"):
             self.overlay.setGeometry(self.rect())
+        if hasattr(self, "platforms") and self.platforms:
+            self._auto_size()
+        if getattr(self, "popover", None) and self.popover and self.popover.isVisible():
+            pw, ph = self.popover.width(), self.popover.height()
+            self.popover.move((self.width()-pw)//2, (self.height()-ph)//2)
+
+    def _filter_components(self, text: str):
+        """Arama kutusuna göre bileşen satırlarını göster/gizle."""
+        q = text.strip().lower()
+        for row in range(self.frozen.rowCount()):
+            widget = self.frozen.cellWidget(row, 0)
+            if widget:
+                # İsim labelini bul
+                name_lbl = widget.findChild(QLabel)
+                if name_lbl:
+                    visible = q == "" or q in name_lbl.text().lower()
+                else:
+                    visible = True
+            else:
+                item = self.frozen.item(row, 0)
+                visible = q == "" or (item and q in item.text().lower())
+            self.frozen.setRowHidden(row, not visible)
+            self.matrix.setRowHidden(row, not visible)
 
     def _load_data(self):
         self.platforms = self._read_platforms()
         self.components = self._read_components()
         self._refresh_matrix()
+        if not hasattr(self, "_snapshot") or not self._snapshot:
+            self._take_snapshot()
 
     def _read_platforms(self) -> list[dict[str, Any]]:
         if hasattr(self.store, "load_platforms"):
@@ -366,8 +560,8 @@ QPushButton#dangerButton {{ background:#FFF5F5; color:#DC2626; border:1px solid 
         for c in range(cols):
             self.matrix.setColumnWidth(c, 104)
         for r, comp in enumerate(self.components):
-            self.frozen.setRowHeight(r, 38)
-            self.matrix.setRowHeight(r, 38)
+            self.frozen.setRowHeight(r, 52)
+            self.matrix.setRowHeight(r, 52)
             item = QTableWidgetItem(str(comp.get("name") or ""))
             item.setData(Qt.UserRole, comp)
             self.frozen.setItem(r, 0, item)
@@ -380,18 +574,44 @@ QPushButton#dangerButton {{ background:#FFF5F5; color:#DC2626; border:1px solid 
         self.frozen.blockSignals(False)
         self.matrix.blockSignals(False)
         self._update_change_text()
+        self._auto_size()
 
     def _update_change_text(self):
-        text = "Değişiklik yok" if self.change_count <= 0 else f"{self.change_count} değişiklik kaydedildi"
-        self.change_badge.setText(text)
-        self.footer_msg.setText(text)
+        self._update_dirty_count()
 
-    def _mark_saved(self, message: str):
+    def _update_dirty_count(self):
+        """Bellekteki bileşen durumunu snapshot ile karşılaştırıp badge güncelle."""
+        snap = getattr(self, "_snapshot", {})
+        diff = sum(
+            1 for c in self.components
+            if c.get("name") in snap
+            and dict(c.get("platforms") or {}) != snap[c.get("name")]
+        )
+        self.change_count = diff
+        if diff > 0:
+            self.change_badge.setText(f"{diff} değişiklik")
+            self.change_badge.setStyleSheet(
+                "color:#B45309;background:#FFF7E6;border:1px solid #FDE68A;"
+                "border-radius:6px;padding:4px 9px;font-size:11px;font-weight:700;"
+            )
+        else:
+            self.change_badge.setText("Değişiklik yok")
+            self.change_badge.setStyleSheet(
+                "color:#91A0B8;background:#F0F4FA;border:1px solid #E2E8F0;"
+                "border-radius:6px;padding:4px 9px;font-size:11px;"
+            )
+
+    def _take_snapshot(self):
+        """Mevcut platform ataması durumunu kaydet."""
+        self._snapshot = {
+            c.get("name", ""): dict(c.get("platforms") or {})
+            for c in (self.components or [])
+        }
+
+    def _mark_saved(self, message: str = ""):
         self.changed = True
-        self.change_count += 1
-        self.footer_msg.setText(message)
-        self.change_badge.setText(f"{self.change_count} değişiklik kaydedildi")
         self.settings_saved.emit()
+        self._update_dirty_count()
 
     def _component_context_menu(self, pos):
         row = self.frozen.rowAt(pos.y())
@@ -447,14 +667,38 @@ QPushButton#dangerButton {{ background:#FFF5F5; color:#DC2626; border:1px solid 
     def _toggle_assignment(self, row: int, col: int):
         if row < 0 or col < 0 or row >= len(self.components) or col >= len(self.platforms):
             return
-        comp = dict(self.components[row])
-        platform = str(self.platforms[col].get("name") or "")
-        platforms = dict(comp.get("platforms") or {})
-        platforms[platform] = not bool(platforms.get(platform, False))
-        comp["platforms"] = platforms
+        platform_name = str(self.platforms[col].get("name") or "")
+        # Bellekteki komponenti güncelle
+        comp = self.components[row]
+        plats = dict(comp.get("platforms") or {})
+        was = bool(plats.get(platform_name, False))
+        plats[platform_name] = not was
+        comp["platforms"] = plats
+        # Sadece bu hücreyi güncelle
+        item = self.matrix.item(row, col)
+        if item:
+            now = plats[platform_name]
+            item.setText("✓" if now else "")
+            from PySide6.QtGui import QColor, QBrush
+            row_bg = "#FAFBFD" if row % 2 == 0 else "#FFFFFF"
+            item.setBackground(QBrush(QColor("#DCFCE7" if now else row_bg)))
+            item.setForeground(QBrush(QColor("#15803D" if now else "#E5E7EB")))
+            item.setData(__import__("PySide6.QtCore", fromlist=["Qt"]).Qt.UserRole, now)
+            f = item.font(); f.setBold(now); f.setPointSize(14 if now else 12); item.setFont(f)
+        # DB'ye yaz
         self._write_component(comp)
-        self._mark_saved("Atama güncellendi")
-        self._load_data()
+        # Platform başlığındaki bileşen sayacını anlık güncelle
+        plat_data = self.platforms[col] if col < len(self.platforms) else {}
+        new_count = sum(
+            1 for c in self.components
+            if bool((c.get("platforms") or {}).get(platform_name, False))
+        )
+        plat_data["comp_count"] = new_count
+        self.matrix.horizontalHeader().viewport().update()
+        # Değişiklik sayacı
+        self.changed = True
+        self.settings_saved.emit()
+        self._update_dirty_count()
 
     def _write_component(self, comp: dict[str, Any]):
         if hasattr(self.store, "write_component"):
@@ -475,20 +719,46 @@ QPushButton#dangerButton {{ background:#FFF5F5; color:#DC2626; border:1px solid 
     def _open_component_popover(self, comp: dict[str, Any] | None):
         is_new = comp is None
         self._clear_popover()
-        self.popover.setFixedWidth(330)
+        self.popover.setMinimumWidth(380)
+        self.popover.setMaximumWidth(420)
         lay = QVBoxLayout(self.popover)
         lay.setContentsMargins(14, 12, 14, 12)
-        title_row = QHBoxLayout()
-        icon = QLabel("+", objectName="pcBrand")
-        title_box = QVBoxLayout()
-        title_box.addWidget(QLabel("Yeni Bileşen" if is_new else str(comp.get("name") or "Bileşen"), objectName="popTitle"))
-        title_box.addWidget(QLabel("Bileşen bilgilerini girin", objectName="popSub"))
-        x = QPushButton("×", objectName="pcFooterButton")
-        x.clicked.connect(self._hide_popover)
-        title_row.addWidget(icon)
-        title_row.addLayout(title_box, 1)
-        title_row.addWidget(x)
-        lay.addLayout(title_row)
+        # ── Başlık (HTML referansı: pop-head) ──
+        head_frame = QFrame()
+        head_frame.setObjectName("popHead")
+        head_lay = QHBoxLayout(head_frame)
+        head_lay.setContentsMargins(16, 12, 16, 12)
+        head_lay.setSpacing(12)
+
+        icon_lbl = QLabel("＋")
+        icon_lbl.setObjectName("popIconComp")
+        icon_lbl.setFixedSize(36, 36)
+        icon_lbl.setAlignment(Qt.AlignCenter)
+        icon_lbl.setStyleSheet(
+            "background:#F0FDFA;color:#0D9488;border-radius:10px;"
+            "font-size:18px;font-weight:900;border:1.5px solid #CCFBF1;"
+        )
+
+        meta_lay = QVBoxLayout()
+        meta_lay.setSpacing(1)
+        meta_lay.addWidget(QLabel("Yeni Bileşen" if is_new else str(comp.get("name") or "Bileşen"), objectName="popTitle"))
+        meta_lay.addWidget(QLabel("Bileşen bilgilerini girin", objectName="popSub"))
+
+        x_btn = QPushButton("✕")
+        x_btn.setObjectName("popXBtn")
+        x_btn.setFixedSize(26, 26)
+        x_btn.clicked.connect(self._hide_popover)
+
+        head_lay.addWidget(icon_lbl)
+        head_lay.addLayout(meta_lay, 1)
+        head_lay.addWidget(x_btn)
+
+        # Alt çizgi
+        sep = QFrame(); sep.setFrameShape(QFrame.HLine)
+        sep.setObjectName("popSep")
+
+        lay.addWidget(head_frame)
+        lay.addWidget(sep)
 
         grid = QGridLayout()
         name = QLineEdit(str((comp or {}).get("name") or ""))
@@ -501,8 +771,9 @@ QPushButton#dangerButton {{ background:#FFF5F5; color:#DC2626; border:1px solid 
         unit.setCurrentText(current_unit)
         note = QLineEdit(str((comp or {}).get("note") or ""))
         note.setPlaceholderText("İsteğe bağlı kısa not...")
-        active = QCheckBox("Aktif")
-        active.setChecked(bool((comp or {}).get("active", True)))
+        active = ToggleSwitch(bool((comp or {}).get("active", True)))
+        grid.setContentsMargins(0, 8, 0, 4)
+        grid.setSpacing(6)
         grid.addWidget(QLabel("BİLEŞEN ADI", objectName="popField"), 0, 0)
         grid.addWidget(QLabel("BİRİM", objectName="popField"), 0, 1)
         grid.addWidget(name, 1, 0)
@@ -510,16 +781,38 @@ QPushButton#dangerButton {{ background:#FFF5F5; color:#DC2626; border:1px solid 
         grid.addWidget(QLabel("NOT", objectName="popField"), 2, 0, 1, 2)
         grid.addWidget(note, 3, 0, 1, 2)
         grid.addWidget(QLabel("DURUM", objectName="popField"), 4, 0, 1, 2)
-        grid.addWidget(active, 5, 0, 1, 2)
-        lay.addLayout(grid)
-        btns = QHBoxLayout()
-        btns.addStretch()
+        # Toggle + label yan yana
+        durum_row = QHBoxLayout()
+        durum_row.setContentsMargins(0, 2, 0, 2)
+        durum_row.setSpacing(10)
+        durum_row.addWidget(active)
+        active_lbl = QLabel("Aktif" if active.isChecked() else "Pasif")
+        active_lbl.setStyleSheet("font-size:13px;color:#334155;background:transparent;")
+        active.toggled.connect(lambda v, l=active_lbl: l.setText("Aktif" if v else "Pasif"))
+        durum_row.addWidget(active_lbl)
+        durum_row.addStretch(1)
+        grid.addLayout(durum_row, 5, 0, 1, 2)
+        body_w = QWidget(); body_w.setObjectName("popBody")
+        body_lay = QVBoxLayout(body_w)
+        body_lay.setContentsMargins(16, 12, 16, 4)
+        body_lay.setSpacing(0)
+        body_lay.addLayout(grid)
+        lay.addWidget(body_w, 1)
+
+        # Footer çizgi + butonlar
+        foot_sep = QFrame(); foot_sep.setFrameShape(QFrame.HLine); foot_sep.setObjectName("popSep")
+        foot_frame = QFrame(); foot_frame.setObjectName("popFoot")
+        foot_lay = QHBoxLayout(foot_frame)
+        foot_lay.setContentsMargins(16, 10, 16, 14)
+        foot_lay.setSpacing(8)
+        foot_lay.addStretch()
         cancel = QPushButton("İptal", objectName="dangerButton")
         cancel.clicked.connect(self._hide_popover)
         save = QPushButton("Kaydet", objectName="pcPrimaryButton")
-        btns.addWidget(cancel)
-        btns.addWidget(save)
-        lay.addLayout(btns)
+        foot_lay.addWidget(cancel)
+        foot_lay.addWidget(save)
+        lay.addWidget(foot_sep)
+        lay.addWidget(foot_frame)
 
         def do_save():
             clean = name.text().strip()
@@ -548,44 +841,89 @@ QPushButton#dangerButton {{ background:#FFF5F5; color:#DC2626; border:1px solid 
         is_new = platform is None
         self._logo_path = ""
         self._clear_popover()
-        self.popover.setFixedWidth(330)
+        self.popover.setMinimumWidth(380)
+        self.popover.setMaximumWidth(420)
         lay = QVBoxLayout(self.popover)
         lay.setContentsMargins(14, 12, 14, 12)
-        title_row = QHBoxLayout()
-        icon = QLabel("+", objectName="pcBrand")
-        title_box = QVBoxLayout()
-        title_box.addWidget(QLabel("Yeni Platform" if is_new else str(platform.get("name") or "Platform"), objectName="popTitle"))
-        title_box.addWidget(QLabel("Platform adı girin", objectName="popSub"))
-        x = QPushButton("×", objectName="pcFooterButton")
-        x.clicked.connect(self._hide_popover)
-        title_row.addWidget(icon)
-        title_row.addLayout(title_box, 1)
-        title_row.addWidget(x)
-        lay.addLayout(title_row)
+        head_frame = QFrame()
+        head_frame.setObjectName("popHead")
+        head_lay = QHBoxLayout(head_frame)
+        head_lay.setContentsMargins(16, 12, 16, 12)
+        head_lay.setSpacing(12)
+
+        icon_lbl = QLabel("＋")
+        icon_lbl.setObjectName("popIconPlat")
+        icon_lbl.setFixedSize(36, 36)
+        icon_lbl.setAlignment(Qt.AlignCenter)
+        icon_lbl.setStyleSheet(
+            "background:#EFF6FF;color:#1D4ED8;border-radius:10px;"
+            "font-size:18px;font-weight:900;border:1.5px solid #BFDBFE;"
+        )
+
+        meta_lay = QVBoxLayout()
+        meta_lay.setSpacing(1)
+        meta_lay.addWidget(QLabel("Yeni Platform" if is_new else str(platform.get("name") or "Platform"), objectName="popTitle"))
+        meta_lay.addWidget(QLabel("Platform adı girin", objectName="popSub"))
+
+        x_btn = QPushButton("✕")
+        x_btn.setObjectName("popXBtn")
+        x_btn.setFixedSize(26, 26)
+        x_btn.clicked.connect(self._hide_popover)
+
+        head_lay.addWidget(icon_lbl)
+        head_lay.addLayout(meta_lay, 1)
+        head_lay.addWidget(x_btn)
+
+        sep = QFrame(); sep.setFrameShape(QFrame.HLine)
+        sep.setObjectName("popSep")
+
+        lay.addWidget(head_frame)
+        lay.addWidget(sep)
 
         name = QLineEdit(str((platform or {}).get("name") or ""))
         name.setPlaceholderText("ÖRN: AKINCI")
         name.textEdited.connect(lambda txt: name.setText(txt.upper()))
-        active = QCheckBox("Aktif")
-        active.setChecked(bool((platform or {}).get("is_active", True)))
-        excluded = QCheckBox("Hariç tut")
-        excluded.setChecked(bool((platform or {}).get("is_excluded", False)))
-        logo_btn = QPushButton("📷  Logo ekle (opsiyonel)\nPNG, JPG, WEBP · Maks 2 MB", objectName="pcFooterButton")
+        active = ToggleSwitch(bool((platform or {}).get("is_active", True)))
+
+        def _sw_row(sw, on_txt, off_txt):
+            row = QHBoxLayout(); row.setContentsMargins(0,2,0,2); row.setSpacing(10)
+            row.addWidget(sw)
+            lbl = QLabel(on_txt if sw.isChecked() else off_txt)
+            lbl.setStyleSheet("font-size:13px;color:#334155;background:transparent;")
+            sw.toggled.connect(lambda v, l=lbl, a=on_txt, b=off_txt: l.setText(a if v else b))
+            row.addWidget(lbl); row.addStretch(1)
+            return row
+
+        logo_btn = QPushButton("📷  Logo ekle (opsiyonel)", objectName="logoPickBtn")
         logo_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         logo_btn.clicked.connect(lambda: self._pick_logo(logo_btn))
-        lay.addWidget(QLabel("PLATFORM ADI (BÜYÜK HARF)", objectName="popField"))
-        lay.addWidget(name)
-        lay.addWidget(active)
-        lay.addWidget(excluded)
-        lay.addWidget(logo_btn)
-        btns = QHBoxLayout()
-        btns.addStretch()
+
+
+        body_w = QWidget(); body_w.setObjectName("popBody")
+        body_lay = QVBoxLayout(body_w)
+        body_lay.setContentsMargins(16, 12, 16, 4)
+        body_lay.setSpacing(8)
+        body_lay.addWidget(QLabel("PLATFORM ADI (BÜYÜK HARF)", objectName="popField"))
+        body_lay.addWidget(name)
+        body_lay.addSpacing(4)
+        body_lay.addLayout(_sw_row(active, "Aktif", "Pasif"))
+        body_lay.addSpacing(4)
+        body_lay.addWidget(logo_btn)
+        lay.addWidget(body_w, 1)
+
+        foot_sep = QFrame(); foot_sep.setFrameShape(QFrame.HLine); foot_sep.setObjectName("popSep")
+        foot_frame = QFrame(); foot_frame.setObjectName("popFoot")
+        foot_lay = QHBoxLayout(foot_frame)
+        foot_lay.setContentsMargins(16, 10, 16, 14)
+        foot_lay.setSpacing(8)
+        foot_lay.addStretch()
         cancel = QPushButton("İptal", objectName="dangerButton")
         cancel.clicked.connect(self._hide_popover)
         save = QPushButton("Kaydet", objectName="pcPrimaryButton")
-        btns.addWidget(cancel)
-        btns.addWidget(save)
-        lay.addLayout(btns)
+        foot_lay.addWidget(cancel)
+        foot_lay.addWidget(save)
+        lay.addWidget(foot_sep)
+        lay.addWidget(foot_frame)
 
         def do_save():
             clean = name.text().strip().upper()
@@ -596,7 +934,7 @@ QPushButton#dangerButton {{ background:#FFF5F5; color:#DC2626; border:1px solid 
             if is_new:
                 self.store.create_platform(clean)
                 old_name = clean
-            self.store.update_platform(old_name, clean, active.isChecked(), excluded.isChecked(), sort_order=(platform or {}).get("sort_order"))
+            self.store.update_platform(old_name, clean, active.isChecked(), False, sort_order=(platform or {}).get("sort_order"))
             if self._logo_path:
                 raw = Path(self._logo_path).read_bytes()
                 ext = Path(self._logo_path).suffix.lower().lstrip(".")
@@ -614,26 +952,119 @@ QPushButton#dangerButton {{ background:#FFF5F5; color:#DC2626; border:1px solid 
             self._logo_path = p
             button.setText(Path(p).name)
 
+    def _pop_local_style(self) -> str:
+        return """
+        QFrame#pcPopover, QWidget { background: #FFFFFF; }
+        QLabel { background: transparent; color: #334155; }
+        QLabel[objectName="popTitle"] { font-size:14px; font-weight:900; color:#0D1117; }
+        QLabel[objectName="popSub"]   { font-size:10px; color:#94A3B8; }
+        QLabel[objectName="popField"] { font-size:10px; font-weight:900; color:#53657E; letter-spacing:.04em; }
+        QLineEdit {
+            border:1.5px solid #DDE3EE; border-radius:7px;
+            padding:7px 10px; background:#FFFFFF; color:#0D1117;
+            font-size:13px;
+        }
+        QLineEdit:focus { border-color:#3B6FE8; background:#FFFFFF; }
+        QComboBox {
+            border:1.5px solid #DDE3EE; border-radius:7px;
+            padding:6px 10px; background:#FFFFFF; color:#0D1117;
+            font-size:13px;
+        }
+        QComboBox:focus { border-color:#3B6FE8; }
+        QComboBox::drop-down { border:none; background:transparent; width:22px; }
+        QComboBox QAbstractItemView {
+            background:#FFFFFF; border:1.5px solid #DDE3EE;
+            selection-background-color:#EBF1FD; color:#0D1117; outline:none;
+        }
+        QCheckBox { font-size:13px; color:#334155; spacing:8px; background:transparent; }
+        QCheckBox::indicator {
+            width:20px; height:20px; border-radius:6px;
+            border:1.5px solid #CBD7E7; background:#FFFFFF;
+        }
+        QCheckBox::indicator:checked { background:#3B6FE8; border-color:#3B6FE8; }
+        QPushButton[objectName="pcPrimaryButton"] {
+            background: #3B6FE8 !important;
+            color: #FFFFFF !important;
+            border: none !important;
+            border-radius: 8px !important;
+            padding: 8px 18px !important;
+            font-size: 13px !important;
+            font-weight: 700 !important;
+        }
+        QPushButton[objectName="pcPrimaryButton"]:hover {
+            background: #2954CC !important;
+        }
+        QPushButton[objectName="dangerButton"] {
+            background: #FEF2F2 !important;
+            color: #DC2626 !important;
+            border: 1.5px solid #FCA5A5 !important;
+            border-radius: 8px !important;
+            padding: 8px 18px !important;
+            font-size: 13px !important;
+            font-weight: 700 !important;
+        }
+        QPushButton[objectName="dangerButton"]:hover {
+            background: #FEE2E2 !important;
+        }
+        QFrame[objectName="popFoot"] {
+            background: #FFFFFF;
+            border-radius: 0 0 14px 14px;
+        }
+        """
+
     def _clear_popover(self):
+        """Önceki popover'ı tamamen sil, temiz yenisini oluştur."""
+        if self.popover is not None:
+            self.popover.hide()
+            self.popover.setParent(None)
+            self.popover.deleteLater()
+            self.popover = None
+        from PySide6.QtWidgets import QFrame as _F
+        self.popover = _F(self)
+        self.popover.setObjectName("pcPopover")
+        self.popover.setStyleSheet(self._pop_local_style())
         self.popover.hide()
-        old = self.popover.layout()
-        if old:
-            while old.count():
-                item = old.takeAt(0)
-                widget = item.widget()
-                if widget:
-                    widget.deleteLater()
-            QWidget().setLayout(old)
 
     def _show_popover(self):
         self.overlay.setGeometry(self.rect())
         self.overlay.show()
-        self.popover.show()
         self.overlay.raise_()
+        if self.popover:
+            # 1. Önce göster — layout hesaplanabilsin
+            self.popover.show()
+            self.popover.raise_()
+            # 2. sizeHint ile gerçek boyutu al (adjustSize'dan güvenilir)
+            sh = self.popover.sizeHint()
+            pw = max(380, sh.width())
+            ph = max(200, sh.height())
+            # 3. Ortala
+            x = max(20, (self.width()  - pw) // 2)
+            y = max(20, (self.height() - ph) // 2)
+            self.popover.setGeometry(x, y, pw, ph)
 
     def _hide_popover(self):
-        self.popover.hide()
+        if self.popover:
+            self.popover.hide()
         self.overlay.hide()
+
+    def closeEvent(self, event):
+        if self.popover and self.popover.isVisible():
+            self._hide_popover()
+            event.ignore()
+            return
+        if self.changed and self.change_count > 0:
+            from PySide6.QtWidgets import QMessageBox as _MB
+            mb = _MB(self)
+            mb.setWindowTitle("Çıkmak istiyor musunuz?")
+            mb.setText(f"{self.change_count} kaydedilmemiş değişiklik var. Çıkmak istiyor musunuz?")
+            mb.setIcon(_MB.Question)
+            mb.setStandardButtons(_MB.Yes | _MB.No)
+            mb.setDefaultButton(_MB.No)
+            mb.setStyleSheet("QLabel { background: transparent; color: #334155; selection-background-color: transparent; }")
+            if mb.exec() == _MB.No:
+                event.ignore()
+                return
+        event.accept()
 
     def _save_and_close(self):
         if hasattr(self.store, "save"):
