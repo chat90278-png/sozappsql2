@@ -93,6 +93,7 @@ class AutoAcceptDialog(QDialog):
         self.month_spins: List[QSpinBox] = []
         self.term_edits: List[QLineEdit] = []
         self.note_edits: List[QLineEdit] = []
+        self.delivery_user_combo: Optional[QComboBox] = None
         self.acc_date_edits: List[QLineEdit] = []
         self.search_edits: List[QLineEdit] = []
         self.current_index = 0
@@ -161,6 +162,21 @@ class AutoAcceptDialog(QDialog):
         rv.setContentsMargins(0, 0, 0, 0)
         rv.setSpacing(10)
         root.addWidget(right, 1)
+
+        user_grid = QGridLayout()
+        user_grid.setHorizontalSpacing(14)
+        user_grid.setVerticalSpacing(8)
+        self.delivery_user_combo = QComboBox()
+        self.delivery_user_combo.addItem("Seçiniz...")
+        store = getattr(self.work, "store", None)
+        if store is not None:
+            for user in store.load_users(active_only=True):
+                name = str(user.get("name", "") or "").strip()
+                if name:
+                    self.delivery_user_combo.addItem(name)
+        user_grid.addWidget(self._form_label("Teslim Edilecek Kullanıcı"), 0, 0)
+        user_grid.addWidget(self.delivery_user_combo, 1, 0)
+        rv.addLayout(user_grid)
 
         self.stack = QStackedWidget()
         for idx in range(self.accept_count):
@@ -610,6 +626,9 @@ class AutoAcceptDialog(QDialog):
             return
 
         self.result_deliveries = []
+        delivery_user = ""
+        if self.delivery_user_combo is not None and self.delivery_user_combo.currentIndex() > 0:
+            delivery_user = self.delivery_user_combo.currentText().strip()
         for i, tbl in enumerate(self.tables):
             planned: Dict[str, float] = {}
             delivered: Dict[str, float] = {}
@@ -628,6 +647,7 @@ class AutoAcceptDialog(QDialog):
                 t0_date=str(getattr(self.system, "t0_date", "") or self.t0_edits[i].text()).strip(),
                 t0_months=int(getattr(self.system, "t0_months", self.month_spins[i].value()) or 0),
                 completion_date=str(getattr(self.system, "completion_date", "") or self.term_edits[i].text()).strip(),
+                delivery_user=delivery_user,
             ))
         self.accept()
 
