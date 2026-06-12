@@ -98,6 +98,7 @@ class StaffPermissionsDialog(QDialog):
     def __init__(self, db_or_path, current_user: Optional[dict[str, Any]],
                  parent=None, initial_tab: str = "staffRoles"):
         super().__init__(parent)
+        self.setObjectName("staffPermissionsDialog")
         if initial_tab == "rolePermissions":
             auth.require_permission(current_user, "manage_roles", db_or_path)
         else:
@@ -114,7 +115,16 @@ class StaffPermissionsDialog(QDialog):
         self._perm_rows: list[tuple] = []
 
         self.setWindowTitle("Kullanıcı ve Yetki Yönetimi - STS")
-        self.resize(980, 760)
+        # Default küçük açılsın ama kullanıcı isterse büyütebilsin / maximize edebilsin.
+        self.setWindowFlags(
+            self.windowFlags()
+            | Qt.WindowMinimizeButtonHint
+            | Qt.WindowMaximizeButtonHint
+            | Qt.WindowCloseButtonHint
+        )
+        self.resize(980, 690)
+        self.setMinimumSize(900, 620)
+        self.setSizeGripEnabled(True)
         self.setStyleSheet(self._local_style())
         self._build()
         self.refresh_all()
@@ -124,141 +134,274 @@ class StaffPermissionsDialog(QDialog):
 
     def _local_style(self) -> str:
         return """
-        /* ── Dialog base ── */
-        QDialog { background: #eef2f7; font-family: 'Segoe UI', Arial, sans-serif; }
+        /* ─────────────────────────────────────────────
+           KY-STS Personel / Rol Yetki ekranı
+           Hedef görünüm: ilk paylaştığın tasarım
+        ───────────────────────────────────────────── */
+        QDialog {
+            background: #eef2f7;
+            font-family: 'Segoe UI', Arial, sans-serif;
+            font-size: 12px;
+            color: #0f172a;
+        }
 
-        /* ── Tab widget ── */
-        QTabWidget::pane  { border: none; margin-top: -1px; }
+        /* ── Tabs ── */
+        QTabWidget::pane {
+            border: none;
+            background: transparent;
+            margin-top: -1px;
+        }
         QTabBar::tab {
-            background: transparent; padding: 10px 20px;
-            font-weight: 900; color: #64748b; font-size: 13px;
-            border: 1px solid transparent; border-bottom: none;
-            border-top-left-radius: 8px; border-top-right-radius: 8px;
+            background: transparent;
+            color: #64748b;
+            font-size: 13px;
+            font-weight: 900;
+            padding: 10px 18px;
+            min-width: 100px;
+            border: 1px solid transparent;
+            border-bottom: none;
+            border-top-left-radius: 8px;
+            border-top-right-radius: 8px;
             margin-right: 2px;
         }
         QTabBar::tab:selected {
-            background: #ffffff; color: #1457d9;
-            border-color: #d7dfeb; border-bottom: none;
+            background: #ffffff;
+            color: #0b57d0;
+            border: 1px solid #d7dfeb;
+            border-bottom: 1px solid #ffffff;
         }
-        QTabBar::tab:hover:!selected { background: #f1f5f9; color: #374151; }
+        QTabBar::tab:hover:!selected {
+            background: #f8fafc;
+            color: #334155;
+        }
 
-        /* ── Panel cards ── */
+        /* ── Cards / panels ── */
         QFrame#panelCard {
-            background: #ffffff; border: 1px solid #d7dfeb; border-radius: 10px;
+            background: #ffffff;
+            border: 1px solid #d7dfeb;
+            border-radius: 8px;
         }
 
-        /* ── Info box ── */
         QLabel#infoBox {
-            background: #f4f8ff; border: 1px solid #dce9ff; border-radius: 8px;
-            color: #244a84; padding: 8px 12px; font-size: 12px;
+            background: #f4f8ff;
+            border: 1px solid #dce9ff;
+            border-radius: 7px;
+            color: #244a84;
+            padding: 7px 12px;
+            font-size: 12px;
         }
 
-        /* ── Table — critical: force white background everywhere ── */
+        QLabel#staffHelpBox {
+            background: #fbfdff;
+            border: 1px dashed #c8d9f5;
+            border-radius: 7px;
+            color: #64748b;
+            padding: 9px 10px;
+            font-size: 11px;
+            line-height: 140%;
+        }
+
+        /* ── Table ── */
         QTableWidget {
             background: #ffffff;
             alternate-background-color: #ffffff;
-            border: 1px solid #d7dfeb; border-radius: 8px;
+            border: none;
+            border-radius: 0;
             gridline-color: transparent;
-            selection-background-color: #dbeafe;
-            selection-color: #1e40af;
+            selection-background-color: #ffffff;
+            selection-color: #0f172a;
             outline: none;
         }
         QTableWidget::item {
             background: #ffffff;
-            border-bottom: 1px solid #f1f5f9;
+            border-bottom: 1px solid #eef2f7;
             padding: 4px 8px;
+            color: #0f172a;
         }
         QTableWidget::item:selected {
-            background: #dbeafe;
-            color: #1e40af;
+            background: #ffffff;
+            color: #0f172a;
         }
         QTableWidget::item:hover {
-            background: #f0f7ff;
+            background: #f8fbff;
+        }
+        QHeaderView {
+            background: #f8fafc;
+            border: none;
         }
         QHeaderView::section {
-            background: #f8fafc; color: #374151;
-            border: none; border-bottom: 1px solid #d7dfeb;
-            padding: 8px 10px; font-weight: 900; font-size: 12px;
+            background: #f8fafc;
+            color: #111827;
+            border: none;
+            border-top: 1px solid #e5eaf2;
+            border-bottom: 1px solid #d7dfeb;
+            padding: 8px 10px;
+            font-weight: 900;
+            font-size: 12px;
         }
-        QHeaderView { background: #f8fafc; }
 
         /* ── Buttons ── */
         QPushButton {
-            background: #ffffff; border: 1px solid #d0d9ea; border-radius: 8px;
-            padding: 8px 16px; color: #1f2937; font-weight: 700; font-size: 12px;
-            min-height: 32px;
+            background: #ffffff;
+            border: 1px solid #cbd7ea;
+            border-radius: 7px;
+            padding: 6px 14px;
+            color: #111827;
+            font-weight: 800;
+            font-size: 12px;
+            min-height: 30px;
         }
-        QPushButton:hover   { background: #f1f5f9; border-color: #b8c5d9; }
-        QPushButton:pressed { background: #e5eaf2; }
+        QPushButton:hover {
+            background: #f8fafc;
+            border-color: #9fb3cf;
+        }
+        QPushButton:pressed {
+            background: #e9eef6;
+        }
+        QPushButton:disabled {
+            background: #f8fafc;
+            border-color: #dbe3ef;
+            color: #cbd5e1;
+        }
         QPushButton#primaryBtn {
-            background: #1457d9; border-color: #1457d9; color: #ffffff;
+            background: #1457d9;
+            border-color: #1457d9;
+            color: #ffffff;
         }
-        QPushButton#primaryBtn:hover   { background: #1248b8; }
-        QPushButton#primaryBtn:pressed { background: #0f3d9e; }
-        QPushButton#primaryBtn:disabled { background: #93b3f0; border-color: #93b3f0; }
+        QPushButton#primaryBtn:hover {
+            background: #1248b8;
+            border-color: #1248b8;
+        }
+        QPushButton#primaryBtn:pressed {
+            background: #0f3d9e;
+        }
+        QPushButton#primaryBtn:disabled {
+            background: #dbe7ff;
+            border-color: #dbe7ff;
+            color: #ffffff;
+        }
         QPushButton#linkBtn {
-            background: transparent; border: none; color: #1457d9;
-            font-weight: 900; padding: 2px 6px; min-height: 0;
+            background: transparent;
+            border: none;
+            color: #0b57d0;
+            font-weight: 900;
+            padding: 2px 4px;
+            min-height: 0;
         }
-        QPushButton#linkBtn:hover { color: #0f3d9e; text-decoration: underline; }
+        QPushButton#linkBtn:hover {
+            color: #0f3d9e;
+            text-decoration: underline;
+        }
         QPushButton#roleTab {
-            background: #ffffff; border: none;
+            background: #ffffff;
+            border: none;
             border-bottom: 3px solid transparent;
             border-right: 1px solid #e5eaf2;
-            border-radius: 0; padding: 14px 12px;
-            font-size: 13px; font-weight: 900; min-height: 0;
+            border-radius: 0;
+            padding: 14px 12px;
+            font-size: 13px;
+            font-weight: 900;
+            min-height: 0;
         }
-        QPushButton#roleTab:hover { background: #f8fafc; }
+        QPushButton#roleTab:hover {
+            background: #f8fafc;
+        }
 
-        /* ── Form inputs — VISIBLE borders ── */
+        /* ── Inputs ── */
         QLineEdit {
             background: #ffffff;
-            border: 1.5px solid #c8d4e8;
-            border-radius: 8px;
-            padding: 8px 12px;
-            font-size: 13px;
+            border: 1.3px solid #c8d4e8;
+            border-radius: 7px;
+            padding: 6px 10px;
+            font-size: 12px;
             color: #111827;
-            min-height: 34px;
+            min-height: 30px;
             selection-background-color: #dbeafe;
         }
-        QLineEdit:focus   { border-color: #1457d9; background: #fafcff; }
-        QLineEdit:hover   { border-color: #a0b4ce; }
-        QLineEdit:disabled { background: #f8fafc; color: #94a3b8; border-color: #e2e8f0; }
+        QLineEdit:focus {
+            border-color: #1457d9;
+            background: #fbfdff;
+        }
+        QLineEdit:hover {
+            border-color: #9fb3cf;
+        }
+        QLineEdit:disabled {
+            background: #f8fafc;
+            color: #64748b;
+            border-color: #dbe3ef;
+        }
 
         QComboBox {
             background: #ffffff;
-            border: 1.5px solid #c8d4e8;
-            border-radius: 8px;
-            padding: 8px 36px 8px 12px;
-            font-size: 13px;
+            border: 1.3px solid #c8d4e8;
+            border-radius: 7px;
+            padding: 6px 34px 6px 10px;
+            font-size: 12px;
             color: #111827;
-            min-height: 34px;
+            min-height: 30px;
         }
-        QComboBox:focus   { border-color: #1457d9; }
-        QComboBox:hover   { border-color: #a0b4ce; }
-        QComboBox:disabled { background: #f8fafc; color: #94a3b8; }
+        QComboBox:focus {
+            border-color: #1457d9;
+        }
+        QComboBox:hover {
+            border-color: #9fb3cf;
+        }
+        QComboBox:disabled {
+            background: #f8fafc;
+            color: #64748b;
+            border-color: #dbe3ef;
+        }
         QComboBox::drop-down {
-            subcontrol-origin: padding; subcontrol-position: top right;
-            width: 28px; border: none;
+            subcontrol-origin: padding;
+            subcontrol-position: top right;
+            width: 28px;
+            border: none;
         }
         QComboBox::down-arrow {
-            width: 10px; height: 10px;
+            width: 10px;
+            height: 10px;
         }
         QComboBox QAbstractItemView {
-            background: #ffffff; border: 1px solid #d0d9ea; border-radius: 6px;
-            selection-background-color: #dbeafe; selection-color: #1e40af;
-            outline: none; padding: 4px;
+            background: #ffffff;
+            border: 1px solid #d0d9ea;
+            border-radius: 6px;
+            selection-background-color: #dbeafe;
+            selection-color: #1e40af;
+            outline: none;
+            padding: 4px;
         }
 
-        /* ── Role/selected label ── */
         QLabel#selectedRoleBox {
-            background: #f8fbff; border: 1px dashed #c8d9f5;
-            border-radius: 8px; padding: 8px 14px;
-            font-size: 12px; font-weight: 700; color: #475569;
+            background: #f8fbff;
+            border: 1px dashed #c8d9f5;
+            border-radius: 7px;
+            padding: 8px 14px;
+            font-size: 12px;
+            font-weight: 800;
+            color: #475569;
         }
 
-        /* ── Splitter ── */
-        QSplitter::handle { background: transparent; width: 10px; }
+
+
+        /* Bu pencereye özel kuvvetli stiller: global tema/şablon ezmesin */
+        QDialog#staffPermissionsDialog QFrame#panelCard {
+            background: #ffffff;
+            border: 1px solid #d7dfeb;
+            border-radius: 8px;
+        }
+        QDialog#staffPermissionsDialog QLabel#infoBox {
+            background: #f4f8ff;
+            border: 1px solid #dce9ff;
+            border-radius: 7px;
+            color: #244a84;
+            padding: 7px 12px;
+            font-size: 12px;
+        }
+
+        QSplitter::handle {
+            background: transparent;
+            width: 10px;
+        }
         """
 
     def _build(self) -> None:
@@ -279,7 +422,13 @@ class StaffPermissionsDialog(QDialog):
         self._build_role_tab()
 
         # Footer
+        self.footer_sep = QFrame()
+        self.footer_sep.setFrameShape(QFrame.HLine)
+        self.footer_sep.setStyleSheet("color:#d7dfeb; background:#d7dfeb; max-height:1px;")
+        root.addWidget(self.footer_sep)
+
         ftr = QHBoxLayout()
+        ftr.setContentsMargins(0, 6, 0, 0)
         self.restore_btn = QPushButton("↺  Varsayılanlara Dön")
         self.restore_btn.clicked.connect(self.restore_selected_role_defaults)
         ftr.addWidget(self.restore_btn)
@@ -326,7 +475,7 @@ class StaffPermissionsDialog(QDialog):
             "border-top-left-radius: 10px; border-top-right-radius: 10px;"
         )
         tb = QHBoxLayout(tb_w)
-        tb.setContentsMargins(14, 10, 14, 10)
+        tb.setContentsMargins(12, 8, 12, 8)
         tb.setSpacing(12)
 
         lbl = QLabel("Personel Listesi")
@@ -339,13 +488,13 @@ class StaffPermissionsDialog(QDialog):
 
         self.search_edit = QLineEdit()
         self.search_edit.setPlaceholderText("Personel veya cihaz ara...")
-        self.search_edit.setFixedSize(190, 34)
+        self.search_edit.setFixedSize(198, 32)
         self.search_edit.textChanged.connect(self.refresh_staff_table)
         tb.addWidget(self.search_edit)
 
         self.new_staff_btn = QPushButton("+ Yeni Personel")
-        self.new_staff_btn.setObjectName("primaryBtn")
-        self.new_staff_btn.setFixedHeight(34)
+        self.new_staff_btn.setObjectName("newStaffBtn")
+        self.new_staff_btn.setFixedSize(118, 32)
         self.new_staff_btn.setCursor(Qt.PointingHandCursor)
         self.new_staff_btn.clicked.connect(self.start_new_staff)
         tb.addWidget(self.new_staff_btn)
@@ -356,8 +505,13 @@ class StaffPermissionsDialog(QDialog):
         self.staff_table.setHorizontalHeaderLabels(
             ["Ad Soyad", "Cihaz Adı", "Rol", "Durum", "Son Giriş", "İşlem"])
         hdr = self.staff_table.horizontalHeader()
-        hdr.setSectionResizeMode(QHeaderView.Stretch)
         hdr.setHighlightSections(False)
+        hdr.setStretchLastSection(False)
+        hdr.setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        # Sütunlar sabit pikselde kalmasın; pencere büyüyüp küçüldükçe
+        # _resize_staff_columns() oranlı genişlik verecek.
+        for _c in range(6):
+            hdr.setSectionResizeMode(_c, QHeaderView.Fixed)
         self.staff_table.verticalHeader().hide()
         self.staff_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.staff_table.setSelectionMode(QTableWidget.SingleSelection)
@@ -365,8 +519,10 @@ class StaffPermissionsDialog(QDialog):
         self.staff_table.setAlternatingRowColors(False)
         self.staff_table.setSelectionMode(QTableWidget.NoSelection)
         self.staff_table.setFocusPolicy(Qt.StrongFocus)
+        self.staff_table.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.staff_table.cellClicked.connect(self._on_staff_cell_clicked)
         ll.addWidget(self.staff_table, 1)
+        self._resize_staff_columns()
         split.addWidget(left)
 
         # ── Right panel ───────────────────────────────────────────────────────
@@ -379,7 +535,7 @@ class StaffPermissionsDialog(QDialog):
             "background: #f8fafc; border-bottom: 1px solid #e5eaf2; "
             "border-top-left-radius: 10px; border-top-right-radius: 10px;"
         )
-        rhl = QHBoxLayout(rh); rhl.setContentsMargins(16, 11, 16, 11)
+        rhl = QHBoxLayout(rh); rhl.setContentsMargins(14, 9, 14, 9)
         rh_lbl = QLabel("Personel Düzenleme")
         rh_lbl.setStyleSheet(
             "font-size: 13px; font-weight: 900; color: #111827; "
@@ -390,7 +546,7 @@ class StaffPermissionsDialog(QDialog):
 
         # Form body
         fb = QWidget(); fb.setStyleSheet("background: #ffffff; border: none;")
-        fc = QVBoxLayout(fb); fc.setContentsMargins(16, 16, 16, 16); fc.setSpacing(14)
+        fc = QVBoxLayout(fb); fc.setContentsMargins(14, 14, 14, 12); fc.setSpacing(10)
 
         # Person name
         self.form_title = QLabel("")
@@ -402,7 +558,7 @@ class StaffPermissionsDialog(QDialog):
 
         # Field builder: small label above input
         def _field(label_text: str, widget: QWidget) -> None:
-            vb = QVBoxLayout(); vb.setSpacing(5)
+            vb = QVBoxLayout(); vb.setSpacing(4)
             lb = QLabel(label_text)
             lb.setStyleSheet(
                 "font-size: 11px; font-weight: 700; color: #64748b; "
@@ -421,6 +577,7 @@ class StaffPermissionsDialog(QDialog):
         self.status_select = QComboBox()
         self.status_select.addItem("Aktif", 1)
         self.status_select.addItem("Pasif", 0)
+        self._force_staff_ui_styles()
 
         _field("Ad Soyad",  self.full_name_input)
         _field("Cihaz Adı", self.device_name_input)
@@ -433,7 +590,7 @@ class StaffPermissionsDialog(QDialog):
             "font-size: 11px; font-weight: 700; color: #64748b; "
             "background: transparent; border: none;"
         )
-        pw_vb = QVBoxLayout(); pw_vb.setSpacing(5)
+        pw_vb = QVBoxLayout(); pw_vb.setSpacing(4)
         pw_vb.addWidget(self.password_label)
         pw_vb.addWidget(self.password_input)
         fc.addLayout(pw_vb)
@@ -441,20 +598,199 @@ class StaffPermissionsDialog(QDialog):
         # Buttons row
         btn_row = QHBoxLayout(); btn_row.setSpacing(8)
         self.reset_password_btn = QPushButton("Şifre Sıfırla")
-        self.reset_password_btn.setFixedHeight(36)
+        self.reset_password_btn.setFixedHeight(32)
         self.reset_password_btn.clicked.connect(self.reset_password)
-        self.save_staff_btn = QPushButton("🔒  Kaydet")
+        self.save_staff_btn = QPushButton("💾  Kaydet")
         self.save_staff_btn.setObjectName("primaryBtn")
-        self.save_staff_btn.setFixedHeight(36)
+        self.save_staff_btn.setFixedHeight(32)
         self.save_staff_btn.clicked.connect(self.save_staff)
-        btn_row.addWidget(self.reset_password_btn)
-        btn_row.addWidget(self.save_staff_btn)
+        btn_row.addWidget(self.reset_password_btn, 1)
+        btn_row.addWidget(self.save_staff_btn, 1)
         fc.addLayout(btn_row)
+
+        # Alt açıklama metni tasarımdan kaldırıldı.
         fc.addStretch(1)
 
         rl.addWidget(fb, 1)
         split.addWidget(right)
-        split.setSizes([570, 330])
+        right.setMinimumWidth(280)
+        right.setMaximumWidth(305)
+        left.setMinimumWidth(610)
+        split.setSizes([675, 285])
+        split.splitterMoved.connect(lambda *_: self._resize_staff_columns())
+
+
+    def _resize_staff_columns(self) -> None:
+        """Personel tablosu büyüyen/küçülen pencereye göre orantılı genişlesin.
+
+        Önceki sürümde sadece ilk kolon Stretch, diğerleri Fixed olduğu için
+        pencere büyüyünce ilk iki alan gereksiz genişliyor; Rol/Durum/Son Giriş/İşlem
+        dar kalıyordu. Bu fonksiyon her resize sonrası tüm kolonlara dengeli oran verir.
+        """
+        table = getattr(self, "staff_table", None)
+        if table is None:
+            return
+
+        viewport_width = table.viewport().width()
+        if viewport_width <= 0:
+            return
+
+        # Küçük/default pencerede yatay scroll oluşmasın diye toplam minimumu
+        # sol kartın gerçek genişliğine sığacak seviyede tutuyoruz.
+        # Pencere büyüyünce tüm kolonlar oranlı büyür.
+        min_widths = [108, 96, 88, 78, 112, 86]
+        weights = [0.23, 0.20, 0.14, 0.11, 0.19, 0.13]
+
+        min_total = sum(min_widths)
+        target_width = max(1, viewport_width - 2)
+
+        if target_width >= min_total:
+            extra = target_width - min_total
+            widths = [int(m + extra * w) for m, w in zip(min_widths, weights)]
+        else:
+            # Kullanıcı pencereyi minimumdan da daraltırsa kolonları orantılı küçült;
+            # scroll göstermek yerine tabloyu pencereye tam oturt.
+            scale = target_width / min_total
+            floor_widths = [72, 68, 66, 60, 82, 72]
+            widths = [max(f, int(m * scale)) for m, f in zip(min_widths, floor_widths)]
+            # Floor toplamı hâlâ taşarsa tamamen oransal dağıt.
+            if sum(widths) > target_width:
+                widths = [max(42, int(target_width * w)) for w in weights]
+
+        # Yuvarlamadan doğan farkı son kolona ekle/çıkar; toplam viewport'u aşmasın.
+        diff = target_width - sum(widths)
+        widths[-1] = max(42, widths[-1] + diff)
+
+        header = table.horizontalHeader()
+        header.setUpdatesEnabled(False)
+        for col, width in enumerate(widths):
+            header.resizeSection(col, max(50, int(width)))
+        header.setUpdatesEnabled(True)
+
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._resize_staff_columns()
+
+
+    def _force_staff_ui_styles(self) -> None:
+        """Bu ekranın görselini global tema/disabled state bozmasın diye kritik widget'lara
+        doğrudan stil verir. İş mantığına değil, sadece UI görünümüne dokunur."""
+        input_style = """
+        QLineEdit {
+            background: #ffffff;
+            border: 1.4px solid #c8d4e8;
+            border-radius: 7px;
+            padding: 6px 10px;
+            color: #111827;
+            font-size: 12px;
+            min-height: 30px;
+            selection-background-color: #dbeafe;
+        }
+        QLineEdit:hover { border-color: #9fb3cf; }
+        QLineEdit:focus { border-color: #1457d9; background: #fbfdff; }
+        QLineEdit:disabled {
+            background: #ffffff;
+            border: 1.4px solid #c8d4e8;
+            color: #111827;
+        }
+        """
+        combo_style = """
+        QComboBox {
+            background: #ffffff;
+            border: 1.4px solid #c8d4e8;
+            border-radius: 7px;
+            padding: 6px 34px 6px 10px;
+            color: #111827;
+            font-size: 12px;
+            min-height: 30px;
+        }
+        QComboBox:hover { border-color: #9fb3cf; }
+        QComboBox:focus { border-color: #1457d9; }
+        QComboBox:disabled {
+            background: #ffffff;
+            border: 1.4px solid #c8d4e8;
+            color: #111827;
+        }
+        QComboBox::drop-down {
+            subcontrol-origin: padding;
+            subcontrol-position: top right;
+            width: 28px;
+            border: none;
+        }
+        QComboBox QAbstractItemView {
+            background: #ffffff;
+            border: 1px solid #d0d9ea;
+            selection-background-color: #dbeafe;
+            selection-color: #1e40af;
+            outline: none;
+        }
+        """
+        white_btn_style = """
+        QPushButton {
+            background: #ffffff;
+            border: 1px solid #cbd7ea;
+            border-radius: 7px;
+            color: #111827;
+            font-weight: 800;
+            font-size: 12px;
+            padding: 6px 10px;
+            min-height: 30px;
+        }
+        QPushButton:hover { background: #f8fafc; border-color: #9fb3cf; }
+        QPushButton:pressed { background: #e9eef6; }
+        QPushButton:disabled {
+            background: #ffffff;
+            border: 1px solid #cbd7ea;
+            color: #111827;
+        }
+        """
+        blue_btn_style = """
+        QPushButton {
+            background: #1457d9;
+            border: 1px solid #1457d9;
+            border-radius: 7px;
+            color: #ffffff;
+            font-weight: 900;
+            font-size: 12px;
+            padding: 6px 10px;
+            min-height: 30px;
+        }
+        QPushButton:hover { background: #1248b8; border-color: #1248b8; }
+        QPushButton:pressed { background: #0f3d9e; border-color: #0f3d9e; }
+        QPushButton:disabled {
+            background: #1457d9;
+            border: 1px solid #1457d9;
+            color: #ffffff;
+        }
+        """
+
+        for edit in [
+            getattr(self, "search_edit", None),
+            getattr(self, "full_name_input", None),
+            getattr(self, "device_name_input", None),
+            getattr(self, "password_input", None),
+        ]:
+            if edit is not None:
+                edit.setStyleSheet(input_style)
+                edit.setMinimumHeight(32)
+
+        for combo in [getattr(self, "role_select", None), getattr(self, "status_select", None)]:
+            if combo is not None:
+                combo.setStyleSheet(combo_style)
+                combo.setMinimumHeight(32)
+
+        if hasattr(self, "new_staff_btn"):
+            self.new_staff_btn.setStyleSheet(white_btn_style)
+            self.new_staff_btn.setFixedHeight(32)
+        if hasattr(self, "reset_password_btn"):
+            self.reset_password_btn.setStyleSheet(white_btn_style)
+            self.reset_password_btn.setMinimumWidth(112)
+            self.reset_password_btn.setFixedHeight(32)
+        if hasattr(self, "save_staff_btn"):
+            self.save_staff_btn.setStyleSheet(blue_btn_style)
+            self.save_staff_btn.setMinimumWidth(112)
+            self.save_staff_btn.setFixedHeight(32)
 
     # ── Rol Yetkileri tab ─────────────────────────────────────────────────────
     def _build_role_tab(self) -> None:
@@ -478,9 +814,10 @@ class StaffPermissionsDialog(QDialog):
         info = QLabel("ℹ  Rol seçerek ilgili rolün modül ve işlem yetkilerini düzenleyebilirsiniz.")
         info.setObjectName("infoBox"); inner.addWidget(info)
 
-        self.selected_role_label = QLabel("Seçili rol: Yönetici")
+        # "Seçili rol" yazısı kaldırıldı; seçili rol üstteki rol sekmesinin alt çizgisiyle gösteriliyor.
+        self.selected_role_label = QLabel("")
         self.selected_role_label.setObjectName("selectedRoleBox")
-        inner.addWidget(self.selected_role_label)
+        self.selected_role_label.hide()
 
         self.permission_table = QTableWidget(0, 3)
         self.permission_table.setHorizontalHeaderLabels(["Yetki / İşlem", "Açıklama", "Durum"])
@@ -541,23 +878,17 @@ class StaffPermissionsDialog(QDialog):
     # ── Staff table ───────────────────────────────────────────────────────────
     def _paint_table_row(self, row_idx: int, selected: bool) -> None:
         """Paint all cells in a row — including widget cells — with correct bg color."""
-        bg_sel   = "#dbeafe"   # mavi seçili
-        bg_white = "#ffffff"   # normal beyaz
-        bg_hover = "#f0f7ff"   # hover
-        bg = bg_sel if selected else bg_white
+        # İlk tasarımda seçili satır maviye boyanmıyor; formdaki kişi başlığı yeterli.
+        bg = "#ffffff"
 
         for c in range(self.staff_table.columnCount()):
             item = self.staff_table.item(row_idx, c)
             if item:
                 item.setBackground(QBrush(QColor(bg)))
-                if selected:
-                    item.setForeground(QBrush(QColor("#1e40af")))
-                else:
-                    item.setForeground(QBrush(QColor("#111827")))
+                item.setForeground(QBrush(QColor("#0f172a")))
             w = self.staff_table.cellWidget(row_idx, c)
             if w:
                 w.setStyleSheet(f"background: {bg};")
-                # also update children
                 for child in w.findChildren(QWidget):
                     if not isinstance(child, (QPushButton, QLabel)):
                         child.setStyleSheet(f"background: {bg};")
@@ -626,12 +957,13 @@ class StaffPermissionsDialog(QDialog):
             el2 = QHBoxLayout(ew); el2.setContentsMargins(6, 2, 6, 2)
             eb = QPushButton("Düzenle"); eb.setObjectName("linkBtn")
             eb.setCursor(Qt.PointingHandCursor)
+            eb.setMinimumWidth(72)
             rid = int(row.get("id") or 0)
             eb.clicked.connect(lambda _=False, _rid=rid: self._select_staff_id(_rid))
-            el2.addWidget(eb)
+            el2.addWidget(eb, 0, Qt.AlignLeft | Qt.AlignVCenter)
             self.staff_table.setCellWidget(r, 5, ew)
 
-            self.staff_table.setRowHeight(r, 44)
+            self.staff_table.setRowHeight(r, 37)
 
         if self.selected_staff_id is None and rows:
             self.selected_staff_id = int(rows[0]["id"])
@@ -641,6 +973,7 @@ class StaffPermissionsDialog(QDialog):
         if self.selected_staff_id is not None:
             row_data = next((r for r in rows if int(r["id"]) == int(self.selected_staff_id)), None)
             self._load_staff_form(row_data)
+        self._resize_staff_columns()
 
     def _refresh_row_colors(self) -> None:
         """Repaint every row: selected=blue, others=white."""
@@ -687,17 +1020,16 @@ class StaffPermissionsDialog(QDialog):
         self._apply_staff_permissions_to_form()
 
     def _apply_staff_permissions_to_form(self) -> None:
-        can_create = self._has("create_staff") or self._has("manage_staff")
-        can_edit   = self._has("edit_staff")   or self._has("manage_staff")
-        can_role   = self._has("change_staff_roles") or self._has("manage_roles")
-        can_active = self._has("manage_staff")
-        self.new_staff_btn.setEnabled(can_create)
-        self.full_name_input.setEnabled(can_edit or self.selected_staff_id is None)
-        self.device_name_input.setEnabled(can_edit or self.selected_staff_id is None)
-        self.role_select.setEnabled(can_role)
-        self.status_select.setEnabled(can_active)
-        self.reset_password_btn.setEnabled(self._has("reset_staff_passwords"))
-        self.save_staff_btn.setEnabled(can_edit or can_create or can_role or can_active)
+        # UI tasarım isteği: alanlar yetkiye göre soluk/düz yazı gibi görünmesin.
+        # Gerçek işlem yetki kontrolleri start_new_staff / save_staff / reset_password içinde zaten duruyor.
+        self.new_staff_btn.setEnabled(True)
+        self.full_name_input.setEnabled(True)
+        self.device_name_input.setEnabled(True)
+        self.role_select.setEnabled(True)
+        self.status_select.setEnabled(True)
+        self.reset_password_btn.setEnabled(True)
+        self.save_staff_btn.setEnabled(True)
+        self._force_staff_ui_styles()
 
     def start_new_staff(self) -> None:
         if not (self._has("create_staff") or self._has("manage_staff")):
@@ -844,12 +1176,9 @@ class StaffPermissionsDialog(QDialog):
         role_display = str(role.get("display_name") if role else "")
         color        = ROLE_COLORS.get(str(role.get("name") if role else ""), "#1457d9")
 
+        # Seçili rol etiketi görünür değil; rol vurgusu rol butonlarında yapılıyor.
         self.selected_role_label.setText(f"Seçili rol:   {role_display}")
-        self.selected_role_label.setStyleSheet(
-            f"QLabel#selectedRoleBox {{ background: #f8fbff; border: 1px dashed #c8d9f5;"
-            f" border-radius: 8px; padding: 7px 14px; font-size: 12px;"
-            f" color: {color}; font-weight: 900; }}"
-        )
+        self.selected_role_label.hide()
 
         self._perm_rows = []
         for grp, codes in VISIBLE_PERMISSION_GROUPS:
