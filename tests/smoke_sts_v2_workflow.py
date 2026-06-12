@@ -40,8 +40,8 @@ with TemporaryDirectory() as td:
         ComponentDef(name="AVİYONİK", platforms={"AKINCI": True, "KIZILELMA": True}),
         ComponentDef(name="SIFIR", platforms={"AKINCI": True, "KIZILELMA": False}),
     ])
-    assert store.assigned_components("AKINCI") == ["AVİYONİK", "GÖVDE", "KANAT", "MOTOR", "SIFIR"]
-    assert store.assigned_components("KIZILELMA") == ["AVİYONİK", "GÖVDE", "KANAT"]
+    assert store.assigned_components("AKINCI") == ["GÖVDE", "KANAT", "MOTOR", "AVİYONİK", "SIFIR"]
+    assert store.assigned_components("KIZILELMA") == ["GÖVDE", "KANAT", "AVİYONİK"]
 
     contract = ContractInfo(
         no="AKN-001",

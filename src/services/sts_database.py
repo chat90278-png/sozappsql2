@@ -101,6 +101,40 @@ class STSDatabase:
     def _table_column_info(self, table: str) -> dict[str, sqlite3.Row]:
         return {str(row[1]): row for row in self.conn.execute(f"PRAGMA table_info({quote_identifier(table)})").fetchall()}
 
+    def _backfill_component_display_order(self) -> bool:
+        rows = self.conn.execute(
+            "SELECT id FROM components WHERE display_order IS NULL ORDER BY name ASC, id ASC"
+        ).fetchall()
+        if not rows:
+            return False
+        used = self.conn.execute("SELECT COALESCE(MAX(display_order), -1) FROM components").fetchone()[0]
+        start = int(used if used is not None else -1) + 1
+        for offset, row in enumerate(rows):
+            self.conn.execute(
+                "UPDATE components SET display_order=? WHERE id=?",
+                (start + offset, int(row[0])),
+            )
+        return True
+
+    def _backfill_platform_sort_order(self, force: bool = False) -> bool:
+        if force:
+            rows = self.conn.execute("SELECT id FROM platforms ORDER BY name ASC, id ASC").fetchall()
+            start = 0
+        else:
+            rows = self.conn.execute(
+                "SELECT id FROM platforms WHERE sort_order IS NULL ORDER BY name ASC, id ASC"
+            ).fetchall()
+            used = self.conn.execute("SELECT COALESCE(MAX(sort_order), -1) FROM platforms").fetchone()[0]
+            start = int(used if used is not None else -1) + 1
+        if not rows:
+            return False
+        for offset, row in enumerate(rows):
+            self.conn.execute(
+                "UPDATE platforms SET sort_order=? WHERE id=?",
+                (start + offset, int(row[0])),
+            )
+        return True
+
     def _legacy_user_list(self, raw, fallback_user_id=None) -> list[str]:
         values: list[str] = []
         txt = str(raw or "").strip()
@@ -375,7 +409,7 @@ class STSDatabase:
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE IF NOT EXISTS platforms(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT UNIQUE NOT NULL,display_name TEXT,is_active INTEGER DEFAULT 1,is_excluded INTEGER DEFAULT 0,logo_blob BLOB,logo_ext TEXT,logo_mime TEXT,logo_updated_at TEXT,sort_order INTEGER DEFAULT 0,created_at TEXT,updated_at TEXT);
 CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT UNIQUE NOT NULL,yi_yd TEXT DEFAULT 'Yİ',active INTEGER DEFAULT 1,note TEXT,created_at TEXT,updated_at TEXT);
-CREATE TABLE IF NOT EXISTS components(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT UNIQUE NOT NULL,version TEXT,unit TEXT DEFAULT 'Adet',active INTEGER DEFAULT 1,usage REAL DEFAULT 1,note TEXT,payload_json TEXT,created_at TEXT,updated_at TEXT);
+CREATE TABLE IF NOT EXISTS components(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT UNIQUE NOT NULL,version TEXT,unit TEXT DEFAULT 'Adet',active INTEGER DEFAULT 1,usage REAL DEFAULT 1,note TEXT,display_order INTEGER,payload_json TEXT,created_at TEXT,updated_at TEXT);
 CREATE TABLE IF NOT EXISTS component_platforms(id INTEGER PRIMARY KEY AUTOINCREMENT,component_id INTEGER NOT NULL,platform_id INTEGER NOT NULL,enabled INTEGER DEFAULT 1,UNIQUE(component_id,platform_id),FOREIGN KEY(component_id) REFERENCES components(id) ON DELETE CASCADE,FOREIGN KEY(platform_id) REFERENCES platforms(id) ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS tags(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT UNIQUE NOT NULL,color TEXT,kind TEXT DEFAULT 'contract',created_at TEXT,updated_at TEXT);
 CREATE TABLE IF NOT EXISTS contracts(id INTEGER PRIMARY KEY AUTOINCREMENT,platform_id INTEGER NOT NULL,contract_no TEXT NOT NULL,yi_yd TEXT,contract_type TEXT,type_display TEXT,link_type TEXT,status TEXT,signed_date TEXT,t0_date TEXT,t0_months INTEGER,completion_date TEXT,acceptance_date TEXT,content TEXT,note TEXT,is_main INTEGER DEFAULT 1,parent_contract_id INTEGER,search_text TEXT,payload_json TEXT,created_at TEXT,updated_at TEXT,UNIQUE(platform_id,contract_no,contract_type),FOREIGN KEY(platform_id) REFERENCES platforms(id) ON DELETE RESTRICT,FOREIGN KEY(parent_contract_id) REFERENCES contracts(id) ON DELETE SET NULL);
@@ -401,6 +435,17 @@ CREATE TABLE IF NOT EXISTS activity_logs(id INTEGER PRIMARY KEY AUTOINCREMENT,cr
         if self._rebuild_deliveries_without_legacy_system_label():
             migrated.append("deliveries.cleaned_model")
         self._create_runtime_indexes()
+        # Existing v2 files may predate the sortable platform/component manager.
+        platform_sort_added = self._ensure_column("platforms", "sort_order", "INTEGER DEFAULT 0")
+        if platform_sort_added:
+            migrated.append("platforms.sort_order")
+        if self._backfill_platform_sort_order(force=platform_sort_added):
+            migrated.append("platforms.sort_order.backfill")
+        if self._ensure_column("components", "display_order", "INTEGER"):
+            migrated.append("components.display_order")
+        if self._backfill_component_display_order():
+            migrated.append("components.display_order.backfill")
+
         # Existing v2 files may predate delivery-level responsibility. SQLite
         # cannot add foreign-key constraints with ALTER TABLE, but adding the
         # nullable column keeps those files readable and writable. New files
@@ -439,7 +484,7 @@ CREATE TABLE IF NOT EXISTS activity_logs(id INTEGER PRIMARY KEY AUTOINCREMENT,cr
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_document_locks_contract_id "
             "ON document_locks(contract_id)"
         )
-        self.conn.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version','8')")
+        self.conn.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version','9')")
         self.conn.commit()
         return migrated
 
