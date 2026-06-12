@@ -3,8 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QMimeData, QRect, Qt, Signal, QSize
-from PySide6.QtGui import QAction, QColor, QDrag, QPainter, QPen
+from PySide6.QtCore import QPoint, QMimeData, QRect, Qt, Signal, QSize
+from PySide6.QtGui import QAction, QColor, QDrag, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -141,12 +141,29 @@ class ToggleSwitch(QWidget):
 
 
 class PlatformHeader(QHeaderView):
+    platformMoved = Signal(int, int)
+
+    _MIME_TYPE = "application/x-sts-platform-column"
+
     def __init__(self, orientation, parent=None):
         super().__init__(orientation, parent)
         self.platforms: list[dict[str, Any]] = []
+        self._drag_enabled = True
+        self._drag_start_pos = None
+        self._drag_start_logical = -1
+        self._dragging_logical = -1
+        self._drop_index = -1
+        self.setAcceptDrops(True)
+        self.viewport().setAcceptDrops(True)
         self.setDefaultAlignment(Qt.AlignCenter)
         self.setSectionsClickable(True)
         self.setFixedHeight(80)
+
+    def setSectionsMovable(self, movable: bool):
+        self._drag_enabled = bool(movable)
+        # Native header moving only drags the title.  Keep the functional reorder
+        # custom so the pixmap can represent the full platform column.
+        super().setSectionsMovable(False)
 
     def set_platforms(self, platforms: list[dict[str, Any]]):
         self.platforms = list(platforms or [])
@@ -156,6 +173,13 @@ class PlatformHeader(QHeaderView):
         s = super().sizeHint()
         s.setHeight(80)
         return s
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        if self._drop_index >= 0:
+            painter = QPainter(self.viewport())
+            self._paint_column_indicator(painter)
+            painter.end()
 
     def paintSection(self, painter: QPainter, rect: QRect, logicalIndex: int):
         if not rect.isValid():
@@ -217,7 +241,277 @@ class PlatformHeader(QHeaderView):
         cnt_rect = QRect(rect.left() + 4, name_rect.bottom() + 1, rect.width() - 8, 14)
         painter.drawText(cnt_rect, Qt.AlignCenter, f"{count} bileşen{suffix}")
 
+        if logicalIndex == self._dragging_logical:
+            painter.setPen(QPen(QColor("#60A5FA"), 2))
+            painter.setBrush(QColor(255, 255, 255, 46))
+            painter.drawRoundedRect(rect.adjusted(3, 4, -3, -4), 10, 10)
+
         painter.restore()
+
+    def mousePressEvent(self, event):
+        if self._drag_enabled and event.button() == Qt.LeftButton:
+            self._drag_start_pos = event.position().toPoint()
+            self._drag_start_logical = self.logicalIndexAt(self._drag_start_pos)
+        else:
+            self._drag_start_pos = None
+            self._drag_start_logical = -1
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if (
+            self._drag_enabled
+            and self._drag_start_pos is not None
+            and self._drag_start_logical >= 0
+            and event.buttons() & Qt.LeftButton
+            and (event.position().toPoint() - self._drag_start_pos).manhattanLength() >= 8
+        ):
+            self._start_column_drag(self._drag_start_logical, self._drag_start_pos)
+            self._drag_start_pos = None
+            self._drag_start_logical = -1
+            return
+        super().mouseMoveEvent(event)
+
+    def dragEnterEvent(self, event):
+        if self._drag_enabled and event.mimeData().hasFormat(self._MIME_TYPE):
+            event.acceptProposedAction()
+            return
+        super().dragEnterEvent(event)
+
+    def dragMoveEvent(self, event):
+        if self._drag_enabled and event.mimeData().hasFormat(self._MIME_TYPE):
+            self._set_drop_index(self._drop_index_at(event.position().toPoint().x()))
+            event.acceptProposedAction()
+            return
+        super().dragMoveEvent(event)
+
+    def dragLeaveEvent(self, event):
+        self._set_drop_index(-1)
+        super().dragLeaveEvent(event)
+
+    def dropEvent(self, event):
+        if not (self._drag_enabled and event.mimeData().hasFormat(self._MIME_TYPE)):
+            super().dropEvent(event)
+            return
+        try:
+            source = int(bytes(event.mimeData().data(self._MIME_TYPE)).decode("utf-8"))
+        except Exception:
+            event.ignore()
+            return
+        target = self._drop_index_at(event.position().toPoint().x())
+        self._set_drop_index(-1)
+        self.platformMoved.emit(source, target)
+        event.acceptProposedAction()
+
+    def _start_column_drag(self, logical_index: int, start_pos: QPoint):
+        drag = QDrag(self)
+        mime = QMimeData()
+        mime.setData(self._MIME_TYPE, str(logical_index).encode("utf-8"))
+        drag.setMimeData(mime)
+        pixmap = self._column_drag_pixmap(logical_index)
+        if not pixmap.isNull():
+            drag.setPixmap(pixmap)
+            section_x = self.sectionViewportPosition(logical_index)
+            drag.setHotSpot(QPoint(max(0, start_pos.x() - section_x) + 10, min(start_pos.y() + 10, pixmap.height() - 1)))
+        self._dragging_logical = logical_index
+        table = self.parent()
+        if hasattr(table, "set_dragging_column"):
+            table.set_dragging_column(logical_index)
+        self.viewport().update()
+        try:
+            drag.exec(Qt.MoveAction)
+        finally:
+            self._dragging_logical = -1
+            self._set_drop_index(-1)
+            if hasattr(table, "set_dragging_column"):
+                table.set_dragging_column(-1)
+            self.viewport().update()
+
+    def _column_drag_pixmap(self, logical_index: int) -> QPixmap:
+        table = self.parent()
+        if not table or logical_index < 0:
+            return QPixmap()
+        x = self.sectionViewportPosition(logical_index)
+        w = self.sectionSize(logical_index)
+        if w <= 0:
+            return QPixmap()
+        header_h = self.viewport().height()
+        body_h = table.viewport().height() if hasattr(table, "viewport") else 0
+        margin = 10
+        base = QPixmap(w, header_h + body_h)
+        base.fill(Qt.transparent)
+        painter = QPainter(base)
+        self.viewport().render(painter, QPoint(0, 0), QRect(x, 0, w, header_h))
+        if body_h > 0:
+            table.viewport().render(painter, QPoint(0, header_h), QRect(x, 0, w, body_h))
+        painter.end()
+        preview = QPixmap(base.width() + margin * 2, base.height() + margin * 2)
+        preview.fill(Qt.transparent)
+        painter = QPainter(preview)
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor(15, 31, 61, 38))
+        painter.drawRoundedRect(QRect(margin + 4, margin + 5, base.width(), base.height()), 12, 12)
+        painter.setOpacity(0.88)
+        painter.drawPixmap(margin, margin, base)
+        painter.setOpacity(1)
+        painter.setPen(QPen(QColor("#3B82F6"), 2))
+        painter.setBrush(Qt.NoBrush)
+        painter.drawRoundedRect(QRect(margin, margin, base.width(), base.height()).adjusted(1, 1, -1, -1), 10, 10)
+        painter.end()
+        return preview
+
+    def _drop_index_at(self, x: int) -> int:
+        if self.count() <= 0:
+            return 0
+        for visual in range(self.count()):
+            logical = self.logicalIndex(visual)
+            left = self.sectionViewportPosition(logical)
+            width = self.sectionSize(logical)
+            if x < left + width // 2:
+                return visual
+        return self.count()
+
+    def _set_drop_index(self, index: int):
+        if self._drop_index == index:
+            return
+        self._drop_index = index
+        table = self.parent()
+        if hasattr(table, "set_column_drop_index"):
+            table.set_column_drop_index(index)
+        self.viewport().update()
+
+    def _indicator_x(self) -> int:
+        if self._drop_index <= 0:
+            return self.sectionViewportPosition(self.logicalIndex(0)) if self.count() else 0
+        if self._drop_index >= self.count():
+            logical = self.logicalIndex(self.count() - 1)
+            return self.sectionViewportPosition(logical) + self.sectionSize(logical)
+        return self.sectionViewportPosition(self.logicalIndex(self._drop_index))
+
+    def _paint_column_indicator(self, painter: QPainter):
+        x = self._indicator_x()
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setPen(QPen(QColor("#2563EB"), 4, Qt.SolidLine, Qt.RoundCap))
+        painter.drawLine(x, 8, x, self.viewport().height() - 8)
+
+
+class MatrixAssignmentTable(QTableWidget):
+    rowMoved = Signal(int, int)
+
+    _ROW_MIME_TYPE = "application/x-sts-component-row"
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._row_drag_enabled = True
+        self.setAcceptDrops(True)
+        self.viewport().setAcceptDrops(True)
+        self._column_drop_index = -1
+        self._dragging_column = -1
+        self._row_drop_index = -1
+        self._dragging_row = -1
+
+    def set_order_drag_enabled(self, enabled: bool):
+        self._row_drag_enabled = bool(enabled)
+        self.setAcceptDrops(self._row_drag_enabled)
+        self.viewport().setAcceptDrops(self._row_drag_enabled)
+
+    def set_column_drop_index(self, index: int):
+        self._column_drop_index = index
+        self.viewport().update()
+
+    def set_dragging_column(self, logical_index: int):
+        self._dragging_column = logical_index
+        self.viewport().update()
+
+    def set_row_drop_index(self, index: int):
+        self._row_drop_index = index
+        self.viewport().update()
+
+    def set_dragging_row(self, row: int):
+        self._dragging_row = row
+        self.viewport().update()
+
+    def dragEnterEvent(self, event):
+        if self._row_drag_enabled and event.mimeData().hasFormat(self._ROW_MIME_TYPE):
+            event.acceptProposedAction()
+            return
+        super().dragEnterEvent(event)
+
+    def dragMoveEvent(self, event):
+        if self._row_drag_enabled and event.mimeData().hasFormat(self._ROW_MIME_TYPE):
+            self.set_row_drop_index(self._target_row_at(event.position().toPoint().y()))
+            event.acceptProposedAction()
+            return
+        super().dragMoveEvent(event)
+
+    def dragLeaveEvent(self, event):
+        self.set_row_drop_index(-1)
+        super().dragLeaveEvent(event)
+
+    def dropEvent(self, event):
+        if not (self._row_drag_enabled and event.mimeData().hasFormat(self._ROW_MIME_TYPE)):
+            super().dropEvent(event)
+            return
+        try:
+            source_row = int(bytes(event.mimeData().data(self._ROW_MIME_TYPE)).decode("utf-8"))
+        except Exception:
+            event.ignore()
+            return
+        target_row = self._target_row_at(event.position().toPoint().y())
+        self.set_row_drop_index(-1)
+        self.rowMoved.emit(source_row, target_row)
+        event.acceptProposedAction()
+
+    def _target_row_at(self, y: int) -> int:
+        target_row = self.rowAt(y)
+        if target_row < 0:
+            target_row = self.rowCount()
+        return target_row
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        painter = QPainter(self.viewport())
+        if self._dragging_column >= 0 and self._dragging_column < self.columnCount():
+            x = self.columnViewportPosition(self._dragging_column)
+            w = self.columnWidth(self._dragging_column)
+            painter.fillRect(QRect(x, 0, w, self.viewport().height()), QColor(59, 130, 246, 24))
+        if self._dragging_row >= 0 and self._dragging_row < self.rowCount():
+            y = self.rowViewportPosition(self._dragging_row)
+            h = self.rowHeight(self._dragging_row)
+            painter.fillRect(QRect(0, y, self.viewport().width(), h), QColor(59, 130, 246, 24))
+        if self._column_drop_index >= 0:
+            self._paint_column_indicator(painter)
+        if self._row_drop_index >= 0:
+            self._paint_row_indicator(painter)
+        painter.end()
+
+    def _paint_column_indicator(self, painter: QPainter):
+        if self.columnCount() <= 0:
+            x = 0
+        elif self._column_drop_index <= 0:
+            x = self.columnViewportPosition(0)
+        elif self._column_drop_index >= self.columnCount():
+            last = self.columnCount() - 1
+            x = self.columnViewportPosition(last) + self.columnWidth(last)
+        else:
+            x = self.columnViewportPosition(self._column_drop_index)
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setPen(QPen(QColor("#2563EB"), 4, Qt.SolidLine, Qt.RoundCap))
+        painter.drawLine(x, 0, x, self.viewport().height())
+
+    def _paint_row_indicator(self, painter: QPainter):
+        if self.rowCount() <= 0:
+            y = 0
+        elif self._row_drop_index <= 0:
+            y = self.rowViewportPosition(0)
+        elif self._row_drop_index >= self.rowCount():
+            last = self.rowCount() - 1
+            y = self.rowViewportPosition(last) + self.rowHeight(last)
+        else:
+            y = self.rowViewportPosition(self._row_drop_index)
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setPen(QPen(QColor("#2563EB"), 4, Qt.SolidLine, Qt.RoundCap))
+        painter.drawLine(0, y, self.viewport().width(), y)
 
 
 class DraggableComponentTable(QTableWidget):
@@ -230,6 +524,9 @@ class DraggableComponentTable(QTableWidget):
         self._drag_enabled = True
         self._drag_start_pos = None
         self._drag_start_row = -1
+        self._drop_row = -1
+        self._dragging_row = -1
+        self._drag_peer = None
         self.setAcceptDrops(True)
         self.viewport().setAcceptDrops(True)
         self.setDragEnabled(True)
@@ -240,6 +537,20 @@ class DraggableComponentTable(QTableWidget):
         self.setDragEnabled(self._drag_enabled)
         self.setAcceptDrops(self._drag_enabled)
         self.viewport().setAcceptDrops(self._drag_enabled)
+
+    def set_drag_peer(self, peer):
+        self._drag_peer = peer
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        painter = QPainter(self.viewport())
+        if 0 <= self._dragging_row < self.rowCount():
+            y = self.rowViewportPosition(self._dragging_row)
+            h = self.rowHeight(self._dragging_row)
+            painter.fillRect(QRect(0, y, self.viewport().width(), h), QColor(59, 130, 246, 24))
+        if self._drop_row >= 0:
+            self._paint_row_indicator(painter)
+        painter.end()
 
     def mousePressEvent(self, event):
         if self._drag_enabled and event.button() == Qt.LeftButton:
@@ -258,11 +569,9 @@ class DraggableComponentTable(QTableWidget):
             and event.buttons() & Qt.LeftButton
             and (event.position().toPoint() - self._drag_start_pos).manhattanLength() >= 8
         ):
-            drag = QDrag(self)
-            mime = QMimeData()
-            mime.setData(self._MIME_TYPE, str(self._drag_start_row).encode("utf-8"))
-            drag.setMimeData(mime)
-            drag.exec(Qt.MoveAction)
+            self._start_row_drag(self._drag_start_row, self._drag_start_pos)
+            self._drag_start_pos = None
+            self._drag_start_row = -1
             return
         super().mouseMoveEvent(event)
 
@@ -274,9 +583,14 @@ class DraggableComponentTable(QTableWidget):
 
     def dragMoveEvent(self, event):
         if self._drag_enabled and event.mimeData().hasFormat(self._MIME_TYPE):
+            self._set_drop_row(self._target_row_at(event.position().toPoint().y()))
             event.acceptProposedAction()
             return
         super().dragMoveEvent(event)
+
+    def dragLeaveEvent(self, event):
+        self._set_drop_row(-1)
+        super().dragLeaveEvent(event)
 
     def dropEvent(self, event):
         if not (self._drag_enabled and event.mimeData().hasFormat(self._MIME_TYPE)):
@@ -287,11 +601,93 @@ class DraggableComponentTable(QTableWidget):
         except Exception:
             event.ignore()
             return
-        target_row = self.rowAt(event.position().toPoint().y())
-        if target_row < 0:
-            target_row = self.rowCount()
+        target_row = self._target_row_at(event.position().toPoint().y())
+        self._set_drop_row(-1)
         self.rowMoved.emit(source_row, target_row)
         event.acceptProposedAction()
+
+    def _target_row_at(self, y: int) -> int:
+        target_row = self.rowAt(y)
+        if target_row < 0:
+            target_row = self.rowCount()
+        return target_row
+
+    def _set_drop_row(self, row: int):
+        if self._drop_row == row:
+            return
+        self._drop_row = row
+        if self._drag_peer and hasattr(self._drag_peer, "set_row_drop_index"):
+            self._drag_peer.set_row_drop_index(row)
+        self.viewport().update()
+
+    def _start_row_drag(self, row: int, start_pos: QPoint):
+        drag = QDrag(self)
+        mime = QMimeData()
+        mime.setData(self._MIME_TYPE, str(row).encode("utf-8"))
+        drag.setMimeData(mime)
+        pixmap = self._row_drag_pixmap(row)
+        if not pixmap.isNull():
+            drag.setPixmap(pixmap)
+            drag.setHotSpot(QPoint(min(start_pos.x() + 10, pixmap.width() - 1), max(0, start_pos.y() - self.rowViewportPosition(row)) + 10))
+        self._dragging_row = row
+        if self._drag_peer and hasattr(self._drag_peer, "set_dragging_row"):
+            self._drag_peer.set_dragging_row(row)
+        self.viewport().update()
+        try:
+            drag.exec(Qt.MoveAction)
+        finally:
+            self._dragging_row = -1
+            self._set_drop_row(-1)
+            if self._drag_peer and hasattr(self._drag_peer, "set_dragging_row"):
+                self._drag_peer.set_dragging_row(-1)
+            self.viewport().update()
+
+    def _row_drag_pixmap(self, row: int) -> QPixmap:
+        if row < 0 or row >= self.rowCount():
+            return QPixmap()
+        y = self.rowViewportPosition(row)
+        h = self.rowHeight(row)
+        if h <= 0:
+            return QPixmap()
+        left_w = self.viewport().width()
+        peer_w = self._drag_peer.viewport().width() if self._drag_peer and hasattr(self._drag_peer, "viewport") else 0
+        margin = 10
+        base = QPixmap(left_w + peer_w, h)
+        base.fill(Qt.transparent)
+        painter = QPainter(base)
+        self.viewport().render(painter, QPoint(0, 0), QRect(0, y, left_w, h))
+        if peer_w > 0:
+            self._drag_peer.viewport().render(painter, QPoint(left_w, 0), QRect(0, y, peer_w, h))
+        painter.end()
+        preview = QPixmap(base.width() + margin * 2, base.height() + margin * 2)
+        preview.fill(Qt.transparent)
+        painter = QPainter(preview)
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor(15, 31, 61, 38))
+        painter.drawRoundedRect(QRect(margin + 4, margin + 5, base.width(), base.height()), 12, 12)
+        painter.setOpacity(0.88)
+        painter.drawPixmap(margin, margin, base)
+        painter.setOpacity(1)
+        painter.setPen(QPen(QColor("#3B82F6"), 2))
+        painter.setBrush(Qt.NoBrush)
+        painter.drawRoundedRect(QRect(margin, margin, base.width(), base.height()).adjusted(1, 1, -1, -1), 10, 10)
+        painter.end()
+        return preview
+
+    def _paint_row_indicator(self, painter: QPainter):
+        if self.rowCount() <= 0:
+            y = 0
+        elif self._drop_row <= 0:
+            y = self.rowViewportPosition(0)
+        elif self._drop_row >= self.rowCount():
+            last = self.rowCount() - 1
+            y = self.rowViewportPosition(last) + self.rowHeight(last)
+        else:
+            y = self.rowViewportPosition(self._drop_row)
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setPen(QPen(QColor("#2563EB"), 4, Qt.SolidLine, Qt.RoundCap))
+        painter.drawLine(0, y, self.viewport().width(), y)
 
 
 class PlatformComponentManagerDialog(QDialog):
@@ -387,7 +783,7 @@ class PlatformComponentManagerDialog(QDialog):
         self.frozen.rowMoved.connect(self._move_component_row)
         matrix_lay.addWidget(self.frozen)
 
-        self.matrix = QTableWidget()
+        self.matrix = MatrixAssignmentTable()
         self.matrix.setObjectName("pcMatrix")
         self.matrix.setShowGrid(True)
         self.matrix.verticalHeader().setVisible(False)
@@ -396,14 +792,17 @@ class PlatformComponentManagerDialog(QDialog):
         self.matrix.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.matrix.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.matrix.setItemDelegate(AssignmentDelegate(self.matrix))
+        self.frozen.set_drag_peer(self.matrix)
         header = PlatformHeader(Qt.Horizontal, self.matrix)
         self.matrix.setHorizontalHeader(header)
         self.matrix.horizontalHeader().setContextMenuPolicy(Qt.CustomContextMenu)
         self.matrix.horizontalHeader().customContextMenuRequested.connect(self._platform_context_menu)
         self.matrix.horizontalHeader().sectionDoubleClicked.connect(self._open_platform_by_index)
         self.matrix.horizontalHeader().setSectionsMovable(True)
+        self.matrix.horizontalHeader().platformMoved.connect(self._move_platform_column)
         self.matrix.horizontalHeader().sectionMoved.connect(self._platform_section_moved)
         self.matrix.cellClicked.connect(self._toggle_assignment)
+        self.matrix.rowMoved.connect(self._move_component_row)
         matrix_lay.addWidget(self.matrix, 1)
         root.addWidget(self.matrix_area, 1)
 
@@ -676,6 +1075,8 @@ QPushButton#dangerButton {{ background:#FFF5F5; color:#DC2626; border:1px solid 
             self.frozen.set_order_drag_enabled(enabled)
         if hasattr(self, "matrix"):
             self.matrix.horizontalHeader().setSectionsMovable(enabled)
+            if hasattr(self.matrix, "set_order_drag_enabled"):
+                self.matrix.set_order_drag_enabled(enabled)
         msg = "" if enabled else "Sıralama yapmak için aramayı temizleyin."
         if hasattr(self, "footer_msg"):
             self.footer_msg.setText(msg)
@@ -714,6 +1115,23 @@ QPushButton#dangerButton {{ background:#FFF5F5; color:#DC2626; border:1px solid 
         self.components.insert(target_row, item)
         self._renumber_component_orders()
         self._component_order_changed = self._component_order() != getattr(self, "_snapshot_component_order", [])
+        self.changed = True
+        self._refresh_matrix()
+
+    def _move_platform_column(self, source_index: int, target_index: int):
+        if self._syncing_platform_header or not self._ordering_enabled():
+            return
+        if source_index < 0 or source_index >= len(self.platforms):
+            return
+        target_index = max(0, min(int(target_index), len(self.platforms)))
+        if target_index > source_index:
+            target_index -= 1
+        if target_index == source_index:
+            return
+        item = self.platforms.pop(source_index)
+        self.platforms.insert(target_index, item)
+        self._renumber_platform_orders()
+        self._platform_order_changed = self._platform_order() != getattr(self, "_snapshot_platform_order", [])
         self.changed = True
         self._refresh_matrix()
 
