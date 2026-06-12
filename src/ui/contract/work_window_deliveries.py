@@ -13,7 +13,7 @@ def refresh_delivery_table(self):
         self.pinned_delivery.clearContents()
         self.del_table.setRowCount(0)
         return
-    headers = ["", "Kabul Adı", "Durum", "Kabul Tarihi", "Teslim Kullanıcısı"]
+    headers = ["", "Kabul Adı", "Durum", "Kabul Tarihi", "Teslim Kullanıcısı", "Not"]
     self.del_table.clear()
     self.del_table.setColumnCount(len(headers))
     self.del_table.setHorizontalHeaderLabels(headers)
@@ -25,11 +25,17 @@ def refresh_delivery_table(self):
         r = self.del_table.rowCount()
         self.del_table.insertRow(r)
         self._delivery_row_map[r] = idx
-        vals = ["▶", d.name, d.status, d.acceptance_date, delivery_user_text(d)]
+        note = str(getattr(d, "note", "") or "").strip()
+        note_display = note if note else "-"
+        if len(note_display) > 80:
+            note_display = f"{note_display[:77]}..."
+        vals = ["▶", d.name, d.status, d.acceptance_date, delivery_user_text(d), note_display]
         for c, v in enumerate(vals):
             it = QTableWidgetItem(str(v))
             it.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
             it.setTextAlignment(Qt.AlignCenter if c == 0 else Qt.AlignLeft | Qt.AlignVCenter)
+            if c == 5 and note:
+                it.setToolTip(note)
             self.del_table.setItem(r, c, it)
     self.del_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
     if self.del_table.columnCount() > 0:
