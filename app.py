@@ -80,7 +80,22 @@ from PySide6.QtWidgets import (
     QSizePolicy, QProgressBar, QProgressDialog, QStyledItemDelegate, QTextEdit,
     QToolButton, QMenu, QInputDialog, QWidgetAction, QStackedWidget, QAbstractItemView, QStyle
 )
+from shiboken6 import isValid as _qt_is_valid
 
+
+def qt_obj_alive(obj) -> bool:
+    """PySide/Shiboken objeleri C++ tarafında silindiyse False döner.
+
+    Qt'nin C++ tarafından çağırdığı eventFilter/sizeHint gibi override'larda
+    silinmiş objeye dokunmak RuntimeError üretir; PySide bunu yakalayamazsa
+    uygulama `Fatal Python error: Aborted` ile kapanabilir.
+    """
+    if obj is None:
+        return False
+    try:
+        return bool(_qt_is_valid(obj))
+    except Exception:
+        return True
 
 
 def normalized_tag_key(value: str) -> str:
@@ -280,6 +295,154 @@ def is_system_sheet_name(name: str) -> bool:
 def safe_sheet_name(name: str) -> str:
     n = re.sub(r"[\\/*?:\[\]]", "_", name.strip().upper())
     return n[:31] or "PLATFORM"
+
+
+def safe_filename_part(value: object, fallback: str = "DOSYA") -> str:
+    """Windows dosya adına güvenli, okunabilir parça üretir."""
+    text = str(value or "").strip() or str(fallback or "DOSYA")
+    replacements = {
+        "ı": "i", "İ": "I", "ş": "s", "Ş": "S", "ğ": "g", "Ğ": "G",
+        "ü": "u", "Ü": "U", "ö": "o", "Ö": "O", "ç": "c", "Ç": "C",
+    }
+    for src, dst in replacements.items():
+        text = text.replace(src, dst)
+    text = unicodedata.normalize("NFKD", text)
+    text = "".join(ch for ch in text if not unicodedata.combining(ch))
+    text = re.sub(r'[<>:"/\\|?*]+', "_", text)
+    text = re.sub(r"\s+", "_", text)
+    text = re.sub(r"_+", "_", text).strip("._ ")
+    return text or str(fallback or "DOSYA")
+
+
+def suggested_export_excel_path(sts_path: object, options: Optional[dict] = None) -> Path:
+    """Export için varsayılan dosya adı: STSADI__PLATFORM__export__yyyy-MM-dd_HH-mm.xlsx"""
+    try:
+        source = Path(sts_path) if sts_path else Path.cwd() / "sts_export.sts"
+    except Exception:
+        source = Path.cwd() / "sts_export.sts"
+
+    base_name = safe_filename_part(source.stem, "STS")
+    opts = dict(options or {})
+    platforms_raw = opts.get("platforms") or []
+    platforms: List[str] = []
+    seen: set[str] = set()
+    for item in platforms_raw:
+        name = str(item or "").strip()
+        key = name.casefold()
+        if name and key not in seen:
+            seen.add(key)
+            platforms.append(name)
+
+    scope = str(opts.get("scope") or "").strip().lower()
+    if scope == "selected" and len(platforms) == 1:
+        scope_name = safe_filename_part(platforms[0], "PLATFORM")
+    elif scope == "selected" and len(platforms) > 1:
+        scope_name = "SECILI_PLATFORMLAR"
+    else:
+        scope_name = "TUM_PLATFORMLAR"
+
+    stamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
+    filename = f"{base_name}__{scope_name}__export__{stamp}.xlsx"
+    folder = source.parent if str(source.parent) not in {"", "."} else Path.cwd()
+    return folder / filename
+
+
+_STS_VERSIONED_RE = re.compile(
+    r"^(?P<code>STS-[A-Z]\d+)__v(?P<ver>\d+)__(?P<stamp>\d{4}-\d{2}-\d{2}_\d{2}-\d{2})$",
+    re.IGNORECASE,
+)
+
+
+def parse_sts_versioned_stem(stem: str) -> Tuple[str, int]:
+    """STS-A1__v004__2026-06-15_10-30 -> (STS-A1, 4)."""
+    raw = str(stem or "").strip()
+    m = _STS_VERSIONED_RE.match(raw)
+    if m:
+        code = str(m.group("code") or "STS-A1").upper()
+        try:
+            ver = int(m.group("ver") or 0)
+        except Exception:
+            ver = 0
+        return code, max(0, ver)
+    # Eski/serbest adla açılmış dosyalar ilk kapanışta standart isme taşınır.
+    return "STS-A1", 0
+
+
+def next_sts_versioned_path(current_path: object) -> Path:
+    """Tek aktif .sts dosyası için sonraki ad: STS-A1__v004__yyyy-MM-dd_HH-mm.sts"""
+    current = Path(current_path)
+    folder = current.parent if str(current.parent) not in {"", "."} else Path.cwd()
+    code, current_ver = parse_sts_versioned_stem(current.stem)
+
+    max_ver = current_ver
+    try:
+        for item in folder.glob(f"{code}__v*__*.sts"):
+            parsed_code, parsed_ver = parse_sts_versioned_stem(item.stem)
+            if parsed_code == code:
+                max_ver = max(max_ver, parsed_ver)
+    except Exception:
+        pass
+
+    stamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
+    next_ver = max_ver + 1
+    while True:
+        candidate = folder / f"{code}__v{next_ver:03d}__{stamp}.sts"
+        if not candidate.exists() or candidate.resolve() == current.resolve():
+            return candidate
+        next_ver += 1
+
+
+def close_store_for_file_rename(store) -> None:
+    """Windows'ta SQLite dosyasını yeniden adlandırabilmek için bağlantıyı kapatır."""
+    if store is None:
+        return
+    try:
+        if hasattr(store, "save"):
+            store.save()
+    except Exception:
+        pass
+    for close_name in ("close", "disconnect"):
+        try:
+            closer = getattr(store, close_name, None)
+            if callable(closer):
+                closer()
+                return
+        except Exception:
+            pass
+    try:
+        db = getattr(store, "db", None)
+        conn = getattr(db, "conn", None)
+        if conn is not None:
+            try:
+                conn.commit()
+            except Exception:
+                pass
+            conn.close()
+    except Exception:
+        pass
+
+
+def rename_sts_file_to_next_version(store, current_path: object) -> Optional[Path]:
+    """Değişiklik varsa kapanışta tek aktif STS dosyasını bir üst versiyon adına taşır."""
+    try:
+        old_path = Path(current_path)
+        if old_path.suffix.lower() != ".sts" or not old_path.exists():
+            return None
+        new_path = next_sts_versioned_path(old_path)
+        if new_path.resolve() == old_path.resolve():
+            return old_path
+        close_store_for_file_rename(store)
+        old_path.replace(new_path)
+        try:
+            setattr(store, "path", new_path)
+            db = getattr(store, "db", None)
+            if db is not None:
+                setattr(db, "path", new_path)
+        except Exception:
+            pass
+        return new_path
+    except Exception:
+        return None
 
 
 def to_iso(qdate: QDate) -> str:
@@ -542,8 +705,11 @@ class PlatformListDelegate(QStyledItemDelegate):
         painter.restore()
 
     def sizeHint(self, option, index):
-        from PySide6.QtCore import QSize
-        return QSize(option.rect.width() if option.rect.width() > 0 else 200, 46)
+        try:
+            w = int(option.rect.width()) if option is not None else 200
+            return QSize(w if w > 0 else 200, 46)
+        except Exception:
+            return QSize(200, 46)
 
 
 
@@ -5128,27 +5294,54 @@ class ContractWorkWindow(QDialog):
         return self._is_widget_inside(widget, popover) or self._is_widget_inside(widget, bar)
 
     def eventFilter(self, obj, event):
-        if obj is getattr(self, "side_meta_host", None) and event.type() in (QEvent.Resize, QEvent.Show):
-            self.position_side_meta_popover()
-        _editing = (
-            getattr(self, "_tree_editing", False)
-            or getattr(self, "_file_dialog_open", False)
-            or getattr(self, "_side_meta_modal_open", False)
-        )
-        if (
-            event.type() in (QEvent.WindowDeactivate, QEvent.ApplicationDeactivate)
-            and getattr(self, "_side_meta_open_panel", None)
-            and not _editing
-        ):
-            self.close_side_meta_popover()
-        if event.type() == QEvent.MouseButtonPress and getattr(self, "_side_meta_open_panel", None):
-            if not _editing and not self._is_side_meta_inside_click(obj, event):
+        # Bu dialogda da dosya kartları/event filter kullanılıyor. Silinmiş Qt
+        # objelerine dokunmak PySide6'da uygulamayı abort ettirebildiği için
+        # eventFilter içinde hiçbir hatanın dışarı kaçmasına izin vermiyoruz.
+        try:
+            if not qt_obj_alive(obj) or event is None:
+                return False
+            try:
+                etype = event.type()
+            except Exception:
+                return False
+
+            side_host = getattr(self, "side_meta_host", None)
+            if obj is side_host and etype in (QEvent.Resize, QEvent.Show):
+                self.position_side_meta_popover()
+
+            _editing = (
+                getattr(self, "_tree_editing", False)
+                or getattr(self, "_file_dialog_open", False)
+                or getattr(self, "_side_meta_modal_open", False)
+            )
+            panel_open = bool(getattr(self, "_side_meta_open_panel", None))
+
+            if etype in (QEvent.WindowDeactivate, QEvent.ApplicationDeactivate) and panel_open and not _editing:
                 self.close_side_meta_popover()
-        file_id = obj.property("contractFileId") if hasattr(obj, "property") else None
-        if file_id and event.type() == QEvent.MouseButtonDblClick:
-            self.open_contract_file(int(file_id))
-            return True
-        return super().eventFilter(obj, event)
+
+            if etype == QEvent.MouseButtonPress and panel_open:
+                if not _editing and not self._is_side_meta_inside_click(obj, event):
+                    self.close_side_meta_popover()
+
+            if etype == QEvent.MouseButtonDblClick:
+                file_id = None
+                try:
+                    if hasattr(obj, "property"):
+                        file_id = obj.property("contractFileId")
+                except Exception:
+                    file_id = None
+                if file_id:
+                    self.open_contract_file(int(file_id))
+                    return True
+
+        except Exception:
+            try:
+                traceback.print_exc()
+            except Exception:
+                pass
+            return False
+
+        return False
 
     def configure_summary_columns(self):
         header = self.summary.horizontalHeader()
@@ -8061,9 +8254,19 @@ class MainWindow(QMainWindow):
         if not dlg.exec() or not dlg.result_options:
             return
         opts = dict(dlg.result_options)
-        out, _ = QFileDialog.getSaveFileName(self, "Excel’e Aktar", str(Path(self.path).with_suffix('.xlsx')), "Excel (*.xlsx)")
+        try:
+            suggested_out = suggested_export_excel_path(getattr(self, "path", None), opts)
+        except Exception:
+            suggested_out = Path(self.path).with_suffix(".xlsx")
+        try:
+            out, _ = QFileDialog.getSaveFileName(self, "Excel’e Aktar", str(suggested_out), "Excel (*.xlsx)")
+        except Exception as exc:
+            QMessageBox.critical(self, "Excel’e Aktar", f"Kayıt penceresi açılamadı:\n{exc}")
+            return
         if not out:
             return
+        if not str(out).lower().endswith(".xlsx"):
+            out = str(out) + ".xlsx"
         from src.workers.export_workers import ExcelExportWorker
         self._export_progress = QProgressDialog("Excel dosyası hazırlanıyor...", "", 0, 100, self)
         self._export_progress.setWindowTitle("Excel’e Aktar")
@@ -8076,25 +8279,84 @@ class MainWindow(QMainWindow):
         self._export_progress.show()
         QApplication.processEvents()
 
+        db_path = getattr(getattr(self.store, "db", None), "path", None)
+        if not db_path:
+            self._export_progress.close()
+            QMessageBox.critical(self, "Excel’e Aktar", "Veritabanı yolu belirlenemedi.")
+            return
+
         self._export_thread = QThread(self)
-        self._export_worker = ExcelExportWorker(self.store, out, opts)
+        # Worker'a canlı store/bağlantı DEĞİL, dosya yolu verilir; worker kendi
+        # salt-okunur sqlite bağlantısını kendi thread'inde açar (thread-safe).
+        self._export_worker = ExcelExportWorker(db_path, out, opts)
         self._export_worker.moveToThread(self._export_thread)
         self._export_thread.started.connect(self._export_worker.run)
-        self._export_worker.progress.connect(lambda p, m: (self._export_progress.setLabelText(str(m)), self._export_progress.setValue(int(max(0,min(100,p))))))
-        def _done(_res):
-            self._export_progress.setValue(100)
-            self._export_progress.close()
-            QMessageBox.information(self, "Excel’e Aktar", "Excel dosyası oluşturuldu.")
-        def _fail(msg):
-            self._export_progress.close()
-            QMessageBox.critical(self, "Excel’e Aktar", str(msg))
-        self._export_worker.finished.connect(_done)
-        self._export_worker.failed.connect(_fail)
+        # KRİTİK: Sinyaller lambda/yerel fonksiyona DEĞİL, ana penceredeki
+        # gerçek metotlara bağlanır. Lambda bağlanırsa Qt onu sinyali yayan
+        # thread'de (worker) çalıştırır ve GUI'ye worker thread'inden dokunmak
+        # uygulamayı çökertir. Alıcı self (ana thread'de yaşayan QObject)
+        # olduğunda Qt bağlantıyı otomatik QueuedConnection yapar; tüm GUI
+        # işleri güvenle ana thread'de çalışır.
+        self._export_out_path = str(out)
+        self._export_opts = dict(opts)
+        self._export_worker.progress.connect(self._on_export_progress)
+        self._export_worker.finished.connect(self._on_export_finished)
+        self._export_worker.failed.connect(self._on_export_failed)
         self._export_worker.finished.connect(self._export_thread.quit)
         self._export_worker.failed.connect(self._export_thread.quit)
         self._export_thread.finished.connect(self._export_worker.deleteLater)
         self._export_thread.finished.connect(self._export_thread.deleteLater)
         self._export_thread.start()
+
+    # --- Excel export slot'ları: sinyaller worker thread'inden gelir ama bu
+    # metotlar ana pencerenin (ana thread) metodu olduğu için Qt bunları
+    # QueuedConnection ile ana thread'de çalıştırır. GUI burada güvendedir. ---
+
+    def _on_export_progress(self, p, m):
+        dlg = getattr(self, "_export_progress", None)
+        if dlg is not None:
+            try:
+                dlg.setLabelText(str(m))
+                dlg.setValue(int(max(0, min(100, int(p)))))
+            except Exception:
+                pass
+
+    def _on_export_finished(self, res):
+        dlg = getattr(self, "_export_progress", None)
+        if dlg is not None:
+            try:
+                dlg.setValue(100)
+                dlg.close()
+            except Exception:
+                pass
+        out = getattr(self, "_export_out_path", "")
+        opts = getattr(self, "_export_opts", {})
+        # Export işlemi artık uygulama işlem geçmişine ekstra log yazmaz.
+        # Sadece kullanıcıya başarı mesajı gösterilir; teşhis/debug log dosyası
+        # da worker tarafında kapatıldı.
+        box = QMessageBox(self)
+        box.setWindowTitle("Excel’e Aktar")
+        box.setIcon(QMessageBox.Information)
+        box.setText("Excel dosyası oluşturuldu.")
+        open_btn = box.addButton("Dosyayı Aç", QMessageBox.AcceptRole)
+        box.addButton("Kapat", QMessageBox.RejectRole)
+        box.exec()
+        if box.clickedButton() is open_btn:
+            try:
+                import os
+                os.startfile(str(out))
+            except Exception:
+                QMessageBox.information(self, "Excel’e Aktar", f"Dosya konumu:\n{out}")
+
+    def _on_export_failed(self, msg):
+        dlg = getattr(self, "_export_progress", None)
+        if dlg is not None:
+            try:
+                dlg.close()
+            except Exception:
+                pass
+        # Export işlemi için debug/işlem geçmişi logu oluşturulmaz.
+        QMessageBox.critical(self, "Excel’e Aktar", str(msg))
 
     def open_database_management(self):
         if not self.store:
@@ -8440,14 +8702,21 @@ class MainWindow(QMainWindow):
         return bool(baseline and current and current != baseline)
 
     def closeEvent(self, event: QCloseEvent) -> None:
-        """Uygulama kapanırken değişiklik varsa Excel'e versiyon damgası vurur ve dosya adını günceller."""
-        if (getattr(self, "store", None) and getattr(self.store, "wb", None)
-                and self._workbook_changed_since_load()):
+        """Kapanışta değişiklik varsa dosya adını standart versiyon formatına taşır."""
+        if getattr(self, "store", None) and self._workbook_changed_since_load():
             try:
-                from src.services.version_manager import bump_version, save_store_as_versioned_file
-                new_ver = bump_version(self.store)
-                self.path = save_store_as_versioned_file(self.store, new_ver)
-                self._remember_version_baseline()
+                # STS dosyalarında tek aktif dosya korunur: mevcut dosya yeniden adlandırılır.
+                if self.is_sts_mode():
+                    new_path = rename_sts_file_to_next_version(self.store, getattr(self.store, "path", self.path))
+                    if new_path:
+                        self.path = Path(new_path)
+                        self._remember_version_baseline()
+                # Eski Excel modu için mevcut version_manager davranışı korunur.
+                elif getattr(self.store, "wb", None):
+                    from src.services.version_manager import bump_version, save_store_as_versioned_file
+                    new_ver = bump_version(self.store)
+                    self.path = save_store_as_versioned_file(self.store, new_ver)
+                    self._remember_version_baseline()
             except Exception:
                 pass
         super().closeEvent(event)
@@ -8491,25 +8760,31 @@ class MainWindow(QMainWindow):
         self.loading_overlay.raise_()
 
     def position_query_logo_background(self):
-        if not hasattr(self, "query_logo_bg") or not hasattr(self, "contract_table"):
-            return
+        """Sorgulama tablosunda sadece seçili platform logolarını watermark olarak konumlandırır.
 
-        vp = self.contract_table.viewport()
-        rect = vp.geometry()
+        Platform seçimi yoksa varsayılan/Baykar logosu gösterilmez.
+        """
+        try:
+            if not hasattr(self, "query_logo_bg") or not hasattr(self, "contract_table"):
+                return
 
-        if rect.width() <= 0 or rect.height() <= 0:
-            self.query_logo_bg.hide()
-            return
+            if not getattr(self, "_query_logo_source", None) or self._query_logo_source.isNull():
+                self.query_logo_bg.clear()
+                self.query_logo_bg.hide()
+                return
 
-        if self._query_logo_source and not self._query_logo_source.isNull():
+            vp = self.contract_table.viewport()
+            rect = vp.geometry()
+
+            if rect.width() <= 0 or rect.height() <= 0:
+                self.query_logo_bg.hide()
+                return
+
             max_w = int(rect.width() * 0.82)
             max_h = int(rect.height() * 0.62)
-
             source = self._query_logo_source
 
-            # Burada büyütme yapmıyoruz.
-            # Logo strip tablo alanından büyükse küçültüyoruz,
-            # küçükse olduğu gibi bırakıyoruz.
+            # Logo tablo alanından büyükse küçült; küçükse olduğu gibi bırak.
             if source.width() > max_w or source.height() > max_h:
                 scaled = source.scaled(
                     QSize(max_w, max_h),
@@ -8525,13 +8800,15 @@ class MainWindow(QMainWindow):
             self.query_logo_bg.setGeometry(x, y, scaled.width(), scaled.height())
             self.query_logo_bg.setPixmap(scaled)
             self.query_logo_bg.show()
-        else:
-            self.query_logo_bg.clear()
-            self.query_logo_bg.hide()
+            self.query_logo_bg.raise_()
+        except Exception:
+            try:
+                if hasattr(self, "query_logo_bg"):
+                    self.query_logo_bg.clear()
+                    self.query_logo_bg.hide()
+            except Exception:
+                pass
 
-        self.query_logo_bg.lower()
-        self.contract_table.raise_()
-    
     def _scale_logo_smart(
         self,
         px: QPixmap,
@@ -8620,30 +8897,70 @@ class MainWindow(QMainWindow):
         self.index_progress_badge.setVisible(bool(visible))
 
     def eventFilter(self, obj, event):
-        if hasattr(self, "contract_table") and obj is self.contract_table.viewport():
-            if event.type() in (QEvent.Resize, QEvent.Move, QEvent.Show):
+        # PySide6: Qt'nin C++ tarafından çağırdığı Python override'larında
+        # yakalanmamış hata uygulamayı doğrudan abort ettirebilir. Bu filtre
+        # QApplication seviyesine kurulu olduğu için export sırasında açılan/kapanan
+        # dialoglar dahil tüm objelerin event'leri buradan geçer. Bu yüzden burada
+        # silinmiş C++ objelere ve tüm yardımcı çağrılara karşı savunmalı davranıyoruz.
+        try:
+            if not qt_obj_alive(obj) or event is None:
+                return False
+
+            try:
+                etype = event.type()
+            except Exception:
+                return False
+
+            contract_viewport = None
+            try:
+                table = getattr(self, "contract_table", None)
+                if qt_obj_alive(table):
+                    contract_viewport = table.viewport()
+            except Exception:
+                contract_viewport = None
+
+            if obj is contract_viewport and etype in (QEvent.Resize, QEvent.Move, QEvent.Show):
                 QTimer.singleShot(0, self.position_query_logo_background)
-        if obj is getattr(self, "side_meta_host", None) and event.type() in (QEvent.Resize, QEvent.Show):
-            self.position_side_meta_popover()
-        _editing = (
-            getattr(self, "_tree_editing", False)
-            or getattr(self, "_file_dialog_open", False)
-            or getattr(self, "_side_meta_modal_open", False)
-        )
-        if (
-            event.type() in (QEvent.WindowDeactivate, QEvent.ApplicationDeactivate)
-            and getattr(self, "_side_meta_open_panel", None)
-            and not _editing
-        ):
-            self.close_side_meta_popover()
-        if event.type() == QEvent.MouseButtonPress and getattr(self, "_side_meta_open_panel", None):
-            if not _editing and not self._is_side_meta_inside_click(obj, event):
+
+            side_host = getattr(self, "side_meta_host", None)
+            if obj is side_host and etype in (QEvent.Resize, QEvent.Show):
+                self.position_side_meta_popover()
+
+            _editing = (
+                getattr(self, "_tree_editing", False)
+                or getattr(self, "_file_dialog_open", False)
+                or getattr(self, "_side_meta_modal_open", False)
+            )
+            panel_open = bool(getattr(self, "_side_meta_open_panel", None))
+
+            if etype in (QEvent.WindowDeactivate, QEvent.ApplicationDeactivate) and panel_open and not _editing:
                 self.close_side_meta_popover()
-        file_id = obj.property("contractFileId") if hasattr(obj, "property") else None
-        if file_id and event.type() == QEvent.MouseButtonDblClick:
-            self.open_contract_file(int(file_id))
-            return True
-        return super().eventFilter(obj, event)
+
+            if etype == QEvent.MouseButtonPress and panel_open:
+                if not _editing and not self._is_side_meta_inside_click(obj, event):
+                    self.close_side_meta_popover()
+
+            if etype == QEvent.MouseButtonDblClick:
+                file_id = None
+                try:
+                    if hasattr(obj, "property"):
+                        file_id = obj.property("contractFileId")
+                except Exception:
+                    file_id = None
+                if file_id:
+                    self.open_contract_file(int(file_id))
+                    return True
+
+        except Exception:
+            # Event filter içinde hata dışarı kaçarsa PySide6 abort edebilir.
+            # Log görünür kalsın ama uygulama kapanmasın.
+            try:
+                traceback.print_exc()
+            except Exception:
+                pass
+            return False
+
+        return False
 
     def _norm_tr(self, s: str) -> str:
         t = str(s or "").strip().lower()
@@ -8744,49 +9061,64 @@ class MainWindow(QMainWindow):
         return canvas
 
     def update_query_logo_background(self, selected_platform: Optional[str] = None):
-        if not hasattr(self, "query_logo_bg"):
-            return
-        if not self.store:
-            self._query_logo_source = None
-            self.query_logo_bg.hide()
-            self.query_logo_bg.clear()
-            return
-        if selected_platform:
-            # Platform seçili: o platformun logosunu göster
-            targets = [str(selected_platform)]
-            strip = self._build_query_logo_strip(targets)
-            if not strip:
+        """Sorgulama tablosu watermark kontrolü.
+
+        - Platform seçiliyse: o platformun / seçili platformların gömülü logosu gösterilir.
+        - Platform seçimi yoksa: varsayılan Baykar/STS logosu gösterilmez.
+        """
+        try:
+            if not hasattr(self, "query_logo_bg"):
+                return
+
+            if not self.store:
                 self._query_logo_source = None
                 self.query_logo_bg.hide()
                 self.query_logo_bg.clear()
                 return
-            self._query_logo_source = strip
-            self.position_query_logo_background()
-        else:
-            # Hiç platform seçili değil: Baykar logosu göster
-            from pathlib import Path as _Path
-            from PySide6.QtGui import QPixmap as _QPixmap
-            assets_dir = _Path(__file__).parent / "src" / "ui" / "assets"
-            # baykar_logo.jpeg → baykar_logo.jpg → sts_logo.svg sıralaması
-            for _name in ("baykar_logo.jpeg", "baykar_logo.jpg", "sts_logo.svg"):
-                _p = assets_dir / _name
-                if _p.exists():
-                    logo_path = _p
-                    break
+
+            targets: List[str] = []
+
+            if isinstance(selected_platform, (list, tuple, set)):
+                targets = [str(p).strip() for p in selected_platform if str(p or "").strip()]
+            elif selected_platform:
+                targets = [str(selected_platform).strip()]
             else:
-                logo_path = None
-            px = _QPixmap(str(logo_path)) if logo_path else _QPixmap()
-            if not px.isNull():
-                # Direkt ölçekle — logo kendi arka planına sahip, kart yok
-                scaled = px.scaledToHeight(200, Qt.SmoothTransformation)
-                self.query_logo_bg.setPixmap(scaled)
-                self.query_logo_bg.show()
-                self._query_logo_source = scaled
-                self.position_query_logo_background()
-            else:
+                # _apply_platform_selection çoklu seçimde None gönderebilir.
+                # Bu durumda seçili platform seti varsa onların logolarını göster;
+                # gerçekten hiç seçim yoksa varsayılan logo gösterme.
+                current_selected = list(getattr(self, "selected_platforms", set()) or [])
+                targets = [str(p).strip() for p in current_selected if str(p or "").strip()]
+
+            if not targets:
                 self._query_logo_source = None
                 self.query_logo_bg.hide()
                 self.query_logo_bg.clear()
+                return
+
+            # Sıralama sabit kalsın; soldaki platform listesi sırası varsa onu kullan.
+            try:
+                order = {name: i for i, name in enumerate(self._all_platform_names())}
+                targets = sorted(set(targets), key=lambda x: order.get(x, 9999))
+            except Exception:
+                targets = sorted(set(targets))
+
+            strip = self._build_query_logo_strip(targets)
+            if not strip or strip.isNull():
+                self._query_logo_source = None
+                self.query_logo_bg.hide()
+                self.query_logo_bg.clear()
+                return
+
+            self._query_logo_source = strip
+            self.position_query_logo_background()
+        except Exception:
+            try:
+                self._query_logo_source = None
+                if hasattr(self, "query_logo_bg"):
+                    self.query_logo_bg.hide()
+                    self.query_logo_bg.clear()
+            except Exception:
+                pass
 
     def _set_platform_items(self, platforms: List[str]):
         available = {str(p) for p in platforms}
@@ -8864,7 +9196,7 @@ class MainWindow(QMainWindow):
             self.update_query_logo_background(platform)
         else:
             self.right_title.setText(f"{len(selected)} Platform - Sözleşmeler")
-            self.update_query_logo_background(None)
+            self.update_query_logo_background(selected)
         self.refresh_platform_list_ui()
         self.schedule_apply_contract_filter()
 
