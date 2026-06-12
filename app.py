@@ -1919,6 +1919,8 @@ class MultiUserSelectWidget(QWidget):
         self._dropdown: Optional[_MultiUserDropdown] = None
         self._rendered_rows = 1
         self._display_height = 40
+        self._max_visible_rows = 4
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -1939,7 +1941,17 @@ class MultiUserSelectWidget(QWidget):
         self._vlay.setContentsMargins(8, 6, 8, 6)
         self._vlay.setSpacing(5)
 
-        outer.addWidget(self._display)
+        self._scroll = QScrollArea()
+        self._scroll.setObjectName("multiUserScroll")
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setFrameShape(QFrame.NoFrame)
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self._scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self._scroll.setStyleSheet("QScrollArea#multiUserScroll{background:transparent;border:none;}")
+        self._scroll.setWidget(self._display)
+
+        outer.addWidget(self._scroll)
         self._display.mousePressEvent = self._toggle_dropdown
         self._render_pills()
 
@@ -1973,6 +1985,9 @@ class MultiUserSelectWidget(QWidget):
                 continue
             seen.add(k)
             vals.append(n)
+        if vals == self._selected:
+            self._render_pills()
+            return
         self._selected = vals
         self._render_pills()
         self.changed.emit()
@@ -2018,7 +2033,10 @@ class MultiUserSelectWidget(QWidget):
 
     def _available_pill_width(self, width: Optional[int] = None) -> int:
         source_width = int(width or self._display.width() or self.width() or 0)
-        return max(source_width - 40, 160) if source_width > 20 else 300
+        # İç marginler + son satırdaki açılır liste oku için güvenli alan bırak.
+        # Ok genişliği hesaba katılmazsa özellikle 4. chip son satırda kırpılabiliyor.
+        reserved = 58
+        return max(source_width - reserved, 160) if source_width > 20 else 300
 
     def _pill_rows(self, width: Optional[int] = None) -> List[List[str]]:
         if not self._selected:
@@ -2045,17 +2063,35 @@ class MultiUserSelectWidget(QWidget):
         margins = self._vlay.contentsMargins()
         spacing = self._vlay.spacing()
         rows = max(1, int(row_count or 1))
+        visible_rows = min(rows, self._max_visible_rows)
+        return max(40, margins.top() + margins.bottom() + visible_rows * self._row_height() + max(0, visible_rows - 1) * spacing)
+
+    def _content_height_for_rows(self, row_count: int) -> int:
+        margins = self._vlay.contentsMargins()
+        spacing = self._vlay.spacing()
+        rows = max(1, int(row_count or 1))
         return max(40, margins.top() + margins.bottom() + rows * self._row_height() + max(0, rows - 1) * spacing)
 
     def _apply_display_height(self, row_count: int):
         height = self._height_for_rows(row_count)
+        content_height = self._content_height_for_rows(row_count)
         if height != self._display_height:
             self._display_height = height
-            self._display.setMinimumHeight(height)
-            self._display.setMaximumHeight(height)
+        self.setMinimumHeight(height)
+        self._scroll.setMinimumHeight(height)
+        self._scroll.setMaximumHeight(height)
+        self._display.setMinimumHeight(content_height)
+        self._display.setMaximumHeight(16777215)
         self._rendered_rows = max(1, int(row_count or 1))
         self._display.updateGeometry()
+        self._scroll.updateGeometry()
         self.updateGeometry()
+        parent = self.parentWidget()
+        if parent is not None:
+            layout = parent.layout()
+            if layout is not None:
+                layout.invalidate()
+            parent.updateGeometry()
 
     def hasHeightForWidth(self) -> bool:
         return True
@@ -2148,7 +2184,7 @@ class MultiUserSelectWidget(QWidget):
 
         self._dropdown.setFixedWidth(max(self.width(), 240))
         self._dropdown.populate(self._available, self._selected)
-        pos = self.mapToGlobal(self._display.rect().bottomLeft())
+        pos = self.mapToGlobal(self._scroll.rect().bottomLeft())
         self._dropdown.move(pos.x(), pos.y() + 2)
         self._dropdown.show()
         self._dropdown.raise_()
@@ -2177,7 +2213,8 @@ class ContractDialog(StyledDialog):
         self._sd_anchor_end_row: int = 0
         self._sd_anchor_platform: str = ""
         self._sd_anchor_no: str = ""
-        self.resize(820, 390)
+        self._default_size = QSize(820, 390)
+        self.resize(self._default_size)
         self.build()
 
     def build(self):
@@ -2217,8 +2254,6 @@ class ContractDialog(StyledDialog):
         self.platform = PlatformSelectWidget(self); self.platform.set_platforms(self.store.platform_names())
         self.user = MultiUserSelectWidget(self)
         self.user.set_available_users([u.get("name", "") for u in self.user_records])
-        if self.user_records:
-            self.user.set_users([self.user_records[0].get("name", "")])
         self.yi_yd = QLineEdit(); self.yi_yd.setReadOnly(True); self.yi_yd.setText("Yİ")
         self.ctype = QComboBox(); self.ctype.addItems(["Ana Sözleşme"])
         self.sd_code = QLineEdit(); self.sd_code.setPlaceholderText("SD-1"); self.sd_code.setEnabled(False)
@@ -2231,7 +2266,7 @@ class ContractDialog(StyledDialog):
 
         self.t0.textChanged.connect(self.update_completion_date)
         self.months.valueChanged.connect(self.update_completion_date)
-        self.user.changed.connect(self.update_user_yi_yd)
+        self.user.changed.connect(self._on_user_selection_changed)
         self.ctype.currentTextChanged.connect(self.on_contract_type_changed)
         self.verify_btn.clicked.connect(lambda: self.verify_sd_reference(show_message=False))
         self.platform.currentTextChanged.connect(self.on_sd_ref_changed)
@@ -2290,6 +2325,22 @@ class ContractDialog(StyledDialog):
         save.clicked.connect(self.save)
         row.addWidget(save)
         root.addLayout(row)
+
+    def _on_user_selection_changed(self):
+        self.update_user_yi_yd()
+        QTimer.singleShot(0, self._resize_for_user_selection)
+
+    def _resize_for_user_selection(self):
+        layout = self.layout()
+        if layout is not None:
+            layout.invalidate()
+            layout.activate()
+        self.user.updateGeometry()
+        preferred_height = max(self._default_size.height(), self.sizeHint().height())
+        screen = QApplication.primaryScreen()
+        if screen is not None:
+            preferred_height = min(preferred_height, screen.availableGeometry().height() - 80)
+        self.resize(max(self.width(), self._default_size.width()), preferred_height)
 
     def is_sd_mode(self) -> bool:
         return self.ctype.currentText().strip() == "Sözleşme Değişikliği"
