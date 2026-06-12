@@ -94,10 +94,13 @@ class AutoAcceptDialog(QDialog):
         self.term_edits: List[QLineEdit] = []
         self.note_edits: List[QLineEdit] = []
         self.delivery_user_combo: Optional[QComboBox] = None
+        self.delivery_user_combos: List[QComboBox] = []
+        self.delivery_user_names: List[str] = []
         self.acc_date_edits: List[QLineEdit] = []
         self.search_edits: List[QLineEdit] = []
         self.current_index = 0
         self._updating = False
+        self._syncing_delivery_user = False
 
         existing_deliveries = list(getattr(work_window, "deliveries", {}).get(system.name, []))
         self.existing_assigned: Dict[str, float] = {
@@ -163,20 +166,7 @@ class AutoAcceptDialog(QDialog):
         rv.setSpacing(10)
         root.addWidget(right, 1)
 
-        user_grid = QGridLayout()
-        user_grid.setHorizontalSpacing(14)
-        user_grid.setVerticalSpacing(8)
-        self.delivery_user_combo = QComboBox()
-        self.delivery_user_combo.addItem("Seçiniz...")
-        store = getattr(self.work, "store", None)
-        if store is not None:
-            for user in store.load_users(active_only=True):
-                name = str(user.get("name", "") or "").strip()
-                if name:
-                    self.delivery_user_combo.addItem(name)
-        user_grid.addWidget(self._form_label("Teslim Edilecek Kullanıcı"), 0, 0)
-        user_grid.addWidget(self.delivery_user_combo, 1, 0)
-        rv.addLayout(user_grid)
+        self.delivery_user_names = self._load_delivery_user_names()
 
         self.stack = QStackedWidget()
         for idx in range(self.accept_count):
@@ -211,6 +201,44 @@ class AutoAcceptDialog(QDialog):
         l.setObjectName("formLabel")
         l.setStyleSheet("font-weight:800; color:#64748B;")
         return l
+
+    def _load_delivery_user_names(self) -> List[str]:
+        names: List[str] = []
+        seen = set()
+        store = getattr(self.work, "store", None)
+        if store is not None:
+            for user in store.load_users(active_only=True):
+                name = str(user.get("name", "") or "").strip()
+                key = name.casefold()
+                if name and key not in seen:
+                    seen.add(key)
+                    names.append(name)
+        return names
+
+    def _build_delivery_user_combo(self) -> QComboBox:
+        combo = QComboBox()
+        combo.addItem("Seçiniz...")
+        for name in self.delivery_user_names:
+            combo.addItem(name)
+        combo.currentIndexChanged.connect(lambda _idx, c=combo: self._sync_delivery_user_combo(c))
+        self.delivery_user_combos.append(combo)
+        if self.delivery_user_combo is None:
+            self.delivery_user_combo = combo
+        return combo
+
+    def _sync_delivery_user_combo(self, source: QComboBox):
+        if self._syncing_delivery_user:
+            return
+        self._syncing_delivery_user = True
+        try:
+            text = source.currentText().strip() if source.currentIndex() > 0 else ""
+            for combo in self.delivery_user_combos:
+                if combo is source:
+                    continue
+                idx = combo.findText(text) if text else 0
+                combo.setCurrentIndex(idx if idx >= 0 else 0)
+        finally:
+            self._syncing_delivery_user = False
 
     def _legacy_build_acceptance_date_input_unused(self) -> tuple[QLineEdit, QWidget]:
         edit = QLineEdit()
@@ -307,10 +335,14 @@ class AutoAcceptDialog(QDialog):
         grid.addWidget(name, 1, 0)
         grid.addWidget(self._form_label("Durum"), 0, 1)
         grid.addWidget(status, 1, 1)
+        delivery_user_combo = self._build_delivery_user_combo()
+
         grid.addWidget(self._form_label("Kabul Tarihi"), 2, 0)
         grid.addWidget(acc_wrap, 3, 0)
         grid.addWidget(self._form_label("Not"), 2, 1)
         grid.addWidget(note, 3, 1)
+        grid.addWidget(self._form_label("Teslim Edilecek Kullanıcı"), 4, 0)
+        grid.addWidget(delivery_user_combo, 5, 0)
         root.addLayout(grid)
 
         info_row = QHBoxLayout()
