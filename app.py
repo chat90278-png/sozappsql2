@@ -8473,10 +8473,10 @@ class MainWindow(QMainWindow):
 
     def open_staff_permissions_dialog(self, initial_tab: str = "staffRoles"):
         if not self.store or not self.is_sts_mode():
-            QMessageBox.information(self, "Veri dosyası gerekli", "Kullanıcı ve yetki yönetimi için önce bir STS veri dosyası açın.")
+            QMessageBox.information(self, "Veri dosyası gerekli", "Personel ve yetki yönetimi için önce bir STS veri dosyası açın.")
             return
         required_permission = "manage_roles" if initial_tab == "rolePermissions" else "manage_staff"
-        if not self.require_permission_ui(required_permission, "Kullanıcı ve Yetki Yönetimi"):
+        if not self.require_permission_ui(required_permission, "Personel ve Yetki Yönetimi"):
             return
         from src.ui.dialogs.staff_permissions import StaffPermissionsDialog
         dlg = StaffPermissionsDialog(self._permission_db(), self.current_staff, self, initial_tab=initial_tab)
@@ -8484,11 +8484,20 @@ class MainWindow(QMainWindow):
         dlg.exec()
 
     def open_user_management(self):
-        self.open_staff_permissions_dialog("staffRoles")
+        if not self.store:
+            QMessageBox.information(self, "Excel gerekli", "Önce bir Excel veya STS veri dosyası bağlayın.")
+            return
+        dlg = UserManagerDialog(self.store, self)
+        dlg.exec()
+        if dlg.changed:
+            self.request_refresh(scope="users")
 
     def open_staff_management(self):
-        # Eski callback uyumluluğu: artık tek kullanıcı/yetki yönetimi penceresine yönlenir.
-        self.open_user_management()
+        self.open_staff_permissions_dialog("staffRoles")
+
+    def open_personnel_permissions(self):
+        initial_tab = "staffRoles" if self.has_permission("manage_staff") else "rolePermissions"
+        self.open_staff_permissions_dialog(initial_tab)
 
     def open_role_permissions(self):
         self.open_staff_permissions_dialog("rolePermissions")
@@ -8537,7 +8546,7 @@ class MainWindow(QMainWindow):
         self.top_actions_menu.addAction("Platform & Bileşen", self.manage_platforms)
         self.top_actions_menu.addSeparator()
         self.user_management_action = self.top_actions_menu.addAction("Kullanıcı Yönetimi", self.open_user_management)
-        self.role_permissions_action = self.top_actions_menu.addAction("Yetki Yönetimi", self.open_role_permissions)
+        self.role_permissions_action = self.top_actions_menu.addAction("Personel ve Yetki Yönetimi", self.open_personnel_permissions)
         self.top_actions_menu.addAction("Etiket Yönetimi", self.manage_tags)
         self.activity_logs_action = self.top_actions_menu.addAction("İşlem Geçmişi", self.open_activity_logs)
         self.top_actions_menu.addSeparator()
@@ -8920,9 +8929,12 @@ class MainWindow(QMainWindow):
 
     def _refresh_permission_actions(self):
         if hasattr(self, "user_management_action"):
-            self.user_management_action.setVisible(self._permission_action_visible("manage_staff"))
+            self.user_management_action.setVisible(True)
         if hasattr(self, "role_permissions_action"):
-            self.role_permissions_action.setVisible(self._permission_action_visible("manage_roles"))
+            self.role_permissions_action.setVisible(
+                self._permission_action_visible("manage_staff")
+                or self._permission_action_visible("manage_roles")
+            )
         if hasattr(self, "activity_logs_action"):
             self.activity_logs_action.setVisible(self._permission_action_visible("view_action_history"))
 
@@ -9788,7 +9800,6 @@ class MainWindow(QMainWindow):
         self.manage_platforms()
 
     def manage_users(self):
-        # Eski menü callback'i artık gerçek personel/rol penceresine yönlenir.
         self.open_user_management()
 
     def manage_tags(self):

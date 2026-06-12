@@ -114,7 +114,7 @@ class StaffPermissionsDialog(QDialog):
         self._group_collapsed: dict[int, bool] = {}
         self._perm_rows: list[tuple] = []
 
-        self.setWindowTitle("Kullanıcı ve Yetki Yönetimi - STS")
+        self.setWindowTitle("Personel ve Yetki Yönetimi - STS")
         # Default küçük açılsın ama kullanıcı isterse büyütebilsin / maximize edebilsin.
         self.setWindowFlags(
             self.windowFlags()
@@ -455,7 +455,7 @@ class StaffPermissionsDialog(QDialog):
         lay.setContentsMargins(0, 8, 0, 0)
         lay.setSpacing(10)
 
-        info = QLabel("ℹ  Bu bölümde personelleri görüntüleyebilir ve hangi kullanıcının "
+        info = QLabel("ℹ  Bu bölümde personelleri görüntüleyebilir ve hangi personelin "
                       "hangi role sahip olacağını belirleyebilirsiniz.")
         info.setObjectName("infoBox")
         lay.addWidget(info)
@@ -1071,7 +1071,7 @@ class StaffPermissionsDialog(QDialog):
                 auth.update_staff_record(self.db_or_path, self.current_user,
                                          int(self.selected_staff_id), **kw)
             self.refresh_all()
-            QMessageBox.information(self, "Kullanıcı ve Yetki Yönetimi",
+            QMessageBox.information(self, "Personel ve Yetki Yönetimi",
                                     "Personel bilgileri kaydedildi.")
         except PermissionError:
             QMessageBox.warning(self, "Yetkisiz İşlem",
