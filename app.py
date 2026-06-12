@@ -8373,7 +8373,7 @@ class MainWindow(QMainWindow):
         self.query_logo_bg.setAttribute(Qt.WA_TransparentForMouseEvents, True)
 
         logo_opacity = QGraphicsOpacityEffect(self.query_logo_bg)
-        logo_opacity.setOpacity(0.22)  # 0.15 çok silik, 0.30 daha belirgin
+        logo_opacity.setOpacity(0.55)
         self.query_logo_bg.setGraphicsEffect(logo_opacity)
         self._query_logo_source: Optional[QPixmap] = None
         self.contract_table.verticalScrollBar().valueChanged.connect(lambda _v: self.position_query_logo_background())
@@ -8752,17 +8752,41 @@ class MainWindow(QMainWindow):
             self.query_logo_bg.clear()
             return
         if selected_platform:
+            # Platform seçili: o platformun logosunu göster
             targets = [str(selected_platform)]
+            strip = self._build_query_logo_strip(targets)
+            if not strip:
+                self._query_logo_source = None
+                self.query_logo_bg.hide()
+                self.query_logo_bg.clear()
+                return
+            self._query_logo_source = strip
+            self.position_query_logo_background()
         else:
-            targets = self.store.platform_names()
-        strip = self._build_query_logo_strip(targets)
-        if not strip:
-            self._query_logo_source = None
-            self.query_logo_bg.hide()
-            self.query_logo_bg.clear()
-            return
-        self._query_logo_source = strip
-        self.position_query_logo_background()
+            # Hiç platform seçili değil: Baykar logosu göster
+            from pathlib import Path as _Path
+            from PySide6.QtGui import QPixmap as _QPixmap
+            assets_dir = _Path(__file__).parent / "src" / "ui" / "assets"
+            # baykar_logo.jpeg → baykar_logo.jpg → sts_logo.svg sıralaması
+            for _name in ("baykar_logo.jpeg", "baykar_logo.jpg", "sts_logo.svg"):
+                _p = assets_dir / _name
+                if _p.exists():
+                    logo_path = _p
+                    break
+            else:
+                logo_path = None
+            px = _QPixmap(str(logo_path)) if logo_path else _QPixmap()
+            if not px.isNull():
+                # Direkt ölçekle — logo kendi arka planına sahip, kart yok
+                scaled = px.scaledToHeight(200, Qt.SmoothTransformation)
+                self.query_logo_bg.setPixmap(scaled)
+                self.query_logo_bg.show()
+                self._query_logo_source = scaled
+                self.position_query_logo_background()
+            else:
+                self._query_logo_source = None
+                self.query_logo_bg.hide()
+                self.query_logo_bg.clear()
 
     def _set_platform_items(self, platforms: List[str]):
         available = {str(p) for p in platforms}
