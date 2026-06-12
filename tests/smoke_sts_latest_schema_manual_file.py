@@ -12,7 +12,7 @@ from tools.create_manual_sts_latest import create_manual_sts
 EXPECTED_COLUMNS = {
     "platforms": ["id", "name", "display_name", "is_active", "is_excluded", "logo_blob", "logo_ext", "logo_mime", "logo_updated_at", "sort_order", "created_at", "updated_at"],
     "users": ["id", "name", "yi_yd", "active", "note", "created_at", "updated_at"],
-    "components": ["id", "name", "version", "unit", "active", "usage", "payload_json", "created_at", "updated_at"],
+    "components": ["id", "name", "version", "unit", "active", "usage", "note", "display_order", "payload_json", "created_at", "updated_at"],
     "component_platforms": ["id", "component_id", "platform_id", "enabled"],
     "contracts": ["id", "platform_id", "contract_no", "yi_yd", "contract_type", "type_display", "link_type", "status", "signed_date", "t0_date", "t0_months", "completion_date", "acceptance_date", "content", "note", "is_main", "parent_contract_id", "search_text", "payload_json", "created_at", "updated_at"],
     "contract_users": ["contract_id", "user_id"],

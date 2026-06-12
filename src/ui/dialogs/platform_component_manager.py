@@ -3,8 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QRect, Qt, Signal, QSize
-from PySide6.QtGui import QAction, QColor, QPainter, QPen
+from PySide6.QtCore import QMimeData, QPoint, QRect, Qt, Signal, QSize
+from PySide6.QtGui import QAction, QColor, QDrag, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -141,12 +141,105 @@ class ToggleSwitch(QWidget):
 
 
 class PlatformHeader(QHeaderView):
+    columnDropped = Signal(int, int)
+    columnDragMoved = Signal(int)
+    columnDragEnded = Signal()
+
+    _MIME_TYPE = "application/x-sts-platform-column"
+
     def __init__(self, orientation, parent=None):
         super().__init__(orientation, parent)
         self.platforms: list[dict[str, Any]] = []
+        self._drag_enabled = True
+        self._drag_start_pos = None
+        self._drag_start_logical = -1
+        self._preview_provider = None
+        self.setAcceptDrops(True)
+        self.viewport().setAcceptDrops(True)
         self.setDefaultAlignment(Qt.AlignCenter)
         self.setSectionsClickable(True)
         self.setFixedHeight(80)
+
+    def set_order_drag_enabled(self, enabled: bool):
+        self._drag_enabled = bool(enabled)
+        self.setAcceptDrops(self._drag_enabled)
+        self.viewport().setAcceptDrops(self._drag_enabled)
+
+    def set_preview_provider(self, provider):
+        self._preview_provider = provider
+
+    def _target_index_at(self, pos: QPoint) -> int:
+        if self.count() <= 0:
+            return 0
+        x = pos.x()
+        for visual in range(self.count()):
+            logical = self.logicalIndex(visual)
+            left = self.sectionViewportPosition(logical)
+            right = left + self.sectionSize(logical)
+            if x < left + max(1, (right - left) // 2):
+                return visual
+        return self.count()
+
+    def mousePressEvent(self, event):
+        if self._drag_enabled and event.button() == Qt.LeftButton:
+            self._drag_start_pos = event.position().toPoint()
+            self._drag_start_logical = self.logicalIndexAt(self._drag_start_pos)
+        else:
+            self._drag_start_pos = None
+            self._drag_start_logical = -1
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if (
+            self._drag_enabled
+            and self._drag_start_pos is not None
+            and self._drag_start_logical >= 0
+            and event.buttons() & Qt.LeftButton
+            and (event.position().toPoint() - self._drag_start_pos).manhattanLength() >= 8
+        ):
+            drag = QDrag(self)
+            mime = QMimeData()
+            mime.setData(self._MIME_TYPE, str(self._drag_start_logical).encode("utf-8"))
+            drag.setMimeData(mime)
+            if self._preview_provider is not None:
+                pix = self._preview_provider(self._drag_start_logical)
+                if pix is not None and not pix.isNull():
+                    drag.setPixmap(pix)
+                    drag.setHotSpot(QPoint(min(pix.width() // 2, max(8, event.position().toPoint().x() - self.sectionViewportPosition(self._drag_start_logical) + 6)), 22))
+            drag.exec(Qt.MoveAction)
+            self.columnDragEnded.emit()
+            return
+        super().mouseMoveEvent(event)
+
+    def dragEnterEvent(self, event):
+        if self._drag_enabled and event.mimeData().hasFormat(self._MIME_TYPE):
+            event.acceptProposedAction()
+            return
+        super().dragEnterEvent(event)
+
+    def dragMoveEvent(self, event):
+        if self._drag_enabled and event.mimeData().hasFormat(self._MIME_TYPE):
+            self.columnDragMoved.emit(self._target_index_at(event.position().toPoint()))
+            event.acceptProposedAction()
+            return
+        super().dragMoveEvent(event)
+
+    def dragLeaveEvent(self, event):
+        self.columnDragEnded.emit()
+        super().dragLeaveEvent(event)
+
+    def dropEvent(self, event):
+        if not (self._drag_enabled and event.mimeData().hasFormat(self._MIME_TYPE)):
+            super().dropEvent(event)
+            return
+        try:
+            source = int(bytes(event.mimeData().data(self._MIME_TYPE)).decode("utf-8"))
+        except Exception:
+            event.ignore()
+            return
+        self.columnDropped.emit(source, self._target_index_at(event.position().toPoint()))
+        self.columnDragEnded.emit()
+        event.acceptProposedAction()
 
     def set_platforms(self, platforms: list[dict[str, Any]]):
         self.platforms = list(platforms or [])
@@ -220,6 +313,100 @@ class PlatformHeader(QHeaderView):
         painter.restore()
 
 
+class DraggableComponentTable(QTableWidget):
+    rowMoved = Signal(int, int)
+    rowDragMoved = Signal(int)
+    rowDragEnded = Signal()
+
+    _MIME_TYPE = "application/x-sts-component-row"
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._drag_enabled = True
+        self._drag_start_pos = None
+        self._drag_start_row = -1
+        self._preview_provider = None
+        self.setAcceptDrops(True)
+        self.viewport().setAcceptDrops(True)
+        self.setDragEnabled(True)
+        self.setDropIndicatorShown(True)
+
+    def set_preview_provider(self, provider):
+        self._preview_provider = provider
+
+    def set_order_drag_enabled(self, enabled: bool):
+        self._drag_enabled = bool(enabled)
+        self.setDragEnabled(self._drag_enabled)
+        self.setAcceptDrops(self._drag_enabled)
+        self.viewport().setAcceptDrops(self._drag_enabled)
+
+    def mousePressEvent(self, event):
+        if self._drag_enabled and event.button() == Qt.LeftButton:
+            self._drag_start_pos = event.position().toPoint()
+            self._drag_start_row = self.rowAt(self._drag_start_pos.y())
+        else:
+            self._drag_start_pos = None
+            self._drag_start_row = -1
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if (
+            self._drag_enabled
+            and self._drag_start_pos is not None
+            and self._drag_start_row >= 0
+            and event.buttons() & Qt.LeftButton
+            and (event.position().toPoint() - self._drag_start_pos).manhattanLength() >= 8
+        ):
+            drag = QDrag(self)
+            mime = QMimeData()
+            mime.setData(self._MIME_TYPE, str(self._drag_start_row).encode("utf-8"))
+            drag.setMimeData(mime)
+            if self._preview_provider is not None:
+                pix = self._preview_provider(self._drag_start_row)
+                if pix is not None and not pix.isNull():
+                    drag.setPixmap(pix)
+                    row_y = self.rowViewportPosition(self._drag_start_row)
+                    drag.setHotSpot(QPoint(28, max(12, self._drag_start_pos.y() - row_y + 6)))
+            drag.exec(Qt.MoveAction)
+            self.rowDragEnded.emit()
+            return
+        super().mouseMoveEvent(event)
+
+    def dragEnterEvent(self, event):
+        if self._drag_enabled and event.mimeData().hasFormat(self._MIME_TYPE):
+            event.acceptProposedAction()
+            return
+        super().dragEnterEvent(event)
+
+    def dragMoveEvent(self, event):
+        if self._drag_enabled and event.mimeData().hasFormat(self._MIME_TYPE):
+            target_row = self.rowAt(event.position().toPoint().y())
+            self.rowDragMoved.emit(self.rowCount() if target_row < 0 else target_row)
+            event.acceptProposedAction()
+            return
+        super().dragMoveEvent(event)
+
+    def dragLeaveEvent(self, event):
+        self.rowDragEnded.emit()
+        super().dragLeaveEvent(event)
+
+    def dropEvent(self, event):
+        if not (self._drag_enabled and event.mimeData().hasFormat(self._MIME_TYPE)):
+            super().dropEvent(event)
+            return
+        try:
+            source_row = int(bytes(event.mimeData().data(self._MIME_TYPE)).decode("utf-8"))
+        except Exception:
+            event.ignore()
+            return
+        target_row = self.rowAt(event.position().toPoint().y())
+        if target_row < 0:
+            target_row = self.rowCount()
+        self.rowMoved.emit(source_row, target_row)
+        self.rowDragEnded.emit()
+        event.acceptProposedAction()
+
+
 class PlatformComponentManagerDialog(QDialog):
     settings_saved = Signal()
 
@@ -233,7 +420,10 @@ class PlatformComponentManagerDialog(QDialog):
         self.change_count = 0
         self._logo_path = ""
         self._syncing_scroll = False
-        self.setWindowTitle("Platform & Bileşen")
+        self._syncing_platform_header = False
+        self._component_order_changed = False
+        self._platform_order_changed = False
+        self.setWindowTitle("Platform ve Bileşen Yönetimi")
         self.setMinimumSize(600, 460)
         self.setWindowFlags(self.windowFlags() | Qt.Window | Qt.WindowMaximizeButtonHint)
         self._build()
@@ -269,7 +459,7 @@ class PlatformComponentManagerDialog(QDialog):
         self.toolbar.setFixedHeight(38)
         tb = QHBoxLayout(self.toolbar)
         tb.setContentsMargins(14, 0, 14, 0)
-        hint = QLabel("Hücreye tıkla → ata / kaldır · Başlığa çift tık veya sağ tık → düzenle / aktife al / sil", objectName="pcHint")
+        hint = QLabel("Hücreye tıkla → ata / kaldır · Sol bileşen alanı ve platform başlığı sürükle → sırala", objectName="pcHint")
         # Arama çubuğu
         self.search_box = QLineEdit()
         self.search_box.setObjectName("pcSearch")
@@ -289,7 +479,7 @@ class PlatformComponentManagerDialog(QDialog):
         matrix_lay.setContentsMargins(0, 0, 0, 0)
         matrix_lay.setSpacing(0)
 
-        self.frozen = QTableWidget()
+        self.frozen = DraggableComponentTable()
         self.frozen.setObjectName("pcFrozen")
         self.frozen.setFixedWidth(220)
         self.frozen.setColumnCount(1)
@@ -307,6 +497,10 @@ class PlatformComponentManagerDialog(QDialog):
         self.frozen.setContextMenuPolicy(Qt.CustomContextMenu)
         self.frozen.customContextMenuRequested.connect(self._component_context_menu)
         self.frozen.cellDoubleClicked.connect(lambda r, _c: self._open_component_popover(self.components[r] if 0 <= r < len(self.components) else None))
+        self.frozen.set_preview_provider(self._row_drag_preview)
+        self.frozen.rowMoved.connect(self._move_component_row)
+        self.frozen.rowDragMoved.connect(self._show_row_drop_indicator)
+        self.frozen.rowDragEnded.connect(self._hide_drop_indicators)
         matrix_lay.addWidget(self.frozen)
 
         self.matrix = QTableWidget()
@@ -323,8 +517,25 @@ class PlatformComponentManagerDialog(QDialog):
         self.matrix.horizontalHeader().setContextMenuPolicy(Qt.CustomContextMenu)
         self.matrix.horizontalHeader().customContextMenuRequested.connect(self._platform_context_menu)
         self.matrix.horizontalHeader().sectionDoubleClicked.connect(self._open_platform_by_index)
+        self.matrix.horizontalHeader().set_preview_provider(self._column_drag_preview)
+        self.matrix.horizontalHeader().setSectionsMovable(False)
+        self.matrix.horizontalHeader().set_order_drag_enabled(True)
+        self.matrix.horizontalHeader().sectionMoved.connect(self._platform_section_moved)
+        self.matrix.horizontalHeader().columnDropped.connect(self._move_platform_column)
+        self.matrix.horizontalHeader().columnDragMoved.connect(self._show_column_drop_indicator)
+        self.matrix.horizontalHeader().columnDragEnded.connect(self._hide_drop_indicators)
         self.matrix.cellClicked.connect(self._toggle_assignment)
         matrix_lay.addWidget(self.matrix, 1)
+
+        self.row_drop_indicator = QFrame(self.matrix_area)
+        self.row_drop_indicator.setObjectName("pcRowDropIndicator")
+        self.row_drop_indicator.setStyleSheet("background:#2563EB;border-radius:1px;")
+        self.row_drop_indicator.hide()
+        self.column_drop_indicator = QFrame(self.matrix_area)
+        self.column_drop_indicator.setObjectName("pcColumnDropIndicator")
+        self.column_drop_indicator.setStyleSheet("background:#2563EB;border-radius:1px;")
+        self.column_drop_indicator.hide()
+
         root.addWidget(self.matrix_area, 1)
 
         def _frozen_scrolled(val):
@@ -502,6 +713,7 @@ QPushButton#dangerButton {{ background:#FFF5F5; color:#DC2626; border:1px solid 
     def _filter_components(self, text: str):
         """Arama kutusuna göre bileşen satırlarını göster/gizle."""
         q = text.strip().lower()
+        self._update_drag_enabled()
         for row in range(self.frozen.rowCount()):
             widget = self.frozen.cellWidget(row, 0)
             if widget:
@@ -543,6 +755,7 @@ QPushButton#dangerButton {{ background:#FFF5F5; color:#DC2626; border:1px solid 
                 "unit": str(getattr(comp, "unit", "Adet") or "Adet"),
                 "active": bool(getattr(comp, "active", True)),
                 "note": str(getattr(comp, "note", "") or ""),
+                "display_order": i,
                 "platforms": dict(getattr(comp, "platforms", {}) or {}),
             })
         return out
@@ -550,13 +763,21 @@ QPushButton#dangerButton {{ background:#FFF5F5; color:#DC2626; border:1px solid 
     def _refresh_matrix(self):
         self.frozen.blockSignals(True)
         self.matrix.blockSignals(True)
+        header = self.matrix.horizontalHeader()
+        header.blockSignals(True)
         rows = len(self.components)
         cols = len(self.platforms)
         self.frozen.setRowCount(rows)
         self.matrix.setRowCount(rows)
         self.matrix.setColumnCount(cols)
-        self.matrix.horizontalHeader().set_platforms(self.platforms)
+        header.set_platforms(self.platforms)
         self.matrix.setHorizontalHeaderLabels([str(p.get("name") or "") for p in self.platforms])
+        header.setSectionsMovable(False)
+        header.set_order_drag_enabled(self._ordering_enabled())
+        for logical in range(cols):
+            visual = header.visualIndex(logical)
+            if visual >= 0 and visual != logical:
+                header.moveSection(visual, logical)
         for c in range(cols):
             self.matrix.setColumnWidth(c, 104)
         for r, comp in enumerate(self.components):
@@ -571,10 +792,193 @@ QPushButton#dangerButton {{ background:#FFF5F5; color:#DC2626; border:1px solid 
                 cell = QTableWidgetItem("✓" if assigned else "")
                 cell.setData(Qt.UserRole, assigned)
                 self.matrix.setItem(r, c, cell)
+        header.blockSignals(False)
         self.frozen.blockSignals(False)
         self.matrix.blockSignals(False)
         self._update_change_text()
         self._auto_size()
+        self._update_drag_enabled()
+
+    def _ordering_enabled(self) -> bool:
+        return not bool(self.search_box.text().strip()) if hasattr(self, "search_box") else True
+
+    def _update_drag_enabled(self):
+        enabled = self._ordering_enabled()
+        if hasattr(self, "frozen") and hasattr(self.frozen, "set_order_drag_enabled"):
+            self.frozen.set_order_drag_enabled(enabled)
+        if hasattr(self, "matrix"):
+            self.matrix.horizontalHeader().setSectionsMovable(False)
+            if hasattr(self.matrix.horizontalHeader(), "set_order_drag_enabled"):
+                self.matrix.horizontalHeader().set_order_drag_enabled(enabled)
+        if not enabled:
+            self._hide_drop_indicators()
+        msg = "" if enabled else "Sıralama yapmak için aramayı temizleyin."
+        if hasattr(self, "footer_msg"):
+            self.footer_msg.setText(msg)
+            self.footer_msg.setVisible(bool(msg))
+        tip = msg or "Bileşen satırlarını sol alandan, platformları başlıktan sürükleyerek sıralayın."
+        if hasattr(self, "frozen"):
+            self.frozen.setToolTip(tip)
+        if hasattr(self, "matrix"):
+            self.matrix.horizontalHeader().setToolTip(tip)
+
+    def _soft_drag_pixmap(self, content: QPixmap) -> QPixmap:
+        if content is None or content.isNull():
+            return QPixmap()
+        pad = 8
+        out = QPixmap(content.width() + pad * 2, content.height() + pad * 2)
+        out.fill(Qt.transparent)
+        painter = QPainter(out)
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor(15, 31, 61, 38))
+        painter.drawRoundedRect(5, 6, content.width() + 6, content.height() + 6, 10, 10)
+        painter.setOpacity(0.88)
+        painter.drawPixmap(pad, pad, content)
+        painter.setOpacity(1.0)
+        painter.setPen(QPen(QColor(59, 111, 232, 190), 1))
+        painter.setBrush(Qt.NoBrush)
+        painter.drawRoundedRect(pad, pad, max(1, content.width() - 1), max(1, content.height() - 1), 8, 8)
+        painter.end()
+        return out
+
+    def _row_drag_preview(self, row: int) -> QPixmap:
+        if row < 0 or row >= self.frozen.rowCount():
+            return QPixmap()
+        frozen_rect = QRect(0, self.frozen.rowViewportPosition(row), self.frozen.viewport().width(), self.frozen.rowHeight(row))
+        matrix_rect = QRect(0, self.matrix.rowViewportPosition(row), self.matrix.viewport().width(), self.matrix.rowHeight(row))
+        frozen_pix = self.frozen.viewport().grab(frozen_rect)
+        matrix_pix = self.matrix.viewport().grab(matrix_rect)
+        content = QPixmap(frozen_pix.width() + matrix_pix.width(), max(frozen_pix.height(), matrix_pix.height()))
+        content.fill(QColor("#FFFFFF"))
+        painter = QPainter(content)
+        painter.drawPixmap(0, 0, frozen_pix)
+        painter.drawPixmap(frozen_pix.width(), 0, matrix_pix)
+        painter.end()
+        return self._soft_drag_pixmap(content)
+
+    def _column_drag_preview(self, col: int) -> QPixmap:
+        if col < 0 or col >= self.matrix.columnCount():
+            return QPixmap()
+        width = self.matrix.columnWidth(col)
+        header_x = self.matrix.horizontalHeader().sectionViewportPosition(col)
+        body_x = self.matrix.columnViewportPosition(col)
+        header_rect = QRect(header_x, 0, width, self.matrix.horizontalHeader().height())
+        body_rect = QRect(body_x, 0, width, self.matrix.viewport().height())
+        header_pix = self.matrix.horizontalHeader().viewport().grab(header_rect)
+        body_pix = self.matrix.viewport().grab(body_rect)
+        content = QPixmap(width, header_pix.height() + body_pix.height())
+        content.fill(QColor("#FFFFFF"))
+        painter = QPainter(content)
+        painter.drawPixmap(0, 0, header_pix)
+        painter.drawPixmap(0, header_pix.height(), body_pix)
+        painter.end()
+        return self._soft_drag_pixmap(content)
+
+    def _show_row_drop_indicator(self, target_row: int):
+        if not hasattr(self, "row_drop_indicator") or self.frozen.rowCount() <= 0:
+            return
+        target_row = max(0, min(int(target_row), self.frozen.rowCount()))
+        if target_row >= self.frozen.rowCount():
+            y = self.frozen.rowViewportPosition(self.frozen.rowCount() - 1) + self.frozen.rowHeight(self.frozen.rowCount() - 1)
+        else:
+            y = self.frozen.rowViewportPosition(target_row)
+        pos = self.frozen.viewport().mapTo(self.matrix_area, QPoint(0, y))
+        self.row_drop_indicator.setGeometry(0, max(0, pos.y() - 1), self.matrix_area.width(), 3)
+        self.row_drop_indicator.raise_()
+        self.row_drop_indicator.show()
+        self.column_drop_indicator.hide()
+
+    def _show_column_drop_indicator(self, target_col: int):
+        if not hasattr(self, "column_drop_indicator") or self.matrix.columnCount() <= 0:
+            return
+        target_col = max(0, min(int(target_col), self.matrix.columnCount()))
+        if target_col >= self.matrix.columnCount():
+            last = self.matrix.columnCount() - 1
+            x = self.matrix.columnViewportPosition(last) + self.matrix.columnWidth(last)
+        else:
+            x = self.matrix.columnViewportPosition(target_col)
+        top = self.matrix.horizontalHeader().mapTo(self.matrix_area, QPoint(x, 0))
+        body_bottom = self.matrix.viewport().mapTo(self.matrix_area, QPoint(x, self.matrix.viewport().height()))
+        self.column_drop_indicator.setGeometry(max(0, top.x() - 1), max(0, top.y()), 3, max(20, body_bottom.y() - top.y()))
+        self.column_drop_indicator.raise_()
+        self.column_drop_indicator.show()
+        self.row_drop_indicator.hide()
+
+    def _hide_drop_indicators(self):
+        if hasattr(self, "row_drop_indicator"):
+            self.row_drop_indicator.hide()
+        if hasattr(self, "column_drop_indicator"):
+            self.column_drop_indicator.hide()
+
+    def _renumber_component_orders(self):
+        for idx, comp in enumerate(self.components):
+            comp["display_order"] = idx
+
+    def _renumber_platform_orders(self):
+        for idx, platform in enumerate(self.platforms):
+            platform["sort_order"] = idx
+
+    def _component_order(self) -> list[int]:
+        return [int(c.get("id") or 0) for c in self.components if int(c.get("id") or 0) > 0]
+
+    def _platform_order(self) -> list[int]:
+        return [int(p.get("id") or 0) for p in self.platforms if int(p.get("id") or 0) > 0]
+
+    def _move_component_row(self, source_row: int, target_row: int):
+        if not self._ordering_enabled():
+            return
+        if source_row < 0 or source_row >= len(self.components):
+            return
+        target_row = max(0, min(int(target_row), len(self.components)))
+        if target_row > source_row:
+            target_row -= 1
+        if target_row == source_row:
+            return
+        item = self.components.pop(source_row)
+        self.components.insert(target_row, item)
+        self._renumber_component_orders()
+        self._component_order_changed = self._component_order() != getattr(self, "_snapshot_component_order", [])
+        self.changed = True
+        self._refresh_matrix()
+
+    def _move_platform_column(self, source_col: int, target_col: int):
+        if not self._ordering_enabled():
+            return
+        if source_col < 0 or source_col >= len(self.platforms):
+            return
+        target_col = max(0, min(int(target_col), len(self.platforms)))
+        if target_col > source_col:
+            target_col -= 1
+        if target_col == source_col:
+            return
+        item = self.platforms.pop(source_col)
+        self.platforms.insert(target_col, item)
+        self._renumber_platform_orders()
+        self._platform_order_changed = self._platform_order() != getattr(self, "_snapshot_platform_order", [])
+        self.changed = True
+        self._refresh_matrix()
+
+    def _platform_section_moved(self, logical_index: int, old_visual_index: int, new_visual_index: int):
+        if self._syncing_platform_header or not self._ordering_enabled():
+            return
+        header = self.matrix.horizontalHeader()
+        visual_order = []
+        for visual in range(header.count()):
+            logical = header.logicalIndex(visual)
+            if 0 <= logical < len(self.platforms):
+                visual_order.append(self.platforms[logical])
+        if len(visual_order) != len(self.platforms):
+            return
+        self._syncing_platform_header = True
+        try:
+            self.platforms = list(visual_order)
+            self._renumber_platform_orders()
+            self._platform_order_changed = self._platform_order() != getattr(self, "_snapshot_platform_order", [])
+            self.changed = True
+            self._refresh_matrix()
+        finally:
+            self._syncing_platform_header = False
 
     def _update_change_text(self):
         self._update_dirty_count()
@@ -587,6 +991,14 @@ QPushButton#dangerButton {{ background:#FFF5F5; color:#DC2626; border:1px solid 
             if c.get("name") in snap
             and dict(c.get("platforms") or {}) != snap[c.get("name")]
         )
+        if self._component_order() != getattr(self, "_snapshot_component_order", []):
+            diff += 1
+        if self._platform_order() != getattr(self, "_snapshot_platform_order", []):
+            diff += 1
+        self._component_order_changed = self._component_order() != getattr(self, "_snapshot_component_order", [])
+        self._platform_order_changed = self._platform_order() != getattr(self, "_snapshot_platform_order", [])
+        if diff > 0:
+            self.changed = True
         self.change_count = diff
         if diff > 0:
             self.change_badge.setText(f"{diff} değişiklik")
@@ -607,6 +1019,10 @@ QPushButton#dangerButton {{ background:#FFF5F5; color:#DC2626; border:1px solid 
             c.get("name", ""): dict(c.get("platforms") or {})
             for c in (self.components or [])
         }
+        self._snapshot_component_order = self._component_order()
+        self._snapshot_platform_order = self._platform_order()
+        self._component_order_changed = False
+        self._platform_order_changed = False
 
     def _mark_saved(self, message: str = ""):
         self.changed = True
@@ -1067,8 +1483,13 @@ QPushButton#dangerButton {{ background:#FFF5F5; color:#DC2626; border:1px solid 
         event.accept()
 
     def _save_and_close(self):
+        if self._component_order_changed and hasattr(self.store, "update_component_order"):
+            self.store.update_component_order(self._component_order())
+        if self._platform_order_changed and hasattr(self.store, "update_platform_order"):
+            self.store.update_platform_order(self._platform_order())
         if hasattr(self.store, "save"):
             self.store.save()
         if self.changed:
             self.settings_saved.emit()
+        self._take_snapshot()
         self.accept()
