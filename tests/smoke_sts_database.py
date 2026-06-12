@@ -13,9 +13,10 @@ with TemporaryDirectory() as td:
     assert db.conn.execute('PRAGMA busy_timeout').fetchone()[0] == 5000
     assert db.conn.execute('PRAGMA synchronous').fetchone()[0] == 1
     assert db.conn.execute('PRAGMA cache_size').fetchone()[0] == -64000
-    assert db.conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0] == '8'
+    assert db.conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0] == '9'
 
     expected_columns = {
+        'components': {'display_order'},
         'component_platforms': {'component_id', 'platform_id'},
         'contracts': {'platform_id'},
         'contract_users': {'contract_id', 'user_id'},
@@ -59,6 +60,10 @@ with TemporaryDirectory() as td:
 
     legacy_path = Path(td) / 'legacy-v2.sts'
     legacy = sqlite3.connect(legacy_path)
+    legacy.execute('CREATE TABLE platforms(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT UNIQUE NOT NULL)')
+    legacy.execute("INSERT INTO platforms(name) VALUES('ZPLATFORM'),('APLATFORM')")
+    legacy.execute('CREATE TABLE components(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT UNIQUE NOT NULL)')
+    legacy.execute("INSERT INTO components(name) VALUES('ZCOMP'),('ACOMP')")
     legacy.execute('CREATE TABLE systems(id INTEGER PRIMARY KEY AUTOINCREMENT,contract_id INTEGER NOT NULL,name TEXT NOT NULL,status TEXT,completion_date TEXT,acceptance_date TEXT,note TEXT,sort_order INTEGER DEFAULT 0,payload_json TEXT)')
     legacy.execute('CREATE TABLE deliveries(id INTEGER PRIMARY KEY AUTOINCREMENT,contract_id INTEGER NOT NULL,system_id INTEGER,system_' 'name TEXT NOT NULL,name TEXT NOT NULL,status TEXT,acceptance_date TEXT,note TEXT,sort_order INTEGER DEFAULT 0,payload_json TEXT)')
     legacy.execute('CREATE TABLE contract_files(id INTEGER PRIMARY KEY AUTOINCREMENT,contract_id INTEGER NOT NULL,filename TEXT NOT NULL,original_path TEXT,file_ext TEXT,mime_type TEXT,size_bytes INTEGER NOT NULL DEFAULT 0,content_blob BLOB NOT NULL,note TEXT,created_at TEXT,updated_at TEXT)')
@@ -69,6 +74,10 @@ with TemporaryDirectory() as td:
     assert 'delivery_user_id' not in {r[1] for r in upgraded.conn.execute('PRAGMA table_info(systems)')}
     assert 'delivery_user_id' in {r[1] for r in upgraded.conn.execute('PRAGMA table_info(deliveries)')}
     assert 'folder_id' in {r[1] for r in upgraded.conn.execute('PRAGMA table_info(contract_files)')}
+    assert 'display_order' in {r[1] for r in upgraded.conn.execute('PRAGMA table_info(components)')}
+    assert 'sort_order' in {r[1] for r in upgraded.conn.execute('PRAGMA table_info(platforms)')}
+    assert [r[0] for r in upgraded.conn.execute("SELECT name FROM components ORDER BY display_order")] == ['ACOMP', 'ZCOMP']
+    assert [r[0] for r in upgraded.conn.execute("SELECT name FROM platforms ORDER BY sort_order")] == ['APLATFORM', 'ZPLATFORM']
     assert 'contract_file_folders' in {r[0] for r in upgraded.conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     delivery_indexes = {r[1] for r in upgraded.conn.execute('PRAGMA index_list(deliveries)')}
     assert 'idx_deliveries_delivery_user_id' in delivery_indexes

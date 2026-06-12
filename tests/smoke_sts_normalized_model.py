@@ -80,7 +80,7 @@ with TemporaryDirectory() as td:
     assert "user_id" not in column_names(upgraded.conn, "contracts")
     assert "system_" "name" not in column_names(upgraded.conn, "deliveries")
     assert upgraded.conn.execute("SELECT COUNT(*) FROM contract_users").fetchone()[0] == 2
-    assert upgraded.conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0] == "8"
+    assert upgraded.conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0] == "9"
     assert upgraded.conn.execute("SELECT system_id FROM deliveries WHERE id=1").fetchone()[0] == 1
     assert upgraded.foreign_key_check() == []
     assert upgraded.integrity_check() == ["ok"]

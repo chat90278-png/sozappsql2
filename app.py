@@ -8594,7 +8594,7 @@ class MainWindow(QMainWindow):
         self.top_actions_menu.addAction("Excel’e Aktar", self.export_sts_to_excel)
         self.top_actions_menu.addAction("Database Yönetimi", self.open_database_management)
         self.top_actions_menu.addAction("Performans Takip", self.open_performance_tracking)
-        self.top_actions_menu.addAction("Platform & Bileşen", self.manage_platforms)
+        self.top_actions_menu.addAction("Platform ve Bileşen Yönetimi", self.manage_platforms)
         self.top_actions_menu.addSeparator()
         self.user_management_action = self.top_actions_menu.addAction("Kullanıcı Yönetimi", self.open_user_management)
         self.role_permissions_action = self.top_actions_menu.addAction("Personel ve Yetki Yönetimi", self.open_personnel_permissions)
@@ -9826,7 +9826,7 @@ class MainWindow(QMainWindow):
         self.show_contract_summary(row, rows[row])
 
     def manage_platforms(self):
-        if not self.require_permission_ui("manage_platforms", "Platform Yönetimi"):
+        if not self.require_permission_ui("manage_platforms", "Platform ve Bileşen Yönetimi"):
             return
         if not self.store:
             QMessageBox.information(self, "Excel gerekli", "Önce bir Excel dosyası bağlayın.")
