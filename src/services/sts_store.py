@@ -473,6 +473,120 @@ class STSStore:
         ).fetchall()
         return [str(r[0]) for r in fb if str(r[0] or "").strip()]
 
+
+    # ---------- Sistem Tipi / Bileşen Paketi helpers ----------
+    # STS dosyalarında sistem tipi paketleri mevcut meta tablosunda JSON olarak tutulur.
+    # Şema değişikliği yapılmaz; meta tablosu yoksa kayıt işlemi kontrollü hata verir.
+    _SYSTEM_TYPES_META_KEY = "system_types"
+
+    def _system_type_meta_available(self) -> bool:
+        row = self.db.conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='meta'"
+        ).fetchone()
+        return bool(row)
+
+    def _system_type_platform_key(self, platform: str = "") -> str:
+        return str(platform or "").strip()
+
+    def _load_system_types_payload(self) -> dict:
+        if not self._system_type_meta_available():
+            return {}
+        row = self.db.conn.execute(
+            "SELECT value FROM meta WHERE key=?",
+            (self._SYSTEM_TYPES_META_KEY,),
+        ).fetchone()
+        if not row or not str(row[0] or "").strip():
+            return {}
+        try:
+            payload = json.loads(str(row[0] or "{}"))
+        except Exception:
+            return {}
+        return payload if isinstance(payload, dict) else {}
+
+    def _write_system_types_payload(self, payload: dict) -> None:
+        if not self._system_type_meta_available():
+            raise RuntimeError("Sistem tipi kaydedilemedi: meta tablosu bulunamadı.")
+        self.db.conn.execute(
+            "INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)",
+            (self._SYSTEM_TYPES_META_KEY, json.dumps(payload or {}, ensure_ascii=False)),
+        )
+
+    def _find_system_type_key(self, platform_bucket: dict, type_name: str) -> str | None:
+        target = str(type_name or "").strip().casefold()
+        if not target or not isinstance(platform_bucket, dict):
+            return None
+        for key in platform_bucket.keys():
+            if str(key or "").strip().casefold() == target:
+                return str(key)
+        return None
+
+    def _normalize_system_type_components(self, components) -> Dict[str, float]:
+        source = (components or {}).items() if isinstance(components, dict) else [(c, 1) for c in (components or [])]
+        out: Dict[str, float] = {}
+        seen = set()
+        for cname, qty in source:
+            name = str(cname or "").strip()
+            key = name.casefold()
+            if not name or key in seen:
+                continue
+            try:
+                amount = float(qty or 0)
+            except Exception:
+                amount = 0.0
+            if amount <= 0:
+                continue
+            seen.add(key)
+            out[name] = int(amount) if amount.is_integer() else amount
+        return out
+
+    def save_system_type(self, type_name: str, platform: str, components) -> int:
+        type_name = str(type_name or "").strip()
+        if not type_name:
+            raise ValueError("Tip adı boş olamaz.")
+        normalized_components = self._normalize_system_type_components(components)
+        if not normalized_components:
+            raise ValueError("Kaydedilecek bileşen yok.")
+
+        payload = self._load_system_types_payload()
+        platform_key = self._system_type_platform_key(platform)
+        platform_bucket = payload.get(platform_key)
+        if not isinstance(platform_bucket, dict):
+            platform_bucket = {}
+            payload[platform_key] = platform_bucket
+
+        existing_key = self._find_system_type_key(platform_bucket, type_name)
+        if existing_key and existing_key != type_name:
+            platform_bucket.pop(existing_key, None)
+        platform_bucket[type_name] = normalized_components
+
+        with self.db.tx():
+            self._write_system_types_payload(payload)
+        return len(normalized_components)
+
+    def list_system_type_names(self, platform: str = "") -> List[str]:
+        payload = self._load_system_types_payload()
+        platform_bucket = payload.get(self._system_type_platform_key(platform))
+        if not isinstance(platform_bucket, dict):
+            return []
+        names = [str(name).strip() for name in platform_bucket.keys() if str(name or "").strip()]
+        return sorted(names, key=lambda x: x.casefold())
+
+    def get_system_type_component_quantities(self, type_name: str, platform: str = "") -> Dict[str, float]:
+        payload = self._load_system_types_payload()
+        platform_bucket = payload.get(self._system_type_platform_key(platform))
+        if not isinstance(platform_bucket, dict):
+            return {}
+        type_key = self._find_system_type_key(platform_bucket, type_name)
+        if not type_key:
+            return {}
+        raw_components = platform_bucket.get(type_key)
+        if not isinstance(raw_components, dict):
+            return {}
+        return self._normalize_system_type_components(raw_components)
+
+    def get_system_type_components(self, type_name: str, platform: str = "") -> List[str]:
+        return list(self.get_system_type_component_quantities(type_name, platform).keys())
+
     def _tag_name_of(self, tag) -> str:
         if isinstance(tag, str):
             return str(tag).strip()

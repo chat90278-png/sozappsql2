@@ -15,7 +15,7 @@ import zipfile
 import unicodedata
 from pathlib import Path
 from datetime import date, datetime, timedelta
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Protocol, Tuple
 from auto_accept import open_auto_accept_dialog
 
 from openpyxl import Workbook, load_workbook
@@ -594,6 +594,16 @@ from src.services.excel_store import ExcelStore
 from src.services.sts_store import STSStore
 from src import auth
 from src.workers import ExcelLoadWorker, UserSaveWorker, ContractSaveWorker, AnalyzeDialog
+
+
+class SystemTypeStore(Protocol):
+    """System dialogs depend on this store API in both ExcelStore and STSStore modes."""
+
+    def assigned_components(self, platform: str) -> List[str]: ...
+    def list_system_type_names(self, platform: str = "") -> List[str]: ...
+    def get_system_type_components(self, type_name: str, platform: str = "") -> List[str]: ...
+    def get_system_type_component_quantities(self, type_name: str, platform: str = "") -> Dict[str, float]: ...
+    def save_system_type(self, type_name: str, platform: str, components) -> int: ...
 
 
 COL_PLATFORM = 0
@@ -1915,7 +1925,7 @@ class MultiUserSelectWidget(QWidget):
         self._display = QFrame()
         self._display.setObjectName("multiUserDisplay")
         self._display.setCursor(Qt.PointingHandCursor)
-        self._display.setMinimumHeight(36)
+        self._display.setMinimumHeight(40)
         self._display.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
         self._display.setStyleSheet(
             "QFrame#multiUserDisplay{"
@@ -1924,8 +1934,8 @@ class MultiUserSelectWidget(QWidget):
             "QFrame#multiUserDisplay:hover{border-color:#93c5fd;}"
         )
         self._vlay = QVBoxLayout(self._display)
-        self._vlay.setContentsMargins(8, 5, 8, 5)
-        self._vlay.setSpacing(4)
+        self._vlay.setContentsMargins(8, 6, 8, 6)
+        self._vlay.setSpacing(5)
 
         outer.addWidget(self._display)
         self._display.mousePressEvent = self._toggle_dropdown
@@ -1977,18 +1987,18 @@ class MultiUserSelectWidget(QWidget):
     def _make_pill(self, name: str) -> QWidget:
         bg, fg = self._pill_colors(name)
         pill = QWidget()
-        pill.setStyleSheet(f"QWidget{{background:{bg};border-radius:10px;border:none;}}")
+        pill.setStyleSheet(f"QWidget{{background:{bg};border-radius:11px;border:none;}}")
         pl = QHBoxLayout(pill)
-        pl.setContentsMargins(9, 3, 7, 3)
-        pl.setSpacing(4)
+        pl.setContentsMargins(10, 4, 8, 4)
+        pl.setSpacing(5)
         lbl = QLabel(name)
         lbl.setStyleSheet(
-            f"color:{fg};font-size:12px;font-weight:700;background:transparent;border:none;"
+            f"color:{fg};font-size:12px;font-weight:600;background:transparent;border:none;"
         )
         pl.addWidget(lbl)
         x = QLabel("×")
         x.setStyleSheet(
-            f"color:{fg};font-size:14px;background:transparent;border:none;padding:0 2px;"
+            f"color:{fg};font-size:15px;background:transparent;border:none;padding:0 1px;"
         )
         x.setCursor(Qt.PointingHandCursor)
         x.mousePressEvent = lambda e, n=name: self._remove_user(e, n)
@@ -1999,7 +2009,7 @@ class MultiUserSelectWidget(QWidget):
     def _est_pill_w(name: str) -> int:
         WIDE, NARROW = set("mwMW"), set("iltfrjıİiI.,;: ")
         w = sum(12 if c in WIDE else 4 if c == " " else 6 if c in NARROW else 8 for c in name)
-        return w + 44
+        return w + 52
 
     def _clear_rows(self):
         """_vlay içindeki tüm satır widget'larını sil (her seferinde yeni QLabel yaratılıyor)."""
@@ -2034,7 +2044,7 @@ class MultiUserSelectWidget(QWidget):
             self._vlay.addWidget(row)
         else:
             dw = self._display.width()
-            avail = max(dw - 56, 150) if dw > 20 else 280
+            avail = max(dw - 40, 160) if dw > 20 else 300
             GAP = 5
 
             all_rows: List[List[str]] = []
@@ -2120,7 +2130,7 @@ class ContractDialog(StyledDialog):
         self._sd_anchor_end_row: int = 0
         self._sd_anchor_platform: str = ""
         self._sd_anchor_no: str = ""
-        self.resize(720, 390)
+        self.resize(820, 390)
         self.build()
 
     def build(self):
@@ -2190,7 +2200,7 @@ class ContractDialog(StyledDialog):
 
         add_field("Sözleşme No", no_container, 0, 0)
         add_field("Platform", self.platform, 0, 1)
-        add_field("Kullanıcı", self.user, 1, 0)
+        add_field("Sözleşmenin Sahibi Kullanıcı", self.user, 1, 0)
         add_field("Yİ/YD", self.yi_yd, 1, 1)
         add_field("Sözleşme Tipi", self.ctype, 2, 0)
         add_field("İmza Tarihi", self.sig_wrap, 2, 1)
@@ -3375,7 +3385,7 @@ class TagManagerDialog(StyledDialog):
 class SystemDialog(StyledDialog):
     def __init__(
         self,
-        store: ExcelStore,
+        store: SystemTypeStore,
         platform: str,
         default_name: str = "Sistem 1",
         parent=None,
@@ -3787,7 +3797,7 @@ class SystemDialog(StyledDialog):
 class MultiSystemDialog(StyledDialog):
     def __init__(
         self,
-        store: ExcelStore,
+        store: SystemTypeStore,
         platform: str,
         contract_t0_date: str = "",
         existing_names: Optional[List[str]] = None,
