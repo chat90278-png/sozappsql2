@@ -15,7 +15,7 @@ import zipfile
 import unicodedata
 from pathlib import Path
 from datetime import date, datetime, timedelta
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Protocol, Tuple
 from auto_accept import open_auto_accept_dialog
 
 from openpyxl import Workbook, load_workbook
@@ -594,6 +594,16 @@ from src.services.excel_store import ExcelStore
 from src.services.sts_store import STSStore
 from src import auth
 from src.workers import ExcelLoadWorker, UserSaveWorker, ContractSaveWorker, AnalyzeDialog
+
+
+class SystemTypeStore(Protocol):
+    """System dialogs depend on this store API in both ExcelStore and STSStore modes."""
+
+    def assigned_components(self, platform: str) -> List[str]: ...
+    def list_system_type_names(self, platform: str = "") -> List[str]: ...
+    def get_system_type_components(self, type_name: str, platform: str = "") -> List[str]: ...
+    def get_system_type_component_quantities(self, type_name: str, platform: str = "") -> Dict[str, float]: ...
+    def save_system_type(self, type_name: str, platform: str, components) -> int: ...
 
 
 COL_PLATFORM = 0
@@ -3375,7 +3385,7 @@ class TagManagerDialog(StyledDialog):
 class SystemDialog(StyledDialog):
     def __init__(
         self,
-        store: ExcelStore,
+        store: SystemTypeStore,
         platform: str,
         default_name: str = "Sistem 1",
         parent=None,
@@ -3787,7 +3797,7 @@ class SystemDialog(StyledDialog):
 class MultiSystemDialog(StyledDialog):
     def __init__(
         self,
-        store: ExcelStore,
+        store: SystemTypeStore,
         platform: str,
         contract_t0_date: str = "",
         existing_names: Optional[List[str]] = None,
