@@ -2313,6 +2313,8 @@ class PlatformTabsWidget(QScrollArea):
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setFixedHeight(32)
+        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        self.viewport().setStyleSheet("background:transparent;border:0;")
         self.setObjectName("platformTabsRail")
         self._apply_rail_style(single=True)
         self._host = QWidget()
@@ -2360,7 +2362,7 @@ class PlatformTabsWidget(QScrollArea):
             btn=QPushButton(name)
             btn.setCursor(Qt.PointingHandCursor)
             btn.setFixedHeight(max_height)
-            chip_width = max(70, metrics.horizontalAdvance(name) + 30)
+            chip_width = max(74 if single else 70, metrics.horizontalAdvance(name) + (32 if single else 30))
             btn.setFixedWidth(chip_width)
             btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
             btn.setToolTip(name)
@@ -2369,7 +2371,7 @@ class PlatformTabsWidget(QScrollArea):
             btn.setStyleSheet(
                 "QPushButton{border-radius:13px;padding:2px 12px;font-size:11px;font-weight:900;letter-spacing:0.35px;text-align:center;"
                 + ("background:qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #1d58ca, stop:0.55 #2f7dff, stop:1 #0b48a8);"
-                   "color:#fbfdff;border:1px solid rgba(130,198,255,220);"
+                   "color:#fbfdff;border:1px solid rgba(150,211,255,230);"
                    if active else
                    "background:transparent;color:#cfe5ff;border:1px solid transparent;")
                 + "}"
@@ -5366,7 +5368,15 @@ class ContractWorkWindow(QDialog):
 
         header = QFrame(); header.setObjectName("contractHeader")
         header.setFixedHeight(68)
-        h = QHBoxLayout(header); h.setContentsMargins(18, 7, 16, 7); h.setSpacing(0)
+        h = QHBoxLayout(header); h.setContentsMargins(18, 7, 16, 7); h.setSpacing(14)
+
+        info_row = QWidget(); info_row.setObjectName("contractHeaderInfoRow")
+        info_row.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        info = QHBoxLayout(info_row); info.setContentsMargins(0, 0, 0, 0); info.setSpacing(0)
+
+        actions = QWidget(); actions.setObjectName("contractHeaderActions")
+        actions.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        actions_lay = QHBoxLayout(actions); actions_lay.setContentsMargins(0, 0, 0, 0); actions_lay.setSpacing(8)
 
         self.meta_values: Dict[str, QLabel] = {}
         self.platform_tabs_widget: Optional[PlatformTabsWidget] = None
@@ -5376,7 +5386,7 @@ class ContractWorkWindow(QDialog):
             cell.setMinimumWidth(min_w)
             if max_w:
                 cell.setMaximumWidth(max_w)
-            cell.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+            cell.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
             cl = QVBoxLayout(cell); cl.setContentsMargins(10, 0, 10, 0); cl.setSpacing(2)
             lbl = QLabel(label_text.upper()); lbl.setObjectName("metaHeaderLabel")
             if value_widget is None:
@@ -5432,21 +5442,21 @@ class ContractWorkWindow(QDialog):
         self.platform_tabs_widget.activePlatformChanged.connect(lambda _name: None)
 
         cells = [
-            (*meta_cell("no", "Sözleşme No", self.ci.no, min_w=116, max_w=172), 0),
-            (*meta_cell("platform", "Platform", "", min_w=86, max_w=440, value_widget=self.platform_tabs_widget), 0),
-            (*meta_cell("type", "Tür", self.ci.contract_type, min_w=92, max_w=150), 0),
-            (*meta_cell("user", "Kullanıcı", user_text, min_w=124, max_w=190, value_widget=inline_icon_text(user_text, user_svg, "user", user_tip)), 0),
-            (*meta_cell("status", "Durum", "", min_w=112, max_w=150, value_widget=status_widget(self.ci.status or "Başlanmadı")), 0),
+            (*meta_cell("no", "Sözleşme No", self.ci.no, min_w=122, max_w=210), 17),
+            (*meta_cell("platform", "Platform", "", min_w=120, max_w=360, value_widget=self.platform_tabs_widget), 22),
+            (*meta_cell("type", "Tür", self.ci.contract_type, min_w=112, max_w=190), 16),
+            (*meta_cell("user", "Kullanıcı", user_text, min_w=150, max_w=250, value_widget=inline_icon_text(user_text, user_svg, "user", user_tip)), 21),
+            (*meta_cell("status", "Durum", "", min_w=126, max_w=190, value_widget=status_widget(self.ci.status or "Başlanmadı")), 16),
         ]
         if user_tip and self.meta_values.get("user"):
             self.meta_values["user"].setToolTip(user_tip)
         for i, (cell, div, stretch) in enumerate(cells):
-            h.addWidget(cell, stretch)
+            info.addWidget(cell, stretch)
             if i < len(cells) - 1:
-                h.addWidget(div)
-                h.addSpacing(2)
+                info.addWidget(div)
+                info.addSpacing(2)
 
-        h.addStretch(1)
+        h.addWidget(info_row, 1)
         e = QPushButton("  Ana Bilgileri Düzenle"); e.setObjectName("headerEditBtn")
         e.setFixedHeight(36)
         _svg = b"""<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' width='15' height='15'>
@@ -5458,8 +5468,7 @@ class ContractWorkWindow(QDialog):
         e.setIcon(QIcon(_pix))
         e.setIconSize(QSize(15, 15))
         e.clicked.connect(self.edit_contract_info)
-        h.addWidget(e)
-        h.addSpacing(8)
+        actions_lay.addWidget(e)
         self.delete_contract_btn = QPushButton("Sözleşmeyi Sil")
         self.delete_contract_btn.setObjectName("danger")
         self.delete_contract_btn.setFixedHeight(36)
@@ -5471,7 +5480,8 @@ class ContractWorkWindow(QDialog):
         self.delete_contract_btn.setIcon(QIcon(trash_pix))
         self.delete_contract_btn.setIconSize(QSize(15, 15))
         self.delete_contract_btn.clicked.connect(self.delete_contract)
-        h.addWidget(self.delete_contract_btn)
+        actions_lay.addWidget(self.delete_contract_btn)
+        h.addWidget(actions, 0, Qt.AlignRight | Qt.AlignVCenter)
         root.addWidget(header)
 
         body = QHBoxLayout(); body.setSpacing(10); root.addLayout(body, 1)
