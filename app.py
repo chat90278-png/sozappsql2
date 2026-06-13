@@ -2303,6 +2303,8 @@ class PlatformTabsWidget(QScrollArea):
         super().__init__(parent)
         self._platforms: List[str] = []
         self._active = ""
+        self._content_width = 72
+        self._max_width = 520
         # Scroll alanı üst barda genişleyebilir; iç chip host'u ise içerik kadar
         # kalmalı. widgetResizable=True olursa host viewport genişliğine zorlanıp
         # tek chip'in büyük bir mavi bar gibi algılanmasına neden olabiliyor.
@@ -2358,7 +2360,17 @@ class PlatformTabsWidget(QScrollArea):
         if self._platforms:
             total_width += self._lay.spacing() * max(0, len(self._platforms) - 1)
         self._host.setFixedSize(max(1, total_width), max_height)
+        self._content_width = max(72, total_width)
+        self.setMinimumWidth(min(self._content_width, self._max_width))
+        self.setMaximumWidth(self._max_width)
+        self.updateGeometry()
         self.setToolTip(", ".join(self._platforms))
+
+    def sizeHint(self) -> QSize:
+        return QSize(min(max(72, self._content_width), self._max_width), 30)
+
+    def minimumSizeHint(self) -> QSize:
+        return QSize(min(max(72, self._content_width), self._max_width), 30)
 
     def _set_active(self, name: str):
         if name == self._active:
@@ -5360,7 +5372,7 @@ class ContractWorkWindow(QDialog):
 
         cells = [
             (*meta_cell("no", "Sözleşme No", self.ci.no, min_w=110, max_w=170), 0),
-            (*meta_cell("platform", "Platform", "", min_w=220, value_widget=self.platform_tabs_widget), 2),
+            (*meta_cell("platform", "Platform", "", min_w=90, max_w=560, value_widget=self.platform_tabs_widget), 0),
             (*meta_cell("type", "Tür", self.ci.contract_type, min_w=70, max_w=110), 0),
             (*meta_cell("user", "Kullanıcı", user_text, min_w=95, max_w=145), 0),
             (*meta_cell("status", "Durum", self.ci.status or "Başlanmadı", min_w=95, max_w=135), 0),
