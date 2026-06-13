@@ -33,6 +33,14 @@ class ContractInfo:
     sd_anchor_platform: str = ""
     sd_anchor_no: str = ""
     users: list[str] = field(default_factory=list)
+    id: int = 0
+    contract_id: int = 0
+    platform_id: int = 0
+    primary_platform_id: int = 0
+    primary_platform: str = ""
+    platforms: list[dict] = field(default_factory=list)
+    platform_names: list[str] = field(default_factory=list)
+    platform_ids: list[int] = field(default_factory=list)
 
 
 @dataclass
@@ -45,6 +53,7 @@ class SystemInfo:
     completion_date: str = ""
     status: str = "Başlanmadı"
     acceptance_date: str = ""
+    platform_id: int = 0
 
     def __post_init__(self) -> None:
         # Preserve the legacy positional constructor contract from before
