@@ -2344,7 +2344,7 @@ class PlatformTabsWidget(QScrollArea):
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setFixedHeight(32)
-        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         self.viewport().setStyleSheet("background:transparent;border:0;")
         self.setObjectName("platformTabsRail")
         self._apply_rail_style(single=True)
@@ -2358,14 +2358,10 @@ class PlatformTabsWidget(QScrollArea):
         self.setWidget(self._host)
 
     def _apply_rail_style(self, single: bool):
-        rail_style = "background:transparent;border:0;border-radius:0;" if single else (
-            "background:qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 rgba(10,28,52,120), stop:1 rgba(7,20,38,98));"
-            "border:1px solid rgba(91,148,204,54);border-radius:16px;"
-        )
-        self.setStyleSheet(f"""
-            QScrollArea#platformTabsRail {{{rail_style}}}
-            QScrollArea#platformTabsRail > QWidget > QWidget {{ background:transparent; }}
-            QScrollBar:horizontal {{ height:0px; background:transparent; }}
+        self.setStyleSheet("""
+            QScrollArea#platformTabsRail {background:transparent;border:0;border-radius:0;}
+            QScrollArea#platformTabsRail > QWidget > QWidget { background:transparent; }
+            QScrollBar:horizontal { height:0px; background:transparent; }
         """)
 
     def set_platforms(self, platforms: List[object], active_platform_id: int = 0):
@@ -2416,7 +2412,7 @@ class PlatformTabsWidget(QScrollArea):
             btn.setFixedWidth(chip_width)
             btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
             btn.setToolTip(name)
-            active = pid == int(self._active or 0)
+            active = bool(pid) and pid == int(self._active or 0)
             btn.setObjectName("platformTabActive" if active else "platformTabPassive")
             btn.setStyleSheet(
                 "QPushButton{border-radius:13px;padding:2px 12px;font-size:11px;font-weight:900;letter-spacing:0.35px;text-align:center;"
@@ -2428,14 +2424,7 @@ class PlatformTabsWidget(QScrollArea):
                   "QPushButton#platformTabPassive:hover{background:rgba(45,123,255,0.16);border-color:rgba(125,190,255,0.38);color:#ffffff;}"
                   "QPushButton#platformTabActive:hover{border-color:rgba(174,218,255,235);}"
             )
-            if active and not single:
-                glow = QGraphicsDropShadowEffect(btn)
-                glow.setBlurRadius(18)
-                glow.setOffset(0, 0)
-                glow.setColor(QColor(45, 132, 255, 180))
-                btn.setGraphicsEffect(glow)
-            else:
-                btn.setGraphicsEffect(None)
+            btn.setGraphicsEffect(None)
             btn.clicked.connect(lambda _=False, platform_id=pid: self._set_active(platform_id))
             self._lay.addWidget(btn, 0, Qt.AlignLeft | Qt.AlignVCenter)
             total_width += chip_width
@@ -2445,8 +2434,10 @@ class PlatformTabsWidget(QScrollArea):
         total_width += left + right
         self._host.setFixedSize(max(1, total_width), 32)
         self._content_width = max(70, total_width)
-        self.setMinimumWidth(min(self._content_width, self._max_width))
-        self.setMaximumWidth(self._max_width)
+        fixed_width = min(self._content_width, self._max_width)
+        self.setMinimumWidth(fixed_width)
+        self.setMaximumWidth(fixed_width)
+        self.setFixedWidth(fixed_width)
         self.updateGeometry()
         self.setToolTip(", ".join(str(p.get("platform_name") or "") for p in self._platforms))
 
@@ -5590,7 +5581,7 @@ class ContractWorkWindow(QDialog):
 
         cells = [
             (*meta_cell("no", "Sözleşme No", self.ci.no, min_w=122, max_w=210), 17),
-            (*meta_cell("platform", "Platform", "", min_w=180, max_w=620, value_widget=self.platform_tabs_widget), 28),
+            (*meta_cell("platform", "Platform", "", min_w=90, max_w=380, value_widget=self.platform_tabs_widget), 0),
             (*meta_cell("type", "Tür", self.ci.contract_type, min_w=112, max_w=190), 16),
             (*meta_cell("user", "Kullanıcı", user_text, min_w=150, max_w=250, value_widget=inline_icon_text(user_text, user_svg, "user", user_tip)), 21),
             (*meta_cell("status", "Durum", "", min_w=126, max_w=190, value_widget=status_widget(self.ci.status or "Başlanmadı")), 16),
