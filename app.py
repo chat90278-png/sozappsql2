@@ -2676,9 +2676,15 @@ class ContractEditDialog(StyledDialog):
         self._no_lbl       = QLineEdit(str(self.ci.no or ""))
         self._plat_lbl     = readonly(self.ci.platform)
         self._type_lbl     = readonly(self.ci.contract_type)
+        self._type_lbl.setPlaceholderText("Örn: SD-1")
         if self._is_sd_contract:
             self._no_lbl.setReadOnly(True)
             self._no_lbl.setStyleSheet("background:#f1f5f9; color:#64748B; border:1px solid #e2e8f0;")
+            self._type_lbl.setReadOnly(False)
+            self._type_lbl.setEnabled(True)
+            self._type_lbl.setStyleSheet("")
+            self._type_lbl.editingFinished.connect(self._normalize_sd_code_field)
+            self._type_lbl.textChanged.connect(self._check_duplicate_contract_key)
             no_warn_text = "SD kayıtlarının sözleşme no alanı ana sözleşmeye bağlıdır; doğrudan değiştirilemez."
         else:
             no_warn_text = "Aynı platform + sözleşme tipi + sözleşme no kombinasyonu kullanılamaz."
@@ -2815,11 +2821,32 @@ class ContractEditDialog(StyledDialog):
             })
         return events
 
+    def _normalized_sd_code(self) -> str:
+        raw = str(self._type_lbl.text() or "").strip().upper().replace(" ", "")
+        if not raw:
+            return ""
+        m = re.match(r"^SD[-_]?(\d+)$", raw)
+        if m:
+            return f"SD-{int(m.group(1))}"
+        return ""
+
+    def _normalize_sd_code_field(self):
+        if not self._is_sd_contract:
+            return
+        sd_code = self._normalized_sd_code()
+        if sd_code:
+            self._type_lbl.setText(sd_code)
+
+    def _current_contract_type_text(self) -> str:
+        if self._is_sd_contract:
+            return self._normalized_sd_code() or self._type_lbl.text().strip()
+        return str(self.ci.contract_type or "").strip()
+
     def _check_duplicate_contract_key(self) -> bool:
         """Başka bir kayıtta aynı platform + tip + no varsa uyarı gösterir."""
         no_text = self._no_lbl.text().strip()
         platform = str(self.ci.platform or "").strip()
-        contract_type = str(self.ci.contract_type or "").strip()
+        contract_type = self._current_contract_type_text()
         if not no_text or not platform or not contract_type:
             self._no_dup_warn.setVisible(self._is_sd_contract)
             if not self._is_sd_contract:
@@ -2929,8 +2956,17 @@ class ContractEditDialog(StyledDialog):
             QMessageBox.warning(self, "Tarih hatası", "T0 tarihi yyyy-aa-gg formatında olmalı.")
             return
         self._recalc()
+        contract_type = str(self.ci.contract_type or "").strip()
+        if self._is_sd_contract:
+            sd_code = self._normalized_sd_code()
+            if not sd_code:
+                QMessageBox.warning(self, "Format", "SD kodu SD-1, SD-2 gibi sayısal formatta olmalı.")
+                return
+            self._type_lbl.setText(sd_code)
+            contract_type = sd_code
         new_ci = copy.copy(self.ci)
         new_ci.no              = new_no_text
+        new_ci.contract_type   = contract_type
         selected_users = self.user.selected_users()
         if not selected_users:
             QMessageBox.warning(self, "Zorunlu Alan", "En az bir kullanıcı seçmelisiniz.")
