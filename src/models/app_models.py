@@ -33,6 +33,8 @@ class ContractInfo:
     sd_anchor_platform: str = ""
     sd_anchor_no: str = ""
     users: list[str] = field(default_factory=list)
+    id: int = 0
+    contract_id: int = 0
     platform_id: int = 0
     primary_platform_id: int = 0
     primary_platform: str = ""

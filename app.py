@@ -2215,17 +2215,48 @@ class MultiPlatformSelectWidget(MultiUserSelectWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._placeholder = "Platform seçiniz..."
+        self._platform_id_by_name: Dict[str, int] = {}
         self._display.setObjectName("multiPlatformDisplay")
         self._display.setStyleSheet(
             "QFrame#multiPlatformDisplay{background:white;border:1.5px solid #d8e2ed;border-radius:8px;}"
             "QFrame#multiPlatformDisplay:hover{border-color:#93c5fd;}"
         )
 
-    def set_platforms(self, names: List[str]):
+    def set_platforms(self, platforms: List[object]):
+        names: List[str] = []
+        self._platform_id_by_name = {}
+        for item in platforms or []:
+            if isinstance(item, dict):
+                pid = int(item.get("id") or item.get("platform_id") or 0)
+                name = str(item.get("name") or item.get("platform_name") or "").strip()
+            else:
+                pid = 0
+                name = str(item or "").strip()
+            if name:
+                names.append(name)
+                if pid:
+                    self._platform_id_by_name[name] = pid
         self.set_available_users(names)
 
-    def selected_platforms(self) -> List[str]:
+    def selected_platform_names(self) -> List[str]:
         return self.selected_users()
+
+    def selected_platform_ids(self) -> List[int]:
+        ids: List[int] = []
+        seen = set()
+        for name in self.selected_platform_names():
+            pid = int(self._platform_id_by_name.get(name) or 0)
+            if pid and pid not in seen:
+                seen.add(pid); ids.append(pid)
+        return ids
+
+    def selected_platforms(self) -> List[str]:
+        return self.selected_platform_names()
+
+    def selected_platform_records(self) -> List[dict]:
+        ids = self.selected_platform_ids()
+        names = self.selected_platform_names()
+        return [{"id": pid, "name": name, "platform_id": pid, "platform_name": name} for pid, name in zip(ids, names)]
 
     def set_selected_platforms(self, names: List[str]):
         self.set_users(names)
@@ -2484,7 +2515,7 @@ class ContractDialog(StyledDialog):
         no_container_lay.addWidget(no_row)
         no_container_lay.addWidget(self.no_dup_warn)
 
-        self.platform = MultiPlatformSelectWidget(self); self.platform.set_platforms(self.store.platform_names())
+        self.platform = MultiPlatformSelectWidget(self); self.platform.set_platforms(self.store.load_platforms() if hasattr(self.store, "load_platforms") else self.store.platform_names())
         self.user = MultiUserSelectWidget(self)
         self.user.set_available_users([u.get("name", "") for u in self.user_records])
         self.yi_yd = QLineEdit(); self.yi_yd.setReadOnly(True); self.yi_yd.setText("Yİ")
@@ -2752,20 +2783,14 @@ class ContractDialog(StyledDialog):
             widget.setStyleSheet("")
 
     def selected_platform_ids(self) -> List[int]:
-        ids: List[int] = []
-        seen = set()
-        for name in self.platform.selected_platforms():
-            pid = self.store.get_platform_id(name, create=False)
-            if pid is not None and int(pid) not in seen:
-                seen.add(int(pid)); ids.append(int(pid))
-        return ids
+        return self.platform.selected_platform_ids() if hasattr(self.platform, "selected_platform_ids") else []
 
     def save(self):
         if not self.no.text().strip():
             QMessageBox.warning(self, "Eksik", "Sözleşme no girin.")
             return
         if not self.platform.selected_platforms():
-            QMessageBox.warning(self, "Eksik", "En az bir platform seçmelisiniz.")
+            QMessageBox.warning(self, "Eksik", "Lütfen en az bir platform seçiniz.")
             return
         if self.is_sd_mode() and not self.verify_sd_reference(show_message=False):
             QMessageBox.warning(self, "Doğrulama", "Sözleşme Değişikliği için önce geçerli kontrat no doğrulaması gerekir.")
@@ -2847,9 +2872,9 @@ class ContractDialog(StyledDialog):
             sd_anchor_platform=self._sd_anchor_platform if self.is_sd_mode() else "",
             sd_anchor_no=self._sd_anchor_no if self.is_sd_mode() else "",
             users=users,
-            platforms=[{"platform_id": pid, "platform_name": name} for pid, name in zip(self.selected_platform_ids(), self.platform.selected_platforms())],
-            platform_names=self.platform.selected_platforms(),
-            platform_ids=self.selected_platform_ids(),
+            platforms=self.platform.selected_platform_records(),
+            platform_names=self.platform.selected_platform_names(),
+            platform_ids=self.platform.selected_platform_ids(),
         )
         self.accept()
 
@@ -2921,7 +2946,7 @@ class ContractEditDialog(StyledDialog):
         self._no_lbl       = QLineEdit(str(self.ci.no or ""))
         self._locked_platforms = self._initial_platforms()
         self._platform_select = MultiPlatformSelectWidget(self)
-        self._platform_select.set_platforms(self.store.platform_names())
+        self._platform_select.set_platforms(self.store.load_platforms() if hasattr(self.store, "load_platforms") else self.store.platform_names())
         self._platform_select.set_selected_platforms(self._locked_platforms)
         self._platform_help = QLabel("Kayıtlı platformlar çıkarılamaz; yalnızca yeni platform eklenebilir.")
         self._platform_help.setObjectName("muted")
@@ -3226,7 +3251,7 @@ class ContractEditDialog(StyledDialog):
             return
         selected_platforms = self._selected_platforms()
         if not selected_platforms:
-            QMessageBox.warning(self, "Zorunlu Alan", "En az bir platform seçmelisiniz.")
+            QMessageBox.warning(self, "Zorunlu Alan", "Lütfen en az bir platform seçiniz.")
             return
         if self._check_duplicate_contract_key():
             QMessageBox.warning(
@@ -3298,11 +3323,12 @@ class ContractEditDialog(StyledDialog):
         new_ci.completion_date = self.completion.text().strip()
         new_ci.status          = str(self.ci.status or "Başlanmadı")
         new_ci.note            = self.note.text().strip()
-        selected_platform_ids = []
-        for name in selected_platforms:
-            pid = self.store.get_platform_id(name, create=False)
-            if pid is not None:
-                selected_platform_ids.append(int(pid))
+        selected_platform_ids = self._platform_select.selected_platform_ids() if hasattr(self._platform_select, "selected_platform_ids") else []
+        if not selected_platform_ids:
+            for name in selected_platforms:
+                pid = self.store.get_platform_id(name, create=False)
+                if pid is not None:
+                    selected_platform_ids.append(int(pid))
         setattr(new_ci, "platforms", [{"platform_id": pid, "platform_name": name} for pid, name in zip(selected_platform_ids, selected_platforms)])
         setattr(new_ci, "platform_names", selected_platforms)
         setattr(new_ci, "platform_ids", selected_platform_ids)
@@ -5973,30 +5999,6 @@ class ContractWorkWindow(QDialog):
         self.refresh_contract_header()
         self.refresh()
 
-
-    def set_active_platform(self, platform_name: str):
-        platform_name = str(platform_name or "").strip()
-        if not platform_name or platform_name == str(self.ci.platform or "").strip():
-            return
-        self._cache_current_context()
-        try:
-            ci, systems, deliveries = self.store.load_contract_structure(platform_name, self.ci.no, start_row=self.ci.entry_start_row, contract_type=self.ci.contract_type)
-        except Exception as exc:
-            QMessageBox.warning(self, "Platform yüklenemedi", f"Seçilen platform verisi yüklenemedi:\n{exc}")
-            return
-        # Same contract row, different active platform context. Keep primary platform metadata but use
-        # ci.platform as the active system/delivery write target for backward-compatible save paths.
-        self.ci.platform = platform_name
-        self.active_platform_id = int(getattr(ci, "platform_id", 0) or self.store.get_platform_id(platform_name) or 0)
-        setattr(self.ci, "platforms", self._linked_contract_platforms())
-        setattr(self.ci, "platform_names", self._linked_contract_platforms())
-        self.systems = systems or []
-        self.deliveries = deliveries or {}
-        self.selected_system = self.systems[0].name if self.systems else None
-        self.expanded_delivery_index = None
-        self.refresh_contract_header()
-        self.refresh()
-
     def refresh_contract_header(self):
         if not hasattr(self, "meta_values"):
             return
@@ -8294,7 +8296,10 @@ class ContractWorkWindow(QDialog):
         if not ci:
             return False, "Sözleşme bilgisi eksik."
         if not systems:
-            return False, f"{ci.contract_type}: en az bir sistem ekleyin."
+            self._apply_derived_statuses(ci, systems, deliveries)
+            ctx["deliveries"] = deliveries
+            ctx["systems"] = systems
+            return True, ""
         created_defaults = []
         deleted_delivery_systems = set(ctx.get("deleted_delivery_systems") or set())
         for sys_info in systems:
@@ -10519,12 +10524,29 @@ class MainWindow(QMainWindow):
                 return
         dlg=ContractDialog(self.store,self)
         if dlg.exec() and dlg.result:
-            work=ContractWorkWindow(self.store,dlg.result,self)
+            try:
+                new_contract_id = self.store.write_contract(dlg.result, [], {})
+                dlg.result.entry_start_row = int(new_contract_id or 0)
+                setattr(dlg.result, "id", int(new_contract_id or 0))
+                setattr(dlg.result, "contract_id", int(new_contract_id or 0))
+                active_pid = int((getattr(dlg.result, "platform_ids", []) or [0])[0] or getattr(dlg.result, "platform_id", 0) or 0)
+                ci, systems, deliveries = self.store.load_contract_structure(
+                    dlg.result.platform,
+                    dlg.result.no,
+                    start_row=new_contract_id,
+                    contract_type=dlg.result.contract_type,
+                    platform_id=active_pid,
+                )
+            except Exception as exc:
+                traceback.print_exc()
+                QMessageBox.critical(self, "Sözleşme Kaydedilemedi", f"Yeni sözleşme kaydedilemedi:\n{exc}")
+                return
+            work=ContractWorkWindow(self.store,ci,self,systems=systems,deliveries=deliveries)
             if work.exec():
                 self.request_refresh(
-                    select_platform=dlg.result.platform,
+                    select_platform=ci.platform,
                     scope="platform",
-                    platform=dlg.result.platform,
+                    platform=ci.platform,
                 )
 
     def refresh(self, rebuild_index: bool = True):
