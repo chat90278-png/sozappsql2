@@ -2295,7 +2295,7 @@ class ElidedValueLabel(QLabel):
 
 
 class PlatformTabsWidget(QScrollArea):
-    """Header içindeki tek satırlık platform chip/tab prototipi."""
+    """Header içinde gömülü premium/neon platform sekme rayı."""
 
     activePlatformChanged = Signal(str)
 
@@ -2303,7 +2303,7 @@ class PlatformTabsWidget(QScrollArea):
         super().__init__(parent)
         self._platforms: List[str] = []
         self._active = ""
-        self._content_width = 72
+        self._content_width = 92
         self._max_width = 520
         # Scroll alanı üst barda genişleyebilir; iç chip host'u ise içerik kadar
         # kalmalı. widgetResizable=True olursa host viewport genişliğine zorlanıp
@@ -2312,14 +2312,23 @@ class PlatformTabsWidget(QScrollArea):
         self.setFrameShape(QFrame.NoFrame)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.setFixedHeight(30)
-        self.setStyleSheet("QScrollArea{background:transparent;border:none;} QScrollArea > QWidget > QWidget{background:transparent;}")
+        self.setFixedHeight(34)
+        self.setObjectName("platformTabsRail")
+        self.setStyleSheet("""
+            QScrollArea#platformTabsRail {
+                background:qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 rgba(12,31,55,168), stop:1 rgba(8,22,42,145));
+                border:1px solid rgba(91,148,204,82);
+                border-radius:17px;
+            }
+            QScrollArea#platformTabsRail > QWidget > QWidget { background:transparent; }
+            QScrollBar:horizontal { height:0px; background:transparent; }
+        """)
         self._host = QWidget()
         self._host.setStyleSheet("background:transparent;")
         self._host.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         self._lay = QHBoxLayout(self._host)
-        self._lay.setContentsMargins(0, 0, 0, 0)
-        self._lay.setSpacing(5)
+        self._lay.setContentsMargins(4, 4, 4, 4)
+        self._lay.setSpacing(3)
         self._lay.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         self.setWidget(self._host)
 
@@ -2339,38 +2348,50 @@ class PlatformTabsWidget(QScrollArea):
             if item.widget(): item.widget().deleteLater()
         metrics = QFontMetrics(self.font())
         total_width = 0
-        max_height = 24
+        max_height = 26
         for name in self._platforms:
             btn=QPushButton(name)
             btn.setCursor(Qt.PointingHandCursor)
             btn.setFixedHeight(max_height)
-            chip_width = max(44, metrics.horizontalAdvance(name) + 28)
+            chip_width = max(72, metrics.horizontalAdvance(name) + 34)
             btn.setFixedWidth(chip_width)
             btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
             btn.setToolTip(name)
             active = name == self._active
+            btn.setObjectName("platformTabActive" if active else "platformTabPassive")
             btn.setStyleSheet(
-                "QPushButton{border-radius:12px;padding:2px 12px;font-size:12px;font-weight:700;text-align:center;"
-                + ("background:#2563eb;color:white;border:1px solid #2563eb;}" if active else "background:#f8fafc;color:#334155;border:1px solid #cbd5e1;}")
-                + "QPushButton:hover{border-color:#60a5fa;}"
+                "QPushButton{border-radius:13px;padding:2px 14px;font-size:11px;font-weight:900;letter-spacing:0.3px;text-align:center;"
+                + ("background:qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #1b55c9, stop:0.52 #2f7cff, stop:1 #0a46a5);"
+                   "color:#f8fbff;border:1px solid rgba(118,187,255,210);"
+                   if active else
+                   "background:transparent;color:#d7e9ff;border:1px solid transparent;")
+                + "}"
+                  "QPushButton:hover{background:rgba(45,123,255,0.22);border-color:rgba(125,190,255,0.55);color:#ffffff;}"
             )
+            if active:
+                glow = QGraphicsDropShadowEffect(btn)
+                glow.setBlurRadius(18)
+                glow.setOffset(0, 0)
+                glow.setColor(QColor(45, 132, 255, 180))
+                btn.setGraphicsEffect(glow)
             btn.clicked.connect(lambda _=False, n=name: self._set_active(n))
             self._lay.addWidget(btn, 0, Qt.AlignLeft | Qt.AlignVCenter)
             total_width += chip_width
         if self._platforms:
             total_width += self._lay.spacing() * max(0, len(self._platforms) - 1)
-        self._host.setFixedSize(max(1, total_width), max_height)
-        self._content_width = max(72, total_width)
+        total_width += 8
+        self._host.setFixedSize(max(1, total_width), 34)
+        self._content_width = max(92, total_width)
         self.setMinimumWidth(min(self._content_width, self._max_width))
         self.setMaximumWidth(self._max_width)
         self.updateGeometry()
         self.setToolTip(", ".join(self._platforms))
 
     def sizeHint(self) -> QSize:
-        return QSize(min(max(72, self._content_width), self._max_width), 30)
+        return QSize(min(max(92, self._content_width), self._max_width), 34)
 
     def minimumSizeHint(self) -> QSize:
-        return QSize(min(max(72, self._content_width), self._max_width), 30)
+        return QSize(min(max(92, self._content_width), self._max_width), 34)
 
     def _set_active(self, name: str):
         if name == self._active:
@@ -5335,8 +5356,8 @@ class ContractWorkWindow(QDialog):
         root.setSpacing(6)
 
         header = QFrame(); header.setObjectName("contractHeader")
-        header.setFixedHeight(70)
-        h = QHBoxLayout(header); h.setContentsMargins(16, 8, 12, 8); h.setSpacing(0)
+        header.setFixedHeight(68)
+        h = QHBoxLayout(header); h.setContentsMargins(18, 7, 16, 7); h.setSpacing(0)
 
         self.meta_values: Dict[str, QLabel] = {}
         self.platform_tabs_widget: Optional[PlatformTabsWidget] = None
@@ -5346,7 +5367,7 @@ class ContractWorkWindow(QDialog):
             cell.setMinimumWidth(min_w)
             if max_w:
                 cell.setMaximumWidth(max_w)
-            cl = QVBoxLayout(cell); cl.setContentsMargins(10, 0, 10, 0); cl.setSpacing(1)
+            cl = QVBoxLayout(cell); cl.setContentsMargins(12, 0, 12, 0); cl.setSpacing(2)
             lbl = QLabel(label_text.upper()); lbl.setObjectName("metaHeaderLabel")
             if value_widget is None:
                 val = ElidedValueLabel(value_text if value_text else "-"); val.setObjectName("metaHeaderValue")
@@ -5365,17 +5386,46 @@ class ContractWorkWindow(QDialog):
             shown = users[0] if len(users) == 1 else f"{users[0]} +{len(users) - 1}"
             return shown, "\n".join(users)
 
+        def inline_icon_text(text: str, icon_svg: bytes, object_name: str, tooltip: str = "") -> QWidget:
+            wrap = QWidget(); wrap.setObjectName(object_name)
+            row = QHBoxLayout(wrap); row.setContentsMargins(0, 0, 0, 0); row.setSpacing(7)
+            pix = QPixmap(); pix.loadFromData(icon_svg, "SVG")
+            icon = QLabel(); icon.setPixmap(pix); icon.setFixedSize(16, 16)
+            val = ElidedValueLabel(text if text else "-"); val.setObjectName("metaHeaderValue")
+            if tooltip:
+                wrap.setToolTip(tooltip); val.setToolTip(tooltip)
+            self.meta_values[object_name] = val
+            row.addWidget(icon, 0, Qt.AlignVCenter)
+            row.addWidget(val, 1, Qt.AlignVCenter)
+            return wrap
+
+        def status_widget(text: str) -> QWidget:
+            wrap = QWidget(); wrap.setObjectName("headerStatusWrap")
+            row = QHBoxLayout(wrap); row.setContentsMargins(0, 0, 0, 0); row.setSpacing(7)
+            dot = QLabel(); dot.setObjectName("headerStatusDot"); dot.setFixedSize(10, 10)
+            val = ElidedValueLabel(text if text else "Başlanmadı"); val.setObjectName("metaHeaderValue")
+            self.meta_values["status"] = val
+            row.addWidget(dot, 0, Qt.AlignVCenter)
+            row.addWidget(val, 1, Qt.AlignVCenter)
+            return wrap
+
         user_text, user_tip = compact_users(self.ci.user)
+        user_svg = b"""<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' width='16' height='16'>
+          <path d='M5.8 7.2a2.55 2.55 0 1 1 0-5.1 2.55 2.55 0 0 1 0 5.1Zm-4 6.2c.35-2.7 1.85-4.1 4-4.1s3.65 1.4 4 4.1'
+                fill='none' stroke='#a7c8ec' stroke-width='1.25' stroke-linecap='round'/>
+          <path d='M11.2 6.2a1.9 1.9 0 1 0 0-3.8M10.8 9.2c1.8.15 3 1.35 3.35 3.5'
+                fill='none' stroke='#6f94bd' stroke-width='1.15' stroke-linecap='round'/>
+        </svg>"""
         self.platform_tabs_widget = PlatformTabsWidget(self)
         self.platform_tabs_widget.set_platforms(getattr(self.ci, "platforms", None) or [self.ci.platform], self.ci.platform)
         self.platform_tabs_widget.activePlatformChanged.connect(lambda _name: None)
 
         cells = [
-            (*meta_cell("no", "Sözleşme No", self.ci.no, min_w=110, max_w=170), 0),
-            (*meta_cell("platform", "Platform", "", min_w=90, max_w=560, value_widget=self.platform_tabs_widget), 0),
-            (*meta_cell("type", "Tür", self.ci.contract_type, min_w=70, max_w=110), 0),
-            (*meta_cell("user", "Kullanıcı", user_text, min_w=95, max_w=145), 0),
-            (*meta_cell("status", "Durum", self.ci.status or "Başlanmadı", min_w=95, max_w=135), 0),
+            (*meta_cell("no", "Sözleşme No", self.ci.no, min_w=120, max_w=180), 0),
+            (*meta_cell("platform", "Platform", "", min_w=130, max_w=560, value_widget=self.platform_tabs_widget), 0),
+            (*meta_cell("type", "Tür", self.ci.contract_type, min_w=90, max_w=140), 0),
+            (*meta_cell("user", "Kullanıcı", user_text, min_w=130, max_w=170, value_widget=inline_icon_text(user_text, user_svg, "user", user_tip)), 0),
+            (*meta_cell("status", "Durum", "", min_w=120, max_w=150, value_widget=status_widget(self.ci.status or "Başlanmadı")), 0),
         ]
         if user_tip and self.meta_values.get("user"):
             self.meta_values["user"].setToolTip(user_tip)
@@ -5402,6 +5452,13 @@ class ContractWorkWindow(QDialog):
         self.delete_contract_btn = QPushButton("Sözleşmeyi Sil")
         self.delete_contract_btn.setObjectName("danger")
         self.delete_contract_btn.setFixedHeight(36)
+        trash_svg = b"""<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' width='15' height='15'>
+          <path d='M2.8 4.2h10.4M6.2 4.2V2.7h3.6v1.5M4.2 5.8l.45 7.1c.05.75.48 1.1 1.2 1.1h4.3c.72 0 1.15-.35 1.2-1.1l.45-7.1M6.8 7.4v4.1M9.2 7.4v4.1'
+                fill='none' stroke='#dc2626' stroke-width='1.25' stroke-linecap='round' stroke-linejoin='round'/>
+        </svg>"""
+        trash_pix = QPixmap(); trash_pix.loadFromData(trash_svg, "SVG")
+        self.delete_contract_btn.setIcon(QIcon(trash_pix))
+        self.delete_contract_btn.setIconSize(QSize(15, 15))
         self.delete_contract_btn.clicked.connect(self.delete_contract)
         h.addWidget(self.delete_contract_btn)
         root.addWidget(header)
