@@ -1916,6 +1916,7 @@ class MultiUserSelectWidget(QWidget):
         super().__init__(parent)
         self._available: List[str] = []
         self._selected: List[str] = []
+        self._placeholder = "Kullanıcı seçiniz..."
         self._dropdown: Optional[_MultiUserDropdown] = None
         self._rendered_rows = 1
         self._display_height = 40
@@ -2127,7 +2128,7 @@ class MultiUserSelectWidget(QWidget):
             rl = QHBoxLayout(row)
             rl.setContentsMargins(0, 0, 0, 0)
             rl.setSpacing(4)
-            ph = QLabel("Kullanıcı seçiniz...")
+            ph = QLabel(getattr(self, "_placeholder", "Kullanıcı seçiniz..."))
             ph.setStyleSheet(
                 "color:#94a3b8;font-size:13px;background:transparent;border:none;"
             )
@@ -2201,6 +2202,184 @@ class MultiUserSelectWidget(QWidget):
             self._dropdown.setFixedWidth(max(self.width(), 240))
 
 
+class MultiPlatformSelectWidget(MultiUserSelectWidget):
+    """Faz 1 çoklu platform seçim prototipi.
+
+    MultiUserSelectWidget'in denenmiş chip/dropdown altyapısını generic API ile
+    kullanır; state UI tarafında çoklu platform adlarını tutar, backend'e sadece
+    ilk seçili platform currentText uyumluluğu ile verilir.
+    """
+
+    currentTextChanged = Signal(str)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._placeholder = "Platform seçiniz..."
+        self._display.setObjectName("multiPlatformDisplay")
+        self._display.setStyleSheet(
+            "QFrame#multiPlatformDisplay{background:white;border:1.5px solid #d8e2ed;border-radius:8px;}"
+            "QFrame#multiPlatformDisplay:hover{border-color:#93c5fd;}"
+        )
+
+    def set_platforms(self, names: List[str]):
+        self.set_available_users(names)
+
+    def selected_platforms(self) -> List[str]:
+        return self.selected_users()
+
+    def set_selected_platforms(self, names: List[str]):
+        self.set_users(names)
+
+    def currentText(self) -> str:
+        vals = self.selected_platforms()
+        return vals[0] if vals else ""
+
+    def currentIndex(self) -> int:
+        cur = self.currentText()
+        try:
+            return self._available.index(cur)
+        except ValueError:
+            return -1
+
+    def setCurrentIndex(self, idx: int):
+        if 0 <= idx < len(self._available):
+            self.set_selected_platforms([self._available[idx]])
+
+    def setCurrentText(self, text: str):
+        t = str(text or "").strip()
+        self.set_selected_platforms([t] if t else [])
+
+    @property
+    def currentIndexChanged(self):
+        return self.currentTextChanged
+
+    def _on_dropdown_changed(self, names: List[str]):
+        old = self.currentText()
+        super()._on_dropdown_changed(names)
+        new = self.currentText()
+        if old != new:
+            self.currentTextChanged.emit(new)
+
+    def _remove_user(self, event, name: str):
+        old = self.currentText()
+        super()._remove_user(event, name)
+        new = self.currentText()
+        if old != new:
+            self.currentTextChanged.emit(new)
+
+
+class ElidedValueLabel(QLabel):
+    """Tek satır ellipsis + tam değer tooltip gösteren kompakt header etiketi."""
+
+    def __init__(self, text: str = "", parent=None):
+        super().__init__(parent)
+        self._full_text = ""
+        self.setWordWrap(False)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.setMinimumWidth(40)
+        super().setText("")
+        self.setText(text)
+
+    def setText(self, text: str):
+        self._full_text = str(text or "-")
+        self.setToolTip(self._full_text)
+        self._apply_elide()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._apply_elide()
+
+    def _apply_elide(self):
+        metrics = QFontMetrics(self.font())
+        super().setText(metrics.elidedText(self._full_text, Qt.ElideRight, max(20, self.width() - 2)))
+
+
+class PlatformTabsWidget(QScrollArea):
+    """Header içindeki tek satırlık platform chip/tab prototipi."""
+
+    activePlatformChanged = Signal(str)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._platforms: List[str] = []
+        self._active = ""
+        self._content_width = 72
+        self._max_width = 520
+        # Scroll alanı üst barda genişleyebilir; iç chip host'u ise içerik kadar
+        # kalmalı. widgetResizable=True olursa host viewport genişliğine zorlanıp
+        # tek chip'in büyük bir mavi bar gibi algılanmasına neden olabiliyor.
+        self.setWidgetResizable(False)
+        self.setFrameShape(QFrame.NoFrame)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setFixedHeight(30)
+        self.setStyleSheet("QScrollArea{background:transparent;border:none;} QScrollArea > QWidget > QWidget{background:transparent;}")
+        self._host = QWidget()
+        self._host.setStyleSheet("background:transparent;")
+        self._host.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self._lay = QHBoxLayout(self._host)
+        self._lay.setContentsMargins(0, 0, 0, 0)
+        self._lay.setSpacing(5)
+        self._lay.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self.setWidget(self._host)
+
+    def set_platforms(self, platforms: List[str], active: str = ""):
+        vals=[]; seen=set()
+        for p in platforms or []:
+            n=str(p or "").strip()
+            if n and n.casefold() not in seen:
+                seen.add(n.casefold()); vals.append(n)
+        self._platforms = vals or ([str(active).strip()] if str(active or "").strip() else [])
+        self._active = active if active in self._platforms else (self._platforms[0] if self._platforms else "")
+        self._render()
+
+    def _render(self):
+        while self._lay.count():
+            item=self._lay.takeAt(0)
+            if item.widget(): item.widget().deleteLater()
+        metrics = QFontMetrics(self.font())
+        total_width = 0
+        max_height = 24
+        for name in self._platforms:
+            btn=QPushButton(name)
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.setFixedHeight(max_height)
+            chip_width = max(44, metrics.horizontalAdvance(name) + 28)
+            btn.setFixedWidth(chip_width)
+            btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+            btn.setToolTip(name)
+            active = name == self._active
+            btn.setStyleSheet(
+                "QPushButton{border-radius:12px;padding:2px 12px;font-size:12px;font-weight:700;text-align:center;"
+                + ("background:#2563eb;color:white;border:1px solid #2563eb;}" if active else "background:#f8fafc;color:#334155;border:1px solid #cbd5e1;}")
+                + "QPushButton:hover{border-color:#60a5fa;}"
+            )
+            btn.clicked.connect(lambda _=False, n=name: self._set_active(n))
+            self._lay.addWidget(btn, 0, Qt.AlignLeft | Qt.AlignVCenter)
+            total_width += chip_width
+        if self._platforms:
+            total_width += self._lay.spacing() * max(0, len(self._platforms) - 1)
+        self._host.setFixedSize(max(1, total_width), max_height)
+        self._content_width = max(72, total_width)
+        self.setMinimumWidth(min(self._content_width, self._max_width))
+        self.setMaximumWidth(self._max_width)
+        self.updateGeometry()
+        self.setToolTip(", ".join(self._platforms))
+
+    def sizeHint(self) -> QSize:
+        return QSize(min(max(72, self._content_width), self._max_width), 30)
+
+    def minimumSizeHint(self) -> QSize:
+        return QSize(min(max(72, self._content_width), self._max_width), 30)
+
+    def _set_active(self, name: str):
+        if name == self._active:
+            return
+        self._active = name
+        self._render()
+        self.activePlatformChanged.emit(name)
+
+
 class ContractDialog(StyledDialog):
     def __init__(self, store: ExcelStore, parent=None):
         super().__init__("Yeni Sözleşme", parent)
@@ -2251,7 +2430,7 @@ class ContractDialog(StyledDialog):
         no_container_lay.addWidget(no_row)
         no_container_lay.addWidget(self.no_dup_warn)
 
-        self.platform = PlatformSelectWidget(self); self.platform.set_platforms(self.store.platform_names())
+        self.platform = MultiPlatformSelectWidget(self); self.platform.set_platforms(self.store.platform_names())
         self.user = MultiUserSelectWidget(self)
         self.user.set_available_users([u.get("name", "") for u in self.user_records])
         self.yi_yd = QLineEdit(); self.yi_yd.setReadOnly(True); self.yi_yd.setText("Yİ")
@@ -5160,29 +5339,49 @@ class ContractWorkWindow(QDialog):
         h = QHBoxLayout(header); h.setContentsMargins(16, 8, 12, 8); h.setSpacing(0)
 
         self.meta_values: Dict[str, QLabel] = {}
+        self.platform_tabs_widget: Optional[PlatformTabsWidget] = None
 
-        def meta_cell(key, label_text, value_text):
+        def meta_cell(key, label_text, value_text, *, min_w=70, max_w=None, value_widget=None):
             cell = QWidget(); cell.setObjectName("metaCell")
+            cell.setMinimumWidth(min_w)
+            if max_w:
+                cell.setMaximumWidth(max_w)
             cl = QVBoxLayout(cell); cl.setContentsMargins(10, 0, 10, 0); cl.setSpacing(1)
             lbl = QLabel(label_text.upper()); lbl.setObjectName("metaHeaderLabel")
-            val = QLabel(value_text if value_text else "-"); val.setObjectName("metaHeaderValue")
-            self.meta_values[key] = val
+            if value_widget is None:
+                val = ElidedValueLabel(value_text if value_text else "-"); val.setObjectName("metaHeaderValue")
+                self.meta_values[key] = val
+            else:
+                val = value_widget
             cl.addWidget(lbl); cl.addWidget(val)
             div = QFrame(); div.setObjectName("metaHeaderDiv")
             div.setFixedSize(1, 32)
             return cell, div
 
-        fields = [
-            ("no",       "Sözleşme No",  self.ci.no),
-            ("platform", "Platform",     self.ci.platform),
-            ("type",     "Tür",          self.ci.contract_type),
-            ("user",     "Kullanıcı",    self.ci.user),
-            ("status",   "Durum",        self.ci.status or "Başlanmadı"),
+        def compact_users(value: str) -> Tuple[str, str]:
+            users = [x.strip() for x in re.split(r"[,;]+", str(value or "")) if x.strip()]
+            if not users:
+                return "-", ""
+            shown = users[0] if len(users) == 1 else f"{users[0]} +{len(users) - 1}"
+            return shown, "\n".join(users)
+
+        user_text, user_tip = compact_users(self.ci.user)
+        self.platform_tabs_widget = PlatformTabsWidget(self)
+        self.platform_tabs_widget.set_platforms(getattr(self.ci, "platforms", None) or [self.ci.platform], self.ci.platform)
+        self.platform_tabs_widget.activePlatformChanged.connect(lambda _name: None)
+
+        cells = [
+            (*meta_cell("no", "Sözleşme No", self.ci.no, min_w=110, max_w=170), 0),
+            (*meta_cell("platform", "Platform", "", min_w=90, max_w=560, value_widget=self.platform_tabs_widget), 0),
+            (*meta_cell("type", "Tür", self.ci.contract_type, min_w=70, max_w=110), 0),
+            (*meta_cell("user", "Kullanıcı", user_text, min_w=95, max_w=145), 0),
+            (*meta_cell("status", "Durum", self.ci.status or "Başlanmadı", min_w=95, max_w=135), 0),
         ]
-        for i, (key, lbl, val) in enumerate(fields):
-            cell, div = meta_cell(key, lbl, val)
-            h.addWidget(cell, 1)
-            if i < len(fields) - 1:
+        if user_tip and self.meta_values.get("user"):
+            self.meta_values["user"].setToolTip(user_tip)
+        for i, (cell, div, stretch) in enumerate(cells):
+            h.addWidget(cell, stretch)
+            if i < len(cells) - 1:
                 h.addWidget(div)
                 h.addSpacing(4)
 
@@ -5505,17 +5704,23 @@ class ContractWorkWindow(QDialog):
     def refresh_contract_header(self):
         if not hasattr(self, "meta_values"):
             return
+        users = [x.strip() for x in re.split(r"[,;]+", str(self.ci.user or "")) if x.strip()]
+        user_text = "-" if not users else (users[0] if len(users) == 1 else f"{users[0]} +{len(users) - 1}")
         mapping = {
             "no": self.ci.no,
-            "platform": self.ci.platform,
             "type": self.ci.contract_type,
-            "user": self.ci.user,
+            "user": user_text,
             "status": self.ci.status or "Başlanmadı",
         }
         for k, v in mapping.items():
             lab = self.meta_values.get(k)
             if lab:
                 lab.setText(str(v or "-"))
+                if k == "user":
+                    lab.setToolTip("\n".join(users))
+        tabs = getattr(self, "platform_tabs_widget", None)
+        if tabs:
+            tabs.set_platforms(getattr(self.ci, "platforms", None) or [self.ci.platform], self.ci.platform)
 
     def _notify_parent_contract_updated(self, old_platform: str, new_platform: str) -> None:
         """Ana bilgi güncellemesi sonrası ana listeyi ve açık takvimi tazeler."""
