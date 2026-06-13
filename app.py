@@ -2335,16 +2335,18 @@ class PlatformTabsWidget(QScrollArea):
         self._platforms: List[str] = []
         self._active = ""
         self._content_width = 76
-        self._max_width = 620
+        self._min_scroll_width = 260
+        self._max_width = 340
+        self._buttons: Dict[int, QPushButton] = {}
         # Scroll alanı üst barda genişleyebilir; iç chip host'u ise içerik kadar
         # kalmalı. widgetResizable=True olursa host viewport genişliğine zorlanıp
         # tek chip'in büyük bir mavi bar gibi algılanmasına neden olabiliyor.
         self.setWidgetResizable(False)
         self.setFrameShape(QFrame.NoFrame)
-        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setFixedHeight(32)
-        self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.setSizePolicy(QSizePolicy.MinimumExpanding, QSizePolicy.Fixed)
         self.viewport().setStyleSheet("background:transparent;border:0;")
         self.setObjectName("platformTabsRail")
         self._apply_rail_style(single=True)
@@ -2391,9 +2393,13 @@ class PlatformTabsWidget(QScrollArea):
         self._render()
 
     def _render(self):
+        self._buttons.clear()
         while self._lay.count():
-            item=self._lay.takeAt(0)
-            if item.widget(): item.widget().deleteLater()
+            item = self._lay.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.setParent(None)
+                widget.deleteLater()
         metrics = QFontMetrics(self.font())
         total_width = 0
         single = len(self._platforms) <= 1
@@ -2404,30 +2410,54 @@ class PlatformTabsWidget(QScrollArea):
         for platform in self._platforms:
             name = str(platform.get("platform_name") or "")
             pid = int(platform.get("platform_id") or 0)
-            btn=QPushButton(name)
+            btn = QPushButton(name)
+            btn.setObjectName("PlatformTabButton")
             btn.setProperty("platform_id", pid)
+            btn.setCheckable(True)
             btn.setCursor(Qt.PointingHandCursor)
             btn.setFixedHeight(max_height)
-            chip_width = max(74 if single else 70, metrics.horizontalAdvance(name) + (32 if single else 30))
+            chip_width = min(150, max(74 if single else 70, metrics.horizontalAdvance(name) + (32 if single else 30)))
             btn.setFixedWidth(chip_width)
             btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
             btn.setToolTip(name)
-            active = bool(pid) and pid == int(self._active or 0)
-            btn.setObjectName("platformTabActive" if active else "platformTabPassive")
-            btn.setStyleSheet(
-                "QPushButton{border-radius:13px;padding:2px 12px;font-size:11px;font-weight:900;letter-spacing:0.35px;text-align:center;"
-                + ("background:qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #1d58ca, stop:0.55 #2f7dff, stop:1 #0b48a8);"
-                   "color:#fbfdff;border:1px solid rgba(150,211,255,230);"
-                   if active else
-                   "background:transparent;color:#cfe5ff;border:1px solid transparent;")
-                + "}"
-                  "QPushButton#platformTabPassive:hover{background:rgba(45,123,255,0.16);border-color:rgba(125,190,255,0.38);color:#ffffff;}"
-                  "QPushButton#platformTabActive:hover{border-color:rgba(174,218,255,235);}"
-            )
             btn.setGraphicsEffect(None)
+            btn.setStyleSheet("""
+                QPushButton#PlatformTabButton {
+                    background: transparent;
+                    border: 1px solid transparent;
+                    color: rgba(235, 245, 255, 0.88);
+                    font-weight: 900;
+                    font-size: 11px;
+                    letter-spacing: 0.35px;
+                    padding: 2px 12px;
+                    border-radius: 13px;
+                    text-align: center;
+                }
+                QPushButton#PlatformTabButton[active="true"] {
+                    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                        stop:0 #1d58ca, stop:0.55 #2f7dff, stop:1 #0b48a8);
+                    border: 1px solid rgba(150, 211, 255, 0.90);
+                    color: white;
+                }
+                QPushButton#PlatformTabButton[active="false"] {
+                    background: transparent;
+                    border: 1px solid transparent;
+                    color: rgba(235, 245, 255, 0.86);
+                }
+                QPushButton#PlatformTabButton[active="false"]:hover {
+                    background: rgba(45, 123, 255, 0.16);
+                    border-color: rgba(125, 190, 255, 0.38);
+                    color: white;
+                }
+                QPushButton#PlatformTabButton[active="true"]:hover {
+                    border-color: rgba(174, 218, 255, 0.92);
+                }
+            """)
             btn.clicked.connect(lambda _=False, platform_id=pid: self._set_active(platform_id))
             self._lay.addWidget(btn, 0, Qt.AlignLeft | Qt.AlignVCenter)
+            self._buttons[pid] = btn
             total_width += chip_width
+        self._refresh_button_states()
         if self._platforms:
             total_width += self._lay.spacing() * max(0, len(self._platforms) - 1)
         left, _top, right, _bottom = margins
@@ -2435,24 +2465,58 @@ class PlatformTabsWidget(QScrollArea):
         self._host.setFixedSize(max(1, total_width), 32)
         self._content_width = max(70, total_width)
         fixed_width = min(self._content_width, self._max_width)
-        self.setMinimumWidth(fixed_width)
-        self.setMaximumWidth(fixed_width)
+        if len(self._platforms) >= 4:
+            fixed_width = min(self._max_width, max(self._min_scroll_width, fixed_width))
+        self.setMinimumWidth(min(fixed_width, self._min_scroll_width if len(self._platforms) >= 4 else fixed_width))
+        self.setMaximumWidth(self._max_width)
         self.setFixedWidth(fixed_width)
         self.updateGeometry()
+        self._ensure_active_visible()
         self.setToolTip(", ".join(str(p.get("platform_name") or "") for p in self._platforms))
 
+    def _ensure_active_visible(self):
+        active_btn = self._buttons.get(int(self._active or 0))
+        if active_btn is not None:
+            self.ensureWidgetVisible(active_btn, 24, 0)
+
+    def _refresh_button_states(self):
+        active_id = int(self._active or 0)
+        for pid, btn in self._buttons.items():
+            active = bool(pid) and int(pid) == active_id
+            btn.setProperty("active", "true" if active else "false")
+            btn.setChecked(active)
+            btn.style().unpolish(btn)
+            btn.style().polish(btn)
+            btn.update()
+        self._ensure_active_visible()
+
+    def wheelEvent(self, event):
+        delta = event.angleDelta().x() or event.angleDelta().y()
+        if delta:
+            bar = self.horizontalScrollBar()
+            bar.setValue(bar.value() - delta)
+            event.accept()
+            return
+        super().wheelEvent(event)
+
     def sizeHint(self) -> QSize:
-        return QSize(min(max(70, self._content_width), self._max_width), 32)
+        width = min(max(70, self._content_width), self._max_width)
+        if len(self._platforms) >= 4:
+            width = max(self._min_scroll_width, width)
+        return QSize(width, 32)
 
     def minimumSizeHint(self) -> QSize:
-        return QSize(min(max(70, self._content_width), self._max_width), 32)
+        width = min(max(70, self._content_width), self._max_width)
+        if len(self._platforms) >= 4:
+            width = min(width, self._min_scroll_width)
+        return QSize(width, 32)
 
     def _set_active(self, platform_id: int):
         platform_id = int(platform_id or 0)
         if platform_id == int(self._active or 0):
             return
         self._active = platform_id
-        self._render()
+        self._refresh_button_states()
         self.activePlatformChanged.emit(platform_id)
 
 
@@ -2468,9 +2532,9 @@ class ContractDialog(StyledDialog):
         self._sd_anchor_end_row: int = 0
         self._sd_anchor_platform: str = ""
         self._sd_anchor_no: str = ""
-        self._default_size = QSize(820, 390)
-        self.resize(self._default_size)
+        self._default_size = QSize(820, 600)
         self.build()
+        self._resize_to_safe_default()
 
     def build(self):
         root = QVBoxLayout(self)
@@ -2581,6 +2645,18 @@ class ContractDialog(StyledDialog):
         row.addWidget(save)
         root.addLayout(row)
 
+    def _resize_to_safe_default(self):
+        layout = self.layout()
+        if layout is not None:
+            layout.invalidate()
+            layout.activate()
+        hint = self.minimumSizeHint()
+        size_hint = self.sizeHint()
+        self.resize(
+            max(self._default_size.width(), hint.width(), size_hint.width()),
+            max(self._default_size.height(), hint.height(), size_hint.height()),
+        )
+
     def _on_user_selection_changed(self):
         self.update_user_yi_yd()
         QTimer.singleShot(0, self._resize_for_user_selection)
@@ -2591,11 +2667,14 @@ class ContractDialog(StyledDialog):
             layout.invalidate()
             layout.activate()
         self.user.updateGeometry()
-        preferred_height = max(self._default_size.height(), self.sizeHint().height())
+        hint = self.minimumSizeHint()
+        preferred_height = max(self._default_size.height(), self.sizeHint().height(), hint.height())
         screen = QApplication.primaryScreen()
         if screen is not None:
-            preferred_height = min(preferred_height, screen.availableGeometry().height() - 80)
-        self.resize(max(self.width(), self._default_size.width()), preferred_height)
+            available_height = screen.availableGeometry().height() - 80
+            if available_height >= hint.height():
+                preferred_height = min(preferred_height, available_height)
+        self.resize(max(self.width(), self._default_size.width(), hint.width()), preferred_height)
 
     def is_sd_mode(self) -> bool:
         return self.ctype.currentText().strip() == "Sözleşme Değişikliği"
@@ -2897,8 +2976,9 @@ class ContractEditDialog(StyledDialog):
         self.user_records = self.store.load_users()
         self.user_to_yi_yd = {u.get("name", ""): u.get("yi_yd", "Yİ") for u in self.user_records}
         self.result: Optional[ContractInfo] = None
-        self.resize(700, 430)
+        self._default_size = QSize(700, 600)
         self.build()
+        self._resize_to_safe_default()
 
     def build(self):
         root = QVBoxLayout(self)
@@ -3056,6 +3136,18 @@ class ContractEditDialog(StyledDialog):
         btn_row.addWidget(cancel)
         btn_row.addWidget(save_btn)
         root.addLayout(btn_row)
+
+    def _resize_to_safe_default(self):
+        layout = self.layout()
+        if layout is not None:
+            layout.invalidate()
+            layout.activate()
+        hint = self.minimumSizeHint()
+        size_hint = self.sizeHint()
+        self.resize(
+            max(self._default_size.width(), hint.width(), size_hint.width()),
+            max(self._default_size.height(), hint.height(), size_hint.height()),
+        )
 
     def _initial_platforms(self) -> List[str]:
         raw = list(getattr(self.ci, "platforms", []) or [])
@@ -5581,7 +5673,7 @@ class ContractWorkWindow(QDialog):
 
         cells = [
             (*meta_cell("no", "Sözleşme No", self.ci.no, min_w=122, max_w=210), 17),
-            (*meta_cell("platform", "Platform", "", min_w=90, max_w=380, value_widget=self.platform_tabs_widget), 0),
+            (*meta_cell("platform", "Platform", "", min_w=260, max_w=340, value_widget=self.platform_tabs_widget), 0),
             (*meta_cell("type", "Tür", self.ci.contract_type, min_w=112, max_w=190), 16),
             (*meta_cell("user", "Kullanıcı", user_text, min_w=150, max_w=250, value_widget=inline_icon_text(user_text, user_svg, "user", user_tip)), 21),
             (*meta_cell("status", "Durum", "", min_w=126, max_w=190, value_widget=status_widget(self.ci.status or "Başlanmadı")), 16),
