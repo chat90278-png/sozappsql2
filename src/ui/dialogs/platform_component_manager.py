@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 from typing import Any
 
@@ -189,11 +190,7 @@ class PlatformHeader(QHeaderView):
         count = int(platform.get("comp_count") or 0)
         excluded = bool(platform.get("is_excluded", False))
 
-        # HTML'deki _PLAT_COLORS ile birebir aynı
-        bg_colors = ["#EFF6FF","#F0FDF4","#FFF7ED","#FDF4FF","#F0FDFA","#FEF3C7","#FEE2E2","#E0F2FE"]
-        fg_colors = ["#1D4ED8","#15803D","#C2410C","#7E22CE","#0D9488","#92400E","#991B1B","#075985"]
-        av_bg = bg_colors[logicalIndex % len(bg_colors)]
-        av_fg = fg_colors[logicalIndex % len(fg_colors)]
+        av_bg, av_fg = self._platform_avatar_colors(platform)
 
         painter.save()
         painter.setRenderHint(QPainter.Antialiasing)
@@ -247,6 +244,26 @@ class PlatformHeader(QHeaderView):
             painter.drawRoundedRect(rect.adjusted(3, 4, -3, -4), 10, 10)
 
         painter.restore()
+
+
+    @staticmethod
+    def _platform_color_key(platform: dict[str, Any]) -> str:
+        key = platform.get("id")
+        if key is None or key == "":
+            key = platform.get("name") or ""
+        return str(key)
+
+    @classmethod
+    def _platform_avatar_colors(cls, platform: dict[str, Any]) -> tuple[str, str]:
+        # HTML'deki _PLAT_COLORS ile birebir aynı palet korunur.
+        # Renk seçimi sütun sırasına göre değil platform id/name anahtarına
+        # göre yapılır; böylece drag/drop ve yeniden çizimde renk sabit kalır.
+        bg_colors = ["#EFF6FF", "#F0FDF4", "#FFF7ED", "#FDF4FF", "#F0FDFA", "#FEF3C7", "#FEE2E2", "#E0F2FE"]
+        fg_colors = ["#1D4ED8", "#15803D", "#C2410C", "#7E22CE", "#0D9488", "#92400E", "#991B1B", "#075985"]
+        stable_key = cls._platform_color_key(platform)
+        digest = hashlib.sha1(stable_key.encode("utf-8")).hexdigest()
+        color_index = int(digest[:8], 16) % len(bg_colors)
+        return bg_colors[color_index], fg_colors[color_index]
 
     def mousePressEvent(self, event):
         if self._drag_enabled and event.button() == Qt.LeftButton:

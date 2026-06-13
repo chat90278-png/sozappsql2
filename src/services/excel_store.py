@@ -173,6 +173,12 @@ class ExcelStore:
         self._merge_map_cache.clear()
         self._platform_names_cache = None
 
+    def _invalidate_sheet_caches(self, ws_or_title):
+        title = getattr(ws_or_title, "title", ws_or_title)
+        if title:
+            self._sheet_cache.pop(str(title), None)
+            self._merge_map_cache.pop(str(title), None)
+
     def _queue_platform_style(self, platform: str, row_start: int, row_end: int):
         p = safe_sheet_name(platform)
         if not p:
@@ -511,33 +517,54 @@ class ExcelStore:
         if target_block is None:
             return None
 
-        start = int(target_block["start"])
-        end = int(target_block["end"])
+        block_no = str(target_block.get("no", "") or target_no)
+        target_type = str(target_block.get("type", "") or "")
+        is_main_delete = self._normalize_label(target_type) == self._normalize_label("Ana Sözleşme")
+        delete_blocks = [target_block]
+        if is_main_delete:
+            delete_blocks = [
+                b for b in blocks
+                if str(b.get("no", "") or "").strip() == block_no
+                and (b is target_block or bool(b.get("is_sd")))
+            ]
+        delete_blocks = sorted(delete_blocks, key=lambda b: int(b["start"]))
+        if not delete_blocks:
+            return None
+
+        start = min(int(b["start"]) for b in delete_blocks)
+        end = max(int(b["end"]) for b in delete_blocks)
         if end < start:
             return None
-        block_no = str(target_block.get("no", "") or target_no)
 
         prev_ci, prev_systems, prev_deliveries = self.load_contract_structure(
             p,
             block_no,
-            start_row=start,
+            start_row=int(target_block["start"]),
         )
         old_snapshot = self._contract_snapshot(prev_ci, prev_systems, prev_deliveries)
 
         _progress(58, "Birleştirilmiş hücreler temizleniyor...")
-        for rng in list(ws.merged_cells.ranges):
-            if rng.max_row < start or rng.min_row > end:
-                continue
-            if rng.min_row >= DATA_START_ROW:
-                ws.unmerge_cells(str(rng))
+        for b in delete_blocks:
+            bs = int(b["start"]); be = int(b["end"])
+            for rng in list(ws.merged_cells.ranges):
+                if rng.max_row < bs or rng.min_row > be:
+                    continue
+                if rng.min_row >= DATA_START_ROW:
+                    ws.unmerge_cells(str(rng))
         _progress(70, "Satırlar siliniyor...")
-        ws.delete_rows(start, end - start + 1)
-        self._sheet_cache.pop(ws.title, None)
-        self._merge_map_cache.pop(ws.title, None)
+        deleted_rows = 0
+        for b in sorted(delete_blocks, key=lambda x: int(x["start"]), reverse=True):
+            bs = int(b["start"]); be = int(b["end"])
+            if be >= bs:
+                ws.delete_rows(bs, be - bs + 1)
+                self._invalidate_sheet_caches(ws)
+                deleted_rows += be - bs + 1
+        self._invalidate_sheet_caches(ws)
 
         _progress(76, "Etiketler temizleniyor...")
         # _repair_contract_merges_near_row kaldırıldı — performans için merge onarımı yapılmaz
-        self.delete_contract_tags(p, block_no, str(target_block.get("type", "") or ""))
+        for b in delete_blocks:
+            self.delete_contract_tags(p, block_no, str(b.get("type", "") or ""))
 
         # delete_rows, alttaki satırları biçimleriyle birlikte yukarı taşır.
         # Tüm sayfayı baştan stillendirmek (binlerce satırda) çok maliyetli olduğu için
@@ -562,7 +589,12 @@ class ExcelStore:
             "contract_no": block_no,
             "start_row": int(start),
             "end_row": int(end),
-            "deleted_rows": int(end - start + 1),
+            "deleted_rows": int(deleted_rows),
+            "contract_type": target_type,
+            "deleted_contracts": [
+                {"platform": p, "contract_no": block_no, "contract_type": str(b.get("type", "") or "")}
+                for b in delete_blocks
+            ],
         }
 
     def _is_effectively_empty_sheet(self, ws) -> bool:
@@ -851,6 +883,7 @@ class ExcelStore:
             str(a[8] or ""),
         ))
         ws.delete_rows(2, max(0, ws.max_row - 1))
+        self._invalidate_sheet_caches(ws)
         row = 2
         for vals in defs + assigns:
             for c, v in enumerate(vals, 1):
@@ -893,6 +926,7 @@ class ExcelStore:
             if self._is_tag_assign_kind(kind):
                 assigns.append([ws.cell(r, c).value for c in range(1, len(TAG_HEADERS) + 1)])
         ws.delete_rows(2, max(0, ws.max_row - 1))
+        self._invalidate_sheet_caches(ws)
         row = 2
         ordered_tags = sorted(list(tags or []), key=lambda t: self._normalize_label(str(getattr(t, "name", "") or "")))
         for t in ordered_tags:
@@ -949,6 +983,7 @@ class ExcelStore:
                 continue
             keep_rows.append(vals)
         ws.delete_rows(2, max(0, ws.max_row - 1))
+        self._invalidate_sheet_caches(ws)
         row = 2
         for vals in keep_rows:
             for c, v in enumerate(vals, 1):
@@ -1020,6 +1055,7 @@ class ExcelStore:
                 continue
             keep_rows.append(row_vals)
         ws.delete_rows(2, max(0, ws.max_row - 1))
+        self._invalidate_sheet_caches(ws)
         row = 2
         for vals in keep_rows:
             for c, v in enumerate(vals, 1):
@@ -1069,6 +1105,7 @@ class ExcelStore:
                 continue
             keep_rows.append(vals)
         ws.delete_rows(2, max(0, ws.max_row - 1))
+        self._invalidate_sheet_caches(ws)
         row = 2
         for vals in keep_rows:
             for c, v in enumerate(vals, 1):
@@ -1222,6 +1259,7 @@ class ExcelStore:
         old_users = {u.get("name", ""): u for u in self.load_users(active_only=False)}
         ws = self.wb[USERS_SHEET] if USERS_SHEET in self.wb.sheetnames else self.wb.create_sheet(USERS_SHEET)
         ws.delete_rows(1, ws.max_row)
+        self._invalidate_sheet_caches(ws)
         headers = ["Kullanıcı Adı", "Yİ/YD", "Aktif", "Not"]
         for c, h in enumerate(headers, 1):
             ws.cell(1, c, h)
@@ -1449,6 +1487,7 @@ class ExcelStore:
         ws = self.wb[COMP_SHEET] if COMP_SHEET in self.wb.sheetnames else self.wb.create_sheet(COMP_SHEET)
         platforms = self.platform_names()
         ws.delete_rows(1, ws.max_row)
+        self._invalidate_sheet_caches(ws)
         headers = ["Bileşen Adı", "Birim", "Aktif", "Kullanım"] + platforms
         for c, h in enumerate(headers, 1):
             ws.cell(1, c, h)
@@ -2106,14 +2145,17 @@ class ExcelStore:
         ws = self.wb[p]
         comp_cols = self.component_col_map(p)
         target = str(contract_no or "").strip()
-        max_n = 0
+        used: set[int] = set()
         for b in self._contract_entry_blocks(ws, comp_cols=comp_cols):
-            if b["no"] != target:
+            if str(b.get("no", "") or "").strip() != target:
                 continue
             m = re.match(r"^SD-(\d+)$", str(b.get("type", "")).strip().upper())
             if m:
-                max_n = max(max_n, int(m.group(1)))
-        return f"SD-{max_n + 1}"
+                used.add(int(m.group(1)))
+        n = 1
+        while n in used:
+            n += 1
+        return f"SD-{n}"
 
     # ─────────────────────────────────────────────────────────────────────────
     # BULLETPROOF INSERT / MERGE HELPERS
@@ -2208,6 +2250,7 @@ class ExcelStore:
 
         # 2) Satır ekle (artık spanning merge yok, openpyxl hatasız çalışır)
         ws.insert_rows(insert_row, count)
+        self._invalidate_sheet_caches(ws)
 
         # 3) Spanning merge'leri ikiye bölerek yeniden uygula
         for min_r, min_c, max_r, max_c in spanning:
@@ -2459,6 +2502,7 @@ class ExcelStore:
                     if rng.min_row >= DATA_START_ROW:
                         ws.unmerge_cells(str(rng))
             ws.delete_rows(del_start, existing_count - target_count)
+            self._invalidate_sheet_caches(ws)
 
         # Yazma öncesi: hedef satır aralığındaki artık merge'leri temizle.
         # (insert_rows/delete_rows sonrası kalmış olabilir; çakışmayı önler.)
@@ -2579,24 +2623,20 @@ class ExcelStore:
         if p not in self.wb.sheetnames:
             return []
         ws = self.wb[p]
+        comp_cols = self.component_col_map(p)
         if tags_map is None:
             tags_map = self.all_contract_tags_map()
         rows = []
-        for r, row_data in enumerate(
-            ws.iter_rows(min_row=DATA_START_ROW, max_col=len(BASE_HEADERS), values_only=True),
-            start=DATA_START_ROW,
-        ):
-            def val(col: int, default=None):
-                return row_data[col - 1] if col - 1 < len(row_data) else default
-
-            activity = str(val(5) or "").strip()
-            delivery = str(val(6) or "").strip()
+        for b in self._contract_entry_blocks(ws, comp_cols=comp_cols):
+            r = int(b.get("start") or 0)
+            activity = str(self.cell_value(ws, r, 5) or "").strip()
+            delivery = str(self.cell_value(ws, r, 6) or "").strip()
             if activity.upper() != "GENEL" or not self._is_main_total_row(delivery):
                 continue
 
-            ctype = str(val(4) or "").strip()
+            ctype = str(self.cell_value(ws, r, 4) or "").strip()
             is_main = self._normalize_label(ctype) == "ana sozlesme"
-            no = str(val(1) or "")
+            no = str(self.cell_value(ws, r, 1) or "")
             if not no.strip():
                 continue
             tags = tags_map.get((p, no.strip(), ctype.strip()), [])
@@ -2604,14 +2644,14 @@ class ExcelStore:
                 "row": r,
                 "platform": p,
                 "no": no,
-                "user": val(2),
+                "user": self.cell_value(ws, r, 2),
                 "type": ctype,
                 "type_display": ctype if is_main else f"\u21b3 {ctype}",
-                "link": "Ana S\u00f6zle\u015fme" if is_main else "Ana s\u00f6zle\u015fmeye ba\u011fl\u0131 SD",
-                "status": val(12),
-                "completion_date": val(11),
-                "acceptance_date": val(13),
-                "content": val(7),
+                "link": "Ana Sözleşme" if is_main else "Ana sözleşmeye bağlı SD",
+                "status": self.cell_value(ws, r, 12),
+                "completion_date": self.cell_value(ws, r, 11),
+                "acceptance_date": self.cell_value(ws, r, 13),
+                "content": self.cell_value(ws, r, 7),
                 "is_main": is_main,
                 "tags": tags,
             }
@@ -2950,6 +2990,7 @@ def save_system_type(self, type_name: str, platform: str, components) -> int:
         row_platform = str(ws.cell(r, 2).value or "").strip()
         if name == target and row_platform == p:
             ws.delete_rows(r, 1)
+            self._invalidate_sheet_caches(ws)
 
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     start_row = max(ws.max_row + 1, 2)
