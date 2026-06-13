@@ -2735,8 +2735,8 @@ class ContractDialog(StyledDialog):
         if not self.no.text().strip():
             QMessageBox.warning(self, "Eksik", "Sözleşme no girin.")
             return
-        if not self.platform.currentText():
-            QMessageBox.warning(self, "Eksik", "Önce platform oluşturun.")
+        if not self.platform.selected_platforms():
+            QMessageBox.warning(self, "Eksik", "En az bir platform seçmelisiniz.")
             return
         if self.is_sd_mode() and not self.verify_sd_reference(show_message=False):
             QMessageBox.warning(self, "Doğrulama", "Sözleşme Değişikliği için önce geçerli kontrat no doğrulaması gerekir.")
@@ -2818,6 +2818,8 @@ class ContractDialog(StyledDialog):
             sd_anchor_platform=self._sd_anchor_platform if self.is_sd_mode() else "",
             sd_anchor_no=self._sd_anchor_no if self.is_sd_mode() else "",
             users=users,
+            platforms=self.platform.selected_platforms(),
+            platform_names=self.platform.selected_platforms(),
         )
         self.accept()
 
@@ -5519,8 +5521,9 @@ class ContractWorkWindow(QDialog):
                 fill='none' stroke='#4e93ff' stroke-opacity='.55' stroke-width='.85' stroke-linecap='round'/>
         </svg>"""
         self.platform_tabs_widget = PlatformTabsWidget(self)
+        self.active_platform_id = int(getattr(self.ci, "platform_id", 0) or 0)
         self.platform_tabs_widget.set_platforms(self._linked_contract_platforms(), self.ci.platform)
-        self.platform_tabs_widget.activePlatformChanged.connect(lambda _name: None)
+        self.platform_tabs_widget.activePlatformChanged.connect(self.set_active_platform)
 
         cells = [
             (*meta_cell("no", "Sözleşme No", self.ci.no, min_w=122, max_w=210), 17),
@@ -5861,7 +5864,15 @@ class ContractWorkWindow(QDialog):
             self._tl_name_lbl.setText(str(self.ci.no or "—"))
 
     def _linked_contract_platforms(self) -> List[str]:
-        explicit = list(getattr(self.ci, "platforms", []) or [])
+        explicit = list(getattr(self.ci, "platforms", []) or getattr(self.ci, "platform_names", []) or [])
+        if getattr(self.ci, "entry_start_row", 0):
+            try:
+                rows = self.store.get_contract_platforms(int(getattr(self.ci, "entry_start_row", 0) or 0))
+                db_names = [str(r.get("platform_name") or "").strip() for r in rows]
+                if db_names:
+                    explicit = db_names
+            except Exception:
+                pass
         base = str(self.ci.platform or "").strip()
         no = self.store._normalize_label(str(self.ci.no or "").strip())
         ctype = self.store._normalize_label(str(self.ci.contract_type or "").strip())
@@ -5886,6 +5897,30 @@ class ContractWorkWindow(QDialog):
         except Exception:
             pass
         return found or ([base] if base else [])
+
+
+    def set_active_platform(self, platform_name: str):
+        platform_name = str(platform_name or "").strip()
+        if not platform_name or platform_name == str(self.ci.platform or "").strip():
+            return
+        self._cache_current_context()
+        try:
+            ci, systems, deliveries = self.store.load_contract_structure(platform_name, self.ci.no, start_row=self.ci.entry_start_row, contract_type=self.ci.contract_type)
+        except Exception as exc:
+            QMessageBox.warning(self, "Platform yüklenemedi", f"Seçilen platform verisi yüklenemedi:\n{exc}")
+            return
+        # Same contract row, different active platform context. Keep primary platform metadata but use
+        # ci.platform as the active system/delivery write target for backward-compatible save paths.
+        self.ci.platform = platform_name
+        self.active_platform_id = int(getattr(ci, "platform_id", 0) or self.store.get_platform_id(platform_name) or 0)
+        setattr(self.ci, "platforms", self._linked_contract_platforms())
+        setattr(self.ci, "platform_names", self._linked_contract_platforms())
+        self.systems = systems or []
+        self.deliveries = deliveries or {}
+        self.selected_system = self.systems[0].name if self.systems else None
+        self.expanded_delivery_index = None
+        self.refresh_contract_header()
+        self.refresh()
 
     def refresh_contract_header(self):
         if not hasattr(self, "meta_values"):
