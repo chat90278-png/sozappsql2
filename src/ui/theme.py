@@ -590,44 +590,66 @@ QLabel#windowBar {
     font-size:14px;
 }
 QFrame#contractHeader {
-    background:qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #1e2e41, stop:1 #263547);
+    background:qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #06152a, stop:0.48 #0b2747, stop:1 #07162a);
     border:0;
-    border-bottom:1px solid #1a2a3a;
+    border-bottom:1px solid #6aa7ff;
     border-radius:0;
 }
 QWidget#metaCell {
     background:transparent;
 }
 QLabel#metaHeaderLabel {
-    color:#8db8d8;
-    font-size:10px;
-    font-weight:600;
-    letter-spacing:0.5px;
+    color:#8fb7df;
+    font-size:9px;
+    font-weight:800;
+    letter-spacing:0.8px;
     background:transparent;
 }
 QLabel#metaHeaderValue {
-    color:#ffffff;
-    font-size:14px;
-    font-weight:800;
+    color:#f5fbff;
+    font-size:13px;
+    font-weight:900;
     background:transparent;
 }
 QFrame#metaHeaderDiv {
-    background:#3a546e;
+    background:rgba(126,170,214,76);
     min-width:1px;
     max-width:1px;
 }
+QWidget#headerStatusWrap,
+QWidget#user {
+    background:transparent;
+}
+QLabel#headerStatusDot {
+    background:#35e790;
+    border:1px solid rgba(151,255,205,0.75);
+    border-radius:5px;
+}
 QPushButton#headerEditBtn {
-    background:rgba(255,255,255,0.10);
-    color:#d8eaff;
-    border:1px solid rgba(255,255,255,0.20);
+    background:rgba(11,28,52,0.68);
+    color:#edf6ff;
+    border:1px solid rgba(115,164,217,0.48);
     border-radius:8px;
-    padding:5px 14px;
-    font-size:13px;
-    font-weight:700;
+    padding:5px 15px;
+    font-size:12px;
+    font-weight:900;
 }
 QPushButton#headerEditBtn:hover {
-    background:rgba(255,255,255,0.18);
-    border-color:rgba(255,255,255,0.35);
+    background:rgba(28,74,127,0.82);
+    border-color:rgba(137,194,255,0.86);
+}
+QFrame#contractHeader QPushButton#danger {
+    background:#fffaf2;
+    color:#dc2626;
+    border:1px solid rgba(248,113,113,0.62);
+    border-radius:8px;
+    padding:5px 15px;
+    font-size:12px;
+    font-weight:900;
+}
+QFrame#contractHeader QPushButton#danger:hover {
+    background:#fff1f2;
+    border-color:#ef4444;
 }
 
 QFrame#contractVersionBar {
