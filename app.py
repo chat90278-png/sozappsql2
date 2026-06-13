@@ -2336,6 +2336,7 @@ class PlatformTabsWidget(QScrollArea):
         self._active = ""
         self._content_width = 76
         self._max_width = 620
+        self._buttons: Dict[int, QPushButton] = {}
         # Scroll alanı üst barda genişleyebilir; iç chip host'u ise içerik kadar
         # kalmalı. widgetResizable=True olursa host viewport genişliğine zorlanıp
         # tek chip'in büyük bir mavi bar gibi algılanmasına neden olabiliyor.
@@ -2391,9 +2392,13 @@ class PlatformTabsWidget(QScrollArea):
         self._render()
 
     def _render(self):
+        self._buttons.clear()
         while self._lay.count():
-            item=self._lay.takeAt(0)
-            if item.widget(): item.widget().deleteLater()
+            item = self._lay.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.setParent(None)
+                widget.deleteLater()
         metrics = QFontMetrics(self.font())
         total_width = 0
         single = len(self._platforms) <= 1
@@ -2404,30 +2409,54 @@ class PlatformTabsWidget(QScrollArea):
         for platform in self._platforms:
             name = str(platform.get("platform_name") or "")
             pid = int(platform.get("platform_id") or 0)
-            btn=QPushButton(name)
+            btn = QPushButton(name)
+            btn.setObjectName("PlatformTabButton")
             btn.setProperty("platform_id", pid)
+            btn.setCheckable(True)
             btn.setCursor(Qt.PointingHandCursor)
             btn.setFixedHeight(max_height)
             chip_width = max(74 if single else 70, metrics.horizontalAdvance(name) + (32 if single else 30))
             btn.setFixedWidth(chip_width)
             btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
             btn.setToolTip(name)
-            active = bool(pid) and pid == int(self._active or 0)
-            btn.setObjectName("platformTabActive" if active else "platformTabPassive")
-            btn.setStyleSheet(
-                "QPushButton{border-radius:13px;padding:2px 12px;font-size:11px;font-weight:900;letter-spacing:0.35px;text-align:center;"
-                + ("background:qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #1d58ca, stop:0.55 #2f7dff, stop:1 #0b48a8);"
-                   "color:#fbfdff;border:1px solid rgba(150,211,255,230);"
-                   if active else
-                   "background:transparent;color:#cfe5ff;border:1px solid transparent;")
-                + "}"
-                  "QPushButton#platformTabPassive:hover{background:rgba(45,123,255,0.16);border-color:rgba(125,190,255,0.38);color:#ffffff;}"
-                  "QPushButton#platformTabActive:hover{border-color:rgba(174,218,255,235);}"
-            )
             btn.setGraphicsEffect(None)
+            btn.setStyleSheet("""
+                QPushButton#PlatformTabButton {
+                    background: transparent;
+                    border: 1px solid transparent;
+                    color: rgba(235, 245, 255, 0.88);
+                    font-weight: 900;
+                    font-size: 11px;
+                    letter-spacing: 0.35px;
+                    padding: 2px 12px;
+                    border-radius: 13px;
+                    text-align: center;
+                }
+                QPushButton#PlatformTabButton[active="true"] {
+                    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                        stop:0 #1d58ca, stop:0.55 #2f7dff, stop:1 #0b48a8);
+                    border: 1px solid rgba(150, 211, 255, 0.90);
+                    color: white;
+                }
+                QPushButton#PlatformTabButton[active="false"] {
+                    background: transparent;
+                    border: 1px solid transparent;
+                    color: rgba(235, 245, 255, 0.86);
+                }
+                QPushButton#PlatformTabButton[active="false"]:hover {
+                    background: rgba(45, 123, 255, 0.16);
+                    border-color: rgba(125, 190, 255, 0.38);
+                    color: white;
+                }
+                QPushButton#PlatformTabButton[active="true"]:hover {
+                    border-color: rgba(174, 218, 255, 0.92);
+                }
+            """)
             btn.clicked.connect(lambda _=False, platform_id=pid: self._set_active(platform_id))
             self._lay.addWidget(btn, 0, Qt.AlignLeft | Qt.AlignVCenter)
+            self._buttons[pid] = btn
             total_width += chip_width
+        self._refresh_button_states()
         if self._platforms:
             total_width += self._lay.spacing() * max(0, len(self._platforms) - 1)
         left, _top, right, _bottom = margins
@@ -2441,6 +2470,16 @@ class PlatformTabsWidget(QScrollArea):
         self.updateGeometry()
         self.setToolTip(", ".join(str(p.get("platform_name") or "") for p in self._platforms))
 
+    def _refresh_button_states(self):
+        active_id = int(self._active or 0)
+        for pid, btn in self._buttons.items():
+            active = bool(pid) and int(pid) == active_id
+            btn.setProperty("active", "true" if active else "false")
+            btn.setChecked(active)
+            btn.style().unpolish(btn)
+            btn.style().polish(btn)
+            btn.update()
+
     def sizeHint(self) -> QSize:
         return QSize(min(max(70, self._content_width), self._max_width), 32)
 
@@ -2452,7 +2491,7 @@ class PlatformTabsWidget(QScrollArea):
         if platform_id == int(self._active or 0):
             return
         self._active = platform_id
-        self._render()
+        self._refresh_button_states()
         self.activePlatformChanged.emit(platform_id)
 
 
