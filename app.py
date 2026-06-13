@@ -2676,17 +2676,23 @@ class ContractEditDialog(StyledDialog):
         self._no_lbl       = QLineEdit(str(self.ci.no or ""))
         self._plat_lbl     = readonly(self.ci.platform)
         self._type_lbl     = readonly(self.ci.contract_type)
+        self._type_lbl.setPlaceholderText("Örn: SD-1")
         if self._is_sd_contract:
             self._no_lbl.setReadOnly(True)
             self._no_lbl.setStyleSheet("background:#f1f5f9; color:#64748B; border:1px solid #e2e8f0;")
-            no_warn_text = "SD kayıtlarının sözleşme no alanı ana sözleşmeye bağlıdır; doğrudan değiştirilemez."
+            self._type_lbl.setReadOnly(False)
+            self._type_lbl.setEnabled(True)
+            self._type_lbl.setStyleSheet("")
+            self._type_lbl.editingFinished.connect(self._normalize_sd_code_field)
+            self._type_lbl.textChanged.connect(self._check_duplicate_contract_key)
+            no_warn_text = ""
         else:
             no_warn_text = "Aynı platform + sözleşme tipi + sözleşme no kombinasyonu kullanılamaz."
             self._no_lbl.textChanged.connect(self._check_duplicate_contract_key)
         self._no_dup_warn = QLabel(no_warn_text)
         self._no_dup_warn.setObjectName("warning")
         self._no_dup_warn.setWordWrap(True)
-        self._no_dup_warn.setVisible(self._is_sd_contract)
+        self._no_dup_warn.setVisible(False)
 
         # ── Düzenlenebilir alanlar ────────────────────────────────────
         self.user = MultiUserSelectWidget(self)
@@ -2815,11 +2821,32 @@ class ContractEditDialog(StyledDialog):
             })
         return events
 
+    def _normalized_sd_code(self) -> str:
+        raw = str(self._type_lbl.text() or "").strip().upper().replace(" ", "")
+        if not raw:
+            return ""
+        m = re.match(r"^SD[-_]?(\d+)$", raw)
+        if m:
+            return f"SD-{int(m.group(1))}"
+        return ""
+
+    def _normalize_sd_code_field(self):
+        if not self._is_sd_contract:
+            return
+        sd_code = self._normalized_sd_code()
+        if sd_code:
+            self._type_lbl.setText(sd_code)
+
+    def _current_contract_type_text(self) -> str:
+        if self._is_sd_contract:
+            return self._normalized_sd_code() or self._type_lbl.text().strip()
+        return str(self.ci.contract_type or "").strip()
+
     def _check_duplicate_contract_key(self) -> bool:
         """Başka bir kayıtta aynı platform + tip + no varsa uyarı gösterir."""
         no_text = self._no_lbl.text().strip()
         platform = str(self.ci.platform or "").strip()
-        contract_type = str(self.ci.contract_type or "").strip()
+        contract_type = self._current_contract_type_text()
         if not no_text or not platform or not contract_type:
             self._no_dup_warn.setVisible(self._is_sd_contract)
             if not self._is_sd_contract:
@@ -2889,12 +2916,8 @@ class ContractEditDialog(StyledDialog):
                             f"'{no_text}' no'ya taşınacak; ancak bu platformda aynı no ve SD tipi zaten var."
                         )
 
-        self._no_dup_warn.setVisible(self._is_sd_contract)
-        if self._is_sd_contract:
-            self._no_dup_warn.setText(
-                "SD kayıtlarının sözleşme no alanı ana sözleşmeye bağlıdır; doğrudan değiştirilemez."
-            )
-        else:
+        self._no_dup_warn.setVisible(False)
+        if not self._is_sd_contract:
             self._no_lbl.setStyleSheet("")
         return False
 
@@ -2929,8 +2952,17 @@ class ContractEditDialog(StyledDialog):
             QMessageBox.warning(self, "Tarih hatası", "T0 tarihi yyyy-aa-gg formatında olmalı.")
             return
         self._recalc()
+        contract_type = str(self.ci.contract_type or "").strip()
+        if self._is_sd_contract:
+            sd_code = self._normalized_sd_code()
+            if not sd_code:
+                QMessageBox.warning(self, "Format", "SD kodu SD-1, SD-2 gibi sayısal formatta olmalı.")
+                return
+            self._type_lbl.setText(sd_code)
+            contract_type = sd_code
         new_ci = copy.copy(self.ci)
         new_ci.no              = new_no_text
+        new_ci.contract_type   = contract_type
         selected_users = self.user.selected_users()
         if not selected_users:
             QMessageBox.warning(self, "Zorunlu Alan", "En az bir kullanıcı seçmelisiniz.")
@@ -5611,6 +5643,7 @@ class ContractWorkWindow(QDialog):
                 if not info:
                     QMessageBox.warning(self, "Hata", "Sözleşme Excel'de bulunamadı veya silinemedi.")
                     return
+                self._drop_deleted_context_cache(info)
                 self.deleted_contract_info = info
                 QMessageBox.information(self, "Silindi", "Sözleşme Excel'den silindi.")
                 self.accept()
@@ -7441,18 +7474,52 @@ class ContractWorkWindow(QDialog):
         return rows
 
     def _next_sd_code_for_family(self, platform: str, no: str) -> str:
+        used: set[int] = set()
         try:
-            base_next = self.store.next_sd_code(platform, no)
-            max_n = int(re.match(r"^SD-(\d+)$", base_next).group(1)) - 1
+            for item in self.store.list_main_contracts(platform):
+                if str(item.get("no", "") or "").strip() != no:
+                    continue
+                m = re.match(r"^SD-(\d+)$", str(item.get("type", "") or "").strip().upper())
+                if m:
+                    used.add(int(m.group(1)))
         except Exception:
-            max_n = 0
+            try:
+                base_next = self.store.next_sd_code(platform, no)
+                m = re.match(r"^SD-(\d+)$", str(base_next or "").strip().upper())
+                if m and int(m.group(1)) > 1:
+                    used.update(range(1, int(m.group(1))))
+            except Exception:
+                pass
         for key in self._context_cache.keys():
             p, n, t = key
             if p == platform and n == no:
                 m = re.match(r"^SD-(\d+)$", str(t or "").strip().upper())
                 if m:
-                    max_n = max(max_n, int(m.group(1)))
-        return f"SD-{max_n + 1}"
+                    used.add(int(m.group(1)))
+        n = 1
+        while n in used:
+            n += 1
+        return f"SD-{n}"
+
+    def _drop_context_cache_key(self, key: Tuple[str, str, str]):
+        if key and all(key):
+            self._context_cache.pop(key, None)
+
+    def _drop_deleted_context_cache(self, info: dict):
+        deleted = list((info or {}).get("deleted_contracts") or [])
+        if not deleted and info:
+            deleted = [{
+                "platform": info.get("platform"),
+                "contract_no": info.get("contract_no"),
+                "contract_type": info.get("contract_type") or self.original_contract_type,
+            }]
+        for item in deleted:
+            key = (
+                str(item.get("platform", "") or "").strip(),
+                str(item.get("contract_no", "") or "").strip(),
+                str(item.get("contract_type", "") or "").strip(),
+            )
+            self._drop_context_cache_key(key)
 
     def refresh_sd_sidebar(self):
         if not hasattr(self, "sd_list"):
@@ -7592,7 +7659,7 @@ class ContractWorkWindow(QDialog):
             self,
             title_text="SD Ekleme Tablosu",
             save_text="SD Ekle",
-            info_text="SD temel bilgilerini girin. Platform, sözleşme no ve SD kodu ana sözleşmeye bağlıdır; değiştirilemez.",
+            info_text="SD temel bilgilerini girin. Platform ve sözleşme no ana sözleşmeye bağlıdır; değiştirilemez.",
         )
         if not dlg.exec() or not dlg.result:
             return
@@ -8175,6 +8242,7 @@ class ContractWorkWindow(QDialog):
 
     def reject(self) -> None:
         """Kapat butonuna basıldığında değişiklik varsa onay ister."""
+        current_key = self._context_key() if hasattr(self, "_context_cache") else ("", "", "")
         if self._is_dirty:
             answer = QMessageBox.question(
                 self,
@@ -8186,6 +8254,11 @@ class ContractWorkWindow(QDialog):
             )
             if answer != QMessageBox.Yes:
                 return
+        if hasattr(self, "_context_cache") and current_key in self._context_cache:
+            ctx = self._context_cache.get(current_key) or {}
+            ci = ctx.get("ci")
+            if int(getattr(ci, "entry_start_row", 0) or ctx.get("original_entry_start_row") or 0) <= 0:
+                self._context_cache.pop(current_key, None)
         super().reject()
 
     def save_all(self):
