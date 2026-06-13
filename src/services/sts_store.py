@@ -118,7 +118,8 @@ class STSStore:
         row = self.db.conn.execute(
             """
             SELECT c.id FROM contracts c
-            JOIN platforms p ON p.id = c.platform_id
+            JOIN contract_platforms cp ON cp.contract_id = c.id
+            JOIN platforms p ON p.id = cp.platform_id
             WHERE p.name=? AND c.contract_no=? AND c.contract_type=?
             """,
             (str(platform or ""), str(contract_no or ""), str(contract_type or "Ana Sözleşme")),
@@ -1048,9 +1049,105 @@ class STSStore:
                     (int(contract_id), int(user_id)),
                 )
 
+
+    def get_contract_platforms(self, contract_id):
+        rows = self.db.conn.execute(
+            """
+            SELECT cp.platform_id, p.name AS platform_name, cp.sort_order, cp.is_primary
+            FROM contract_platforms cp
+            JOIN platforms p ON p.id=cp.platform_id
+            WHERE cp.contract_id=?
+            ORDER BY cp.sort_order ASC, p.name ASC
+            """,
+            (int(contract_id),),
+        ).fetchall()
+        if not rows:
+            rows = self.db.conn.execute(
+                """
+                SELECT c.platform_id, p.name AS platform_name, 0 AS sort_order, 1 AS is_primary
+                FROM contracts c JOIN platforms p ON p.id=c.platform_id
+                WHERE c.id=? AND c.platform_id IS NOT NULL
+                """,
+                (int(contract_id),),
+            ).fetchall()
+        return [{"platform_id": int(r[0]), "platform_name": str(r[1] or ""), "sort_order": int(r[2] or 0), "is_primary": bool(r[3])} for r in rows]
+
+    def get_contract_platform_ids(self, contract_id):
+        return [int(item["platform_id"]) for item in self.get_contract_platforms(contract_id)]
+
+    def get_primary_contract_platform(self, contract_id):
+        rows = self.get_contract_platforms(contract_id)
+        for item in rows:
+            if item.get("is_primary"):
+                return {"platform_id": int(item["platform_id"]), "platform_name": item["platform_name"]}
+        row = self.db.conn.execute("SELECT c.platform_id,p.name FROM contracts c LEFT JOIN platforms p ON p.id=c.platform_id WHERE c.id=?", (int(contract_id),)).fetchone()
+        if row and row[0] is not None:
+            return {"platform_id": int(row[0]), "platform_name": str(row[1] or "")}
+        if rows:
+            return {"platform_id": int(rows[0]["platform_id"]), "platform_name": rows[0]["platform_name"]}
+        return None
+
+    def set_contract_platforms(self, contract_id, platform_ids, primary_platform_id=None):
+        cleaned = []
+        seen = set()
+        for raw in platform_ids or []:
+            if raw is None:
+                continue
+            pid = int(raw)
+            if pid not in seen:
+                seen.add(pid); cleaned.append(pid)
+        if not cleaned:
+            raise ValueError("En az bir platform seçilmelidir.")
+        primary = int(primary_platform_id or cleaned[0])
+        if primary not in cleaned:
+            primary = cleaned[0]
+        existing = set(int(r[0]) for r in self.db.conn.execute("SELECT platform_id FROM contract_platforms WHERE contract_id=?", (int(contract_id),)))
+        for removed in existing - set(cleaned):
+            count = self.db.conn.execute("SELECT COUNT(*) FROM systems WHERE contract_id=? AND platform_id=?", (int(contract_id), int(removed))).fetchone()[0]
+            if int(count or 0) > 0:
+                raise ValueError("Bu platform altında kayıtlı sistemler olduğu için sözleşmeden kaldırılamaz.")
+        self.db.conn.execute("UPDATE contracts SET platform_id=? WHERE id=?", (primary, int(contract_id)))
+        for order, pid in enumerate(cleaned):
+            self.db.conn.execute(
+                """
+                INSERT INTO contract_platforms(contract_id,platform_id,sort_order,is_primary)
+                VALUES(?,?,?,?)
+                ON CONFLICT(contract_id,platform_id) DO UPDATE SET sort_order=excluded.sort_order,is_primary=excluded.is_primary
+                """,
+                (int(contract_id), pid, order, 1 if pid == primary else 0),
+            )
+        q = ",".join("?" for _ in cleaned)
+        self.db.conn.execute(f"DELETE FROM contract_platforms WHERE contract_id=? AND platform_id NOT IN ({q})", [int(contract_id), *cleaned])
+
+    def add_contract_platform(self, contract_id, platform_id, is_primary=False):
+        ids = self.get_contract_platform_ids(contract_id)
+        if int(platform_id) not in ids:
+            ids.append(int(platform_id))
+        self.set_contract_platforms(contract_id, ids, int(platform_id) if is_primary else None)
+
+    def remove_contract_platform(self, contract_id, platform_id):
+        ids = self.get_contract_platform_ids(contract_id)
+        if len(ids) <= 1:
+            raise ValueError("Sözleşmede en az bir platform kalmalıdır.")
+        if int(platform_id) not in ids:
+            return
+        count = self.db.conn.execute("SELECT COUNT(*) FROM systems WHERE contract_id=? AND platform_id=?", (int(contract_id), int(platform_id))).fetchone()[0]
+        if int(count or 0) > 0:
+            raise ValueError("Bu platform altında kayıtlı sistemler olduğu için sözleşmeden kaldırılamaz.")
+        remaining = [pid for pid in ids if pid != int(platform_id)]
+        primary = self.get_primary_contract_platform(contract_id)
+        self.set_contract_platforms(contract_id, remaining, remaining[0] if primary and int(primary["platform_id"]) == int(platform_id) else None)
+
+    def list_systems(self, contract_id, platform_id=None):
+        if platform_id is None:
+            rows = self.db.conn.execute("SELECT * FROM systems WHERE contract_id=? ORDER BY sort_order,id", (int(contract_id),)).fetchall()
+        else:
+            rows = self.db.conn.execute("SELECT * FROM systems WHERE contract_id=? AND platform_id=? ORDER BY sort_order,id", (int(contract_id), int(platform_id))).fetchall()
+        return [dict(r) for r in rows]
+
     def list_main_contracts(self, platform, tags_map=None):
         rows=[]; tags_map = tags_map or self.all_contract_tags_map()
-        for r in self.db.conn.execute("SELECT c.*,p.name AS platform FROM contracts c JOIN platforms p ON p.id=c.platform_id WHERE c.platform_id=? ORDER BY c.id",(self.get_platform_id(platform),)):
+        for r in self.db.conn.execute("SELECT c.*,p.name AS platform FROM contracts c JOIN contract_platforms cp ON cp.contract_id=c.id JOIN platforms p ON p.id=cp.platform_id WHERE cp.platform_id=? ORDER BY c.id",(self.get_platform_id(platform),)):
             tags=tags_map.get((r['platform'],r['contract_no'],r['contract_type']),[])
             users = self._contract_users(int(r["id"]))
             user_display = self._user_display(users)
@@ -1072,7 +1169,7 @@ class STSStore:
         for p in self.platform_names(): out.extend(self.list_main_contracts(p,tags_map=tags))
         return out
     def find_main_contract_info(self, platform, contract_no):
-        r=self.db.conn.execute("SELECT c.*,p.name AS platform FROM contracts c JOIN platforms p ON p.id=c.platform_id WHERE c.platform_id=? AND c.contract_no=? AND c.is_main=1 LIMIT 1",(self.get_platform_id(platform),contract_no)).fetchone()
+        r=self.db.conn.execute("SELECT c.*,p.name AS platform FROM contracts c JOIN contract_platforms cp ON cp.contract_id=c.id JOIN platforms p ON p.id=cp.platform_id WHERE cp.platform_id=? AND c.contract_no=? AND c.is_main=1 LIMIT 1",(self.get_platform_id(platform),contract_no)).fetchone()
         if not r:
             return None
         out = dict(r)
@@ -1080,7 +1177,7 @@ class STSStore:
         out.update({"row": out["id"], "block_start": out["id"], "block_end": out["id"], "user": self._user_display(users), "users": users, "type": out.get("contract_type") or ""})
         return out
     def next_sd_code(self, platform, contract_no):
-        c=self.db.conn.execute("SELECT COUNT(*) FROM contracts WHERE platform_id=? AND contract_no=?",(self.get_platform_id(platform),contract_no)).fetchone()[0]
+        c=self.db.conn.execute("SELECT COUNT(*) FROM contracts c JOIN contract_platforms cp ON cp.contract_id=c.id WHERE cp.platform_id=? AND c.contract_no=?",(self.get_platform_id(platform),contract_no)).fetchone()[0]
         return f"SD-{int(c)+1:03d}"
 
     def write_contract(self, ci, systems, deliveries, old_contract_no=None, old_start_row=None):
@@ -1092,7 +1189,11 @@ class STSStore:
         user_display = self._user_display(users, getattr(ci, "user", ""))
         search_text = " ".join([str(ci.platform or ""), str(ci.no or ""), str(ctype or ""), str(ci.note or ""), user_display, " ".join(users)]).strip()
         ci.user = user_display; ci.users = users
-        row=self.db.conn.execute("SELECT id,status,note,completion_date,acceptance_date FROM contracts WHERE platform_id=? AND contract_no=? AND contract_type=?",(platform_id,ci.no,ctype)).fetchone()
+        row = None
+        if int(getattr(ci, "entry_start_row", 0) or 0):
+            row = self.db.conn.execute("SELECT id,status,note,completion_date,acceptance_date FROM contracts WHERE id=?", (int(getattr(ci, "entry_start_row", 0) or 0),)).fetchone()
+        if not row:
+            row=self.db.conn.execute("SELECT id,status,note,completion_date,acceptance_date FROM contracts WHERE platform_id=? AND contract_no=? AND contract_type=?",(platform_id,ci.no,ctype)).fetchone()
         before_contract = {"status": row[1] or "", "note": row[2] or "", "completion_date": row[3] or "", "acceptance_date": row[4] or ""} if row else None
         old_systems = {}
         old_deliveries = {}
@@ -1111,12 +1212,18 @@ class STSStore:
                 self.db.conn.execute("INSERT INTO contracts(platform_id,contract_no,yi_yd,contract_type,type_display,link_type,status,signed_date,t0_date,t0_months,completion_date,acceptance_date,content,note,is_main,search_text,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(platform_id,ci.no,ci.yi_yd,ctype,ctype,"",ci.status,ci.signature_date,ci.t0_date,int(ci.t0_months or 0),ci.completion_date,ci.acceptance_date,ci.note,ci.note,1 if self._normalize_label(ctype)==self._normalize_label('Ana Sözleşme') else 0,search_text,ts,ts))
                 cid=self.db.conn.execute("SELECT last_insert_rowid()").fetchone()[0]
             self._replace_contract_users(int(cid), users)
+            selected_platform_names = list(getattr(ci, "platforms", None) or getattr(ci, "platform_names", None) or [])
+            if not selected_platform_names:
+                selected_platform_names = [ci.platform]
+            selected_platform_ids = [self.get_platform_id(name, create=True) for name in selected_platform_names if str(name or "").strip()]
+            selected_platform_ids = [pid for pid in selected_platform_ids if pid is not None]
+            self.set_contract_platforms(int(cid), selected_platform_ids or [platform_id], primary_platform_id=platform_id)
 
-            existing_systems = {str(item[1]): int(item[0]) for item in self.db.conn.execute("SELECT id,name FROM systems WHERE contract_id=?", (cid,))}
+            existing_systems = {str(item[1]): int(item[0]) for item in self.db.conn.execute("SELECT id,name FROM systems WHERE contract_id=? AND COALESCE(platform_id, ?) = ?", (cid, platform_id, platform_id))}
             desired_system_labels = {str(system.name) for system in (systems or [])}
             # Remove deliveries first so deleted acceptances cascade only to their own delivery_components.
             desired_delivery_keys = {(str(sys_name), str(delivery.name)) for sys_name, items in (deliveries or {}).items() for delivery in (items or [])}
-            for delivery_row in self.db.conn.execute("SELECT d.id,s.name AS delivery_system,d.name FROM deliveries d JOIN systems s ON s.id=d.system_id WHERE d.contract_id=?", (cid,)).fetchall():
+            for delivery_row in self.db.conn.execute("SELECT d.id,s.name AS delivery_system,d.name FROM deliveries d JOIN systems s ON s.id=d.system_id WHERE d.contract_id=? AND COALESCE(s.platform_id, ?) = ?", (cid, platform_id, platform_id)).fetchall():
                 if (str(delivery_row[1]), str(delivery_row[2])) not in desired_delivery_keys:
                     self.db.conn.execute("DELETE FROM deliveries WHERE id=?", (delivery_row[0],))
 
@@ -1125,10 +1232,10 @@ class STSStore:
                 payload=json.dumps({"t0_date":system.t0_date,"t0_months":system.t0_months})
                 sid=existing_systems.get(str(system.name))
                 if sid is None:
-                    self.db.conn.execute("INSERT INTO systems(contract_id,name,status,completion_date,acceptance_date,note,sort_order,payload_json) VALUES(?,?,?,?,?,?,?,?)",(cid,system.name,system.status,system.completion_date,system.acceptance_date,"",i,payload))
+                    self.db.conn.execute("INSERT INTO systems(contract_id,platform_id,name,status,completion_date,acceptance_date,note,sort_order,payload_json) VALUES(?,?,?,?,?,?,?,?,?)",(cid,platform_id,system.name,system.status,system.completion_date,system.acceptance_date,"",i,payload))
                     sid=self.db.conn.execute("SELECT last_insert_rowid()").fetchone()[0]
                 else:
-                    self.db.conn.execute("UPDATE systems SET name=?,status=?,completion_date=?,acceptance_date=?,sort_order=?,payload_json=? WHERE id=?",(system.name,system.status,system.completion_date,system.acceptance_date,i,payload,sid))
+                    self.db.conn.execute("UPDATE systems SET platform_id=?,name=?,status=?,completion_date=?,acceptance_date=?,sort_order=?,payload_json=? WHERE id=?",(platform_id,system.name,system.status,system.completion_date,system.acceptance_date,i,payload,sid))
                 system_ids[system.name]=sid
                 existing_components = {int(item[0]): int(item[1]) for item in self.db.conn.execute("SELECT component_id,id FROM system_components WHERE system_id=?", (sid,))}
                 desired_component_ids = set()
@@ -1149,7 +1256,7 @@ class STSStore:
                 if name not in desired_system_labels:
                     self.db.conn.execute("DELETE FROM systems WHERE id=?", (sid,))
 
-            existing_deliveries = {(str(item[1]), str(item[2])): int(item[0]) for item in self.db.conn.execute("SELECT d.id,s.name AS delivery_system,d.name FROM deliveries d JOIN systems s ON s.id=d.system_id WHERE d.contract_id=?", (cid,))}
+            existing_deliveries = {(str(item[1]), str(item[2])): int(item[0]) for item in self.db.conn.execute("SELECT d.id,s.name AS delivery_system,d.name FROM deliveries d JOIN systems s ON s.id=d.system_id WHERE d.contract_id=? AND COALESCE(s.platform_id, ?) = ?", (cid, platform_id, platform_id))}
             for sys_name, dlist in (deliveries or {}).items():
                 for i,delivery in enumerate(dlist or []):
                     delivery_user_id = self.get_user_id(getattr(delivery, "delivery_user", ""), create=True)
@@ -1213,22 +1320,23 @@ class STSStore:
         if start_row is not None and str(start_row).isdigit():
             r = self.db.conn.execute("SELECT c.*,p.name AS platform FROM contracts c JOIN platforms p ON p.id=c.platform_id WHERE c.id=? LIMIT 1", (int(start_row),)).fetchone()
         if not r and contract_type:
-            r = self.db.conn.execute("SELECT c.*,p.name AS platform FROM contracts c JOIN platforms p ON p.id=c.platform_id WHERE c.platform_id=? AND c.contract_no=? AND c.contract_type=? ORDER BY c.id LIMIT 1",(self.get_platform_id(platform),contract_no,contract_type)).fetchone()
+            r = self.db.conn.execute("SELECT c.*,p.name AS platform FROM contracts c JOIN contract_platforms cp ON cp.contract_id=c.id JOIN platforms p ON p.id=cp.platform_id WHERE cp.platform_id=? AND c.contract_no=? AND c.contract_type=? ORDER BY c.id LIMIT 1",(self.get_platform_id(platform),contract_no,contract_type)).fetchone()
         if not r:
-            r=self.db.conn.execute("SELECT c.*,p.name AS platform FROM contracts c JOIN platforms p ON p.id=c.platform_id WHERE c.platform_id=? AND c.contract_no=? ORDER BY c.id LIMIT 1",(self.get_platform_id(platform),contract_no)).fetchone()
+            r=self.db.conn.execute("SELECT c.*,p.name AS platform FROM contracts c JOIN contract_platforms cp ON cp.contract_id=c.id JOIN platforms p ON p.id=cp.platform_id WHERE cp.platform_id=? AND c.contract_no=? ORDER BY c.id LIMIT 1",(self.get_platform_id(platform),contract_no)).fetchone()
         if not r: raise ValueError("contract not found")
         users = self._contract_users(int(r["id"]))
         user_display = self._user_display(users)
-        ci=ContractInfo(no=r['contract_no'],platform=r['platform'],user=user_display,yi_yd=r['yi_yd'] or "Yİ",contract_type=r['contract_type'] or "",signature_date=r['signed_date'] or "",t0_date=r['t0_date'] or "",t0_months=int(r['t0_months'] or 0),completion_date=r['completion_date'] or "",status=r['status'] or "PLAN",note=r['note'] or "",acceptance_date=r['acceptance_date'] or "",entry_start_row=int(r['id']),users=users)
+        ci=ContractInfo(no=r['contract_no'],platform=r['platform'],user=user_display,yi_yd=r['yi_yd'] or "Yİ",contract_type=r['contract_type'] or "",signature_date=r['signed_date'] or "",t0_date=r['t0_date'] or "",t0_months=int(r['t0_months'] or 0),completion_date=r['completion_date'] or "",status=r['status'] or "PLAN",note=r['note'] or "",acceptance_date=r['acceptance_date'] or "",entry_start_row=int(r['id']),users=users, platform_id=int(r['platform_id'] or 0), primary_platform_id=int(r['platform_id'] or 0), primary_platform=r['platform'] or '', platforms=[x['platform_name'] for x in self.get_contract_platforms(int(r['id']))], platform_names=[x['platform_name'] for x in self.get_contract_platforms(int(r['id']))])
         systems=[]; deliveries={}
-        for s in self.db.conn.execute("SELECT * FROM systems WHERE contract_id=? ORDER BY sort_order,id",(r['id'],)):
+        active_platform_id = self.get_platform_id(platform) or int(r['platform_id'] or 0)
+        for s in self.db.conn.execute("SELECT * FROM systems WHERE contract_id=? AND COALESCE(platform_id, ?) = ? ORDER BY sort_order,id",(r['id'], active_platform_id, active_platform_id)):
             component_rows=self.db.conn.execute("SELECT c.name,sc.qty,sc.note FROM system_components sc JOIN components c ON c.id=sc.component_id WHERE sc.system_id=?",(s['id'],)).fetchall()
             comps={x[0]:float(x[1] or 0) for x in component_rows}
             component_notes={x[0]:str(x[2] or "") for x in component_rows if str(x[2] or "")}
             payload=json.loads(s['payload_json'] or "{}")
             si=SystemInfo(name=s['name'],components=comps,component_notes=component_notes,t0_date=payload.get('t0_date',''),t0_months=int(payload.get('t0_months',0) or 0),completion_date=s['completion_date'] or "",status=s['status'] or "Başlanmadı",acceptance_date=s['acceptance_date'] or "")
             systems.append(si)
-        for d in self.db.conn.execute("SELECT d.*,s.name AS delivery_system,u.name AS delivery_user FROM deliveries d JOIN systems s ON s.id=d.system_id LEFT JOIN users u ON u.id=d.delivery_user_id WHERE d.contract_id=? ORDER BY s.name,d.sort_order,d.id",(r['id'],)):
+        for d in self.db.conn.execute("SELECT d.*,s.name AS delivery_system,u.name AS delivery_user FROM deliveries d JOIN systems s ON s.id=d.system_id LEFT JOIN users u ON u.id=d.delivery_user_id WHERE d.contract_id=? AND COALESCE(s.platform_id, ?) = ? ORDER BY s.name,d.sort_order,d.id",(r['id'], active_platform_id, active_platform_id)):
             payload=json.loads(d['payload_json'] or "{}")
             rows=self.db.conn.execute("SELECT c.name,dc.planned,dc.delivered FROM delivery_components dc JOIN components c ON c.id=dc.component_id WHERE dc.delivery_id=?",(d['id'],)).fetchall()
             planned={x[0]:float(x[1] or 0) for x in rows}; delivered={x[0]:float(x[2] or 0) for x in rows}
