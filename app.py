@@ -2685,14 +2685,14 @@ class ContractEditDialog(StyledDialog):
             self._type_lbl.setStyleSheet("")
             self._type_lbl.editingFinished.connect(self._normalize_sd_code_field)
             self._type_lbl.textChanged.connect(self._check_duplicate_contract_key)
-            no_warn_text = "SD kayıtlarının sözleşme no alanı ana sözleşmeye bağlıdır; doğrudan değiştirilemez."
+            no_warn_text = ""
         else:
             no_warn_text = "Aynı platform + sözleşme tipi + sözleşme no kombinasyonu kullanılamaz."
             self._no_lbl.textChanged.connect(self._check_duplicate_contract_key)
         self._no_dup_warn = QLabel(no_warn_text)
         self._no_dup_warn.setObjectName("warning")
         self._no_dup_warn.setWordWrap(True)
-        self._no_dup_warn.setVisible(self._is_sd_contract)
+        self._no_dup_warn.setVisible(False)
 
         # ── Düzenlenebilir alanlar ────────────────────────────────────
         self.user = MultiUserSelectWidget(self)
@@ -2916,12 +2916,8 @@ class ContractEditDialog(StyledDialog):
                             f"'{no_text}' no'ya taşınacak; ancak bu platformda aynı no ve SD tipi zaten var."
                         )
 
-        self._no_dup_warn.setVisible(self._is_sd_contract)
-        if self._is_sd_contract:
-            self._no_dup_warn.setText(
-                "SD kayıtlarının sözleşme no alanı ana sözleşmeye bağlıdır; doğrudan değiştirilemez."
-            )
-        else:
+        self._no_dup_warn.setVisible(False)
+        if not self._is_sd_contract:
             self._no_lbl.setStyleSheet("")
         return False
 
@@ -7663,7 +7659,7 @@ class ContractWorkWindow(QDialog):
             self,
             title_text="SD Ekleme Tablosu",
             save_text="SD Ekle",
-            info_text="SD temel bilgilerini girin. Platform, sözleşme no ve SD kodu ana sözleşmeye bağlıdır; değiştirilemez.",
+            info_text="SD temel bilgilerini girin. Platform ve sözleşme no ana sözleşmeye bağlıdır; değiştirilemez.",
         )
         if not dlg.exec() or not dlg.result:
             return
