@@ -5611,6 +5611,7 @@ class ContractWorkWindow(QDialog):
                 if not info:
                     QMessageBox.warning(self, "Hata", "Sözleşme Excel'de bulunamadı veya silinemedi.")
                     return
+                self._drop_deleted_context_cache(info)
                 self.deleted_contract_info = info
                 QMessageBox.information(self, "Silindi", "Sözleşme Excel'den silindi.")
                 self.accept()
@@ -7441,18 +7442,52 @@ class ContractWorkWindow(QDialog):
         return rows
 
     def _next_sd_code_for_family(self, platform: str, no: str) -> str:
+        used: set[int] = set()
         try:
-            base_next = self.store.next_sd_code(platform, no)
-            max_n = int(re.match(r"^SD-(\d+)$", base_next).group(1)) - 1
+            for item in self.store.list_main_contracts(platform):
+                if str(item.get("no", "") or "").strip() != no:
+                    continue
+                m = re.match(r"^SD-(\d+)$", str(item.get("type", "") or "").strip().upper())
+                if m:
+                    used.add(int(m.group(1)))
         except Exception:
-            max_n = 0
+            try:
+                base_next = self.store.next_sd_code(platform, no)
+                m = re.match(r"^SD-(\d+)$", str(base_next or "").strip().upper())
+                if m and int(m.group(1)) > 1:
+                    used.update(range(1, int(m.group(1))))
+            except Exception:
+                pass
         for key in self._context_cache.keys():
             p, n, t = key
             if p == platform and n == no:
                 m = re.match(r"^SD-(\d+)$", str(t or "").strip().upper())
                 if m:
-                    max_n = max(max_n, int(m.group(1)))
-        return f"SD-{max_n + 1}"
+                    used.add(int(m.group(1)))
+        n = 1
+        while n in used:
+            n += 1
+        return f"SD-{n}"
+
+    def _drop_context_cache_key(self, key: Tuple[str, str, str]):
+        if key and all(key):
+            self._context_cache.pop(key, None)
+
+    def _drop_deleted_context_cache(self, info: dict):
+        deleted = list((info or {}).get("deleted_contracts") or [])
+        if not deleted and info:
+            deleted = [{
+                "platform": info.get("platform"),
+                "contract_no": info.get("contract_no"),
+                "contract_type": info.get("contract_type") or self.original_contract_type,
+            }]
+        for item in deleted:
+            key = (
+                str(item.get("platform", "") or "").strip(),
+                str(item.get("contract_no", "") or "").strip(),
+                str(item.get("contract_type", "") or "").strip(),
+            )
+            self._drop_context_cache_key(key)
 
     def refresh_sd_sidebar(self):
         if not hasattr(self, "sd_list"):
@@ -8175,6 +8210,7 @@ class ContractWorkWindow(QDialog):
 
     def reject(self) -> None:
         """Kapat butonuna basıldığında değişiklik varsa onay ister."""
+        current_key = self._context_key() if hasattr(self, "_context_cache") else ("", "", "")
         if self._is_dirty:
             answer = QMessageBox.question(
                 self,
@@ -8186,6 +8222,11 @@ class ContractWorkWindow(QDialog):
             )
             if answer != QMessageBox.Yes:
                 return
+        if hasattr(self, "_context_cache") and current_key in self._context_cache:
+            ctx = self._context_cache.get(current_key) or {}
+            ci = ctx.get("ci")
+            if int(getattr(ci, "entry_start_row", 0) or ctx.get("original_entry_start_row") or 0) <= 0:
+                self._context_cache.pop(current_key, None)
         super().reject()
 
     def save_all(self):
