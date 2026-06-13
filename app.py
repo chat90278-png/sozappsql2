@@ -5973,6 +5973,30 @@ class ContractWorkWindow(QDialog):
         self.refresh_contract_header()
         self.refresh()
 
+
+    def set_active_platform(self, platform_name: str):
+        platform_name = str(platform_name or "").strip()
+        if not platform_name or platform_name == str(self.ci.platform or "").strip():
+            return
+        self._cache_current_context()
+        try:
+            ci, systems, deliveries = self.store.load_contract_structure(platform_name, self.ci.no, start_row=self.ci.entry_start_row, contract_type=self.ci.contract_type)
+        except Exception as exc:
+            QMessageBox.warning(self, "Platform yüklenemedi", f"Seçilen platform verisi yüklenemedi:\n{exc}")
+            return
+        # Same contract row, different active platform context. Keep primary platform metadata but use
+        # ci.platform as the active system/delivery write target for backward-compatible save paths.
+        self.ci.platform = platform_name
+        self.active_platform_id = int(getattr(ci, "platform_id", 0) or self.store.get_platform_id(platform_name) or 0)
+        setattr(self.ci, "platforms", self._linked_contract_platforms())
+        setattr(self.ci, "platform_names", self._linked_contract_platforms())
+        self.systems = systems or []
+        self.deliveries = deliveries or {}
+        self.selected_system = self.systems[0].name if self.systems else None
+        self.expanded_delivery_index = None
+        self.refresh_contract_header()
+        self.refresh()
+
     def refresh_contract_header(self):
         if not hasattr(self, "meta_values"):
             return
