@@ -1212,11 +1212,29 @@ class STSStore:
                 self.db.conn.execute("INSERT INTO contracts(platform_id,contract_no,yi_yd,contract_type,type_display,link_type,status,signed_date,t0_date,t0_months,completion_date,acceptance_date,content,note,is_main,search_text,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(platform_id,ci.no,ci.yi_yd,ctype,ctype,"",ci.status,ci.signature_date,ci.t0_date,int(ci.t0_months or 0),ci.completion_date,ci.acceptance_date,ci.note,ci.note,1 if self._normalize_label(ctype)==self._normalize_label('Ana Sözleşme') else 0,search_text,ts,ts))
                 cid=self.db.conn.execute("SELECT last_insert_rowid()").fetchone()[0]
             self._replace_contract_users(int(cid), users)
-            selected_platform_names = list(getattr(ci, "platforms", None) or getattr(ci, "platform_names", None) or [])
-            if not selected_platform_names:
-                selected_platform_names = [ci.platform]
-            selected_platform_ids = [self.get_platform_id(name, create=True) for name in selected_platform_names if str(name or "").strip()]
-            selected_platform_ids = [pid for pid in selected_platform_ids if pid is not None]
+            selected_platform_ids = []
+            for raw in list(getattr(ci, "platform_ids", None) or []):
+                try:
+                    pid = int(raw or 0)
+                except Exception:
+                    pid = 0
+                if pid and pid not in selected_platform_ids:
+                    selected_platform_ids.append(pid)
+            if not selected_platform_ids:
+                for item in list(getattr(ci, "platforms", None) or []):
+                    if isinstance(item, dict):
+                        pid = int(item.get("platform_id") or item.get("id") or 0)
+                        name = str(item.get("platform_name") or item.get("name") or "").strip()
+                    else:
+                        pid = 0
+                        name = str(item or "").strip()
+                    if not pid and name:
+                        pid = self.get_platform_id(name, create=True) or 0
+                    if pid and pid not in selected_platform_ids:
+                        selected_platform_ids.append(pid)
+            if not selected_platform_ids:
+                selected_platform_ids = [self.get_platform_id(name, create=True) for name in list(getattr(ci, "platform_names", None) or []) if str(name or "").strip()]
+                selected_platform_ids = [int(pid) for pid in selected_platform_ids if pid is not None]
             self.set_contract_platforms(int(cid), selected_platform_ids or [platform_id], primary_platform_id=platform_id)
 
             existing_systems = {str(item[1]): int(item[0]) for item in self.db.conn.execute("SELECT id,name FROM systems WHERE contract_id=? AND COALESCE(platform_id, ?) = ?", (cid, platform_id, platform_id))}
@@ -1312,23 +1330,33 @@ class STSStore:
                     self._log("delivery_status_changed", entity_type="delivery", entity_key=entity_key, contract_no=str(ci.no or ""), source="Delivery Editor", message="Teslimat durumu güncellendi", before={"status": before_compare.get("status")}, after={"status": after_delivery.get("status")})
         return cid
 
-    def load_contract_structure(self, platform, contract_no, start_row=None, contract_type=None):
+    def load_contract_structure(self, platform, contract_no=None, start_row=None, contract_type=None, platform_id=None):
+        # Backward compatible call style remains: load_contract_structure(platform_name, contract_no, ...).
+        # New multi-platform detail context passes platform_id so filtering never depends on display names.
+        if contract_no is None:
+            contract_no = platform
         if contract_type is None and start_row is not None and not str(start_row).isdigit():
             contract_type = str(start_row)
             start_row = None
+        active_platform_id = int(platform_id or 0)
+        if not active_platform_id:
+            active_platform_id = int(self.get_platform_id(platform, create=False) or 0)
         r = None
         if start_row is not None and str(start_row).isdigit():
             r = self.db.conn.execute("SELECT c.*,p.name AS platform FROM contracts c JOIN platforms p ON p.id=c.platform_id WHERE c.id=? LIMIT 1", (int(start_row),)).fetchone()
         if not r and contract_type:
-            r = self.db.conn.execute("SELECT c.*,p.name AS platform FROM contracts c JOIN contract_platforms cp ON cp.contract_id=c.id JOIN platforms p ON p.id=cp.platform_id WHERE cp.platform_id=? AND c.contract_no=? AND c.contract_type=? ORDER BY c.id LIMIT 1",(self.get_platform_id(platform),contract_no,contract_type)).fetchone()
+            r = self.db.conn.execute("SELECT c.*,p.name AS platform FROM contracts c JOIN contract_platforms cp ON cp.contract_id=c.id JOIN platforms p ON p.id=cp.platform_id WHERE cp.platform_id=? AND c.contract_no=? AND c.contract_type=? ORDER BY c.id LIMIT 1",(active_platform_id,contract_no,contract_type)).fetchone()
         if not r:
-            r=self.db.conn.execute("SELECT c.*,p.name AS platform FROM contracts c JOIN contract_platforms cp ON cp.contract_id=c.id JOIN platforms p ON p.id=cp.platform_id WHERE cp.platform_id=? AND c.contract_no=? ORDER BY c.id LIMIT 1",(self.get_platform_id(platform),contract_no)).fetchone()
+            r=self.db.conn.execute("SELECT c.*,p.name AS platform FROM contracts c JOIN contract_platforms cp ON cp.contract_id=c.id JOIN platforms p ON p.id=cp.platform_id WHERE cp.platform_id=? AND c.contract_no=? ORDER BY c.id LIMIT 1",(active_platform_id,contract_no)).fetchone()
         if not r: raise ValueError("contract not found")
         users = self._contract_users(int(r["id"]))
         user_display = self._user_display(users)
-        ci=ContractInfo(no=r['contract_no'],platform=r['platform'],user=user_display,yi_yd=r['yi_yd'] or "Yİ",contract_type=r['contract_type'] or "",signature_date=r['signed_date'] or "",t0_date=r['t0_date'] or "",t0_months=int(r['t0_months'] or 0),completion_date=r['completion_date'] or "",status=r['status'] or "PLAN",note=r['note'] or "",acceptance_date=r['acceptance_date'] or "",entry_start_row=int(r['id']),users=users, platform_id=int(r['platform_id'] or 0), primary_platform_id=int(r['platform_id'] or 0), primary_platform=r['platform'] or '', platforms=[x['platform_name'] for x in self.get_contract_platforms(int(r['id']))], platform_names=[x['platform_name'] for x in self.get_contract_platforms(int(r['id']))])
+        platform_rows = self.get_contract_platforms(int(r['id']))
+        active_name_row = self.db.conn.execute("SELECT name FROM platforms WHERE id=?", (active_platform_id,)).fetchone()
+        active_platform_name = str((active_name_row[0] if active_name_row else r['platform']) or "")
+        ci=ContractInfo(no=r['contract_no'],platform=active_platform_name,user=user_display,yi_yd=r['yi_yd'] or "Yİ",contract_type=r['contract_type'] or "",signature_date=r['signed_date'] or "",t0_date=r['t0_date'] or "",t0_months=int(r['t0_months'] or 0),completion_date=r['completion_date'] or "",status=r['status'] or "PLAN",note=r['note'] or "",acceptance_date=r['acceptance_date'] or "",entry_start_row=int(r['id']),users=users, platform_id=active_platform_id or int(r['platform_id'] or 0), primary_platform_id=int(r['platform_id'] or 0), primary_platform=r['platform'] or '', platforms=platform_rows, platform_names=[x['platform_name'] for x in platform_rows], platform_ids=[int(x['platform_id']) for x in platform_rows])
         systems=[]; deliveries={}
-        active_platform_id = self.get_platform_id(platform) or int(r['platform_id'] or 0)
+        active_platform_id = active_platform_id or int(r['platform_id'] or 0)
         for s in self.db.conn.execute("SELECT * FROM systems WHERE contract_id=? AND COALESCE(platform_id, ?) = ? ORDER BY sort_order,id",(r['id'], active_platform_id, active_platform_id)):
             component_rows=self.db.conn.execute("SELECT c.name,sc.qty,sc.note FROM system_components sc JOIN components c ON c.id=sc.component_id WHERE sc.system_id=?",(s['id'],)).fetchall()
             comps={x[0]:float(x[1] or 0) for x in component_rows}

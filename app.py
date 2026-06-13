@@ -2297,7 +2297,7 @@ class ElidedValueLabel(QLabel):
 class PlatformTabsWidget(QScrollArea):
     """Header içinde gömülü premium/neon platform sekme rayı."""
 
-    activePlatformChanged = Signal(str)
+    activePlatformChanged = Signal(int)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -2337,14 +2337,30 @@ class PlatformTabsWidget(QScrollArea):
             QScrollBar:horizontal {{ height:0px; background:transparent; }}
         """)
 
-    def set_platforms(self, platforms: List[str], active: str = ""):
+    def set_platforms(self, platforms: List[object], active_platform_id: int = 0):
         vals=[]; seen=set()
         for p in platforms or []:
-            n=str(p or "").strip()
-            if n and n.casefold() not in seen:
-                seen.add(n.casefold()); vals.append(n)
-        self._platforms = vals or ([str(active).strip()] if str(active or "").strip() else [])
-        self._active = active if active in self._platforms else (self._platforms[0] if self._platforms else "")
+            if isinstance(p, dict):
+                pid = int(p.get("platform_id") or p.get("id") or 0)
+                name = str(p.get("platform_name") or p.get("name") or "").strip()
+                is_primary = bool(p.get("is_primary"))
+            else:
+                name = str(p or "").strip()
+                pid = 0
+                is_primary = False
+            key = pid if pid else name.casefold()
+            if name and key not in seen:
+                seen.add(key)
+                vals.append({"platform_id": pid, "platform_name": name, "is_primary": is_primary})
+        self._platforms = vals
+        if not self._platforms and str(active_platform_id or "").strip():
+            self._platforms = []
+        active_id = int(active_platform_id or 0)
+        valid_ids = {int(p.get("platform_id") or 0) for p in self._platforms}
+        if active_id not in valid_ids:
+            primary = next((p for p in self._platforms if p.get("is_primary")), None)
+            active_id = int((primary or (self._platforms[0] if self._platforms else {})).get("platform_id") or 0)
+        self._active = active_id
         self._render()
 
     def _render(self):
@@ -2358,15 +2374,18 @@ class PlatformTabsWidget(QScrollArea):
         margins = (0, 3, 0, 3) if single else (5, 3, 5, 3)
         self._lay.setContentsMargins(*margins)
         max_height = 26
-        for name in self._platforms:
+        for platform in self._platforms:
+            name = str(platform.get("platform_name") or "")
+            pid = int(platform.get("platform_id") or 0)
             btn=QPushButton(name)
+            btn.setProperty("platform_id", pid)
             btn.setCursor(Qt.PointingHandCursor)
             btn.setFixedHeight(max_height)
             chip_width = max(74 if single else 70, metrics.horizontalAdvance(name) + (32 if single else 30))
             btn.setFixedWidth(chip_width)
             btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
             btn.setToolTip(name)
-            active = name == self._active
+            active = pid == int(self._active or 0)
             btn.setObjectName("platformTabActive" if active else "platformTabPassive")
             btn.setStyleSheet(
                 "QPushButton{border-radius:13px;padding:2px 12px;font-size:11px;font-weight:900;letter-spacing:0.35px;text-align:center;"
@@ -2386,7 +2405,7 @@ class PlatformTabsWidget(QScrollArea):
                 btn.setGraphicsEffect(glow)
             else:
                 btn.setGraphicsEffect(None)
-            btn.clicked.connect(lambda _=False, n=name: self._set_active(n))
+            btn.clicked.connect(lambda _=False, platform_id=pid: self._set_active(platform_id))
             self._lay.addWidget(btn, 0, Qt.AlignLeft | Qt.AlignVCenter)
             total_width += chip_width
         if self._platforms:
@@ -2398,7 +2417,7 @@ class PlatformTabsWidget(QScrollArea):
         self.setMinimumWidth(min(self._content_width, self._max_width))
         self.setMaximumWidth(self._max_width)
         self.updateGeometry()
-        self.setToolTip(", ".join(self._platforms))
+        self.setToolTip(", ".join(str(p.get("platform_name") or "") for p in self._platforms))
 
     def sizeHint(self) -> QSize:
         return QSize(min(max(70, self._content_width), self._max_width), 32)
@@ -2406,12 +2425,13 @@ class PlatformTabsWidget(QScrollArea):
     def minimumSizeHint(self) -> QSize:
         return QSize(min(max(70, self._content_width), self._max_width), 32)
 
-    def _set_active(self, name: str):
-        if name == self._active:
+    def _set_active(self, platform_id: int):
+        platform_id = int(platform_id or 0)
+        if platform_id == int(self._active or 0):
             return
-        self._active = name
+        self._active = platform_id
         self._render()
-        self.activePlatformChanged.emit(name)
+        self.activePlatformChanged.emit(platform_id)
 
 
 class ContractDialog(StyledDialog):
@@ -2731,6 +2751,15 @@ class ContractDialog(StyledDialog):
         else:
             widget.setStyleSheet("")
 
+    def selected_platform_ids(self) -> List[int]:
+        ids: List[int] = []
+        seen = set()
+        for name in self.platform.selected_platforms():
+            pid = self.store.get_platform_id(name, create=False)
+            if pid is not None and int(pid) not in seen:
+                seen.add(int(pid)); ids.append(int(pid))
+        return ids
+
     def save(self):
         if not self.no.text().strip():
             QMessageBox.warning(self, "Eksik", "Sözleşme no girin.")
@@ -2818,8 +2847,9 @@ class ContractDialog(StyledDialog):
             sd_anchor_platform=self._sd_anchor_platform if self.is_sd_mode() else "",
             sd_anchor_no=self._sd_anchor_no if self.is_sd_mode() else "",
             users=users,
-            platforms=self.platform.selected_platforms(),
+            platforms=[{"platform_id": pid, "platform_name": name} for pid, name in zip(self.selected_platform_ids(), self.platform.selected_platforms())],
             platform_names=self.platform.selected_platforms(),
+            platform_ids=self.selected_platform_ids(),
         )
         self.accept()
 
@@ -3017,8 +3047,8 @@ class ContractEditDialog(StyledDialog):
             raw = [str(self.ci.platform or "").strip()]
         out: List[str] = []
         seen = set()
-        for name in raw:
-            n = str(name or "").strip()
+        for item in raw:
+            n = str(item.get("platform_name") or item.get("name") or "").strip() if isinstance(item, dict) else str(item or "").strip()
             key = n.casefold()
             if n and key not in seen:
                 seen.add(key)
@@ -3268,7 +3298,14 @@ class ContractEditDialog(StyledDialog):
         new_ci.completion_date = self.completion.text().strip()
         new_ci.status          = str(self.ci.status or "Başlanmadı")
         new_ci.note            = self.note.text().strip()
-        setattr(new_ci, "platforms", selected_platforms)
+        selected_platform_ids = []
+        for name in selected_platforms:
+            pid = self.store.get_platform_id(name, create=False)
+            if pid is not None:
+                selected_platform_ids.append(int(pid))
+        setattr(new_ci, "platforms", [{"platform_id": pid, "platform_name": name} for pid, name in zip(selected_platform_ids, selected_platforms)])
+        setattr(new_ci, "platform_names", selected_platforms)
+        setattr(new_ci, "platform_ids", selected_platform_ids)
         self.result = new_ci
         self.accept()
 
@@ -5521,8 +5558,8 @@ class ContractWorkWindow(QDialog):
                 fill='none' stroke='#4e93ff' stroke-opacity='.55' stroke-width='.85' stroke-linecap='round'/>
         </svg>"""
         self.platform_tabs_widget = PlatformTabsWidget(self)
-        self.active_platform_id = int(getattr(self.ci, "platform_id", 0) or 0)
-        self.platform_tabs_widget.set_platforms(self._linked_contract_platforms(), self.ci.platform)
+        self.active_platform_id = int(getattr(self.ci, "platform_id", 0) or getattr(self.ci, "primary_platform_id", 0) or 0)
+        self.platform_tabs_widget.set_platforms(self._linked_contract_platforms(), self.active_platform_id)
         self.platform_tabs_widget.activePlatformChanged.connect(self.set_active_platform)
 
         cells = [
@@ -5863,40 +5900,78 @@ class ContractWorkWindow(QDialog):
             self._tl_prog.setValue(pct)
             self._tl_name_lbl.setText(str(self.ci.no or "—"))
 
-    def _linked_contract_platforms(self) -> List[str]:
-        explicit = list(getattr(self.ci, "platforms", []) or getattr(self.ci, "platform_names", []) or [])
+    def _linked_contract_platforms(self) -> List[dict]:
+        explicit = list(getattr(self.ci, "platforms", []) or [])
+        if not explicit:
+            names = list(getattr(self.ci, "platform_names", []) or [])
+            ids = list(getattr(self.ci, "platform_ids", []) or [])
+            explicit = [{"platform_id": int(ids[i]) if i < len(ids) else 0, "platform_name": name} for i, name in enumerate(names)]
         if getattr(self.ci, "entry_start_row", 0):
             try:
                 rows = self.store.get_contract_platforms(int(getattr(self.ci, "entry_start_row", 0) or 0))
-                db_names = [str(r.get("platform_name") or "").strip() for r in rows]
-                if db_names:
-                    explicit = db_names
+                if rows:
+                    explicit = rows
             except Exception:
                 pass
         base = str(self.ci.platform or "").strip()
-        no = self.store._normalize_label(str(self.ci.no or "").strip())
-        ctype = self.store._normalize_label(str(self.ci.contract_type or "").strip())
-        found: List[str] = []
+        base_id = int(getattr(self.ci, "platform_id", 0) or getattr(self.ci, "primary_platform_id", 0) or 0)
+        found: List[dict] = []
         seen = set()
-        for name in explicit + ([base] if base else []):
-            n = str(name or "").strip()
-            key = n.casefold()
-            if n and key not in seen:
+        for item in explicit + ([{"platform_id": base_id, "platform_name": base}] if base else []):
+            if isinstance(item, dict):
+                pid = int(item.get("platform_id") or item.get("id") or 0)
+                name = str(item.get("platform_name") or item.get("name") or "").strip()
+                is_primary = bool(item.get("is_primary"))
+            else:
+                name = str(item or "").strip()
+                pid = self.store.get_platform_id(name, create=False) or 0
+                is_primary = False
+            key = pid if pid else name.casefold()
+            if name and key not in seen:
                 seen.add(key)
-                found.append(n)
+                found.append({"platform_id": int(pid or 0), "platform_name": name, "is_primary": is_primary})
+        return found
+
+
+
+    def set_active_platform(self, platform_id: int):
         try:
-            for platform in self.store.platform_names():
-                for item in self.store.list_main_contracts(platform):
-                    if (self.store._normalize_label(str(item.get("no", "") or "")) == no and
-                            self.store._normalize_label(str(item.get("type", "") or "")) == ctype):
-                        key = str(platform or "").casefold()
-                        if platform and key not in seen:
-                            seen.add(key)
-                            found.append(platform)
-                        break
+            platform_id = int(platform_id or 0)
         except Exception:
-            pass
-        return found or ([base] if base else [])
+            platform_id = 0
+        linked = self._linked_contract_platforms()
+        valid = {int(p.get("platform_id") or 0): str(p.get("platform_name") or "") for p in linked if int(p.get("platform_id") or 0)}
+        if not platform_id or platform_id not in valid:
+            primary = self.store.get_primary_contract_platform(int(getattr(self.ci, "entry_start_row", 0) or 0)) if getattr(self.ci, "entry_start_row", 0) else None
+            platform_id = int((primary or {}).get("platform_id") or self.active_platform_id or 0)
+            if not platform_id or platform_id not in valid:
+                return
+        if platform_id == int(getattr(self, "active_platform_id", 0) or 0):
+            return
+        self._cache_current_context()
+        try:
+            ci, systems, deliveries = self.store.load_contract_structure(
+                self.ci.no,
+                contract_no=self.ci.no,
+                start_row=self.ci.entry_start_row,
+                contract_type=self.ci.contract_type,
+                platform_id=platform_id,
+            )
+        except Exception as exc:
+            QMessageBox.warning(self, "Platform yüklenemedi", f"Seçilen platform verisi yüklenemedi:\n{exc}")
+            return
+        self.active_platform_id = platform_id
+        self.ci.platform = valid.get(platform_id, str(getattr(ci, "platform", "") or ""))
+        self.ci.platform_id = platform_id
+        setattr(self.ci, "platforms", linked)
+        setattr(self.ci, "platform_names", [p.get("platform_name") for p in linked])
+        setattr(self.ci, "platform_ids", [int(p.get("platform_id") or 0) for p in linked if int(p.get("platform_id") or 0)])
+        self.systems = systems or []
+        self.deliveries = deliveries or {}
+        self.selected_system = self.systems[0].name if self.systems else None
+        self.expanded_delivery_index = None
+        self.refresh_contract_header()
+        self.refresh()
 
 
     def set_active_platform(self, platform_name: str):
@@ -5941,7 +6016,7 @@ class ContractWorkWindow(QDialog):
                     lab.setToolTip("\n".join(users))
         tabs = getattr(self, "platform_tabs_widget", None)
         if tabs:
-            tabs.set_platforms(self._linked_contract_platforms(), self.ci.platform)
+            tabs.set_platforms(self._linked_contract_platforms(), self.active_platform_id)
 
     def _notify_parent_contract_updated(self, old_platform: str, new_platform: str) -> None:
         """Ana bilgi güncellemesi sonrası ana listeyi ve açık takvimi tazeler."""
@@ -5971,12 +6046,14 @@ class ContractWorkWindow(QDialog):
 
         new_ci = dlg.result
         previous_platforms = self._linked_contract_platforms()
-        previous_platform_keys = {p.casefold() for p in previous_platforms}
-        added_platforms = [
-            str(p or "").strip()
-            for p in list(getattr(new_ci, "platforms", []) or [])
-            if str(p or "").strip() and str(p or "").strip().casefold() not in previous_platform_keys
-        ]
+        previous_platform_names = [str(p.get("platform_name") or "").strip() if isinstance(p, dict) else str(p or "").strip() for p in previous_platforms]
+        previous_platform_keys = {p.casefold() for p in previous_platform_names if p}
+        candidate_platforms = list(getattr(new_ci, "platforms", []) or getattr(new_ci, "platform_names", []) or [])
+        added_platforms = []
+        for item in candidate_platforms:
+            name = str(item.get("platform_name") or item.get("name") or "").strip() if isinstance(item, dict) else str(item or "").strip()
+            if name and name.casefold() not in previous_platform_keys:
+                added_platforms.append(name)
         old_platform = str(self.ci.platform or "").strip()
         old_no       = str(self.ci.no or "").strip()
         old_type     = str(self.ci.contract_type or "").strip()
@@ -6018,7 +6095,7 @@ class ContractWorkWindow(QDialog):
                     self.store.save_contract_tags(old_platform, old_no, old_type, [], actor=actor)
                 self.store.save_contract_tags(
                     new_platform, new_no, new_type, self.contract_tags, actor=actor)
-                existing_keys = {p.casefold() for p in previous_platforms}
+                existing_keys = {p.casefold() for p in previous_platform_names}
                 existing_keys.add(new_platform.casefold())
                 for platform_name in added_platforms:
                     platform_name = str(platform_name or "").strip()
