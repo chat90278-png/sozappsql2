@@ -2303,17 +2303,22 @@ class PlatformTabsWidget(QScrollArea):
         super().__init__(parent)
         self._platforms: List[str] = []
         self._active = ""
-        self.setWidgetResizable(True)
+        # Scroll alanı üst barda genişleyebilir; iç chip host'u ise içerik kadar
+        # kalmalı. widgetResizable=True olursa host viewport genişliğine zorlanıp
+        # tek chip'in büyük bir mavi bar gibi algılanmasına neden olabiliyor.
+        self.setWidgetResizable(False)
         self.setFrameShape(QFrame.NoFrame)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setFixedHeight(30)
-        self.setStyleSheet("QScrollArea{background:transparent;border:none;}")
+        self.setStyleSheet("QScrollArea{background:transparent;border:none;} QScrollArea > QWidget > QWidget{background:transparent;}")
         self._host = QWidget()
         self._host.setStyleSheet("background:transparent;")
+        self._host.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         self._lay = QHBoxLayout(self._host)
         self._lay.setContentsMargins(0, 0, 0, 0)
         self._lay.setSpacing(5)
+        self._lay.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         self.setWidget(self._host)
 
     def set_platforms(self, platforms: List[str], active: str = ""):
@@ -2330,20 +2335,29 @@ class PlatformTabsWidget(QScrollArea):
         while self._lay.count():
             item=self._lay.takeAt(0)
             if item.widget(): item.widget().deleteLater()
+        metrics = QFontMetrics(self.font())
+        total_width = 0
+        max_height = 24
         for name in self._platforms:
             btn=QPushButton(name)
             btn.setCursor(Qt.PointingHandCursor)
-            btn.setFixedHeight(24)
+            btn.setFixedHeight(max_height)
+            chip_width = max(44, metrics.horizontalAdvance(name) + 28)
+            btn.setFixedWidth(chip_width)
+            btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
             btn.setToolTip(name)
             active = name == self._active
             btn.setStyleSheet(
-                "QPushButton{border-radius:12px;padding:2px 10px;font-size:12px;font-weight:700;"
+                "QPushButton{border-radius:12px;padding:2px 12px;font-size:12px;font-weight:700;text-align:center;"
                 + ("background:#2563eb;color:white;border:1px solid #2563eb;}" if active else "background:#f8fafc;color:#334155;border:1px solid #cbd5e1;}")
                 + "QPushButton:hover{border-color:#60a5fa;}"
             )
             btn.clicked.connect(lambda _=False, n=name: self._set_active(n))
-            self._lay.addWidget(btn)
-        self._lay.addStretch()
+            self._lay.addWidget(btn, 0, Qt.AlignLeft | Qt.AlignVCenter)
+            total_width += chip_width
+        if self._platforms:
+            total_width += self._lay.spacing() * max(0, len(self._platforms) - 1)
+        self._host.setFixedSize(max(1, total_width), max_height)
         self.setToolTip(", ".join(self._platforms))
 
     def _set_active(self, name: str):
