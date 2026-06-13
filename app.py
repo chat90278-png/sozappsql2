@@ -2304,7 +2304,7 @@ class PlatformTabsWidget(QScrollArea):
         self._platforms: List[str] = []
         self._active = ""
         self._content_width = 76
-        self._max_width = 420
+        self._max_width = 620
         # Scroll alanı üst barda genişleyebilir; iç chip host'u ise içerik kadar
         # kalmalı. widgetResizable=True olursa host viewport genişliğine zorlanıp
         # tek chip'in büyük bir mavi bar gibi algılanmasına neden olabiliyor.
@@ -2313,6 +2313,8 @@ class PlatformTabsWidget(QScrollArea):
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setFixedHeight(32)
+        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        self.viewport().setStyleSheet("background:transparent;border:0;")
         self.setObjectName("platformTabsRail")
         self._apply_rail_style(single=True)
         self._host = QWidget()
@@ -2360,7 +2362,7 @@ class PlatformTabsWidget(QScrollArea):
             btn=QPushButton(name)
             btn.setCursor(Qt.PointingHandCursor)
             btn.setFixedHeight(max_height)
-            chip_width = max(70, metrics.horizontalAdvance(name) + 30)
+            chip_width = max(74 if single else 70, metrics.horizontalAdvance(name) + (32 if single else 30))
             btn.setFixedWidth(chip_width)
             btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
             btn.setToolTip(name)
@@ -2369,19 +2371,21 @@ class PlatformTabsWidget(QScrollArea):
             btn.setStyleSheet(
                 "QPushButton{border-radius:13px;padding:2px 12px;font-size:11px;font-weight:900;letter-spacing:0.35px;text-align:center;"
                 + ("background:qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #1d58ca, stop:0.55 #2f7dff, stop:1 #0b48a8);"
-                   "color:#fbfdff;border:1px solid rgba(130,198,255,220);"
+                   "color:#fbfdff;border:1px solid rgba(150,211,255,230);"
                    if active else
                    "background:transparent;color:#cfe5ff;border:1px solid transparent;")
                 + "}"
                   "QPushButton#platformTabPassive:hover{background:rgba(45,123,255,0.16);border-color:rgba(125,190,255,0.38);color:#ffffff;}"
                   "QPushButton#platformTabActive:hover{border-color:rgba(174,218,255,235);}"
             )
-            if active:
+            if active and not single:
                 glow = QGraphicsDropShadowEffect(btn)
                 glow.setBlurRadius(18)
                 glow.setOffset(0, 0)
                 glow.setColor(QColor(45, 132, 255, 180))
                 btn.setGraphicsEffect(glow)
+            else:
+                btn.setGraphicsEffect(None)
             btn.clicked.connect(lambda _=False, n=name: self._set_active(n))
             self._lay.addWidget(btn, 0, Qt.AlignLeft | Qt.AlignVCenter)
             total_width += chip_width
@@ -2883,7 +2887,20 @@ class ContractEditDialog(StyledDialog):
             self.store._normalize_label(ctype_text) == self.store._normalize_label("Sözleşme Değişikliği")
         )
         self._no_lbl       = QLineEdit(str(self.ci.no or ""))
-        self._plat_lbl     = readonly(self.ci.platform)
+        self._locked_platforms = self._initial_platforms()
+        self._platform_select = MultiPlatformSelectWidget(self)
+        self._platform_select.set_platforms(self.store.platform_names())
+        self._platform_select.set_selected_platforms(self._locked_platforms)
+        self._platform_help = QLabel("Kayıtlı platformlar çıkarılamaz; yalnızca yeni platform eklenebilir.")
+        self._platform_help.setObjectName("muted")
+        self._platform_help.setWordWrap(True)
+        self._platform_box = QWidget(self)
+        self._platform_box.setStyleSheet("QWidget{background:transparent;border:0;}")
+        platform_box_lay = QVBoxLayout(self._platform_box)
+        platform_box_lay.setContentsMargins(0, 0, 0, 0)
+        platform_box_lay.setSpacing(3)
+        platform_box_lay.addWidget(self._platform_select)
+        platform_box_lay.addWidget(self._platform_help)
         self._type_lbl     = readonly(self.ci.contract_type)
         self._type_lbl.setPlaceholderText("Örn: SD-1")
         if self._is_sd_contract:
@@ -2949,7 +2966,7 @@ class ContractEditDialog(StyledDialog):
             grid.addWidget(widget, row * 2 + 1, col)
 
         add_field("Sözleşme No", self._no_lbl, 0, 0)
-        add_field("Platform", self._plat_lbl, 0, 1)
+        add_field("Platform", self._platform_box, 0, 1)
         add_field("Sözleşme Tipi", self._type_lbl, 1, 0)
         add_field("İmza Tarihi", self.sig_wrap, 1, 1)
         add_field("Kullanıcı", self.user, 2, 0)
@@ -2991,6 +3008,36 @@ class ContractEditDialog(StyledDialog):
         btn_row.addWidget(cancel)
         btn_row.addWidget(save_btn)
         root.addLayout(btn_row)
+
+    def _initial_platforms(self) -> List[str]:
+        raw = list(getattr(self.ci, "platforms", []) or [])
+        if not raw and str(self.ci.platform or "").strip():
+            raw = [str(self.ci.platform or "").strip()]
+        out: List[str] = []
+        seen = set()
+        for name in raw:
+            n = str(name or "").strip()
+            key = n.casefold()
+            if n and key not in seen:
+                seen.add(key)
+                out.append(n)
+        return out
+
+    def _selected_platforms(self) -> List[str]:
+        vals = self._platform_select.selected_platforms() if hasattr(self, "_platform_select") else []
+        out: List[str] = []
+        seen = set()
+        for name in vals:
+            n = str(name or "").strip()
+            key = n.casefold()
+            if n and key not in seen:
+                seen.add(key)
+                out.append(n)
+        return out
+
+    def _removed_locked_platforms(self) -> List[str]:
+        selected_keys = {p.casefold() for p in self._selected_platforms()}
+        return [p for p in self._locked_platforms if p.casefold() not in selected_keys]
 
     def update_user_yi_yd(self):
         selected = (self.user.selected_users() or [""])[0].strip()
@@ -3135,6 +3182,20 @@ class ContractEditDialog(StyledDialog):
         if not new_no_text:
             QMessageBox.warning(self, "Zorunlu Alan", "Sözleşme No girilmelidir.")
             return
+        removed_platforms = self._removed_locked_platforms()
+        if removed_platforms:
+            QMessageBox.warning(
+                self,
+                "Platform çıkarılamaz",
+                "Kayıt yazıldıktan sonra mevcut platform çıkarılamaz. "
+                "Sadece yeni platform ekleyebilirsiniz. Çıkarılan: " + ", ".join(removed_platforms)
+            )
+            self._platform_select.set_selected_platforms(self._locked_platforms + [p for p in self._selected_platforms() if p.casefold() not in {x.casefold() for x in self._locked_platforms}])
+            return
+        selected_platforms = self._selected_platforms()
+        if not selected_platforms:
+            QMessageBox.warning(self, "Zorunlu Alan", "En az bir platform seçmelisiniz.")
+            return
         if self._check_duplicate_contract_key():
             QMessageBox.warning(
                 self,
@@ -3143,6 +3204,26 @@ class ContractEditDialog(StyledDialog):
                 "Lütfen farklı bir sözleşme no girin."
             )
             return
+        norm_no = self.store._normalize_label(new_no_text)
+        norm_type = self.store._normalize_label(self._current_contract_type_text())
+        locked_keys = {p.casefold() for p in self._locked_platforms}
+        for platform_name in selected_platforms:
+            if platform_name.casefold() in locked_keys:
+                continue
+            try:
+                candidates = self.store.list_main_contracts(platform_name)
+            except Exception:
+                candidates = []
+            for ex in candidates:
+                if (self.store._normalize_label(str(ex.get("no", "") or "")) == norm_no and
+                        self.store._normalize_label(str(ex.get("type", "") or "")) == norm_type):
+                    QMessageBox.warning(
+                        self,
+                        "Tekrar Eden Kayıt",
+                        f"'{platform_name}' platformunda aynı sözleşme no ve tip zaten var. "
+                        "Bu platform eklenemez."
+                    )
+                    return
         sig_text = self.sig.text().strip()
         t0_text  = self.t0.text().strip()
         if not sig_text:
@@ -3185,6 +3266,7 @@ class ContractEditDialog(StyledDialog):
         new_ci.completion_date = self.completion.text().strip()
         new_ci.status          = str(self.ci.status or "Başlanmadı")
         new_ci.note            = self.note.text().strip()
+        setattr(new_ci, "platforms", selected_platforms)
         self.result = new_ci
         self.accept()
 
@@ -5366,7 +5448,15 @@ class ContractWorkWindow(QDialog):
 
         header = QFrame(); header.setObjectName("contractHeader")
         header.setFixedHeight(68)
-        h = QHBoxLayout(header); h.setContentsMargins(18, 7, 16, 7); h.setSpacing(0)
+        h = QHBoxLayout(header); h.setContentsMargins(18, 7, 16, 7); h.setSpacing(14)
+
+        info_row = QWidget(); info_row.setObjectName("contractHeaderInfoRow")
+        info_row.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        info = QHBoxLayout(info_row); info.setContentsMargins(0, 0, 0, 0); info.setSpacing(0)
+
+        actions = QWidget(); actions.setObjectName("contractHeaderActions")
+        actions.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        actions_lay = QHBoxLayout(actions); actions_lay.setContentsMargins(0, 0, 0, 0); actions_lay.setSpacing(8)
 
         self.meta_values: Dict[str, QLabel] = {}
         self.platform_tabs_widget: Optional[PlatformTabsWidget] = None
@@ -5376,7 +5466,7 @@ class ContractWorkWindow(QDialog):
             cell.setMinimumWidth(min_w)
             if max_w:
                 cell.setMaximumWidth(max_w)
-            cell.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+            cell.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
             cl = QVBoxLayout(cell); cl.setContentsMargins(10, 0, 10, 0); cl.setSpacing(2)
             lbl = QLabel(label_text.upper()); lbl.setObjectName("metaHeaderLabel")
             if value_widget is None:
@@ -5400,7 +5490,8 @@ class ContractWorkWindow(QDialog):
             wrap = QWidget(); wrap.setObjectName(object_name)
             row = QHBoxLayout(wrap); row.setContentsMargins(0, 0, 0, 0); row.setSpacing(6)
             pix = QPixmap(); pix.loadFromData(icon_svg, "SVG")
-            icon = QLabel(); icon.setPixmap(pix); icon.setFixedSize(16, 16)
+            icon = QLabel(); icon.setObjectName("headerUserIcon"); icon.setPixmap(pix); icon.setFixedSize(16, 16)
+            icon.setStyleSheet("QLabel#headerUserIcon{background:transparent;border:0;padding:0;margin:0;}")
             val = ElidedValueLabel(text if text else "-"); val.setObjectName("metaHeaderValue")
             if tooltip:
                 wrap.setToolTip(tooltip); val.setToolTip(tooltip)
@@ -5428,25 +5519,25 @@ class ContractWorkWindow(QDialog):
                 fill='none' stroke='#4e93ff' stroke-opacity='.55' stroke-width='.85' stroke-linecap='round'/>
         </svg>"""
         self.platform_tabs_widget = PlatformTabsWidget(self)
-        self.platform_tabs_widget.set_platforms(getattr(self.ci, "platforms", None) or [self.ci.platform], self.ci.platform)
+        self.platform_tabs_widget.set_platforms(self._linked_contract_platforms(), self.ci.platform)
         self.platform_tabs_widget.activePlatformChanged.connect(lambda _name: None)
 
         cells = [
-            (*meta_cell("no", "Sözleşme No", self.ci.no, min_w=116, max_w=172), 0),
-            (*meta_cell("platform", "Platform", "", min_w=86, max_w=440, value_widget=self.platform_tabs_widget), 0),
-            (*meta_cell("type", "Tür", self.ci.contract_type, min_w=92, max_w=150), 0),
-            (*meta_cell("user", "Kullanıcı", user_text, min_w=124, max_w=190, value_widget=inline_icon_text(user_text, user_svg, "user", user_tip)), 0),
-            (*meta_cell("status", "Durum", "", min_w=112, max_w=150, value_widget=status_widget(self.ci.status or "Başlanmadı")), 0),
+            (*meta_cell("no", "Sözleşme No", self.ci.no, min_w=122, max_w=210), 17),
+            (*meta_cell("platform", "Platform", "", min_w=180, max_w=620, value_widget=self.platform_tabs_widget), 28),
+            (*meta_cell("type", "Tür", self.ci.contract_type, min_w=112, max_w=190), 16),
+            (*meta_cell("user", "Kullanıcı", user_text, min_w=150, max_w=250, value_widget=inline_icon_text(user_text, user_svg, "user", user_tip)), 21),
+            (*meta_cell("status", "Durum", "", min_w=126, max_w=190, value_widget=status_widget(self.ci.status or "Başlanmadı")), 16),
         ]
         if user_tip and self.meta_values.get("user"):
             self.meta_values["user"].setToolTip(user_tip)
         for i, (cell, div, stretch) in enumerate(cells):
-            h.addWidget(cell, stretch)
+            info.addWidget(cell, stretch)
             if i < len(cells) - 1:
-                h.addWidget(div)
-                h.addSpacing(2)
+                info.addWidget(div)
+                info.addSpacing(2)
 
-        h.addStretch(1)
+        h.addWidget(info_row, 1)
         e = QPushButton("  Ana Bilgileri Düzenle"); e.setObjectName("headerEditBtn")
         e.setFixedHeight(36)
         _svg = b"""<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' width='15' height='15'>
@@ -5458,8 +5549,7 @@ class ContractWorkWindow(QDialog):
         e.setIcon(QIcon(_pix))
         e.setIconSize(QSize(15, 15))
         e.clicked.connect(self.edit_contract_info)
-        h.addWidget(e)
-        h.addSpacing(8)
+        actions_lay.addWidget(e)
         self.delete_contract_btn = QPushButton("Sözleşmeyi Sil")
         self.delete_contract_btn.setObjectName("danger")
         self.delete_contract_btn.setFixedHeight(36)
@@ -5471,7 +5561,8 @@ class ContractWorkWindow(QDialog):
         self.delete_contract_btn.setIcon(QIcon(trash_pix))
         self.delete_contract_btn.setIconSize(QSize(15, 15))
         self.delete_contract_btn.clicked.connect(self.delete_contract)
-        h.addWidget(self.delete_contract_btn)
+        actions_lay.addWidget(self.delete_contract_btn)
+        h.addWidget(actions, 0, Qt.AlignRight | Qt.AlignVCenter)
         root.addWidget(header)
 
         body = QHBoxLayout(); body.setSpacing(10); root.addLayout(body, 1)
@@ -5769,6 +5860,33 @@ class ContractWorkWindow(QDialog):
             self._tl_prog.setValue(pct)
             self._tl_name_lbl.setText(str(self.ci.no or "—"))
 
+    def _linked_contract_platforms(self) -> List[str]:
+        explicit = list(getattr(self.ci, "platforms", []) or [])
+        base = str(self.ci.platform or "").strip()
+        no = self.store._normalize_label(str(self.ci.no or "").strip())
+        ctype = self.store._normalize_label(str(self.ci.contract_type or "").strip())
+        found: List[str] = []
+        seen = set()
+        for name in explicit + ([base] if base else []):
+            n = str(name or "").strip()
+            key = n.casefold()
+            if n and key not in seen:
+                seen.add(key)
+                found.append(n)
+        try:
+            for platform in self.store.platform_names():
+                for item in self.store.list_main_contracts(platform):
+                    if (self.store._normalize_label(str(item.get("no", "") or "")) == no and
+                            self.store._normalize_label(str(item.get("type", "") or "")) == ctype):
+                        key = str(platform or "").casefold()
+                        if platform and key not in seen:
+                            seen.add(key)
+                            found.append(platform)
+                        break
+        except Exception:
+            pass
+        return found or ([base] if base else [])
+
     def refresh_contract_header(self):
         if not hasattr(self, "meta_values"):
             return
@@ -5788,7 +5906,7 @@ class ContractWorkWindow(QDialog):
                     lab.setToolTip("\n".join(users))
         tabs = getattr(self, "platform_tabs_widget", None)
         if tabs:
-            tabs.set_platforms(getattr(self.ci, "platforms", None) or [self.ci.platform], self.ci.platform)
+            tabs.set_platforms(self._linked_contract_platforms(), self.ci.platform)
 
     def _notify_parent_contract_updated(self, old_platform: str, new_platform: str) -> None:
         """Ana bilgi güncellemesi sonrası ana listeyi ve açık takvimi tazeler."""
@@ -5811,11 +5929,19 @@ class ContractWorkWindow(QDialog):
             pass
 
     def edit_contract_info(self):
+        setattr(self.ci, "platforms", self._linked_contract_platforms())
         dlg = ContractEditDialog(self.store, self.ci, self)
         if not dlg.exec() or not dlg.result:
             return
 
         new_ci = dlg.result
+        previous_platforms = self._linked_contract_platforms()
+        previous_platform_keys = {p.casefold() for p in previous_platforms}
+        added_platforms = [
+            str(p or "").strip()
+            for p in list(getattr(new_ci, "platforms", []) or [])
+            if str(p or "").strip() and str(p or "").strip().casefold() not in previous_platform_keys
+        ]
         old_platform = str(self.ci.platform or "").strip()
         old_no       = str(self.ci.no or "").strip()
         old_type     = str(self.ci.contract_type or "").strip()
@@ -5857,6 +5983,20 @@ class ContractWorkWindow(QDialog):
                     self.store.save_contract_tags(old_platform, old_no, old_type, [], actor=actor)
                 self.store.save_contract_tags(
                     new_platform, new_no, new_type, self.contract_tags, actor=actor)
+                existing_keys = {p.casefold() for p in previous_platforms}
+                existing_keys.add(new_platform.casefold())
+                for platform_name in added_platforms:
+                    platform_name = str(platform_name or "").strip()
+                    if not platform_name or platform_name.casefold() in existing_keys or platform_name == new_platform:
+                        continue
+                    extra_ci = copy.copy(self.ci)
+                    extra_ci.platform = platform_name
+                    extra_ci.entry_start_row = 0
+                    extra_ci.sd_anchor_platform = ""
+                    extra_ci.sd_anchor_no = ""
+                    self.store.write_contract(extra_ci, self.systems, self.deliveries)
+                    self.store.save_contract_tags(platform_name, new_no, new_type, self.contract_tags, actor=actor)
+                    existing_keys.add(platform_name.casefold())
 
             self.original_entry_start_row = int(written_start or 0)
             self.original_platform        = new_platform

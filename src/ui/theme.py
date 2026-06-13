@@ -595,6 +595,8 @@ QFrame#contractHeader {
     border-bottom:1px solid #6aa7ff;
     border-radius:0;
 }
+QWidget#contractHeaderInfoRow,
+QWidget#contractHeaderActions,
 QWidget#metaCell {
     background:transparent;
 }
