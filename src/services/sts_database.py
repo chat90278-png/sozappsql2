@@ -92,6 +92,16 @@ class STSDatabase:
         rows = self.conn.execute(f"PRAGMA table_info({quote_identifier(table)})").fetchall()
         return {str(row[1]) for row in rows}
 
+    def _table_exists(self, table: str) -> bool:
+        row = self.conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1",
+            (str(table or ""),),
+        ).fetchone()
+        return row is not None
+
+    def _column_exists(self, table: str, column: str) -> bool:
+        return self._table_exists(table) and str(column or "") in self._table_columns(table)
+
     def _ensure_column(self, table: str, name: str, ddl: str) -> bool:
         if name not in self._table_columns(table):
             self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
@@ -374,33 +384,39 @@ class STSDatabase:
         return True
 
     def _create_runtime_indexes(self) -> None:
-        self.conn.executescript(
-            """
-            CREATE INDEX IF NOT EXISTS idx_contracts_platform_id ON contracts(platform_id);
-            CREATE INDEX IF NOT EXISTS idx_contracts_platform_status ON contracts(platform_id,status);
-            CREATE INDEX IF NOT EXISTS idx_contracts_completion_date ON contracts(completion_date);
-            CREATE INDEX IF NOT EXISTS idx_contracts_contract_no ON contracts(contract_no);
-            CREATE INDEX IF NOT EXISTS idx_contracts_contract_type ON contracts(contract_type);
-            CREATE INDEX IF NOT EXISTS idx_contracts_parent_contract_id ON contracts(parent_contract_id);
-            CREATE INDEX IF NOT EXISTS idx_contract_users_user_id ON contract_users(user_id);
-            CREATE INDEX IF NOT EXISTS idx_systems_contract_id ON systems(contract_id);
-            CREATE INDEX IF NOT EXISTS idx_systems_completion_date ON systems(completion_date);
-            CREATE INDEX IF NOT EXISTS idx_systems_contract_name ON systems(contract_id, name);
-            CREATE INDEX IF NOT EXISTS idx_system_components_component_id ON system_components(component_id);
-            CREATE INDEX IF NOT EXISTS idx_deliveries_contract_id ON deliveries(contract_id);
-            CREATE INDEX IF NOT EXISTS idx_deliveries_system_id ON deliveries(system_id);
-            CREATE INDEX IF NOT EXISTS idx_deliveries_contract_system ON deliveries(contract_id,system_id);
-            CREATE INDEX IF NOT EXISTS idx_deliveries_acceptance_date ON deliveries(acceptance_date);
-            CREATE INDEX IF NOT EXISTS idx_delivery_components_component_id ON delivery_components(component_id);
-            CREATE INDEX IF NOT EXISTS idx_contract_file_folders_contract_id ON contract_file_folders(contract_id);
-            CREATE INDEX IF NOT EXISTS idx_contract_file_folders_parent_id ON contract_file_folders(parent_id);
-            CREATE INDEX IF NOT EXISTS idx_contract_files_contract_id ON contract_files(contract_id);
-            CREATE INDEX IF NOT EXISTS idx_logs_created_at ON activity_logs(created_at);
-            CREATE INDEX IF NOT EXISTS idx_logs_action ON activity_logs(action);
-            CREATE INDEX IF NOT EXISTS idx_logs_entity ON activity_logs(entity_type,entity_id);
-            CREATE INDEX IF NOT EXISTS idx_activity_logs_platform_contract ON activity_logs(platform_id, contract_no);
-            """
-        )
+        # Keep runtime indexes safe for legacy databases while migrations are still
+        # adding nullable columns/tables. Indexes that reference optional/newer
+        # columns are created only after the needed table/columns exist.
+        def create_if(table: str, columns: tuple[str, ...], sql: str) -> None:
+            if self._table_exists(table) and all(self._column_exists(table, col) for col in columns):
+                self.conn.execute(sql)
+
+        create_if("contracts", ("platform_id",), "CREATE INDEX IF NOT EXISTS idx_contracts_platform_id ON contracts(platform_id)")
+        create_if("contracts", ("platform_id", "status"), "CREATE INDEX IF NOT EXISTS idx_contracts_platform_status ON contracts(platform_id,status)")
+        create_if("contracts", ("completion_date",), "CREATE INDEX IF NOT EXISTS idx_contracts_completion_date ON contracts(completion_date)")
+        create_if("contracts", ("contract_no",), "CREATE INDEX IF NOT EXISTS idx_contracts_contract_no ON contracts(contract_no)")
+        create_if("contracts", ("contract_type",), "CREATE INDEX IF NOT EXISTS idx_contracts_contract_type ON contracts(contract_type)")
+        create_if("contracts", ("parent_contract_id",), "CREATE INDEX IF NOT EXISTS idx_contracts_parent_contract_id ON contracts(parent_contract_id)")
+        create_if("contract_users", ("user_id",), "CREATE INDEX IF NOT EXISTS idx_contract_users_user_id ON contract_users(user_id)")
+        create_if("systems", ("contract_id",), "CREATE INDEX IF NOT EXISTS idx_systems_contract_id ON systems(contract_id)")
+        create_if("systems", ("completion_date",), "CREATE INDEX IF NOT EXISTS idx_systems_completion_date ON systems(completion_date)")
+        create_if("systems", ("contract_id", "name"), "CREATE INDEX IF NOT EXISTS idx_systems_contract_name ON systems(contract_id, name)")
+        create_if("system_components", ("component_id",), "CREATE INDEX IF NOT EXISTS idx_system_components_component_id ON system_components(component_id)")
+        create_if("deliveries", ("contract_id",), "CREATE INDEX IF NOT EXISTS idx_deliveries_contract_id ON deliveries(contract_id)")
+        create_if("deliveries", ("system_id",), "CREATE INDEX IF NOT EXISTS idx_deliveries_system_id ON deliveries(system_id)")
+        create_if("deliveries", ("contract_id", "system_id"), "CREATE INDEX IF NOT EXISTS idx_deliveries_contract_system ON deliveries(contract_id,system_id)")
+        create_if("deliveries", ("acceptance_date",), "CREATE INDEX IF NOT EXISTS idx_deliveries_acceptance_date ON deliveries(acceptance_date)")
+        create_if("delivery_components", ("component_id",), "CREATE INDEX IF NOT EXISTS idx_delivery_components_component_id ON delivery_components(component_id)")
+        create_if("contract_file_folders", ("contract_id",), "CREATE INDEX IF NOT EXISTS idx_contract_file_folders_contract_id ON contract_file_folders(contract_id)")
+        create_if("contract_file_folders", ("parent_id",), "CREATE INDEX IF NOT EXISTS idx_contract_file_folders_parent_id ON contract_file_folders(parent_id)")
+        create_if("contract_files", ("contract_id",), "CREATE INDEX IF NOT EXISTS idx_contract_files_contract_id ON contract_files(contract_id)")
+        create_if("activity_logs", ("created_at",), "CREATE INDEX IF NOT EXISTS idx_logs_created_at ON activity_logs(created_at)")
+        create_if("activity_logs", ("action",), "CREATE INDEX IF NOT EXISTS idx_logs_action ON activity_logs(action)")
+        create_if("activity_logs", ("entity_type", "entity_id"), "CREATE INDEX IF NOT EXISTS idx_logs_entity ON activity_logs(entity_type,entity_id)")
+        create_if("activity_logs", ("platform_id", "contract_no"), "CREATE INDEX IF NOT EXISTS idx_activity_logs_platform_contract ON activity_logs(platform_id, contract_no)")
+        create_if("contract_platforms", ("contract_id",), "CREATE INDEX IF NOT EXISTS idx_contract_platforms_contract ON contract_platforms(contract_id)")
+        create_if("contract_platforms", ("platform_id",), "CREATE INDEX IF NOT EXISTS idx_contract_platforms_platform ON contract_platforms(platform_id)")
+        create_if("systems", ("contract_id", "platform_id"), "CREATE INDEX IF NOT EXISTS idx_systems_contract_platform ON systems(contract_id, platform_id)")
 
     def init_schema(self):
         migrated = []
@@ -414,7 +430,8 @@ CREATE TABLE IF NOT EXISTS component_platforms(id INTEGER PRIMARY KEY AUTOINCREM
 CREATE TABLE IF NOT EXISTS tags(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT UNIQUE NOT NULL,color TEXT,kind TEXT DEFAULT 'contract',created_at TEXT,updated_at TEXT);
 CREATE TABLE IF NOT EXISTS contracts(id INTEGER PRIMARY KEY AUTOINCREMENT,platform_id INTEGER NOT NULL,contract_no TEXT NOT NULL,yi_yd TEXT,contract_type TEXT,type_display TEXT,link_type TEXT,status TEXT,signed_date TEXT,t0_date TEXT,t0_months INTEGER,completion_date TEXT,acceptance_date TEXT,content TEXT,note TEXT,is_main INTEGER DEFAULT 1,parent_contract_id INTEGER,search_text TEXT,payload_json TEXT,created_at TEXT,updated_at TEXT,UNIQUE(platform_id,contract_no,contract_type),FOREIGN KEY(platform_id) REFERENCES platforms(id) ON DELETE RESTRICT,FOREIGN KEY(parent_contract_id) REFERENCES contracts(id) ON DELETE SET NULL);
 CREATE TABLE IF NOT EXISTS contract_users(contract_id INTEGER NOT NULL REFERENCES contracts(id) ON DELETE CASCADE,user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,PRIMARY KEY(contract_id,user_id));
-CREATE TABLE IF NOT EXISTS systems(id INTEGER PRIMARY KEY AUTOINCREMENT,contract_id INTEGER NOT NULL,name TEXT NOT NULL,status TEXT,completion_date TEXT,acceptance_date TEXT,note TEXT,sort_order INTEGER DEFAULT 0,payload_json TEXT,FOREIGN KEY(contract_id) REFERENCES contracts(id) ON DELETE CASCADE);
+CREATE TABLE IF NOT EXISTS contract_platforms(id INTEGER PRIMARY KEY AUTOINCREMENT,contract_id INTEGER NOT NULL,platform_id INTEGER NOT NULL,sort_order INTEGER DEFAULT 0,is_primary INTEGER DEFAULT 0,created_at TEXT DEFAULT CURRENT_TIMESTAMP,FOREIGN KEY(contract_id) REFERENCES contracts(id) ON DELETE CASCADE,FOREIGN KEY(platform_id) REFERENCES platforms(id) ON DELETE CASCADE,UNIQUE(contract_id,platform_id));
+CREATE TABLE IF NOT EXISTS systems(id INTEGER PRIMARY KEY AUTOINCREMENT,contract_id INTEGER NOT NULL,platform_id INTEGER,name TEXT NOT NULL,status TEXT,completion_date TEXT,acceptance_date TEXT,note TEXT,sort_order INTEGER DEFAULT 0,payload_json TEXT,FOREIGN KEY(contract_id) REFERENCES contracts(id) ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS system_components(id INTEGER PRIMARY KEY AUTOINCREMENT,system_id INTEGER NOT NULL,component_id INTEGER NOT NULL,qty REAL DEFAULT 0,note TEXT,UNIQUE(system_id,component_id),FOREIGN KEY(system_id) REFERENCES systems(id) ON DELETE CASCADE,FOREIGN KEY(component_id) REFERENCES components(id) ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS deliveries(id INTEGER PRIMARY KEY AUTOINCREMENT,contract_id INTEGER NOT NULL,system_id INTEGER NOT NULL,delivery_user_id INTEGER,name TEXT NOT NULL,status TEXT,acceptance_date TEXT,note TEXT,sort_order INTEGER DEFAULT 0,payload_json TEXT,FOREIGN KEY(contract_id) REFERENCES contracts(id) ON DELETE CASCADE,FOREIGN KEY(system_id) REFERENCES systems(id) ON DELETE CASCADE,FOREIGN KEY(delivery_user_id) REFERENCES users(id) ON DELETE SET NULL);
 CREATE TABLE IF NOT EXISTS delivery_components(id INTEGER PRIMARY KEY AUTOINCREMENT,delivery_id INTEGER NOT NULL,component_id INTEGER NOT NULL,planned REAL DEFAULT 0,delivered REAL DEFAULT 0,UNIQUE(delivery_id,component_id),FOREIGN KEY(delivery_id) REFERENCES deliveries(id) ON DELETE CASCADE,FOREIGN KEY(component_id) REFERENCES components(id) ON DELETE CASCADE);
@@ -434,7 +451,65 @@ CREATE TABLE IF NOT EXISTS activity_logs(id INTEGER PRIMARY KEY AUTOINCREMENT,cr
                 migrated.append("contracts.cleaned_model")
         if self._rebuild_deliveries_without_legacy_system_label():
             migrated.append("deliveries.cleaned_model")
-        self._create_runtime_indexes()
+
+        with self.tx():
+            # Multi-platform contracts were added after the initial normalized STS schema.
+            # Keep contracts.platform_id as the primary/default platform and add a bridge
+            # table plus systems.platform_id in-place for legacy .sts compatibility.
+            self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS contract_platforms (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    contract_id INTEGER NOT NULL,
+                    platform_id INTEGER NOT NULL,
+                    sort_order INTEGER DEFAULT 0,
+                    is_primary INTEGER DEFAULT 0,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (contract_id) REFERENCES contracts(id) ON DELETE CASCADE,
+                    FOREIGN KEY (platform_id) REFERENCES platforms(id) ON DELETE CASCADE,
+                    UNIQUE(contract_id, platform_id)
+                )
+            """)
+            if self._ensure_column("systems", "platform_id", "INTEGER"):
+                migrated.append("systems.platform_id")
+            cp_inserted = self.conn.execute("""
+                INSERT OR IGNORE INTO contract_platforms(contract_id, platform_id, sort_order, is_primary)
+                SELECT id, platform_id, 0, 1
+                FROM contracts
+                WHERE platform_id IS NOT NULL
+            """).rowcount
+            if cp_inserted and cp_inserted > 0:
+                migrated.append("contract_platforms.backfill")
+            sys_updated = self.conn.execute("""
+                UPDATE systems
+                SET platform_id = (SELECT platform_id FROM contracts WHERE contracts.id = systems.contract_id)
+                WHERE platform_id IS NULL
+            """).rowcount
+            if sys_updated and sys_updated > 0:
+                migrated.append("systems.platform_id.backfill")
+            for contract in self.conn.execute("SELECT id, platform_id FROM contracts WHERE platform_id IS NOT NULL").fetchall():
+                cid = int(contract[0]); primary_pid = int(contract[1])
+                rows = self.conn.execute(
+                    "SELECT id, platform_id, is_primary FROM contract_platforms WHERE contract_id=? ORDER BY is_primary DESC, sort_order ASC, id ASC",
+                    (cid,),
+                ).fetchall()
+                if not rows:
+                    self.conn.execute(
+                        "INSERT OR IGNORE INTO contract_platforms(contract_id,platform_id,sort_order,is_primary) VALUES(?,?,0,1)",
+                        (cid, primary_pid),
+                    )
+                    continue
+                primary_id = None; selected_pid = None
+                for row in rows:
+                    if primary_id is None and int(row[2] or 0) == 1:
+                        primary_id = int(row[0]); selected_pid = int(row[1])
+                if primary_id is None:
+                    primary_id = int(rows[0][0]); selected_pid = int(rows[0][1])
+                self.conn.execute("UPDATE contract_platforms SET is_primary=CASE WHEN id=? THEN 1 ELSE 0 END WHERE contract_id=?", (primary_id, cid))
+                self.conn.execute("UPDATE contracts SET platform_id=? WHERE id=?", (selected_pid, cid))
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_contract_platforms_contract ON contract_platforms(contract_id)")
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_contract_platforms_platform ON contract_platforms(platform_id)")
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_systems_contract_platform ON systems(contract_id, platform_id)")
+    
         # Existing v2 files may predate the sortable platform/component manager.
         platform_sort_added = self._ensure_column("platforms", "sort_order", "INTEGER DEFAULT 0")
         if platform_sort_added:
@@ -484,7 +559,7 @@ CREATE TABLE IF NOT EXISTS activity_logs(id INTEGER PRIMARY KEY AUTOINCREMENT,cr
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_document_locks_contract_id "
             "ON document_locks(contract_id)"
         )
-        self.conn.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version','9')")
+        self.conn.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version','10')")
         self.conn.commit()
         return migrated
 
