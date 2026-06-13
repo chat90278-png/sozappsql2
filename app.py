@@ -2378,12 +2378,14 @@ class PlatformTabsWidget(QScrollArea):
                   "QPushButton#platformTabPassive:hover{background:rgba(45,123,255,0.16);border-color:rgba(125,190,255,0.38);color:#ffffff;}"
                   "QPushButton#platformTabActive:hover{border-color:rgba(174,218,255,235);}"
             )
-            if active:
+            if active and not single:
                 glow = QGraphicsDropShadowEffect(btn)
                 glow.setBlurRadius(18)
                 glow.setOffset(0, 0)
                 glow.setColor(QColor(45, 132, 255, 180))
                 btn.setGraphicsEffect(glow)
+            else:
+                btn.setGraphicsEffect(None)
             btn.clicked.connect(lambda _=False, n=name: self._set_active(n))
             self._lay.addWidget(btn, 0, Qt.AlignLeft | Qt.AlignVCenter)
             total_width += chip_width
@@ -5410,7 +5412,8 @@ class ContractWorkWindow(QDialog):
             wrap = QWidget(); wrap.setObjectName(object_name)
             row = QHBoxLayout(wrap); row.setContentsMargins(0, 0, 0, 0); row.setSpacing(6)
             pix = QPixmap(); pix.loadFromData(icon_svg, "SVG")
-            icon = QLabel(); icon.setPixmap(pix); icon.setFixedSize(16, 16)
+            icon = QLabel(); icon.setObjectName("headerUserIcon"); icon.setPixmap(pix); icon.setFixedSize(16, 16)
+            icon.setStyleSheet("QLabel#headerUserIcon{background:transparent;border:0;padding:0;margin:0;}")
             val = ElidedValueLabel(text if text else "-"); val.setObjectName("metaHeaderValue")
             if tooltip:
                 wrap.setToolTip(tooltip); val.setToolTip(tooltip)
