@@ -84,6 +84,7 @@ class DeliveryInfo:
     t0_months: int = 0
     completion_date: str = ""
     delivery_user: str = ""
+    planned_acceptance_date: str = ""
 
 
 @dataclass

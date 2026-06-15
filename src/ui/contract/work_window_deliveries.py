@@ -13,7 +13,7 @@ def refresh_delivery_table(self):
         self.pinned_delivery.clearContents()
         self.del_table.setRowCount(0)
         return
-    headers = ["", "Kabul Adı", "Durum", "Kabul Tarihi", "Teslim Kullanıcısı", "Not"]
+    headers = ["", "Kabul Adı", "Durum", "Plan. Kabul", "Gerçek Kabul", "Teslim Kullanıcısı", "Not"]
     self.del_table.clear()
     self.del_table.setColumnCount(len(headers))
     self.del_table.setHorizontalHeaderLabels(headers)
@@ -29,12 +29,12 @@ def refresh_delivery_table(self):
         note_display = note if note else "-"
         if len(note_display) > 80:
             note_display = f"{note_display[:77]}..."
-        vals = ["▶", d.name, d.status, d.acceptance_date, delivery_user_text(d), note_display]
+        vals = ["▶", d.name, d.status, getattr(d, "planned_acceptance_date", "") or "-", d.acceptance_date or "-", delivery_user_text(d), note_display]
         for c, v in enumerate(vals):
             it = QTableWidgetItem(str(v))
             it.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
             it.setTextAlignment(Qt.AlignCenter if c == 0 else Qt.AlignLeft | Qt.AlignVCenter)
-            if c == 5 and note:
+            if c == 6 and note:
                 it.setToolTip(note)
             self.del_table.setItem(r, c, it)
     self.del_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
@@ -104,6 +104,7 @@ def edit_delivery(self, idx: int):
     )
     dlg.name.setText(current.name)
     dlg.status.setCurrentText(current.status or "PLAN")
+    dlg.planned_acceptance_date.setText(getattr(current, "planned_acceptance_date", "") or "")
     dlg.acceptance_date.setText(current.acceptance_date or "")
     dlg.note.setText(current.note or "")
     delivery_user = str(getattr(current, "delivery_user", "") or "").strip()

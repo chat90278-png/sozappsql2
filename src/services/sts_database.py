@@ -339,6 +339,7 @@ class STSDatabase:
                 "delivery_user_id": raw_value(raw, "delivery_user_id"),
                 "name": raw_value(raw, "name", "Teslimat"),
                 "status": raw_value(raw, "status"),
+                "planned_acceptance_date": raw_value(raw, "planned_acceptance_date", ""),
                 "acceptance_date": raw_value(raw, "acceptance_date"),
                 "note": raw_value(raw, "note"),
                 "sort_order": raw_value(raw, "sort_order", 0),
@@ -358,6 +359,7 @@ class STSDatabase:
                     delivery_user_id INTEGER,
                     name TEXT NOT NULL,
                     status TEXT,
+                    planned_acceptance_date TEXT DEFAULT '',
                     acceptance_date TEXT,
                     note TEXT,
                     sort_order INTEGER DEFAULT 0,
@@ -371,8 +373,8 @@ class STSDatabase:
             for row in normalized:
                 self.conn.execute(
                     """
-                    INSERT INTO deliveries(id,contract_id,system_id,delivery_user_id,name,status,acceptance_date,note,sort_order,payload_json)
-                    VALUES(:id,:contract_id,:system_id,:delivery_user_id,:name,:status,:acceptance_date,:note,:sort_order,:payload_json)
+                    INSERT INTO deliveries(id,contract_id,system_id,delivery_user_id,name,status,planned_acceptance_date,acceptance_date,note,sort_order,payload_json)
+                    VALUES(:id,:contract_id,:system_id,:delivery_user_id,:name,:status,:planned_acceptance_date,:acceptance_date,:note,:sort_order,:payload_json)
                     """,
                     row,
                 )
@@ -433,7 +435,7 @@ CREATE TABLE IF NOT EXISTS contract_users(contract_id INTEGER NOT NULL REFERENCE
 CREATE TABLE IF NOT EXISTS contract_platforms(id INTEGER PRIMARY KEY AUTOINCREMENT,contract_id INTEGER NOT NULL,platform_id INTEGER NOT NULL,sort_order INTEGER DEFAULT 0,is_primary INTEGER DEFAULT 0,created_at TEXT DEFAULT CURRENT_TIMESTAMP,FOREIGN KEY(contract_id) REFERENCES contracts(id) ON DELETE CASCADE,FOREIGN KEY(platform_id) REFERENCES platforms(id) ON DELETE CASCADE,UNIQUE(contract_id,platform_id));
 CREATE TABLE IF NOT EXISTS systems(id INTEGER PRIMARY KEY AUTOINCREMENT,contract_id INTEGER NOT NULL,platform_id INTEGER,name TEXT NOT NULL,status TEXT,completion_date TEXT,acceptance_date TEXT,note TEXT,sort_order INTEGER DEFAULT 0,payload_json TEXT,FOREIGN KEY(contract_id) REFERENCES contracts(id) ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS system_components(id INTEGER PRIMARY KEY AUTOINCREMENT,system_id INTEGER NOT NULL,component_id INTEGER NOT NULL,qty REAL DEFAULT 0,note TEXT,UNIQUE(system_id,component_id),FOREIGN KEY(system_id) REFERENCES systems(id) ON DELETE CASCADE,FOREIGN KEY(component_id) REFERENCES components(id) ON DELETE CASCADE);
-CREATE TABLE IF NOT EXISTS deliveries(id INTEGER PRIMARY KEY AUTOINCREMENT,contract_id INTEGER NOT NULL,system_id INTEGER NOT NULL,delivery_user_id INTEGER,name TEXT NOT NULL,status TEXT,acceptance_date TEXT,note TEXT,sort_order INTEGER DEFAULT 0,payload_json TEXT,FOREIGN KEY(contract_id) REFERENCES contracts(id) ON DELETE CASCADE,FOREIGN KEY(system_id) REFERENCES systems(id) ON DELETE CASCADE,FOREIGN KEY(delivery_user_id) REFERENCES users(id) ON DELETE SET NULL);
+CREATE TABLE IF NOT EXISTS deliveries(id INTEGER PRIMARY KEY AUTOINCREMENT,contract_id INTEGER NOT NULL,system_id INTEGER NOT NULL,delivery_user_id INTEGER,name TEXT NOT NULL,status TEXT,planned_acceptance_date TEXT DEFAULT '',acceptance_date TEXT,note TEXT,sort_order INTEGER DEFAULT 0,payload_json TEXT,FOREIGN KEY(contract_id) REFERENCES contracts(id) ON DELETE CASCADE,FOREIGN KEY(system_id) REFERENCES systems(id) ON DELETE CASCADE,FOREIGN KEY(delivery_user_id) REFERENCES users(id) ON DELETE SET NULL);
 CREATE TABLE IF NOT EXISTS delivery_components(id INTEGER PRIMARY KEY AUTOINCREMENT,delivery_id INTEGER NOT NULL,component_id INTEGER NOT NULL,planned REAL DEFAULT 0,delivered REAL DEFAULT 0,UNIQUE(delivery_id,component_id),FOREIGN KEY(delivery_id) REFERENCES deliveries(id) ON DELETE CASCADE,FOREIGN KEY(component_id) REFERENCES components(id) ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS contract_tags(id INTEGER PRIMARY KEY AUTOINCREMENT,contract_id INTEGER NOT NULL,tag_id INTEGER NOT NULL,UNIQUE(contract_id,tag_id),FOREIGN KEY(contract_id) REFERENCES contracts(id) ON DELETE CASCADE,FOREIGN KEY(tag_id) REFERENCES tags(id) ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS contract_file_folders(id INTEGER PRIMARY KEY AUTOINCREMENT,contract_id INTEGER NOT NULL,parent_id INTEGER,name TEXT NOT NULL,created_at TEXT,updated_at TEXT,UNIQUE(contract_id,parent_id,name),FOREIGN KEY(contract_id) REFERENCES contracts(id) ON DELETE CASCADE,FOREIGN KEY(parent_id) REFERENCES contract_file_folders(id) ON DELETE CASCADE);
@@ -527,6 +529,8 @@ CREATE TABLE IF NOT EXISTS activity_logs(id INTEGER PRIMARY KEY AUTOINCREMENT,cr
         # still receive the foreign keys from the CREATE TABLE definitions.
         if self._ensure_column("deliveries", "delivery_user_id", "INTEGER"):
             migrated.append("deliveries.delivery_user_id")
+        if self._ensure_column("deliveries", "planned_acceptance_date", "TEXT DEFAULT ''"):
+            migrated.append("deliveries.planned_acceptance_date")
         # Component notes were added after the initial v2 schema. Keep legacy
         # STS files readable by adding the nullable column in place.
         if self._ensure_column("components", "note", "TEXT"):
