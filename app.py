@@ -2394,7 +2394,7 @@ class PlatformTabsWidget(QScrollArea):
         self.setFrameShape(QFrame.NoFrame)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.setFixedHeight(32)
+        self.setFixedHeight(34)
         self.setSizePolicy(QSizePolicy.MinimumExpanding, QSizePolicy.Fixed)
         self.viewport().setStyleSheet("background:transparent;border:0;")
         self.setObjectName("PlatformTabRail")
@@ -2404,8 +2404,8 @@ class PlatformTabsWidget(QScrollArea):
         self._host.setStyleSheet("QWidget#PlatformTabScrollContent{background:transparent;border:0;}")
         self._host.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         self._lay = QHBoxLayout(self._host)
-        self._lay.setContentsMargins(0, 3, 0, 3)
-        self._lay.setSpacing(4)
+        self._lay.setContentsMargins(6, 2, 6, 2)
+        self._lay.setSpacing(8)
         self._lay.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         self.setWidget(self._host)
 
@@ -2415,8 +2415,10 @@ class PlatformTabsWidget(QScrollArea):
                 background: rgba(7, 28, 58, 0.45);
                 border: 1px solid rgba(80, 140, 210, 0.35);
                 border-radius: 15px;
-                min-height: 30px;
-                max-height: 32px;
+                padding: 0px;
+                margin: 0px;
+                min-height: 34px;
+                max-height: 34px;
             }
             QScrollArea#PlatformTabRail > QWidget > QWidget { background:transparent; }
             QScrollBar:horizontal { height:0px; background:transparent; }
@@ -2460,9 +2462,9 @@ class PlatformTabsWidget(QScrollArea):
         total_width = 0
         single = len(self._platforms) <= 1
         self._apply_rail_style(single=single)
-        margins = (0, 3, 0, 3) if single else (5, 3, 5, 3)
+        margins = (6, 2, 6, 2)
         self._lay.setContentsMargins(*margins)
-        max_height = 26
+        max_height = 28
         for platform in self._platforms:
             name = str(platform.get("platform_name") or "")
             pid = int(platform.get("platform_id") or 0)
@@ -2485,7 +2487,9 @@ class PlatformTabsWidget(QScrollArea):
                     font-weight: 900;
                     font-size: 11px;
                     letter-spacing: 0.35px;
-                    padding: 2px 12px;
+                    padding: 4px 14px;
+                    min-height: 26px;
+                    max-height: 28px;
                     border-radius: 13px;
                     text-align: center;
                 }
@@ -2518,7 +2522,7 @@ class PlatformTabsWidget(QScrollArea):
             total_width += self._lay.spacing() * max(0, len(self._platforms) - 1)
         left, _top, right, _bottom = margins
         total_width += left + right
-        self._host.setFixedSize(max(1, total_width), 32)
+        self._host.setFixedSize(max(1, total_width), 34)
         self._content_width = max(70, total_width)
         fixed_width = min(self._content_width, self._max_width)
         if len(self._platforms) >= 4:
@@ -2559,13 +2563,13 @@ class PlatformTabsWidget(QScrollArea):
         width = min(max(70, self._content_width), self._max_width)
         if len(self._platforms) >= 4:
             width = max(self._min_scroll_width, width)
-        return QSize(width, 32)
+        return QSize(width, 34)
 
     def minimumSizeHint(self) -> QSize:
         width = min(max(70, self._content_width), self._max_width)
         if len(self._platforms) >= 4:
             width = min(width, self._min_scroll_width)
-        return QSize(width, 32)
+        return QSize(width, 34)
 
     def _set_active(self, platform_id: int):
         platform_id = int(platform_id or 0)
@@ -5679,12 +5683,15 @@ class ContractWorkWindow(QDialog):
         self.meta_values: Dict[str, QLabel] = {}
         self.platform_tabs_widget: Optional[PlatformTabsWidget] = None
 
-        def meta_cell(key, label_text, value_text, *, min_w=70, max_w=None, value_widget=None):
+        def meta_cell(key, label_text, value_text, *, min_w=70, max_w=None, value_widget=None, tooltip: str = ""):
             cell = QWidget(); cell.setObjectName("metaCell")
             cell.setMinimumWidth(min_w)
             if max_w:
                 cell.setMaximumWidth(max_w)
             cell.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            if tooltip:
+                cell.setToolTip(tooltip)
+                cell.setMouseTracking(True)
             cl = QVBoxLayout(cell); cl.setContentsMargins(10, 0, 10, 0); cl.setSpacing(2)
             lbl = QLabel(label_text.upper()); lbl.setObjectName("metaHeaderLabel")
             if value_widget is None:
@@ -5692,6 +5699,9 @@ class ContractWorkWindow(QDialog):
                 self.meta_values[key] = val
             else:
                 val = value_widget
+            if tooltip and hasattr(val, "setToolTip"):
+                val.setToolTip(tooltip)
+                val.setMouseTracking(True)
             cl.addWidget(lbl); cl.addWidget(val)
             div = QFrame(); div.setObjectName("metaHeaderDiv")
             div.setFixedSize(1, 32)
@@ -5714,7 +5724,9 @@ class ContractWorkWindow(QDialog):
             icon.setStyleSheet("QLabel#headerUserIcon{background:transparent;border:0;padding:0;margin:0;}")
             val = ElidedValueLabel(text if text else "-"); val.setObjectName("metaHeaderValue")
             if tooltip:
-                wrap.setToolTip(tooltip); val.setToolTip(tooltip)
+                for widget in (wrap, icon, val):
+                    widget.setToolTip(tooltip)
+                    widget.setMouseTracking(True)
             self.meta_values[object_name] = val
             row.addWidget(icon, 0, Qt.AlignVCenter)
             row.addWidget(val, 1, Qt.AlignVCenter)
@@ -5747,7 +5759,7 @@ class ContractWorkWindow(QDialog):
             (*meta_cell("no", "Sözleşme No", self.ci.no, min_w=122, max_w=210), 17),
             (*meta_cell("platform", "Platform", "", min_w=260, max_w=340, value_widget=self.platform_tabs_widget), 0),
             (*meta_cell("type", "Tür", self.ci.contract_type, min_w=112, max_w=190), 16),
-            (*meta_cell("user", "Kullanıcı", user_text, min_w=150, max_w=250, value_widget=inline_icon_text(user_text, user_svg, "user", user_tip)), 21),
+            (*meta_cell("user", "Kullanıcı", user_text, min_w=150, max_w=250, value_widget=inline_icon_text(user_text, user_svg, "user", user_tip), tooltip=user_tip), 21),
             (*meta_cell("status", "Durum", "", min_w=126, max_w=190, value_widget=status_widget(self.ci.status or "Başlanmadı")), 16),
         ]
         if user_tip and self.meta_values.get("user"):
