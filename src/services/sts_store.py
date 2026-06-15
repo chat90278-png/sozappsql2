@@ -1160,7 +1160,7 @@ class STSStore:
                 "user":user_display,"users":users,
                 "type":r["contract_type"],"contract_type":r["contract_type"],
                 "type_display":r["type_display"],"link":r["link_type"],"status":r["status"],
-                "completion_date":r["completion_date"],"acceptance_date":r["acceptance_date"],"content":r["content"] or r["note"] or "",
+                "completion_date":r["completion_date"],"acceptance_date":r["acceptance_date"],"planned_acceptance_date":"","content":r["content"] or r["note"] or "",
                 "is_main":bool(r["is_main"]),"tags":list(tags),"search":search_text
             })
         return rows
@@ -1238,9 +1238,9 @@ class STSStore:
             for old_system in self.db.conn.execute("SELECT id,name,status,completion_date,acceptance_date FROM systems WHERE contract_id=?", (row[0],)):
                 components = {item[0]: float(item[1] or 0) for item in self.db.conn.execute("SELECT c.name,sc.qty FROM system_components sc JOIN components c ON c.id=sc.component_id WHERE sc.system_id=?", (old_system[0],))}
                 old_systems[str(old_system[1])] = {"status": old_system[2] or "", "completion_date": old_system[3] or "", "acceptance_date": old_system[4] or "", "components": components}
-            for old_delivery in self.db.conn.execute("SELECT d.id,s.name AS delivery_system,d.name,d.status,d.acceptance_date,d.note FROM deliveries d JOIN systems s ON s.id=d.system_id WHERE d.contract_id=?", (row[0],)):
+            for old_delivery in self.db.conn.execute("SELECT d.id,s.name AS delivery_system,d.name,d.status,d.planned_acceptance_date,d.acceptance_date,d.note FROM deliveries d JOIN systems s ON s.id=d.system_id WHERE d.contract_id=?", (row[0],)):
                 components = {item[0]: {"planned": float(item[1] or 0), "delivered": float(item[2] or 0)} for item in self.db.conn.execute("SELECT c.name,dc.planned,dc.delivered FROM delivery_components dc JOIN components c ON c.id=dc.component_id WHERE dc.delivery_id=?", (old_delivery[0],))}
-                old_deliveries[(str(old_delivery[1]), str(old_delivery[2]))] = {"id": int(old_delivery[0]), "status": old_delivery[3] or "", "acceptance_date": old_delivery[4] or "", "note": old_delivery[5] or "", "components": components}
+                old_deliveries[(str(old_delivery[1]), str(old_delivery[2]))] = {"id": int(old_delivery[0]), "status": old_delivery[3] or "", "planned_acceptance_date": old_delivery[4] or "", "acceptance_date": old_delivery[5] or "", "note": old_delivery[6] or "", "components": components}
         with self.db.tx():
             if row:
                 cid=row[0]
@@ -1295,10 +1295,10 @@ class STSStore:
                     payload=json.dumps({"t0_date":delivery.t0_date,"t0_months":delivery.t0_months,"completion_date":delivery.completion_date})
                     did=existing_deliveries.get((str(sys_name), str(delivery.name)))
                     if did is None:
-                        self.db.conn.execute("INSERT INTO deliveries(contract_id,system_id,delivery_user_id,name,status,acceptance_date,note,sort_order,payload_json) VALUES(?,?,?,?,?,?,?,?,?)",(cid,system_ids.get(sys_name),delivery_user_id,delivery.name,delivery.status,delivery.acceptance_date,delivery.note,i,payload))
+                        self.db.conn.execute("INSERT INTO deliveries(contract_id,system_id,delivery_user_id,name,status,planned_acceptance_date,acceptance_date,note,sort_order,payload_json) VALUES(?,?,?,?,?,?,?,?,?,?)",(cid,system_ids.get(sys_name),delivery_user_id,delivery.name,delivery.status,getattr(delivery,"planned_acceptance_date","") or "",delivery.acceptance_date,delivery.note,i,payload))
                         did=self.db.conn.execute("SELECT last_insert_rowid()").fetchone()[0]
                     else:
-                        self.db.conn.execute("UPDATE deliveries SET system_id=?,delivery_user_id=?,name=?,status=?,acceptance_date=?,note=?,sort_order=?,payload_json=? WHERE id=?",(system_ids.get(sys_name),delivery_user_id,delivery.name,delivery.status,delivery.acceptance_date,delivery.note,i,payload,did))
+                        self.db.conn.execute("UPDATE deliveries SET system_id=?,delivery_user_id=?,name=?,status=?,planned_acceptance_date=?,acceptance_date=?,note=?,sort_order=?,payload_json=? WHERE id=?",(system_ids.get(sys_name),delivery_user_id,delivery.name,delivery.status,getattr(delivery,"planned_acceptance_date","") or "",delivery.acceptance_date,delivery.note,i,payload,did))
                     existing_components = {int(item[0]): int(item[1]) for item in self.db.conn.execute("SELECT component_id,id FROM delivery_components WHERE delivery_id=?", (did,))}
                     desired_component_ids = set()
                     names=set((delivery.planned or {})) | set((delivery.delivered or {}))
@@ -1332,7 +1332,7 @@ class STSStore:
                 self._log("system_updated", entity_type="system", entity_key=name, contract_no=str(ci.no or ""), source="System Editor", message="Sistem güncellendi", before=before_system, after=after_system)
                 if before_system.get("components") != after_system.get("components"):
                     self._log("system_component_updated", entity_type="system", entity_key=name, contract_no=str(ci.no or ""), source="System Editor", message="Sistem bileşenleri güncellendi", before={"components": before_system.get("components")}, after={"components": after_system.get("components")})
-        new_deliveries = {(str(system_label), str(delivery.name)): {"status": str(delivery.status or ""), "acceptance_date": str(delivery.acceptance_date or ""), "note": str(delivery.note or ""), "components": {name: {"planned": float((delivery.planned or {}).get(name, 0) or 0), "delivered": float((delivery.delivered or {}).get(name, 0) or 0)} for name in set((delivery.planned or {})) | set((delivery.delivered or {})) if float((delivery.planned or {}).get(name, 0) or 0) > 0 or float((delivery.delivered or {}).get(name, 0) or 0) > 0}} for system_label, items in (deliveries or {}).items() for delivery in (items or [])}
+        new_deliveries = {(str(system_label), str(delivery.name)): {"status": str(delivery.status or ""), "planned_acceptance_date": str(getattr(delivery, "planned_acceptance_date", "") or ""), "acceptance_date": str(delivery.acceptance_date or ""), "note": str(delivery.note or ""), "components": {name: {"planned": float((delivery.planned or {}).get(name, 0) or 0), "delivered": float((delivery.delivered or {}).get(name, 0) or 0)} for name in set((delivery.planned or {})) | set((delivery.delivered or {})) if float((delivery.planned or {}).get(name, 0) or 0) > 0 or float((delivery.delivered or {}).get(name, 0) or 0) > 0}} for system_label, items in (deliveries or {}).items() for delivery in (items or [])}
         for key in sorted(set(new_deliveries) | set(old_deliveries)):
             before_delivery, after_delivery = old_deliveries.get(key), new_deliveries.get(key)
             before_compare = {name: value for name, value in (before_delivery or {}).items() if name != "id"}
@@ -1385,7 +1385,7 @@ class STSStore:
             payload=json.loads(d['payload_json'] or "{}")
             rows=self.db.conn.execute("SELECT c.name,dc.planned,dc.delivered FROM delivery_components dc JOIN components c ON c.id=dc.component_id WHERE dc.delivery_id=?",(d['id'],)).fetchall()
             planned={x[0]:float(x[1] or 0) for x in rows}; delivered={x[0]:float(x[2] or 0) for x in rows}
-            di=DeliveryInfo(name=d['name'],status=d['status'] or "",acceptance_date=d['acceptance_date'] or "",note=d['note'] or "",planned=planned,delivered=delivered,t0_date=payload.get('t0_date',''),t0_months=int(payload.get('t0_months',0) or 0),completion_date=payload.get('completion_date',''),delivery_user=d['delivery_user'] or "")
+            di=DeliveryInfo(name=d['name'],status=d['status'] or "",acceptance_date=d['acceptance_date'] or "",note=d['note'] or "",planned_acceptance_date=d['planned_acceptance_date'] or "",planned=planned,delivered=delivered,t0_date=payload.get('t0_date',''),t0_months=int(payload.get('t0_months',0) or 0),completion_date=payload.get('completion_date',''),delivery_user=d['delivery_user'] or "")
             deliveries.setdefault(d['delivery_system'],[]).append(di)
         return ci, systems, deliveries
 

@@ -5114,17 +5114,20 @@ class DeliveryDialog(StyledDialog):
                 name = str(user.get("name", "") or "").strip()
                 if name:
                     self.delivery_user_combo.addItem(name)
+        self.planned_acceptance_date, self.planned_acceptance_date_wrap = build_date_input(self, events_provider=self.events_provider)
         self.acceptance_date, self.acceptance_date_wrap = build_date_input(self, max_date=date.today(), events_provider=self.events_provider)
         grid.addWidget(form_label("Kabul Adı"), 0, 0)
         grid.addWidget(self.name, 1, 0)
         grid.addWidget(form_label("Durum"), 0, 1)
         grid.addWidget(self.status, 1, 1)
-        grid.addWidget(form_label("Kabul Tarihi"), 2, 0)
-        grid.addWidget(self.acceptance_date_wrap, 3, 0)
+        grid.addWidget(form_label("Planlanan Kabul Tarihi"), 2, 0)
+        grid.addWidget(self.planned_acceptance_date_wrap, 3, 0)
+        grid.addWidget(form_label("Gerçek Kabul Tarihi"), 4, 0)
+        grid.addWidget(self.acceptance_date_wrap, 5, 0)
         grid.addWidget(form_label("Not"), 2, 1)
         grid.addWidget(self.note, 3, 1)
-        grid.addWidget(form_label("Teslim Edilecek Kullanıcı"), 4, 0)
-        grid.addWidget(self.delivery_user_combo, 5, 0)
+        grid.addWidget(form_label("Teslim Edilecek Kullanıcı"), 4, 1)
+        grid.addWidget(self.delivery_user_combo, 5, 1)
         root.addLayout(grid)
 
         info_row = QHBoxLayout()
@@ -5409,6 +5412,11 @@ class DeliveryDialog(StyledDialog):
             delivered[comp] = dv
         t0_text = str(getattr(self.system, "t0_date", "") or self.t0_date.text()).strip()
         completion = str(getattr(self.system, "completion_date", "") or self.completion_date_edit.text()).strip()
+        plan_acc_text = self.planned_acceptance_date.text().strip()
+        plan_acc_date = parse_iso_date(plan_acc_text) if plan_acc_text else None
+        if plan_acc_text and not plan_acc_date:
+            QMessageBox.warning(self, "Tarih hatası", "Planlanan Kabul Tarihi yyyy-aa-gg formatında olmalı. Örn: 2026-05-02")
+            return
         acc_text = self.acceptance_date.text().strip()
         acc_date = parse_iso_date(acc_text) if acc_text else None
         if acc_text and not acc_date:
@@ -5443,6 +5451,7 @@ class DeliveryDialog(StyledDialog):
             status=self.status.currentText(),
             acceptance_date=iso_or_blank(acc_text),
             note=self.note.text().strip(),
+            planned_acceptance_date=iso_or_blank(plan_acc_text),
             planned=planned,
             delivered=delivered,
             t0_date=iso_or_blank(t0_text),
@@ -5571,6 +5580,7 @@ class ContractWorkWindow(QDialog):
                         {
                             "name":            str(d.name or ""),
                             "status":          str(d.status or ""),
+                            "planned_acceptance_date": str(getattr(d, "planned_acceptance_date", "") or ""),
                             "acceptance_date": str(d.acceptance_date or ""),
                             "note":            str(d.note or ""),
                             "delivery_user":   str(getattr(d, "delivery_user", "") or ""),
@@ -8298,6 +8308,7 @@ class ContractWorkWindow(QDialog):
             status="Başlanmadı",
             acceptance_date="",
             note="Sistem kaydedilirken otomatik oluşturuldu.",
+            planned_acceptance_date="",
             planned=planned,
             delivered={comp: 0 for comp in planned.keys()},
             t0_date=str(getattr(sys_info, "t0_date", "") or ""),
