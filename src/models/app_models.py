@@ -87,6 +87,8 @@ class DeliveryInfo:
     completion_date: str = ""
     delivery_user: str = ""
     planned_acceptance_date: str = ""
+    # Kuyruk no / seri no takibi: {comp_name: [{"slot_no": 1, "identifier": "TC-001", "is_delivered": 0, "note": ""}, ...]}
+    component_units: Dict[str, list] = field(default_factory=dict)
 
 
 @dataclass
