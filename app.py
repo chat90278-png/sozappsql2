@@ -77,7 +77,7 @@ from PySide6.QtWidgets import (
     QLabel, QPushButton, QListWidget, QListWidgetItem, QTableWidget, QTableWidgetItem,
     QTreeWidget, QTreeWidgetItem, QDialog, QLineEdit, QComboBox, QDateEdit, QSpinBox, QDoubleSpinBox,
     QMessageBox, QFileDialog, QFrame, QScrollArea, QCheckBox, QHeaderView,
-    QSizePolicy, QProgressBar, QProgressDialog, QStyledItemDelegate, QTextEdit,
+    QSizePolicy, QProgressBar, QProgressDialog, QStyledItemDelegate, QTextEdit, QToolTip,
     QToolButton, QMenu, QInputDialog, QWidgetAction, QStackedWidget, QAbstractItemView, QStyle
 )
 from shiboken6 import isValid as _qt_is_valid
@@ -2394,7 +2394,7 @@ class PlatformTabsWidget(QScrollArea):
         self.setFrameShape(QFrame.NoFrame)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.setFixedHeight(32)
+        self.setFixedHeight(30)
         self.setSizePolicy(QSizePolicy.MinimumExpanding, QSizePolicy.Fixed)
         self.viewport().setStyleSheet("background:transparent;border:0;")
         self.setObjectName("PlatformTabRail")
@@ -2404,8 +2404,8 @@ class PlatformTabsWidget(QScrollArea):
         self._host.setStyleSheet("QWidget#PlatformTabScrollContent{background:transparent;border:0;}")
         self._host.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         self._lay = QHBoxLayout(self._host)
-        self._lay.setContentsMargins(0, 3, 0, 3)
-        self._lay.setSpacing(4)
+        self._lay.setContentsMargins(4, 2, 4, 2)
+        self._lay.setSpacing(8)
         self._lay.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         self.setWidget(self._host)
 
@@ -2415,8 +2415,10 @@ class PlatformTabsWidget(QScrollArea):
                 background: rgba(7, 28, 58, 0.45);
                 border: 1px solid rgba(80, 140, 210, 0.35);
                 border-radius: 15px;
+                padding: 0px;
+                margin: 0px;
                 min-height: 30px;
-                max-height: 32px;
+                max-height: 30px;
             }
             QScrollArea#PlatformTabRail > QWidget > QWidget { background:transparent; }
             QScrollBar:horizontal { height:0px; background:transparent; }
@@ -2460,7 +2462,7 @@ class PlatformTabsWidget(QScrollArea):
         total_width = 0
         single = len(self._platforms) <= 1
         self._apply_rail_style(single=single)
-        margins = (0, 3, 0, 3) if single else (5, 3, 5, 3)
+        margins = (4, 2, 4, 2)
         self._lay.setContentsMargins(*margins)
         max_height = 26
         for platform in self._platforms:
@@ -2485,8 +2487,10 @@ class PlatformTabsWidget(QScrollArea):
                     font-weight: 900;
                     font-size: 11px;
                     letter-spacing: 0.35px;
-                    padding: 2px 12px;
-                    border-radius: 13px;
+                    padding: 3px 13px;
+                    min-height: 24px;
+                    max-height: 26px;
+                    border-radius: 12px;
                     text-align: center;
                 }
                 QPushButton#PlatformTabButton[active="true"] {
@@ -2518,7 +2522,7 @@ class PlatformTabsWidget(QScrollArea):
             total_width += self._lay.spacing() * max(0, len(self._platforms) - 1)
         left, _top, right, _bottom = margins
         total_width += left + right
-        self._host.setFixedSize(max(1, total_width), 32)
+        self._host.setFixedSize(max(1, total_width), 30)
         self._content_width = max(70, total_width)
         fixed_width = min(self._content_width, self._max_width)
         if len(self._platforms) >= 4:
@@ -2559,13 +2563,13 @@ class PlatformTabsWidget(QScrollArea):
         width = min(max(70, self._content_width), self._max_width)
         if len(self._platforms) >= 4:
             width = max(self._min_scroll_width, width)
-        return QSize(width, 32)
+        return QSize(width, 30)
 
     def minimumSizeHint(self) -> QSize:
         width = min(max(70, self._content_width), self._max_width)
         if len(self._platforms) >= 4:
             width = min(width, self._min_scroll_width)
-        return QSize(width, 32)
+        return QSize(width, 30)
 
     def _set_active(self, platform_id: int):
         platform_id = int(platform_id or 0)
@@ -5677,14 +5681,22 @@ class ContractWorkWindow(QDialog):
         actions_lay = QHBoxLayout(actions); actions_lay.setContentsMargins(0, 0, 0, 0); actions_lay.setSpacing(8)
 
         self.meta_values: Dict[str, QLabel] = {}
+        self.user_tooltip_text = ""
+        self.user_summary_container: Optional[QWidget] = None
+        self._user_tooltip_widgets: set[QWidget] = set()
         self.platform_tabs_widget: Optional[PlatformTabsWidget] = None
 
-        def meta_cell(key, label_text, value_text, *, min_w=70, max_w=None, value_widget=None):
+        def meta_cell(key, label_text, value_text, *, min_w=70, max_w=None, value_widget=None, tooltip: str = ""):
             cell = QWidget(); cell.setObjectName("metaCell")
             cell.setMinimumWidth(min_w)
             if max_w:
                 cell.setMaximumWidth(max_w)
             cell.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            if tooltip:
+                cell.setToolTip(tooltip)
+                cell.setMouseTracking(True)
+                if key == "user":
+                    self._register_user_tooltip_widget(cell)
             cl = QVBoxLayout(cell); cl.setContentsMargins(10, 0, 10, 0); cl.setSpacing(2)
             lbl = QLabel(label_text.upper()); lbl.setObjectName("metaHeaderLabel")
             if value_widget is None:
@@ -5692,6 +5704,11 @@ class ContractWorkWindow(QDialog):
                 self.meta_values[key] = val
             else:
                 val = value_widget
+            if tooltip and hasattr(val, "setToolTip"):
+                val.setToolTip(tooltip)
+                val.setMouseTracking(True)
+                if key == "user" and isinstance(val, QWidget):
+                    self._register_user_tooltip_widget(val)
             cl.addWidget(lbl); cl.addWidget(val)
             div = QFrame(); div.setObjectName("metaHeaderDiv")
             div.setFixedSize(1, 32)
@@ -5714,7 +5731,13 @@ class ContractWorkWindow(QDialog):
             icon.setStyleSheet("QLabel#headerUserIcon{background:transparent;border:0;padding:0;margin:0;}")
             val = ElidedValueLabel(text if text else "-"); val.setObjectName("metaHeaderValue")
             if tooltip:
-                wrap.setToolTip(tooltip); val.setToolTip(tooltip)
+                if object_name == "user":
+                    self.user_summary_container = wrap
+                for widget in (wrap, icon, val):
+                    widget.setToolTip(tooltip)
+                    widget.setMouseTracking(True)
+                    if object_name == "user":
+                        self._register_user_tooltip_widget(widget)
             self.meta_values[object_name] = val
             row.addWidget(icon, 0, Qt.AlignVCenter)
             row.addWidget(val, 1, Qt.AlignVCenter)
@@ -5731,6 +5754,7 @@ class ContractWorkWindow(QDialog):
             return wrap
 
         user_text, user_tip = compact_users(self.ci.user, list(getattr(self.ci, "users", []) or []))
+        self.user_tooltip_text = user_tip
         user_svg = b"""<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' width='16' height='16'>
           <circle cx='8' cy='5.35' r='2.45' fill='none' stroke='#c8e2ff' stroke-width='1.35'/>
           <path d='M3.15 13.35c.48-2.75 2.18-4.15 4.85-4.15s4.37 1.4 4.85 4.15'
@@ -5747,7 +5771,7 @@ class ContractWorkWindow(QDialog):
             (*meta_cell("no", "Sözleşme No", self.ci.no, min_w=122, max_w=210), 17),
             (*meta_cell("platform", "Platform", "", min_w=260, max_w=340, value_widget=self.platform_tabs_widget), 0),
             (*meta_cell("type", "Tür", self.ci.contract_type, min_w=112, max_w=190), 16),
-            (*meta_cell("user", "Kullanıcı", user_text, min_w=150, max_w=250, value_widget=inline_icon_text(user_text, user_svg, "user", user_tip)), 21),
+            (*meta_cell("user", "Kullanıcı", user_text, min_w=150, max_w=250, value_widget=inline_icon_text(user_text, user_svg, "user", user_tip), tooltip=user_tip), 21),
             (*meta_cell("status", "Durum", "", min_w=126, max_w=190, value_widget=status_widget(self.ci.status or "Başlanmadı")), 16),
         ]
         if user_tip and self.meta_values.get("user"):
@@ -6024,6 +6048,15 @@ class ContractWorkWindow(QDialog):
             except Exception:
                 return False
 
+            user_tooltip_widgets = getattr(self, "_user_tooltip_widgets", set())
+            if obj in user_tooltip_widgets:
+                if etype == QEvent.Enter:
+                    self._show_user_tooltip_now(obj)
+                    return False
+                if etype == QEvent.Leave:
+                    self._hide_user_tooltip_now()
+                    return False
+
             side_host = getattr(self, "side_meta_host", None)
             if obj is side_host and etype in (QEvent.Resize, QEvent.Show):
                 self.position_side_meta_popover()
@@ -6061,6 +6094,28 @@ class ContractWorkWindow(QDialog):
             return False
 
         return False
+
+
+    def _register_user_tooltip_widget(self, widget):
+        if not isinstance(widget, QWidget):
+            return
+        widget.installEventFilter(self)
+        widget.setMouseTracking(True)
+        self._user_tooltip_widgets.add(widget)
+
+    def _show_user_tooltip_now(self, obj):
+        text = str(getattr(self, "user_tooltip_text", "") or "").strip()
+        if not text:
+            return
+        anchor = getattr(self, "user_summary_container", None)
+        if not isinstance(anchor, QWidget) or not qt_obj_alive(anchor):
+            anchor = obj if isinstance(obj, QWidget) else None
+        if not isinstance(anchor, QWidget) or not qt_obj_alive(anchor):
+            return
+        QToolTip.showText(anchor.mapToGlobal(QPoint(0, anchor.height() + 4)), text, anchor)
+
+    def _hide_user_tooltip_now(self):
+        QToolTip.hideText()
 
     def configure_summary_columns(self):
         header = self.summary.horizontalHeader()
