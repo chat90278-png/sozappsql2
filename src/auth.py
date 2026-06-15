@@ -119,6 +119,19 @@ DEFAULT_ROLE_PERMISSIONS = {
 
 current_staff: Optional[dict[str, Any]] = None
 
+
+_SYSTEM_ADMINS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS system_admins (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    admin_name TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    is_active INTEGER DEFAULT 1,
+    last_login_at TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT
+);
+"""
+
 _STAFF_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS staff (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -214,6 +227,7 @@ def ensure_authorization_schema(db_or_path: sqlite3.Connection | str | Path) -> 
             """
         )
         conn.execute(_STAFF_TABLE_SQL)
+        conn.execute(_SYSTEM_ADMINS_TABLE_SQL)
         columns = _table_columns(conn, "staff")
         for name, ddl in (
             ("role_id", "INTEGER"),
@@ -398,6 +412,77 @@ def build_current_staff(row) -> dict[str, Any]:
     }
 
 
+def has_active_system_admin(db_or_path: sqlite3.Connection | str | Path) -> bool:
+    ensure_authorization_schema(db_or_path)
+    conn, should_close = _connection_from(db_or_path)
+    try:
+        row = conn.execute("SELECT 1 FROM system_admins WHERE COALESCE(is_active,1)=1 LIMIT 1").fetchone()
+        return row is not None
+    finally:
+        if should_close:
+            conn.close()
+
+
+def create_system_admin(db_or_path: sqlite3.Connection | str | Path, admin_name: str, password: str):
+    ensure_authorization_schema(db_or_path)
+    name = str(admin_name or "").strip()
+    if not name:
+        raise ValueError("Admin adı boş bırakılamaz.")
+    if not password:
+        raise ValueError("Admin şifresi boş bırakılamaz.")
+    conn, should_close = _connection_from(db_or_path)
+    try:
+        conn.execute(
+            """
+            INSERT INTO system_admins(admin_name, password_hash, is_active, created_at, updated_at)
+            VALUES(?, ?, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            """,
+            (name, hash_password(password)),
+        )
+        conn.commit()
+        return conn.execute("SELECT * FROM system_admins WHERE admin_name=?", (name,)).fetchone()
+    finally:
+        if should_close:
+            conn.close()
+
+
+def verify_system_admin_login(db_or_path: sqlite3.Connection | str | Path, admin_name: str, password: str) -> dict[str, Any] | None:
+    ensure_authorization_schema(db_or_path)
+    name = str(admin_name or "").strip()
+    conn, should_close = _connection_from(db_or_path)
+    try:
+        row = conn.execute(
+            "SELECT * FROM system_admins WHERE admin_name=? AND COALESCE(is_active,1)=1",
+            (name,),
+        ).fetchone()
+        if not row or not verify_password(password, str(row["password_hash"] or "")):
+            # TODO: Bağlantı noktası netleştirilince başarısız sistem yöneticisi giriş denemeleri mevcut log altyapısına yazılacak.
+            return None
+        conn.execute("UPDATE system_admins SET last_login_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=?", (int(row["id"]),))
+        conn.commit()
+        row = conn.execute("SELECT * FROM system_admins WHERE id=?", (int(row["id"]),)).fetchone()
+        # TODO: Bağlantı noktası netleştirilince başarılı sistem yöneticisi girişleri mevcut log altyapısına yazılacak.
+        return dict(row) if row else None
+    finally:
+        if should_close:
+            conn.close()
+
+
+def build_system_admin_session(row, device_name: str) -> dict[str, Any]:
+    admin_id = int(row["id"] if hasattr(row, "keys") else row.get("id"))
+    admin_name = str(row["admin_name"] if hasattr(row, "keys") else row.get("admin_name") or "")
+    is_active = row["is_active"] if hasattr(row, "keys") else row.get("is_active")
+    return {
+        "id": 0,
+        "admin_id": admin_id,
+        "full_name": admin_name,
+        "device_name": str(device_name or ""),
+        "is_admin": True,
+        "role_display_name": "Sistem Yöneticisi",
+        "is_active": int(is_active if is_active is not None else 1),
+    }
+
+
 def has_role(role: str, staff: Optional[dict[str, Any]] = None) -> bool:
     raise RuntimeError("Sabit rol kontrolü kullanılmamalı; has_permission(current_user, permission_code) kullanın.")
 
@@ -420,6 +505,8 @@ def has_permission(current_user: Optional[dict[str, Any]], permission_code: str,
     code = str(permission_code or "").strip()
     if not code:
         return False
+    if user and bool(user.get("is_admin")) and int(user.get("is_active") if user.get("is_active") is not None else 1) != 0:
+        return True
     if not PERMISSION_RESTRICTIONS_ENABLED:
         return True
     if not user or int(user.get("is_active") if user.get("is_active") is not None else 1) == 0:
@@ -734,8 +821,125 @@ def reset_role_permissions_to_defaults(db_or_path: sqlite3.Connection | str | Pa
             conn.close()
 
 
+
+def _build_system_admin_setup_dialog(db_or_path: sqlite3.Connection | str | Path, parent=None):
+    from src.ui.message_boxes import show_warning
+    from PySide6.QtWidgets import QDialog, QFormLayout, QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton, QVBoxLayout
+    from src.ui.theme import STYLE
+
+    class SystemAdminSetupDialog(QDialog):
+        def __init__(self):
+            super().__init__(parent)
+            self.setWindowTitle("Sistem Yöneticisi Kurulumu")
+            self.setModal(True)
+            self.setStyleSheet(STYLE)
+            self.setFixedWidth(460)
+            root = QVBoxLayout(self)
+            root.setContentsMargins(22, 22, 22, 22)
+            root.setSpacing(14)
+            heading = QLabel("Sistem Yöneticisi Kurulumu")
+            heading.setObjectName("mainTitle")
+            root.addWidget(heading)
+            card = QFrame(); card.setObjectName("card")
+            lay = QVBoxLayout(card); lay.setContentsMargins(18, 18, 18, 18); lay.setSpacing(12)
+            root.addWidget(card)
+            info = QLabel("Bu STS dosyası için cihazdan bağımsız ilk sistem yöneticisi hesabını oluşturun.")
+            info.setWordWrap(True); info.setObjectName("muted")
+            lay.addWidget(info)
+            form = QFormLayout()
+            self.name_edit = QLineEdit(); self.name_edit.setPlaceholderText("Admin Adı")
+            self.password_edit = QLineEdit(); self.password_edit.setEchoMode(QLineEdit.Password)
+            self.repeat_edit = QLineEdit(); self.repeat_edit.setEchoMode(QLineEdit.Password)
+            form.addRow("Admin Adı", self.name_edit)
+            form.addRow("Admin Şifresi", self.password_edit)
+            form.addRow("Şifre Tekrar", self.repeat_edit)
+            lay.addLayout(form)
+            row = QHBoxLayout(); row.addStretch()
+            cancel = QPushButton("Vazgeç"); cancel.clicked.connect(self.reject)
+            primary = QPushButton("Kurulumu Tamamla"); primary.setDefault(True); primary.clicked.connect(self._submit)
+            row.addWidget(cancel); row.addWidget(primary); lay.addLayout(row)
+            self.name_edit.returnPressed.connect(self._submit)
+            self.password_edit.returnPressed.connect(self._submit)
+            self.repeat_edit.returnPressed.connect(self._submit)
+
+        def _submit(self):
+            name = self.name_edit.text().strip()
+            password = self.password_edit.text()
+            repeat = self.repeat_edit.text()
+            if not name or not password or not repeat:
+                show_warning(self, "Eksik bilgi", "Admin adı ve şifre alanları boş bırakılamaz.")
+                return
+            if password != repeat:
+                show_warning(self, "Şifreler eşleşmiyor", "Girdiğiniz şifreler eşleşmiyor. Lütfen tekrar deneyin.")
+                self.repeat_edit.setFocus(); self.repeat_edit.selectAll()
+                return
+            try:
+                create_system_admin(db_or_path, name, password)
+            except sqlite3.IntegrityError:
+                show_warning(self, "Kayıt mevcut", "Bu admin adı zaten kullanılıyor.")
+                return
+            except Exception as exc:
+                show_warning(self, "Kurulum başarısız", str(exc))
+                return
+            self.accept()
+
+    return SystemAdminSetupDialog()
+
+
+def ensure_system_admin_setup(db_or_path: sqlite3.Connection | str | Path, parent=None) -> bool:
+    from PySide6.QtWidgets import QDialog
+    ensure_authorization_schema(db_or_path)
+    if has_active_system_admin(db_or_path):
+        return True
+    dlg = _build_system_admin_setup_dialog(db_or_path, parent)
+    return dlg.exec() == QDialog.Accepted and has_active_system_admin(db_or_path)
+
+
+def show_system_admin_login_dialog(db_or_path: sqlite3.Connection | str | Path, parent=None) -> Optional[dict[str, Any]]:
+    from src.ui.message_boxes import show_warning
+    from PySide6.QtWidgets import QDialog, QFormLayout, QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton, QVBoxLayout
+    from src.ui.theme import STYLE
+
+    class SystemAdminLoginDialog(QDialog):
+        def __init__(self):
+            super().__init__(parent)
+            self.setWindowTitle("Sistem Yöneticisi Girişi")
+            self.setModal(True)
+            self.setStyleSheet(STYLE)
+            self.setFixedWidth(440)
+            self.staff: Optional[dict[str, Any]] = None
+            root = QVBoxLayout(self); root.setContentsMargins(22, 22, 22, 22); root.setSpacing(14)
+            heading = QLabel("Sistem Yöneticisi Girişi"); heading.setObjectName("mainTitle"); root.addWidget(heading)
+            card = QFrame(); card.setObjectName("card"); lay = QVBoxLayout(card); lay.setContentsMargins(18, 18, 18, 18); lay.setSpacing(12); root.addWidget(card)
+            form = QFormLayout()
+            self.name_edit = QLineEdit(); self.name_edit.setPlaceholderText("Admin Adı")
+            self.password_edit = QLineEdit(); self.password_edit.setEchoMode(QLineEdit.Password); self.password_edit.setPlaceholderText("Admin Şifresi")
+            form.addRow("Admin Adı", self.name_edit); form.addRow("Admin Şifresi", self.password_edit); lay.addLayout(form)
+            row = QHBoxLayout(); row.addStretch()
+            cancel = QPushButton("Vazgeç"); cancel.clicked.connect(self.reject)
+            primary = QPushButton("Giriş Yap"); primary.setDefault(True); primary.clicked.connect(self._submit)
+            row.addWidget(cancel); row.addWidget(primary); lay.addLayout(row)
+            self.name_edit.returnPressed.connect(self._submit); self.password_edit.returnPressed.connect(self._submit)
+
+        def _submit(self):
+            name = self.name_edit.text().strip(); password = self.password_edit.text()
+            if not name or not password:
+                show_warning(self, "Eksik bilgi", "Admin adı ve şifre boş bırakılamaz.")
+                return
+            row = verify_system_admin_login(db_or_path, name, password)
+            if not row:
+                show_warning(self, "Giriş başarısız", "Admin adı veya şifre hatalı.")
+                self.password_edit.setFocus(); self.password_edit.selectAll()
+                return
+            self.staff = build_system_admin_session(row, get_device_name())
+            self.accept()
+
+    dlg = SystemAdminLoginDialog()
+    return dlg.staff if dlg.exec() == QDialog.Accepted else None
+
 def _build_staff_register_dialog(db_or_path: sqlite3.Connection | str | Path, device_name: str, parent=None):
     from PySide6.QtCore import Qt
+    from PySide6.QtGui import QKeySequence, QShortcut
     from src.ui.message_boxes import show_warning
     from PySide6.QtWidgets import (
         QDialog,
@@ -801,6 +1005,12 @@ def _build_staff_register_dialog(db_or_path: sqlite3.Connection | str | Path, de
             self.full_name_edit.returnPressed.connect(self._submit)
             self.password_edit.returnPressed.connect(self._submit)
             self.password_repeat_edit.returnPressed.connect(self._submit)
+            QShortcut(QKeySequence("Ctrl+Alt+Shift+A"), self).activated.connect(self._admin_login)
+
+        def _admin_login(self):
+            self.staff = show_system_admin_login_dialog(db_or_path, self)
+            if self.staff:
+                self.accept()
 
         def _submit(self):
             full_name = self.full_name_edit.text().strip()
@@ -832,6 +1042,7 @@ def _build_staff_register_dialog(db_or_path: sqlite3.Connection | str | Path, de
 
 def _build_staff_login_dialog(db_or_path: sqlite3.Connection | str | Path, row, parent=None):
     from src.ui.message_boxes import show_warning
+    from PySide6.QtGui import QKeySequence, QShortcut
     from PySide6.QtWidgets import (
         QDialog,
         QFormLayout,
@@ -888,6 +1099,12 @@ def _build_staff_login_dialog(db_or_path: sqlite3.Connection | str | Path, row, 
             row_layout.addWidget(primary)
             card_layout.addLayout(row_layout)
             self.password_edit.returnPressed.connect(self._submit)
+            QShortcut(QKeySequence("Ctrl+Alt+Shift+A"), self).activated.connect(self._admin_login)
+
+        def _admin_login(self):
+            self.staff = show_system_admin_login_dialog(db_or_path, self)
+            if self.staff:
+                self.accept()
 
         def _submit(self):
             if int(row["is_active"] if row["is_active"] is not None else 1) == 0:
@@ -1086,6 +1303,8 @@ def unlock_documents(
 def can_current_staff_access_documents(lock_state: Optional[dict[str, Any]], staff: Optional[dict[str, Any]]) -> bool:
     state = lock_state or {}
     if int(state.get("is_locked") or 0) == 0:
+        return True
+    if staff and bool(staff.get("is_admin")) and int(staff.get("is_active") if staff.get("is_active") is not None else 1) != 0:
         return True
     if not staff:
         return False

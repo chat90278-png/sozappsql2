@@ -11149,6 +11149,8 @@ class MainWindow(QMainWindow):
         if dlg.exec() and dlg.selected_path:
             sel = Path(dlg.selected_path)
             if sel.suffix.lower() == ".sts":
+                if not auth.ensure_system_admin_setup(sel, self):
+                    return
                 staff = auth.require_staff_login(sel, self)
                 if not staff:
                     return
@@ -11846,6 +11848,8 @@ if __name__ == "__main__":
     selected_path = Path(start_dialog.selected_path)
     staff = None
     if selected_path.suffix.lower() == ".sts":
+        if not auth.ensure_system_admin_setup(selected_path):
+            sys.exit(0)
         staff = auth.require_staff_login(selected_path)
         if not staff:
             sys.exit(0)
