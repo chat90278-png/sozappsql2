@@ -16,6 +16,8 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QPushButton,
     QSplitter,
+    QSpinBox,
+    QApplication,
     QTableWidget,
     QTableWidgetItem,
     QTabWidget,
@@ -411,13 +413,16 @@ class StaffPermissionsDialog(QDialog):
         self.tabs = QTabWidget()
         self.staff_tab = QWidget()
         self.role_tab  = QWidget()
+        self.invite_tab = QWidget()
         self.tabs.addTab(self.staff_tab, "Personel Rolleri")
         self.tabs.addTab(self.role_tab,  "Rol Yetkileri")
+        self.tabs.addTab(self.invite_tab, "Yetki Kodları")
         self.tabs.currentChanged.connect(self._sync_footer)
         root.addWidget(self.tabs, 1)
 
         self._build_staff_tab()
         self._build_role_tab()
+        self._build_invite_tab()
 
         # Footer
         self.footer_sep = QFrame()
@@ -835,6 +840,107 @@ class StaffPermissionsDialog(QDialog):
         bl.addLayout(inner)
         lay.addWidget(box, 1)
 
+
+    # ── Yetki Kodları tab ────────────────────────────────────────────────────
+    def _build_invite_tab(self) -> None:
+        lay = QVBoxLayout(self.invite_tab)
+        lay.setContentsMargins(0, 8, 0, 0)
+        lay.setSpacing(10)
+        box = QFrame(); box.setObjectName("panelCard")
+        bl = QVBoxLayout(box); bl.setContentsMargins(14, 14, 14, 14); bl.setSpacing(10)
+        info = QLabel("ℹ  Yeni cihaz kayıtları için role bağlı tek seferlik veya çok kullanımlı yetki kodları oluşturun.")
+        info.setObjectName("infoBox"); bl.addWidget(info)
+        form_row = QHBoxLayout(); form_row.setSpacing(10)
+        self.invite_role_select = QComboBox()
+        self.invite_expiry_select = QComboBox()
+        self.invite_expiry_select.addItem("Süresiz", 0)
+        self.invite_expiry_select.addItem("7 gün", 7)
+        self.invite_expiry_select.addItem("30 gün", 30)
+        self.invite_max_uses = QSpinBox(); self.invite_max_uses.setMinimum(1); self.invite_max_uses.setValue(1)
+        self.create_invite_btn = QPushButton("Yetki Kodu Oluştur")
+        self.create_invite_btn.setObjectName("primaryBtn")
+        self.create_invite_btn.clicked.connect(self.create_invite_code)
+        for label, widget in (("Rol", self.invite_role_select), ("Geçerlilik", self.invite_expiry_select), ("Kullanım", self.invite_max_uses)):
+            wrap = QVBoxLayout(); wrap.setSpacing(4)
+            lb = QLabel(label); lb.setStyleSheet("font-size: 11px; font-weight: 700; color: #64748b; background: transparent; border: none;")
+            wrap.addWidget(lb); wrap.addWidget(widget); form_row.addLayout(wrap)
+        form_row.addWidget(self.create_invite_btn)
+        bl.addLayout(form_row)
+        self.invite_code_box = QFrame(); self.invite_code_box.setObjectName("infoBox")
+        code_lay = QHBoxLayout(self.invite_code_box); code_lay.setContentsMargins(10, 8, 10, 8)
+        self.invite_code_label = QLabel(""); self.invite_code_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.copy_invite_btn = QPushButton("Kopyala"); self.copy_invite_btn.clicked.connect(self.copy_invite_code)
+        code_lay.addWidget(self.invite_code_label, 1); code_lay.addWidget(self.copy_invite_btn)
+        self.invite_code_box.hide(); bl.addWidget(self.invite_code_box)
+        self.invite_table = QTableWidget(0, 8)
+        self.invite_table.setHorizontalHeaderLabels(["Kod İpucu", "Rol", "Durum", "Kullanım", "Oluşturan", "Kullanan", "Son Geçerlilik", "Oluşturma Tarihi"])
+        ih = self.invite_table.horizontalHeader(); ih.setSectionResizeMode(QHeaderView.Stretch); ih.setHighlightSections(False)
+        self.invite_table.verticalHeader().hide(); self.invite_table.setShowGrid(False); self.invite_table.setSelectionMode(QTableWidget.NoSelection)
+        bl.addWidget(self.invite_table, 1)
+        lay.addWidget(box, 1)
+        self._last_invite_code = ""
+
+    def _populate_invite_role_select(self) -> None:
+        if not hasattr(self, "invite_role_select"):
+            return
+        cur = self.invite_role_select.currentData()
+        self.invite_role_select.clear()
+        for role in self.roles:
+            self.invite_role_select.addItem(str(role.get("display_name") or role.get("name")), int(role["id"]))
+        if cur is not None:
+            idx = self.invite_role_select.findData(int(cur))
+            if idx >= 0: self.invite_role_select.setCurrentIndex(idx)
+
+    def _can_create_invite(self) -> bool:
+        return auth.has_any_permission(self.current_user, self.db_or_path, "manage_staff", "create_staff") and auth.has_any_permission(self.current_user, self.db_or_path, "change_staff_roles", "manage_roles")
+
+    def create_invite_code(self) -> None:
+        if not self._can_create_invite():
+            show_warning(self, "Yetkisiz İşlem", "Yetki kodu oluşturmak için gerekli yetkiye sahip değilsiniz.")
+            return
+        try:
+            days = int(self.invite_expiry_select.currentData() or 0)
+            expires_at = None
+            if days > 0:
+                from datetime import datetime, timedelta
+                expires_at = (datetime.now() + timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+            row = auth.create_staff_invite(self.db_or_path, self.current_user, int(self.invite_role_select.currentData()), expires_at, int(self.invite_max_uses.value()))
+            self._last_invite_code = str(row.get("invite_code") or "")
+            self.invite_code_label.setText(f"Bu kodu şimdi kopyalayın. Güvenlik nedeniyle tekrar tam hali gösterilmeyecek.  Kod: {self._last_invite_code}")
+            self.invite_code_box.show()
+            self.refresh_invites()
+        except Exception as exc:
+            show_warning(self, "Yetki Kodu", str(exc))
+
+    def copy_invite_code(self) -> None:
+        if self._last_invite_code:
+            QApplication.clipboard().setText(self._last_invite_code)
+            show_information(self, "Yetki Kodu", "Yetki kodu panoya kopyalandı.")
+
+    def refresh_invites(self) -> None:
+        if not hasattr(self, "invite_table"):
+            return
+        self._populate_invite_role_select()
+        enabled = self._can_create_invite()
+        self.invite_role_select.setEnabled(enabled); self.invite_expiry_select.setEnabled(enabled)
+        self.invite_max_uses.setEnabled(enabled); self.create_invite_btn.setEnabled(enabled)
+        rows = auth.list_staff_invites(self.db_or_path) if enabled else []
+        self.invite_table.setRowCount(len(rows))
+        for r, row in enumerate(rows):
+            values = [
+                row.get("invite_code_hint") or "",
+                row.get("role_display_name") or row.get("role_name") or "",
+                row.get("status_text") or "",
+                f"{int(row.get('used_count') or 0)}/{int(row.get('max_uses') or 1)}",
+                row.get("created_by_full_name") or "Sistem Yöneticisi" if row.get("created_by_admin_id") else row.get("created_by_full_name") or "",
+                row.get("used_by_full_name") or "",
+                row.get("expires_at") or "Süresiz",
+                row.get("created_at") or "",
+            ]
+            for c, val in enumerate(values):
+                item = QTableWidgetItem(str(val)); item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+                self.invite_table.setItem(r, c, item)
+
     # ── Footer sync ───────────────────────────────────────────────────────────
     def _sync_footer(self) -> None:
         on_role = self.tabs.currentWidget() is self.role_tab
@@ -843,6 +949,8 @@ class StaffPermissionsDialog(QDialog):
         self.save_role_btn.setVisible(on_role)
         self.save_message.setVisible(False)
         self.close_btn.setVisible(not on_role)
+        if self.tabs.currentWidget() is getattr(self, "invite_tab", None):
+            self.refresh_invites()
 
     def _has(self, code: str) -> bool:
         return auth.has_permission(self.current_user, code, self.db_or_path)
@@ -854,8 +962,10 @@ class StaffPermissionsDialog(QDialog):
             key=lambda r: ROLE_ORDER.index(r["name"]) if r.get("name") in ROLE_ORDER else 99,
         )
         self._populate_role_select()
+        self._populate_invite_role_select()
         self.refresh_staff_table()
         self._populate_role_buttons()
+        self.refresh_invites()
         if self.active_role_id is None and self.roles:
             mgr = next((r for r in self.roles if r.get("name") == "manager"), self.roles[0])
             self.set_active_role(int(mgr["id"]))
