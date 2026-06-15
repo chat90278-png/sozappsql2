@@ -48,8 +48,14 @@ def ask_yes_no(
     default_yes: bool = False,
 ) -> bool:
     box = _message_box(parent, QMessageBox.Question, title, text, informative_text)
-    yes_btn = box.addButton("Evet", QMessageBox.YesRole)
-    no_btn = box.addButton("Hayır", QMessageBox.NoRole)
+    # Standard Yes/No buttons can be localized by the OS/Qt style as "Yes"/"No".
+    # Use custom Accept/Reject role buttons with explicit Turkish text so every
+    # confirmation dialog is consistent across platforms and styles.
+    yes_btn = box.addButton("Evet", QMessageBox.AcceptRole)
+    no_btn = box.addButton("Hayır", QMessageBox.RejectRole)
+    yes_btn.setText("Evet")
+    no_btn.setText("Hayır")
     box.setDefaultButton(yes_btn if default_yes else no_btn)
+    box.setEscapeButton(no_btn)
     box.exec()
     return box.clickedButton() == yes_btn

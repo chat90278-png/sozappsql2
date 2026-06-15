@@ -69,6 +69,7 @@ from src.ui.ozet import ContractSummaryDialog
 from src.ui.date_picker import build_date_input as _build_date_input
 from src.ui.kullanim_kilavuzu import UsageGuideDialog
 from src.ui.dialogs.platform_component_manager import PlatformComponentManagerDialog
+from src.ui.message_boxes import ask_yes_no
 
 from PySide6.QtCore import Qt, QDate, QObject, QThread, Signal, QTimer, QPoint, QSize, QEvent, QPropertyAnimation, QEasingCurve, QUrl
 from PySide6.QtGui import QFont, QFontMetrics, QColor, QPixmap, QIcon, QPainter, QAction, QCursor, QCloseEvent, QDesktopServices
@@ -664,6 +665,7 @@ COL_T_DATE = 5
 COL_REMAINING = 6
 COL_TAGS = 7
 COL_SUMMARY = 8
+PLATFORM_SELECTED_ROLE = Qt.UserRole + 100
 
 
 class PlatformListDelegate(QStyledItemDelegate):
@@ -696,7 +698,11 @@ class PlatformListDelegate(QStyledItemDelegate):
 
         # PySide6: option.state is StateFlag enum — use QStyle.StateFlag members
         state = option.state
-        is_selected = bool(state & QStyle.State_Selected)
+        # QListWidget'in native selection state'i tekli seçim/current item ile sınırlı
+        # kalabildiği için platform seçim mantığını ayrı bir item role'ünden okuyoruz.
+        # Böylece çoklu seçimde selected_platforms set'indeki her satır aynı aktif
+        # stili alır; focus/current satır tek başına selected gibi boyanmaz.
+        is_selected = bool(index.data(PLATFORM_SELECTED_ROLE))
         is_hover    = bool(state & QStyle.State_MouseOver)
 
         # Arka plan
@@ -3994,14 +4000,11 @@ class TagManagerDialog(StyledDialog):
         tag = next((t for t in self.tags if self._tag_key(t.name) == self.selected_tag_key), None)
         if not tag:
             return
-        ans = QMessageBox.question(
+        if not ask_yes_no(
             self,
             "Etiketi Sil",
             f"'{tag.name}' etiketi silinecek.\nBu etikete ait tüm atamalar da kaldırılır.\n\nDevam edilsin mi?",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No,
-        )
-        if ans != QMessageBox.Yes:
+        ):
             return
         self.op_hint.setText("Etiket siliniyor...")
         QApplication.processEvents()
@@ -4394,16 +4397,13 @@ class SystemDialog(StyledDialog):
                 shown = "\n".join(f"• {name}" for name in removed[:12])
                 if len(removed) > 12:
                     shown += f"\n• ... ve {len(removed) - 12} bileşen daha"
-                answer = QMessageBox.question(
+                if not ask_yes_no(
                     self,
                     "Bileşenler Silinecek",
                     "Aşağıdaki bileşenlerin onay kutusunu kaldırdınız. Güncelleme sonrası bu bileşenler "
                     "sistemden ve bu sisteme ait kabullerden silinecek; Excel'deki ilgili değer hücreleri boşaltılacak.\n\n"
                     f"{shown}\n\nOnaylıyor musunuz?",
-                    QMessageBox.Yes | QMessageBox.No,
-                    QMessageBox.No,
-                )
-                if answer != QMessageBox.Yes:
+                ):
                     return
         comps = {comp: old.get(comp, 0.0) for comp in self.inputs.keys() if comp in selected}
         if not comps:
@@ -6440,14 +6440,7 @@ class ContractWorkWindow(QDialog):
             "Bu işlem tüm sistemler ve kabuller ile birlikte Excel'den kalıcı olarak kaldırır.\n"
             "Devam etmek istiyor musunuz?"
         )
-        ans = QMessageBox.question(
-            self,
-            "Sözleşmeyi Sil",
-            msg,
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No,
-        )
-        if ans != QMessageBox.Yes:
+        if not ask_yes_no(self, "Sözleşmeyi Sil", msg):
             return
         worker = ContractSaveWorker(
             self.store.path,
@@ -7734,9 +7727,7 @@ class ContractWorkWindow(QDialog):
                 f'"{folder_name}" klasörü, alt klasörleri ve içindeki tüm belgeler STS dosyasından silinecek.\n'
                 "Bu işlem geri alınamaz."
             )
-            reply = QMessageBox.question(self, "Klasörü Sil", msg,
-                                         QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
-            if reply != QMessageBox.Yes:
+            if not ask_yes_no(self, "Klasörü Sil", msg):
                 return
             try:
                 if self.is_new_contract:
@@ -8004,12 +7995,10 @@ class ContractWorkWindow(QDialog):
             return
         self._begin_side_meta_modal_action()
         try:
-            reply = QMessageBox.question(
+            if not ask_yes_no(
                 self, "Dosyaları Sil",
                 f"{len(file_ids)} dosyayı silmek istediğinize emin misiniz?\nBu işlem geri alınamaz.",
-                QMessageBox.Yes | QMessageBox.No, QMessageBox.No
-            )
-            if reply != QMessageBox.Yes:
+            ):
                 return
             for fid in file_ids:
                 try:
@@ -8516,7 +8505,7 @@ class ContractWorkWindow(QDialog):
             return
         self._begin_side_meta_modal_action()
         try:
-            if QMessageBox.question(self, "Belgeyi Sil", "Belge STS dosyasından silinsin mi? Orijinal dosyaya dokunulmaz.") != QMessageBox.Yes:
+            if not ask_yes_no(self, "Belgeyi Sil", "Belge STS dosyasından silinsin mi? Orijinal dosyaya dokunulmaz."):
                 return
             try:
                 if self.is_new_contract:
@@ -9509,7 +9498,7 @@ class ContractWorkWindow(QDialog):
             return True
 
         names = "\n".join(f"• {sys_info.name}" for sys_info in missing_systems)
-        answer = QMessageBox.question(
+        if not ask_yes_no(
             self,
             "Kabul eklenmemiş sistem var",
             "Aşağıdaki sistemlere kabul eklemediniz:\n\n"
@@ -9517,10 +9506,8 @@ class ContractWorkWindow(QDialog):
             "Onaylarsanız bu sistemlerin içine Kabul 1 otomatik oluşturulacak ve "
             "sistemdeki tüm bileşen adetleri Kabul 1'e atanacaktır.\n\n"
             "Onaylamazsanız kabul eklemeden kaydetmeye izin verilmeyecektir.",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.Yes,
-        )
-        if answer != QMessageBox.Yes:
+            default_yes=True,
+        ):
             QMessageBox.warning(
                 self,
                 "Kabul gerekli",
@@ -9549,15 +9536,12 @@ class ContractWorkWindow(QDialog):
         """Kapat butonuna basıldığında değişiklik varsa onay ister."""
         current_key = self._context_key() if hasattr(self, "_context_cache") else ("", "", "")
         if self._is_dirty:
-            answer = QMessageBox.question(
+            if not ask_yes_no(
                 self,
                 "Değişiklikler Kaydedilmedi",
                 "Yaptığınız değişiklikler kaydedilmeyecektir.\n\n"
                 "Onaylıyor musunuz?",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No,
-            )
-            if answer != QMessageBox.Yes:
+            ):
                 return
         if hasattr(self, "_context_cache") and current_key in self._context_cache:
             ctx = self._context_cache.get(current_key) or {}
@@ -10667,10 +10651,13 @@ class MainWindow(QMainWindow):
                 else:
                     item.setData(Qt.CheckStateRole, None)
                     item.setFlags(flags & ~Qt.ItemIsUserCheckable)
-                item.setSelected(platform in self.selected_platforms)
+                is_selected = platform in self.selected_platforms
+                item.setData(PLATFORM_SELECTED_ROLE, is_selected)
+                item.setSelected(is_selected)
         finally:
             self._updating_platform_list = False
         count = len(self.selected_platforms)
+        self.platform_list.viewport().update()
         self.platform_selection_badge.setText(f"{count} seçili")
         self.platform_selection_badge.setVisible(count > 0)
         self.platform_info_label.setText(f"{count} platform · sağ tık ile düzenle")
@@ -10764,6 +10751,7 @@ class MainWindow(QMainWindow):
             for i in range(self.platform_list.count()):
                 item = self.platform_list.item(i)
                 item.setCheckState(Qt.Unchecked)
+                item.setData(PLATFORM_SELECTED_ROLE, False)
                 item.setSelected(False)
         finally:
             self._updating_platform_list = False
