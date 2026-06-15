@@ -106,6 +106,59 @@ class STSStore:
             return ", ".join(clean)
         return str(fallback or "").strip()
 
+    def list_staff_for_engineer_selection(self) -> List[dict]:
+        rows = self.db.conn.execute(
+            "SELECT id, full_name, device_name, role_id, is_active FROM staff WHERE COALESCE(is_active,1)=1 ORDER BY full_name COLLATE NOCASE"
+        ).fetchall()
+        return [
+            {"id": int(r[0]), "staff_id": int(r[0]), "full_name": str(r[1] or ""), "device_name": str(r[2] or ""), "role_id": r[3], "is_active": bool(r[4])}
+            for r in rows
+            if str(r[1] or "").strip()
+        ]
+
+    def get_contract_responsible_engineers(self, contract_id=None, platform=None, contract_no=None, contract_type="Ana Sözleşme") -> List[dict]:
+        cid = int(contract_id or 0)
+        if not cid and platform and contract_no:
+            cid = int(self._resolve_contract_id(str(platform or ""), str(contract_no or ""), str(contract_type or "Ana Sözleşme")) or 0)
+        if not cid:
+            return []
+        rows = self.db.conn.execute(
+            """
+            SELECT cre.staff_id, s.full_name, s.device_name, cre.sort_order, cre.is_primary
+            FROM contract_responsible_engineers cre
+            JOIN staff s ON s.id = cre.staff_id
+            WHERE cre.contract_id=?
+            ORDER BY cre.sort_order ASC, cre.is_primary DESC, s.full_name COLLATE NOCASE
+            """,
+            (cid,),
+        ).fetchall()
+        return [
+            {"staff_id": int(r[0]), "id": int(r[0]), "full_name": str(r[1] or ""), "device_name": str(r[2] or ""), "sort_order": int(r[3] or 0), "is_primary": bool(r[4])}
+            for r in rows
+        ]
+
+    def set_contract_responsible_engineers(self, contract_id: int, staff_ids: List[int]) -> None:
+        cid = int(contract_id or 0)
+        if not cid:
+            return
+        clean: List[int] = []
+        seen = set()
+        active_staff = {int(r[0]) for r in self.db.conn.execute("SELECT id FROM staff WHERE COALESCE(is_active,1)=1").fetchall()}
+        for raw in staff_ids or []:
+            try:
+                sid = int(raw or 0)
+            except Exception:
+                sid = 0
+            if sid and sid in active_staff and sid not in seen:
+                seen.add(sid)
+                clean.append(sid)
+        self.db.conn.execute("DELETE FROM contract_responsible_engineers WHERE contract_id=?", (cid,))
+        for order, sid in enumerate(clean):
+            self.db.conn.execute(
+                "INSERT INTO contract_responsible_engineers(contract_id, staff_id, sort_order, is_primary) VALUES(?,?,?,?)",
+                (cid, sid, order, 1 if order == 0 else 0),
+            )
+
 
     def _log(self, action: str, **kwargs):
         self.db.add_log(action=action, **kwargs)
@@ -1368,6 +1421,7 @@ class STSStore:
                 cid=cursor.lastrowid
             self._replace_contract_users(int(cid), users)
             self.set_contract_platforms(int(cid), selected_platform_ids or [platform_id], primary_platform_id=platform_id)
+            self.set_contract_responsible_engineers(int(cid), list(getattr(ci, "responsible_engineer_ids", []) or []))
 
             existing_systems = {str(item[1]): int(item[0]) for item in self.db.conn.execute("SELECT id,name FROM systems WHERE contract_id=? AND COALESCE(platform_id, ?) = ?", (cid, platform_id, platform_id))}
             desired_system_labels = {str(system.name) for system in (systems or [])}
@@ -1490,6 +1544,9 @@ class STSStore:
         active_name_row = self.db.conn.execute("SELECT name FROM platforms WHERE id=?", (active_platform_id,)).fetchone()
         active_platform_name = str((active_name_row[0] if active_name_row else r['platform']) or "")
         ci=ContractInfo(no=r['contract_no'],platform=active_platform_name,user=user_display,yi_yd=r['yi_yd'] or "Yİ",contract_type=r['contract_type'] or "",signature_date=r['signed_date'] or "",t0_date=r['t0_date'] or "",t0_months=int(r['t0_months'] or 0),completion_date=r['completion_date'] or "",status=r['status'] or "PLAN",note=r['note'] or "",acceptance_date=r['acceptance_date'] or "",entry_start_row=int(r['id']),id=int(r['id']),contract_id=int(r['id']),users=users, platform_id=active_platform_id or int(r['platform_id'] or 0), primary_platform_id=int(r['platform_id'] or 0), primary_platform=r['platform'] or '', platforms=platform_rows, platform_names=[x['platform_name'] for x in platform_rows], platform_ids=[int(x['platform_id']) for x in platform_rows])
+        responsible_engineers = self.get_contract_responsible_engineers(contract_id=int(r['id']))
+        setattr(ci, "responsible_engineers", responsible_engineers)
+        setattr(ci, "responsible_engineer_ids", [int(x["staff_id"]) for x in responsible_engineers])
         systems=[]; deliveries={}
         active_platform_id = active_platform_id or int(r['platform_id'] or 0)
         for s in self.db.conn.execute("SELECT * FROM systems WHERE contract_id=? AND COALESCE(platform_id, ?) = ? ORDER BY sort_order,id",(r['id'], active_platform_id, active_platform_id)):
