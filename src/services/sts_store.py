@@ -1395,8 +1395,18 @@ class STSStore:
         if not users:
             users = self._normalize_users([], getattr(ci, "user", ""))
         user_display = self._user_display(users, getattr(ci, "user", ""))
-        search_text = " ".join([str(ci.platform or ""), str(ci.no or ""), str(ctype or ""), str(ci.note or ""), user_display, " ".join(users)]).strip()
+        responsible_engineer_id = int(getattr(ci, "responsible_engineer_id", 0) or 0)
+        if not responsible_engineer_id:
+            responsible_ids = list(getattr(ci, "responsible_engineer_ids", []) or [])
+            responsible_engineer_id = int(responsible_ids[0] or 0) if responsible_ids else 0
+        responsible_engineer_name = str(getattr(ci, "responsible_engineer_name", "") or "").strip()
+        if responsible_engineer_id and not responsible_engineer_name:
+            row_name = self.db.conn.execute("SELECT full_name FROM staff WHERE id=?", (responsible_engineer_id,)).fetchone()
+            responsible_engineer_name = str(row_name[0] or "").strip() if row_name else ""
+        search_text = " ".join([str(ci.platform or ""), str(ci.no or ""), str(ctype or ""), str(ci.note or ""), user_display, " ".join(users), responsible_engineer_name]).strip()
         ci.user = user_display; ci.users = users
+        ci.responsible_engineer_id = responsible_engineer_id
+        ci.responsible_engineer_name = responsible_engineer_name
         row = None
         if int(getattr(ci, "entry_start_row", 0) or 0):
             row = self.db.conn.execute("SELECT id,status,note,completion_date,acceptance_date FROM contracts WHERE id=?", (int(getattr(ci, "entry_start_row", 0) or 0),)).fetchone()
@@ -1415,13 +1425,13 @@ class STSStore:
         with self.db.tx():
             if row:
                 cid=row[0]
-                self.db.conn.execute("UPDATE contracts SET yi_yd=?,status=?,signed_date=?,t0_date=?,t0_months=?,completion_date=?,acceptance_date=?,note=?,content=?,search_text=?,updated_at=? WHERE id=?",(ci.yi_yd,ci.status,ci.signature_date,ci.t0_date,int(ci.t0_months or 0),ci.completion_date,ci.acceptance_date,ci.note,ci.note,search_text,ts,cid))
+                self.db.conn.execute("UPDATE contracts SET yi_yd=?,status=?,signed_date=?,t0_date=?,t0_months=?,completion_date=?,acceptance_date=?,note=?,content=?,search_text=?,responsible_engineer_id=?,updated_at=? WHERE id=?",(ci.yi_yd,ci.status,ci.signature_date,ci.t0_date,int(ci.t0_months or 0),ci.completion_date,ci.acceptance_date,ci.note,ci.note,search_text,responsible_engineer_id or None,ts,cid))
             else:
-                cursor = self.db.conn.execute("INSERT INTO contracts(platform_id,contract_no,yi_yd,contract_type,type_display,link_type,status,signed_date,t0_date,t0_months,completion_date,acceptance_date,content,note,is_main,search_text,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(platform_id,ci.no,ci.yi_yd,ctype,ctype,"",ci.status,ci.signature_date,ci.t0_date,int(ci.t0_months or 0),ci.completion_date,ci.acceptance_date,ci.note,ci.note,1 if self._normalize_label(ctype)==self._normalize_label('Ana Sözleşme') else 0,search_text,ts,ts))
+                cursor = self.db.conn.execute("INSERT INTO contracts(platform_id,contract_no,yi_yd,contract_type,type_display,link_type,status,signed_date,t0_date,t0_months,completion_date,acceptance_date,content,note,is_main,search_text,responsible_engineer_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(platform_id,ci.no,ci.yi_yd,ctype,ctype,"",ci.status,ci.signature_date,ci.t0_date,int(ci.t0_months or 0),ci.completion_date,ci.acceptance_date,ci.note,ci.note,1 if self._normalize_label(ctype)==self._normalize_label('Ana Sözleşme') else 0,search_text,responsible_engineer_id or None,ts,ts))
                 cid=cursor.lastrowid
             self._replace_contract_users(int(cid), users)
             self.set_contract_platforms(int(cid), selected_platform_ids or [platform_id], primary_platform_id=platform_id)
-            self.set_contract_responsible_engineers(int(cid), list(getattr(ci, "responsible_engineer_ids", []) or []))
+            self.set_contract_responsible_engineers(int(cid), [responsible_engineer_id] if responsible_engineer_id else [])
 
             existing_systems = {str(item[1]): int(item[0]) for item in self.db.conn.execute("SELECT id,name FROM systems WHERE contract_id=? AND COALESCE(platform_id, ?) = ?", (cid, platform_id, platform_id))}
             desired_system_labels = {str(system.name) for system in (systems or [])}
@@ -1543,10 +1553,20 @@ class STSStore:
         platform_rows = self.get_contract_platforms(int(r['id']))
         active_name_row = self.db.conn.execute("SELECT name FROM platforms WHERE id=?", (active_platform_id,)).fetchone()
         active_platform_name = str((active_name_row[0] if active_name_row else r['platform']) or "")
-        ci=ContractInfo(no=r['contract_no'],platform=active_platform_name,user=user_display,yi_yd=r['yi_yd'] or "Yİ",contract_type=r['contract_type'] or "",signature_date=r['signed_date'] or "",t0_date=r['t0_date'] or "",t0_months=int(r['t0_months'] or 0),completion_date=r['completion_date'] or "",status=r['status'] or "PLAN",note=r['note'] or "",acceptance_date=r['acceptance_date'] or "",entry_start_row=int(r['id']),id=int(r['id']),contract_id=int(r['id']),users=users, platform_id=active_platform_id or int(r['platform_id'] or 0), primary_platform_id=int(r['platform_id'] or 0), primary_platform=r['platform'] or '', platforms=platform_rows, platform_names=[x['platform_name'] for x in platform_rows], platform_ids=[int(x['platform_id']) for x in platform_rows])
-        responsible_engineers = self.get_contract_responsible_engineers(contract_id=int(r['id']))
-        setattr(ci, "responsible_engineers", responsible_engineers)
-        setattr(ci, "responsible_engineer_ids", [int(x["staff_id"]) for x in responsible_engineers])
+        responsible_engineer_id = int(r['responsible_engineer_id'] or 0) if 'responsible_engineer_id' in r.keys() else 0
+        responsible_engineer_name = ""
+        if responsible_engineer_id:
+            staff_row = self.db.conn.execute("SELECT full_name FROM staff WHERE id=?", (responsible_engineer_id,)).fetchone()
+            responsible_engineer_name = str(staff_row[0] or "").strip() if staff_row else ""
+        ci=ContractInfo(no=r['contract_no'],platform=active_platform_name,user=user_display,yi_yd=r['yi_yd'] or "Yİ",contract_type=r['contract_type'] or "",signature_date=r['signed_date'] or "",t0_date=r['t0_date'] or "",t0_months=int(r['t0_months'] or 0),completion_date=r['completion_date'] or "",status=r['status'] or "PLAN",note=r['note'] or "",acceptance_date=r['acceptance_date'] or "",entry_start_row=int(r['id']),id=int(r['id']),contract_id=int(r['id']),users=users, platform_id=active_platform_id or int(r['platform_id'] or 0), primary_platform_id=int(r['platform_id'] or 0), primary_platform=r['platform'] or '', platforms=platform_rows, platform_names=[x['platform_name'] for x in platform_rows], platform_ids=[int(x['platform_id']) for x in platform_rows], responsible_engineer_id=responsible_engineer_id, responsible_engineer_name=responsible_engineer_name)
+        responsible_engineers = ([{"staff_id": responsible_engineer_id, "id": responsible_engineer_id, "full_name": responsible_engineer_name}] if responsible_engineer_id else self.get_contract_responsible_engineers(contract_id=int(r['id'])))
+        if responsible_engineers and not responsible_engineer_id:
+            responsible_engineer_id = int(responsible_engineers[0]["staff_id"])
+            responsible_engineer_name = str(responsible_engineers[0].get("full_name") or "")
+            ci.responsible_engineer_id = responsible_engineer_id
+            ci.responsible_engineer_name = responsible_engineer_name
+        setattr(ci, "responsible_engineers", responsible_engineers[:1])
+        setattr(ci, "responsible_engineer_ids", [int(x["staff_id"]) for x in responsible_engineers[:1]])
         systems=[]; deliveries={}
         active_platform_id = active_platform_id or int(r['platform_id'] or 0)
         for s in self.db.conn.execute("SELECT * FROM systems WHERE contract_id=? AND COALESCE(platform_id, ?) = ? ORDER BY sort_order,id",(r['id'], active_platform_id, active_platform_id)):

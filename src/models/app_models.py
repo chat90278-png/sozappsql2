@@ -41,6 +41,8 @@ class ContractInfo:
     platforms: list[dict] = field(default_factory=list)
     platform_names: list[str] = field(default_factory=list)
     platform_ids: list[int] = field(default_factory=list)
+    responsible_engineer_id: int = 0
+    responsible_engineer_name: str = ""
 
 
 @dataclass

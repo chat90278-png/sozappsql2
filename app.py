@@ -1115,8 +1115,8 @@ class StyledDialog(QDialog):
         label.setText(f"{icons.get(kind, 'i')}  {visible_text}")
         label.setToolTip(text)
         label.setStyleSheet(
-            f"QLabel#footerStatus{{color:{fg};background:{bg};border:1px solid {border};"
-            "border-radius:7px;padding:6px 10px;font-size:12px;font-weight:700;}}"
+            f"color:{fg};background-color:{bg};border:1px solid {border};"
+            "border-radius:7px;padding:6px 10px;font-size:12px;font-weight:700;"
         )
         label.show()
 
@@ -2283,13 +2283,22 @@ class MultiStaffSelectWidget(MultiUserSelectWidget):
             self._staff_name_by_id[sid] = name
         self.set_available_users(names)
 
+    def set_users(self, users: List[str]):
+        super().set_users(list(users or [])[:1])
+
     def set_selected_staff_ids(self, staff_ids: List[int]):
         names: List[str] = []
         for sid in staff_ids or []:
             name = self._staff_name_by_id.get(int(sid or 0))
             if name:
                 names.append(name)
+                break
         self.set_users(names)
+
+    def _on_dropdown_changed(self, names: List[str]):
+        self._selected = list(names or [])[-1:]
+        self._render_pills()
+        self.changed.emit()
 
     def selected_staff_ids(self) -> List[int]:
         ids: List[int] = []
@@ -2299,7 +2308,12 @@ class MultiStaffSelectWidget(MultiUserSelectWidget):
             if sid and sid not in seen:
                 seen.add(sid)
                 ids.append(sid)
+                break
         return ids
+
+    def selected_staff_id(self) -> int:
+        ids = self.selected_staff_ids()
+        return int(ids[0]) if ids else 0
 
 
 class MultiPlatformSelectWidget(MultiUserSelectWidget):
@@ -2430,9 +2444,7 @@ class PlatformTabsWidget(QWidget):
 
     activePlatformChanged = Signal(int)
 
-    RAIL_HEIGHT = 30
-    SCROLL_HEIGHT = 28
-    BUTTON_HEIGHT = 24
+    DEFAULT_RAIL_HEIGHT = 30
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -2442,7 +2454,8 @@ class PlatformTabsWidget(QWidget):
         self._min_scroll_width = 260
         self._max_width = 340
         self._buttons: Dict[int, QPushButton] = {}
-        self.setFixedHeight(self.RAIL_HEIGHT)
+        self._rail_height = self.DEFAULT_RAIL_HEIGHT
+        self.setFixedHeight(self._rail_height)
         self.setSizePolicy(QSizePolicy.MinimumExpanding, QSizePolicy.Fixed)
 
         outer = QHBoxLayout(self)
@@ -2451,7 +2464,7 @@ class PlatformTabsWidget(QWidget):
 
         self._rail = QFrame(self)
         self._rail.setObjectName("PlatformTabRail")
-        self._rail.setFixedHeight(self.RAIL_HEIGHT)
+        self._rail.setFixedHeight(self._rail_height)
         self._rail.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         rail_lay = QHBoxLayout(self._rail)
         rail_lay.setContentsMargins(3, 1, 3, 1)
@@ -2461,7 +2474,7 @@ class PlatformTabsWidget(QWidget):
         self._scroll.setObjectName("PlatformTabScroll")
         self._scroll.setWidgetResizable(False)
         self._scroll.setFrameShape(QFrame.NoFrame)
-        self._scroll.setFixedHeight(self.SCROLL_HEIGHT)
+        self._scroll.setFixedHeight(self._rail_height)
         self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
@@ -2473,7 +2486,7 @@ class PlatformTabsWidget(QWidget):
         self._host.setObjectName("PlatformTabScrollContent")
         self._host.setStyleSheet("QWidget#PlatformTabScrollContent{background:transparent;border:0;}")
         self._host.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-        self._host.setFixedHeight(26)
+        self._host.setFixedHeight(self._rail_height)
         self._lay = QHBoxLayout(self._host)
         self._lay.setContentsMargins(2, 1, 2, 1)
         self._lay.setSpacing(6)
@@ -2548,7 +2561,7 @@ class PlatformTabsWidget(QWidget):
             btn.setProperty("platform_id", pid)
             btn.setCheckable(True)
             btn.setCursor(Qt.PointingHandCursor)
-            btn.setFixedHeight(self.BUTTON_HEIGHT)
+            # Height is derived from the polished button sizeHint; do not force it here.
             chip_width = min(150, max(74 if single else 70, metrics.horizontalAdvance(name) + (32 if single else 30)))
             btn.setFixedWidth(chip_width)
             btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
@@ -2587,15 +2600,17 @@ class PlatformTabsWidget(QWidget):
                 }
             """)
             btn.clicked.connect(lambda _=False, platform_id=pid: self._set_active(platform_id))
+            btn.ensurePolished()
             self._lay.addWidget(btn, 0, Qt.AlignVCenter)
             self._buttons[pid] = btn
             total_width += chip_width
+        self._sync_measured_heights()
         self._refresh_button_states()
         if self._platforms:
             total_width += self._lay.spacing() * max(0, len(self._platforms) - 1)
         left, _top, right, _bottom = margins
         total_width += left + right
-        self._host.setFixedSize(max(1, total_width), 26)
+        self._host.setFixedSize(max(1, total_width), self._host_height())
         self._content_width = max(70, total_width)
         fixed_width = min(self._content_width, self._max_width)
         if len(self._platforms) >= 4:
@@ -2636,13 +2651,29 @@ class PlatformTabsWidget(QWidget):
         width = min(max(70, self._content_width), self._max_width)
         if len(self._platforms) >= 4:
             width = max(self._min_scroll_width, width)
-        return QSize(width, self.RAIL_HEIGHT)
+        return QSize(width, self._rail_height)
 
     def minimumSizeHint(self) -> QSize:
         width = min(max(70, self._content_width), self._max_width)
         if len(self._platforms) >= 4:
             width = min(width, self._min_scroll_width)
-        return QSize(width, self.RAIL_HEIGHT)
+        return QSize(width, self._rail_height)
+
+    def _host_height(self) -> int:
+        left, top, right, bottom = self._lay.getContentsMargins()
+        button_height = max((btn.sizeHint().height() for btn in self._buttons.values()), default=0)
+        return max(1, button_height + top + bottom)
+
+    def _sync_measured_heights(self) -> None:
+        host_height = self._host_height()
+        _left, rail_top, _right, rail_bottom = self._rail.layout().getContentsMargins()
+        rail_frame = self._rail.frameWidth() * 2
+        rail_height = max(self.DEFAULT_RAIL_HEIGHT, host_height + rail_top + rail_bottom + rail_frame)
+        self._rail_height = rail_height
+        self._host.setFixedHeight(host_height)
+        self._scroll.setFixedHeight(host_height)
+        self._rail.setFixedHeight(rail_height)
+        self.setFixedHeight(rail_height)
 
     def _set_active(self, platform_id: int):
         platform_id = int(platform_id or 0)
@@ -2659,26 +2690,18 @@ class HeaderUserPopup(QFrame):
     def __init__(self, parent=None):
         super().__init__(parent, Qt.Popup | Qt.FramelessWindowHint)
         self.setObjectName("HeaderUserPopup")
-        self.setAttribute(Qt.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WA_ShowWithoutActivating, True)
         self.setMouseTracking(True)
-        shadow = QGraphicsDropShadowEffect(self)
-        shadow.setBlurRadius(22)
-        shadow.setOffset(0, 8)
-        shadow.setColor(QColor(0, 0, 0, 95))
-        self.setGraphicsEffect(shadow)
-        root = QVBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(0)
-        card = QFrame(self)
-        card.setObjectName("HeaderUserPopupCard")
-        root.addWidget(card)
-        self._lay = QVBoxLayout(card)
+        self.setMinimumWidth(220)
+        self.setMinimumHeight(80)
+        self._users: List[str] = []
+        self._lay = QVBoxLayout(self)
         self._lay.setContentsMargins(12, 10, 12, 12)
         self._lay.setSpacing(8)
         self.setStyleSheet("""
-            QFrame#HeaderUserPopupCard {
-                background: rgba(7, 28, 58, 0.96);
-                border: 1px solid rgba(105, 170, 240, 0.45);
+            QFrame#HeaderUserPopup {
+                background-color: #071C3A;
+                border: 1px solid #2D6EB8;
                 border-radius: 10px;
             }
             QLabel#HeaderUserPopupTitle {
@@ -2687,7 +2710,6 @@ class HeaderUserPopup(QFrame):
                 border: 0;
                 font-size: 10px;
                 font-weight: 900;
-                letter-spacing: 0.8px;
             }
             QLabel#HeaderUserPopupName {
                 color: #ffffff;
@@ -2698,8 +2720,8 @@ class HeaderUserPopup(QFrame):
             }
             QLabel#HeaderUserPopupAvatar {
                 color: #eaf5ff;
-                background: rgba(47, 125, 255, 0.34);
-                border: 1px solid rgba(150, 211, 255, 0.42);
+                background-color: #2F7DFF;
+                border: 1px solid #96D3FF;
                 border-radius: 11px;
                 font-size: 9px;
                 font-weight: 900;
@@ -2707,6 +2729,10 @@ class HeaderUserPopup(QFrame):
         """)
 
     def set_users(self, users: List[str]) -> None:
+        clean_users = [str(u).strip() for u in users if str(u).strip()]
+        if clean_users == self._users and self._lay.count():
+            return
+        self._users = clean_users
         while self._lay.count():
             item = self._lay.takeAt(0)
             widget = item.widget()
@@ -2716,7 +2742,7 @@ class HeaderUserPopup(QFrame):
         title = QLabel("SÖZLEŞME SAHİPLERİ")
         title.setObjectName("HeaderUserPopupTitle")
         self._lay.addWidget(title)
-        for name in users:
+        for name in self._users:
             row = QWidget(self)
             row.setMouseTracking(True)
             lay = QHBoxLayout(row)
@@ -2801,9 +2827,7 @@ class ContractDialog(StyledDialog):
         self.yi_yd = QLineEdit(); self.yi_yd.setReadOnly(True); self.yi_yd.setText("Yİ")
         self.responsible_engineers = MultiStaffSelectWidget(self)
         self.responsible_engineers.set_staff_options(self.staff_records)
-        current_staff_id = int((self.current_staff or {}).get("id") or 0)
-        if current_staff_id:
-            self.responsible_engineers.set_selected_staff_ids([current_staff_id])
+        # Sorumlu mühendis sözleşme seviyesinde ayrı ve opsiyonel bir alandır; varsayılan seçim yapılmaz.
         self.ctype = QComboBox(); self.ctype.addItems(["Ana Sözleşme"])
         self.sd_code = QLineEdit(); self.sd_code.setPlaceholderText("SD-1"); self.sd_code.setEnabled(False)
         self.sig, self.sig_wrap = build_date_input(self, events_provider=self.date_picker_events)
@@ -3086,17 +3110,7 @@ class ContractDialog(StyledDialog):
         return self.platform.selected_platform_ids() if hasattr(self.platform, "selected_platform_ids") else []
 
     def _confirm_empty_responsible_engineer(self) -> bool:
-        if self.responsible_engineers.selected_staff_ids():
-            return True
-        box = QMessageBox(self)
-        box.setIcon(QMessageBox.Question)
-        box.setWindowTitle("Sorumlu Mühendis")
-        box.setText("Sorumlu mühendis seçilmedi. Devam etmek istiyor musunuz?")
-        yes_btn = box.addButton("Evet", QMessageBox.YesRole)
-        no_btn = box.addButton("Hayır", QMessageBox.NoRole)
-        box.setDefaultButton(no_btn)
-        box.exec()
-        return box.clickedButton() is yes_btn
+        return True
 
     def save(self):
         if not self.no.text().strip():
@@ -3191,11 +3205,14 @@ class ContractDialog(StyledDialog):
             platform_names=self.platform.selected_platform_names(),
             platform_ids=self.platform.selected_platform_ids(),
         )
-        setattr(self.result, "responsible_engineer_ids", self.responsible_engineers.selected_staff_ids())
+        responsible_id = self.responsible_engineers.selected_staff_id()
+        responsible_name = self.responsible_engineers._staff_name_by_id.get(responsible_id, "") if responsible_id else ""
+        self.result.responsible_engineer_id = responsible_id
+        self.result.responsible_engineer_name = responsible_name
+        setattr(self.result, "responsible_engineer_ids", [responsible_id] if responsible_id else [])
         setattr(self.result, "responsible_engineers", [
-            {"staff_id": sid, "full_name": self.responsible_engineers._staff_name_by_id.get(sid, "")}
-            for sid in self.responsible_engineers.selected_staff_ids()
-        ])
+            {"staff_id": responsible_id, "full_name": responsible_name}
+        ] if responsible_id else [])
         self.accept()
 
 
@@ -3313,10 +3330,12 @@ class ContractEditDialog(StyledDialog):
 
         self.responsible_engineers = MultiStaffSelectWidget(self)
         self.responsible_engineers.set_staff_options(self.staff_records)
-        responsible_ids = [int(x.get("staff_id") or x.get("id") or 0) for x in list(getattr(self.ci, "responsible_engineers", []) or []) if int(x.get("staff_id") or x.get("id") or 0)]
+        responsible_ids = [int(getattr(self.ci, "responsible_engineer_id", 0) or 0)]
+        if not responsible_ids[0]:
+            responsible_ids = [int(x.get("staff_id") or x.get("id") or 0) for x in list(getattr(self.ci, "responsible_engineers", []) or []) if int(x.get("staff_id") or x.get("id") or 0)]
         if not responsible_ids:
             responsible_ids = [int(x or 0) for x in list(getattr(self.ci, "responsible_engineer_ids", []) or []) if int(x or 0)]
-        self.responsible_engineers.set_selected_staff_ids(responsible_ids)
+        self.responsible_engineers.set_selected_staff_ids(responsible_ids[:1])
 
         self.sig, self.sig_wrap = build_date_input(self, events_provider=self.date_picker_events)
         self.sig.setText(str(self.ci.signature_date or ""))
@@ -3575,17 +3594,7 @@ class ContractEditDialog(StyledDialog):
         return False
 
     def _confirm_empty_responsible_engineer(self) -> bool:
-        if self.responsible_engineers.selected_staff_ids():
-            return True
-        box = QMessageBox(self)
-        box.setIcon(QMessageBox.Question)
-        box.setWindowTitle("Sorumlu Mühendis")
-        box.setText("Sorumlu mühendis seçilmedi. Devam etmek istiyor musunuz?")
-        yes_btn = box.addButton("Evet", QMessageBox.YesRole)
-        no_btn = box.addButton("Hayır", QMessageBox.NoRole)
-        box.setDefaultButton(no_btn)
-        box.exec()
-        return box.clickedButton() is yes_btn
+        return True
 
     def save(self):
         new_no_text = self._no_lbl.text().strip()
@@ -3687,11 +3696,14 @@ class ContractEditDialog(StyledDialog):
         setattr(new_ci, "platforms", [{"platform_id": pid, "platform_name": name} for pid, name in zip(selected_platform_ids, selected_platforms)])
         setattr(new_ci, "platform_names", selected_platforms)
         setattr(new_ci, "platform_ids", selected_platform_ids)
-        setattr(new_ci, "responsible_engineer_ids", self.responsible_engineers.selected_staff_ids())
+        responsible_id = self.responsible_engineers.selected_staff_id()
+        responsible_name = self.responsible_engineers._staff_name_by_id.get(responsible_id, "") if responsible_id else ""
+        new_ci.responsible_engineer_id = responsible_id
+        new_ci.responsible_engineer_name = responsible_name
+        setattr(new_ci, "responsible_engineer_ids", [responsible_id] if responsible_id else [])
         setattr(new_ci, "responsible_engineers", [
-            {"staff_id": sid, "full_name": self.responsible_engineers._staff_name_by_id.get(sid, "")}
-            for sid in self.responsible_engineers.selected_staff_ids()
-        ])
+            {"staff_id": responsible_id, "full_name": responsible_name}
+        ] if responsible_id else [])
         self.result = new_ci
         self.accept()
 
@@ -4685,20 +4697,8 @@ class MultiSystemDialog(StyledDialog):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        title_row = QHBoxLayout()
-        title_row.setContentsMargins(16, 12, 16, 10)
-        title = QLabel("Çoklu Sistem Ekle")
-        title.setObjectName("multiTitle")
-        title_row.addWidget(title, 1)
-        close_btn = QPushButton("×")
-        close_btn.setObjectName("secondary")
-        close_btn.setFixedSize(30, 28)
-        close_btn.clicked.connect(self.reject)
-        title_row.addWidget(close_btn, 0)
-        root.addLayout(title_row)
-
         body = QHBoxLayout()
-        body.setContentsMargins(16, 10, 16, 12)
+        body.setContentsMargins(16, 12, 16, 12)
         body.setSpacing(14)
         root.addLayout(body, 1)
 
@@ -5967,6 +5967,12 @@ class ContractWorkWindow(QDialog):
             return wrap
 
         user_text, user_tip = compact_users(self.ci.user, list(getattr(self.ci, "users", []) or []))
+        responsible_name = str(getattr(self.ci, "responsible_engineer_name", "") or "").strip()
+        if not responsible_name:
+            responsible_items = list(getattr(self.ci, "responsible_engineers", []) or [])
+            if responsible_items:
+                responsible_name = str(responsible_items[0].get("full_name") or responsible_items[0].get("name") or "").strip()
+        responsible_text = responsible_name or "-"
         self.user_tooltip_text = user_tip
         self.user_popup_users = [u.strip() for u in user_tip.splitlines() if u.strip()]
         user_svg = b"""<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' width='16' height='16'>
@@ -5984,9 +5990,10 @@ class ContractWorkWindow(QDialog):
         cells = [
             (*meta_cell("no", "Sözleşme No", self.ci.no, min_w=122, max_w=210), 17),
             (*meta_cell("platform", "Platform", "", min_w=260, max_w=340, value_widget=self.platform_tabs_widget), 0),
-            (*meta_cell("type", "Tür", self.ci.contract_type, min_w=112, max_w=190), 16),
-            (*meta_cell("user", "Kullanıcı", user_text, min_w=150, max_w=250, value_widget=inline_icon_text(user_text, user_svg, "user", user_tip), tooltip=user_tip), 21),
-            (*meta_cell("status", "Durum", "", min_w=126, max_w=190, value_widget=status_widget(self.ci.status or "Başlanmadı")), 16),
+            (*meta_cell("type", "Tür", self.ci.contract_type, min_w=96, max_w=160), 13),
+            (*meta_cell("responsible_engineer", "Sorumlu Mühendis", responsible_text, min_w=138, max_w=220, tooltip=responsible_name), 17),
+            (*meta_cell("user", "Kullanıcı", user_text, min_w=140, max_w=230, value_widget=inline_icon_text(user_text, user_svg, "user", user_tip), tooltip=user_tip), 18),
+            (*meta_cell("status", "Durum", "", min_w=112, max_w=170, value_widget=status_widget(self.ci.status or "Başlanmadı")), 13),
         ]
         if user_tip and self.meta_values.get("user"):
             self.meta_values["user"].setToolTip(user_tip)
@@ -6321,6 +6328,9 @@ class ContractWorkWindow(QDialog):
     def _register_user_tooltip_widget(self, widget):
         if not isinstance(widget, QWidget):
             return
+        anchor = getattr(self, "user_summary_container", None)
+        if isinstance(anchor, QWidget) and widget is not anchor:
+            return
         widget.installEventFilter(self)
         widget.setMouseTracking(True)
         self._user_tooltip_widgets.add(widget)
@@ -6336,19 +6346,26 @@ class ContractWorkWindow(QDialog):
             return
         popup = getattr(self, "_user_popup", None)
         if not isinstance(popup, HeaderUserPopup) or not qt_obj_alive(popup):
-            popup = HeaderUserPopup(self)
+            popup = HeaderUserPopup(None)
             popup.installEventFilter(self)
             popup.setMouseTracking(True)
             self._user_popup = popup
         popup.set_users(users)
+        popup.adjustSize()
+        hint = popup.sizeHint().expandedTo(QSize(220, 80))
+        popup.resize(hint)
         pos = anchor.mapToGlobal(QPoint(0, anchor.height() + 6))
         screen = QApplication.screenAt(pos) or QApplication.primaryScreen()
         if screen:
             available = screen.availableGeometry()
-            if pos.x() + popup.sizeHint().width() > available.right():
-                pos.setX(max(available.left(), available.right() - popup.sizeHint().width() - 8))
-            if pos.y() + popup.sizeHint().height() > available.bottom():
-                pos.setY(max(available.top(), anchor.mapToGlobal(QPoint(0, -popup.sizeHint().height() - 6)).y()))
+            if pos.x() + popup.width() > available.right():
+                pos.setX(max(available.left(), available.right() - popup.width() - 8))
+            if pos.y() + popup.height() > available.bottom():
+                pos.setY(max(available.top(), anchor.mapToGlobal(QPoint(0, -popup.height() - 6)).y()))
+        if popup.isVisible():
+            if popup.pos() != pos:
+                popup.move(pos)
+            return
         popup.move(pos)
         popup.show()
         popup.raise_()
@@ -6363,11 +6380,11 @@ class ContractWorkWindow(QDialog):
         pos = QCursor.pos()
         if popup.geometry().contains(pos):
             return
-        for widget in list(getattr(self, "_user_tooltip_widgets", set()) or []):
-            if isinstance(widget, QWidget) and qt_obj_alive(widget):
-                rect = widget.rect()
-                if rect.isValid() and rect.contains(widget.mapFromGlobal(pos)):
-                    return
+        anchor = getattr(self, "user_summary_container", None)
+        if isinstance(anchor, QWidget) and qt_obj_alive(anchor):
+            rect = anchor.rect()
+            if rect.isValid() and rect.contains(anchor.mapFromGlobal(pos)):
+                return
         popup.hide()
 
     def _hide_user_tooltip_now(self):
@@ -6477,6 +6494,7 @@ class ContractWorkWindow(QDialog):
         mapping = {
             "no": self.ci.no,
             "type": self.ci.contract_type,
+            "responsible_engineer": str(getattr(self.ci, "responsible_engineer_name", "") or "-").strip() or "-",
             "user": user_text,
             "status": self.ci.status or "Başlanmadı",
         }
@@ -9200,6 +9218,8 @@ class ContractWorkWindow(QDialog):
             sd_anchor_end_row=int((main_info or {}).get("block_end") or (main_info or {}).get("row") or 0),
             sd_anchor_platform=platform if main_info else "",
             sd_anchor_no=no if main_info else "",
+            responsible_engineer_id=int(getattr(source_ci, "responsible_engineer_id", 0) or 0),
+            responsible_engineer_name=str(getattr(source_ci, "responsible_engineer_name", "") or ""),
         )
         dlg = ContractEditDialog(
             self.store,
