@@ -223,8 +223,8 @@ class _TreeRow(QFrame):
             self.setCursor(Qt.PointingHandCursor)
 
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(indent, 2, 6, 2)
-        lay.setSpacing(5)
+        lay.setContentsMargins(indent, 4, 8, 4)
+        lay.setSpacing(6)
 
         if has_children:
             self._chev = QLabel("▶")
@@ -311,8 +311,8 @@ class _CollapsibleSection(QWidget):
 
 class _SideTreePanel(QWidget):
     """
-    Sol panel — Platform > Sözleşme > SD/Kabul > Sistem ağacı.
-    Stat kartlarına tıklanınca filtreler, tekrar tıklayınca kalkar.
+    Sol panel — Platform > Sözleşme > Sistem (veya sadece Sözleşme).
+    Mod: 'sistem' veya 'sozlesme'
     """
 
     def __init__(self, events: List[dict], year: int, month: int,
@@ -324,9 +324,10 @@ class _SideTreePanel(QWidget):
         self._month1 = month + 1
         self._detail_handler = detail_handler
         self._active_filter: Optional[str] = None
-        self._sections: List[tuple] = []  # (row, section) pairs
-        self.setObjectName("detailSideBg")
-        self.setFixedWidth(300)
+        self._view_mode = "sistem"  # "sistem" veya "sozlesme"
+        self.setFixedWidth(320)
+        self.setAutoFillBackground(True)
+        self.setStyleSheet("QWidget{background:#f8fafc;}")
         self._build()
 
     def _build(self):
@@ -334,59 +335,68 @@ class _SideTreePanel(QWidget):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
-        # Başlık
+        # ── Üst kısım: gradient header ───────────────────────────────────
         hdr = QWidget()
-        hdr.setObjectName("detailSideBg")
+        hdr.setStyleSheet(
+            "QWidget{"
+            "background: qlineargradient(x1:0,y1:0,x2:1,y2:1,"
+            "stop:0 #1e293b, stop:1 #0f172a);"
+            "}"
+        )
+        hdr.setFixedHeight(70)
         hl = QVBoxLayout(hdr)
-        hl.setContentsMargins(16, 14, 16, 8)
-        hl.setSpacing(3)
-        kicker = QLabel(f"{self._year} / {TR_MONTHS[self._month].upper()}")
+        hl.setContentsMargins(16, 0, 16, 0)
+        hl.setSpacing(1)
+        hl.setAlignment(Qt.AlignVCenter)
+        kicker = QLabel(f"{TR_MONTHS[self._month].upper()} {self._year}")
         kicker.setStyleSheet(
-            "color:#64748b; font-size:10px; font-weight:900; background:transparent;"
+            "color:rgba(148,163,184,0.9); font-size:10px; font-weight:700;"
+            "letter-spacing:.1em; background:transparent;"
         )
         hl.addWidget(kicker)
         title = QLabel("Kayıt Paneli")
         title.setStyleSheet(
-            "color:#0f172a; font-size:17px; font-weight:900; background:transparent;"
+            "color:#ffffff; font-size:17px; font-weight:900; background:transparent;"
         )
         hl.addWidget(title)
         outer.addWidget(hdr)
 
-        # Stat kartları
+        # ── Stat kartları ─────────────────────────────────────────────────
         stats_w = QWidget()
-        stats_w.setObjectName("detailSideBg")
+        stats_w.setStyleSheet("QWidget{background:#f8fafc;}")
         sg = QGridLayout(stats_w)
-        sg.setContentsMargins(10, 4, 10, 6)
-        sg.setSpacing(5)
-        self._stat_btns: Dict[str, QFrame] = {}
+        sg.setContentsMargins(10, 10, 10, 6)
+        sg.setSpacing(6)
+        self._stat_btns: Dict[str, tuple] = {}
         self._stat_nums: Dict[str, QLabel] = {}
         items = [
-            ("geciken", "Geciken", "#fef2f2", "#a32d2d", "#e1473f"),
-            ("kritik",  "60 gün",  "#fffbeb", "#854f0b", "#e8b53f"),
-            ("tamamlandi","Teslim","#eaf3de", "#047857", "#39a96b"),
-            (None,      "Toplam",  "#f8fafc", "#374151", "#94a3b8"),
+            ("geciken",    "Geciken", "#fef2f2", "#dc2626", "#e1473f"),
+            ("kritik",     "60 gün",  "#fffbeb", "#d97706", "#e8b53f"),
+            ("tamamlandi", "Teslim",  "#f0fdf4", "#16a34a", "#39a96b"),
+            (None,         "Toplam",  "#f8fafc", "#475569", "#94a3b8"),
         ]
         for i, (key, lbl, bg, fg, border) in enumerate(items):
             card = QFrame()
-            card.setObjectName(f"statCard_{key or 'total'}")
             card.setStyleSheet(
                 f"QFrame{{background:{bg}; border:1.5px solid transparent;"
-                f"border-radius:8px; cursor:pointer;}}"
+                f"border-radius:10px;}}"
             )
-            card.setCursor(Qt.PointingHandCursor if key else Qt.ArrowCursor)
+            if key:
+                card.setCursor(Qt.PointingHandCursor)
             cl = QVBoxLayout(card)
-            cl.setContentsMargins(6, 5, 6, 5)
-            cl.setSpacing(0)
+            cl.setContentsMargins(8, 8, 8, 8)
+            cl.setSpacing(1)
             num = QLabel("0")
             num.setAlignment(Qt.AlignCenter)
             num.setStyleSheet(
-                f"background:transparent; font-size:18px; font-weight:900;"
+                f"background:transparent; font-size:22px; font-weight:900;"
                 f"color:{fg}; border:none;"
             )
             sub = QLabel(lbl)
             sub.setAlignment(Qt.AlignCenter)
             sub.setStyleSheet(
-                f"background:transparent; font-size:9px; color:{fg}; opacity:.8; border:none;"
+                f"background:transparent; font-size:10px; font-weight:600;"
+                f"color:{fg}; border:none;"
             )
             cl.addWidget(num)
             cl.addWidget(sub)
@@ -394,18 +404,16 @@ class _SideTreePanel(QWidget):
             self._stat_nums[key or "_total"] = num
             self._stat_btns[key or "_total"] = (card, border, bg)
             if key:
-                card.mousePressEvent = (
-                    lambda e, k=key: self._on_stat_click(k)
-                )
+                card.mousePressEvent = (lambda e, k=key: self._on_stat_click(k))
             else:
                 card.mousePressEvent = lambda e: self._on_stat_click(None)
         outer.addWidget(stats_w)
 
-        # Filtre bar
+        # ── Filtre bar ────────────────────────────────────────────────────
         self._filter_bar = QWidget()
-        self._filter_bar.setObjectName("detailSideBg")
+        self._filter_bar.setStyleSheet("QWidget{background:#f8fafc;}")
         fb_lay = QHBoxLayout(self._filter_bar)
-        fb_lay.setContentsMargins(12, 3, 12, 3)
+        fb_lay.setContentsMargins(12, 0, 12, 4)
         fb_lay.setSpacing(6)
         self._filter_lbl = QLabel("")
         self._filter_lbl.setStyleSheet(
@@ -425,53 +433,85 @@ class _SideTreePanel(QWidget):
         self._filter_bar.setVisible(False)
         outer.addWidget(self._filter_bar)
 
+        # ── Segmented control: Sistem / Sözleşme ─────────────────────────
+        seg_w = QWidget()
+        seg_w.setStyleSheet("QWidget{background:#f8fafc;}")
+        seg_lay = QHBoxLayout(seg_w)
+        seg_lay.setContentsMargins(12, 8, 12, 10)
+        seg_lay.setSpacing(0)
+
+        # Tek bir pill container
+        pill_container = QFrame()
+        pill_container.setStyleSheet(
+            "QFrame{background:#e2e8f0; border-radius:10px;}"
+        )
+        pill_container.setFixedHeight(40)
+        pill_lay = QHBoxLayout(pill_container)
+        pill_lay.setContentsMargins(4, 4, 4, 4)
+        pill_lay.setSpacing(2)
+
+        self._btn_sistem = QPushButton("🔧  Sistem")
+        self._btn_sozlesme = QPushButton("📄  Sözleşme")
+        for btn in [self._btn_sistem, self._btn_sozlesme]:
+            btn.setFixedHeight(32)
+            btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            btn.setStyleSheet(
+                "QPushButton{background:transparent; color:#64748b; border:none;"
+                "border-radius:7px; font-size:12px; font-weight:600; padding:0 12px;}"
+                "QPushButton:hover{background:rgba(255,255,255,200); color:#1e293b;}"
+            )
+        self._btn_sistem.clicked.connect(lambda: self._set_mode("sistem"))
+        self._btn_sozlesme.clicked.connect(lambda: self._set_mode("sozlesme"))
+        pill_lay.addWidget(self._btn_sistem)
+        pill_lay.addWidget(self._btn_sozlesme)
+        seg_lay.addWidget(pill_container)
+        outer.addWidget(seg_w)
+        self._update_mode_buttons()
+
         sep = QFrame()
         sep.setFrameShape(QFrame.HLine)
         sep.setStyleSheet("background:#e2e8f0; max-height:1px;")
         outer.addWidget(sep)
 
-        # Ağaç scroll
+        # ── Ağaç scroll ───────────────────────────────────────────────────
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setObjectName("plainScroll")
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self._tree_host = QWidget()
-        self._tree_host.setObjectName("detailSideBg")
+        self._tree_host.setStyleSheet("QWidget{background:#f8fafc;}")
         self._tree_lay = QVBoxLayout(self._tree_host)
         self._tree_lay.setContentsMargins(8, 6, 8, 10)
-        self._tree_lay.setSpacing(2)
+        self._tree_lay.setSpacing(1)
         self._tree_lay.addStretch()
         scroll.setWidget(self._tree_host)
         outer.addWidget(scroll, 1)
 
         self._refresh_tree()
 
-    # ── veri ────────────────────────────────────────────────────────────
-    def _filtered_events(self) -> List[dict]:
-        f = self._active_filter
-        if not f:
-            return list(self._events)
-        return [e for e in self._events if e["_cls"] == f]
+    def _set_mode(self, mode: str):
+        self._view_mode = mode
+        self._update_mode_buttons()
+        self._refresh_tree()
 
-    def _counts(self):
-        c = {"geciken": 0, "kritik": 0, "tamamlandi": 0}
-        for e in self._events:
-            if e["_cls"] in c:
-                c[e["_cls"]] += 1
-        return c
+    def _update_mode_buttons(self):
+        active = (
+            "QPushButton{background:#ffffff; color:#1e293b; border:none;"
+            "border-radius:6px; font-size:11px; font-weight:700; padding:0 10px;}"
+        )
+        inactive = (
+            "QPushButton{background:transparent; color:#64748b; border:none;"
+            "border-radius:6px; font-size:11px; font-weight:600; padding:0 10px;}"
+            "QPushButton:hover{background:rgba(255,255,255,180); color:#1e293b;}"
+        )
+        self._btn_sistem.setStyleSheet(
+            active if self._view_mode == "sistem" else inactive
+        )
+        self._btn_sozlesme.setStyleSheet(
+            active if self._view_mode == "sozlesme" else inactive
+        )
 
-    def _group_by_platform(self, events: List[dict]):
-        """events → {platform: {no: {type: [ev]}}}"""
-        result = {}
-        for ev in events:
-            pl = str(ev.get("platform") or "?")
-            no = str(ev.get("no") or "?")
-            tp = str(ev.get("type") or "?")
-            result.setdefault(pl, {}).setdefault(no, {}).setdefault(tp, []).append(ev)
-        return result
-
-    # ── render ───────────────────────────────────────────────────────────
     def _refresh_tree(self):
         # Temizle
         while self._tree_lay.count() > 1:
@@ -484,7 +524,7 @@ class _SideTreePanel(QWidget):
         for k, num in self._stat_nums.items():
             num.setText(str(len(self._events) if k == "_total" else c.get(k, 0)))
 
-        # Aktif filtre stat kartı vurgula
+        # Stat kartı vurgusu
         for k, (card, border_color, bg) in self._stat_btns.items():
             active = (k == self._active_filter) or (k == "_total" and not self._active_filter)
             if active and k != "_total":
@@ -506,96 +546,130 @@ class _SideTreePanel(QWidget):
             self._tree_lay.insertWidget(0, empty)
             return
 
-        grouped = self._group_by_platform(events)
-        all_events = list(self._events)
-        insert_idx = 0
+        if self._view_mode == "sistem":
+            self._render_sistem_tree(events)
+        else:
+            self._render_sozlesme_tree(events)
 
-        for platform, contracts in sorted(grouped.items()):
-            # Platform satırı
-            pl_evs = [e for e in all_events if e.get("platform") == platform]
-            pl_cls = _worst_cls([e["_cls"] for e in pl_evs])
-            _, _, pl_dot = _STATUS_COLORS.get(pl_cls, ("", "", "#94a3b8"))
+    def _render_sistem_tree(self, events: List[dict]):
+        """Platform > Sözleşme No > Sistem adı"""
+        # Gruplama: platform → no → sistem kayıtları
+        grouped: Dict[str, Dict[str, List[dict]]] = {}
+        for ev in events:
+            pl = str(ev.get("platform") or "?")
+            no = str(ev.get("no") or "?")
+            grouped.setdefault(pl, {}).setdefault(no, []).append(ev)
+
+        insert_idx = 0
+        for platform in sorted(grouped):
+            pl_evs = grouped[platform]
+            all_pl = [e for evs in pl_evs.values() for e in evs]
+            pl_cls = _worst_cls([e["_cls"] for e in all_pl])
+
             pl_row = _TreeRow(
                 indent=6, icon="●", label=platform,
                 cls=pl_cls, has_children=True,
                 parent=self._tree_host
             )
-            # Dot rengini platform rengine çevir — platform rengi önceden belirlenemiyor
-            # en kötü durumu yansıt
-            self._tree_lay.insertWidget(insert_idx, pl_row)
-            insert_idx += 1
+            self._tree_lay.insertWidget(insert_idx, pl_row); insert_idx += 1
+            pl_sec = _CollapsibleSection(self._tree_host)
+            self._tree_lay.insertWidget(insert_idx, pl_sec); insert_idx += 1
+            pl_row.clicked.connect(lambda chk=pl_row, sec=pl_sec: self._toggle(chk, sec))
 
-            pl_section = _CollapsibleSection(self._tree_host)
-            self._tree_lay.insertWidget(insert_idx, pl_section)
-            insert_idx += 1
-            pl_row.clicked.connect(
-                lambda chk=pl_row, sec=pl_section: self._toggle(chk, sec)
-            )
-
-            for no, types in sorted(contracts.items()):
-                # Sözleşme satırı
-                no_evs = [e for e in all_events if e.get("platform") == platform and e.get("no") == no]
+            for no in sorted(pl_evs):
+                no_evs = pl_evs[no]
                 no_cls = _worst_cls([e["_cls"] for e in no_evs])
-                no_row = _TreeRow(
-                    indent=16, icon="📄", label=no,
-                    cls=no_cls, has_children=True,
-                    parent=self._tree_host
+                # Sözleşme no — ok yok, sadece etiket (indent)
+                no_lbl = QLabel(f"  📄 {no}")
+                no_lbl.setStyleSheet(
+                    f"background:transparent; font-size:11px; font-weight:600;"
+                    f"color:#374151; padding:4px 6px 2px 24px; border:none;"
                 )
-                pl_section.add(no_row)
+                pl_sec.add(no_lbl)
 
-                no_section = _CollapsibleSection(self._tree_host)
-                pl_section.add(no_section)
-                no_row.clicked.connect(
-                    lambda chk=no_row, sec=no_section: self._toggle(chk, sec)
-                )
-
-                for ctype, evs in sorted(types.items()):
-                    # SD / Ana Sözleşme / Sistem tipi satırı
-                    t_cls = _worst_cls([e["_cls"] for e in evs])
-                    has_sub = len(evs) > 1
-
-                    first_ev = evs[0]
-                    dlbl, dval, dcol = _date_display(first_ev)
-                    dimmed = (self._active_filter is not None and
-                              all(e["_cls"] != self._active_filter for e in evs))
-
-                    t_row = _TreeRow(
-                        indent=28, icon="—",
-                        label=ctype,
-                        cls=t_cls,
-                        has_children=has_sub,
-                        date_val=dval if not has_sub else "",
-                        date_color=dcol,
-                        dimmed=dimmed,
-                        parent=self._tree_host
+                for ev in sorted(no_evs, key=lambda x: x["_eff_date"]):
+                    _, dval, dcol = _date_display(ev)
+                    raw = str(ev.get("title") or "")
+                    no_str = str(ev.get("no") or "")
+                    label = raw[len(no_str)+3:] if raw.startswith(no_str+" · ") else (raw or no_str)
+                    if not label or label == no_str:
+                        label = str(ev.get("type") or "")
+                    dimmed = self._active_filter is not None and ev["_cls"] != self._active_filter
+                    sys_row = _TreeRow(
+                        indent=38, icon="·", label=label,
+                        cls=ev["_cls"], has_children=False,
+                        date_val=dval, date_color=dcol,
+                        dimmed=dimmed, parent=self._tree_host
                     )
-                    no_section.add(t_row)
+                    sys_row.setCursor(Qt.PointingHandCursor)
+                    ev_ref = ev
+                    sys_row.mousePressEvent = lambda e, ev_=ev_ref: self._on_item_click(ev_)
+                    pl_sec.add(sys_row)
 
-                    if has_sub:
-                        t_section = _CollapsibleSection(self._tree_host)
-                        no_section.add(t_section)
-                        t_row.clicked.connect(
-                            lambda chk=t_row, sec=t_section: self._toggle(chk, sec)
-                        )
-                        for ev in sorted(evs, key=lambda x: x["_eff_date"]):
-                            ev_dlbl, ev_dval, ev_dcol = _date_display(ev)
-                            sys_row = _TreeRow(
-                                indent=40, icon="·",
-                                label=str(ev.get("title") or ev.get("no") or ""),
-                                cls=ev["_cls"],
-                                has_children=False,
-                                date_val=ev_dval,
-                                date_color=ev_dcol,
-                                dimmed=(self._active_filter is not None and
-                                        ev["_cls"] != self._active_filter),
-                                parent=self._tree_host
-                            )
-                            t_section.add(sys_row)
-                    else:
-                        # Tek kayıt — tıklanınca detay
-                        ev = evs[0]
-                        t_row.setCursor(Qt.PointingHandCursor)
-                        t_row._has_children = False
+    def _render_sozlesme_tree(self, events: List[dict]):
+        """Platform > Sözleşme No (sadece)"""
+        # Gruplama: platform → no → en kötü durum
+        grouped: Dict[str, Dict[str, List[dict]]] = {}
+        for ev in events:
+            pl = str(ev.get("platform") or "?")
+            no = str(ev.get("no") or "?")
+            grouped.setdefault(pl, {}).setdefault(no, []).append(ev)
+
+        insert_idx = 0
+        for platform in sorted(grouped):
+            pl_evs = grouped[platform]
+            all_pl = [e for evs in pl_evs.values() for e in evs]
+            pl_cls = _worst_cls([e["_cls"] for e in all_pl])
+
+            pl_row = _TreeRow(
+                indent=6, icon="●", label=platform,
+                cls=pl_cls, has_children=True,
+                parent=self._tree_host
+            )
+            self._tree_lay.insertWidget(insert_idx, pl_row); insert_idx += 1
+            pl_sec = _CollapsibleSection(self._tree_host)
+            self._tree_lay.insertWidget(insert_idx, pl_sec); insert_idx += 1
+            pl_row.clicked.connect(lambda chk=pl_row, sec=pl_sec: self._toggle(chk, sec))
+
+            for no in sorted(pl_evs):
+                no_evs = pl_evs[no]
+                no_cls = _worst_cls([e["_cls"] for e in no_evs])
+                # En erken effective date
+                earliest = min(no_evs, key=lambda e: e["_eff_date"])
+                _, dval, dcol = _date_display(earliest)
+                # Sözleşme no satırı — tıklanabilir, ok yok
+                soz_w = QFrame()
+                soz_w.setStyleSheet(
+                    f"QFrame{{background:transparent; border:none; border-radius:6px;}}"
+                )
+                soz_w.setCursor(Qt.PointingHandCursor)
+                soz_lay = QHBoxLayout(soz_w)
+                soz_lay.setContentsMargins(28, 3, 8, 3)
+                soz_lay.setSpacing(6)
+                soz_icon = QLabel("📄")
+                soz_icon.setStyleSheet("background:transparent; font-size:11px; border:none;")
+                soz_lbl = QLabel(no)
+                soz_lbl.setStyleSheet(
+                    "background:transparent; font-size:11px; font-weight:600;"
+                    "color:#374151; border:none;"
+                )
+                soz_lbl.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+                soz_date = QLabel(dval)
+                soz_date.setStyleSheet(
+                    f"background:transparent; font-size:9px; color:{dcol}; border:none;"
+                )
+                soz_badge = _BadgeLabel(no_cls)
+                soz_lay.addWidget(soz_icon)
+                soz_lay.addWidget(soz_lbl, 1)
+                soz_lay.addWidget(soz_date)
+                soz_lay.addWidget(soz_badge)
+                ev_ref = earliest
+                soz_w.mousePressEvent = lambda e, ev_=ev_ref: self._on_item_click(ev_)
+                pl_sec.add(soz_w)
+
+    def _on_item_click(self, ev: dict):
+        if self._detail_handler:
+            self._detail_handler(ev)
 
     def _toggle(self, row: _TreeRow, section: _CollapsibleSection):
         expanded = not section._visible
@@ -627,101 +701,200 @@ class _SideTreePanel(QWidget):
         self._events = events
         self._refresh_tree()
 
+    # ── Veri yardımcıları ────────────────────────────────────────────────
+    def _counts(self) -> Dict[str, int]:
+        c = {"geciken": 0, "kritik": 0, "tamamlandi": 0}
+        for e in self._events:
+            if e["_cls"] in c:
+                c[e["_cls"]] += 1
+        return c
+
+    def _filtered_events(self) -> List[dict]:
+        f = self._active_filter
+        if not f:
+            return list(self._events)
+        return [e for e in self._events if e["_cls"] == f]
+
+    def _group_by_platform(self, events: List[dict]) -> Dict[str, Dict[str, List[dict]]]:
+        result: Dict[str, Dict[str, List[dict]]] = {}
+        for ev in events:
+            pl = str(ev.get("platform") or "?")
+            no = str(ev.get("no") or "?")
+            result.setdefault(pl, {}).setdefault(no, []).append(ev)
+        return result
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Ay Detay Dialog
 # ─────────────────────────────────────────────────────────────────────────────
 # Ay Detay Dialog
 # ─────────────────────────────────────────────────────────────────────────────
-class _MonthDetailDialog(QDialog):
+class _MonthDetailDialog(QWidget):
+    """
+    Yıl takviminin üzerinde overlay olarak açılan ay detay paneli.
+    Arka plan blur efekti için ana pencereye overlay layer olarak eklenir.
+    """
+    closed = Signal()
+
     def __init__(self, events: List[dict], year: int, month: int,
                  detail_handler: Optional[Callable], parent=None):
         super().__init__(parent)
         self._events = events
         self._year = year
-        self._month = month          # 0-indexed
-        self._month1 = month + 1     # 1-indexed for calendar/date
+        self._month = month
+        self._month1 = month + 1
         self._detail_handler = detail_handler
         self._today = date.today()
         self._sel_day: Optional[int] = None
-        self.setWindowTitle(f"{TR_MONTHS[month]} {year} - STS")
-        self.setWindowFlags(Qt.Dialog | Qt.WindowCloseButtonHint)
-        self.resize(1340, 800)
+        # Tam ebeveyn üzerinde yay
+        self.setGeometry(parent.rect() if parent else self.geometry())
         self.setStyleSheet(STYLE + _EXTRA_QSS)
-        self._build()
-        # fade-in
+        self._build_overlay()
+        # Fade-in
         self.setWindowOpacity(0.0)
         anim = QPropertyAnimation(self, b"windowOpacity", self)
-        anim.setDuration(280)
+        anim.setDuration(140)
         anim.setStartValue(0.0)
         anim.setEndValue(1.0)
         anim.setEasingCurve(QEasingCurve.OutCubic)
         anim.start()
         self._anim = anim
+        self.show()
+        self.raise_()
 
-    # ── UI ────────────────────────────────────────────────────────────────
-    def _build(self):
-        root = QHBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(0)
+    def resizeEvent(self, event):
+        if self.parent():
+            self.setGeometry(self.parent().rect())
+        super().resizeEvent(event)
 
-        # ── Sol panel — ağaç yapısı ────────────────────────────────────────
+    def close(self):
+        self.closed.emit()
+        anim = QPropertyAnimation(self, b"windowOpacity", self)
+        anim.setDuration(60)
+        anim.setStartValue(1.0)
+        anim.setEndValue(0.0)
+        anim.finished.connect(self.hide)
+        anim.finished.connect(self.deleteLater)
+        anim.start()
+        self._close_anim = anim
+
+    def _position_card(self):
+        if self.parent():
+            pr = self.parent().rect()
+            w = int(pr.width() * 0.88)
+            h = int(pr.height() * 0.90)
+            x = (pr.width() - w) // 2
+            y = (pr.height() - h) // 2
+        else:
+            w, h, x, y = 1300, 780, 40, 40
+        self._card.setGeometry(x, y, w, h)
+        if hasattr(self, '_backdrop'):
+            self._backdrop.setGeometry(self.rect())
+
+    def _build_overlay(self):
+        """Backdrop + merkezi içerik."""
+        # Backdrop — tıklanınca kapat
+        self._backdrop = QWidget(self)
+        self._backdrop.setStyleSheet("QWidget{background:rgba(10,16,26,0.60);}")
+        self._backdrop.setGeometry(self.rect())
+        self._backdrop.lower()
+        self._backdrop.mousePressEvent = lambda e: self.close()
+
+        # Ana kart widget — backdrop üzerinde
+        self._card = QWidget(self)
+        self._card.setObjectName("overlayCard")
+        self._card.setStyleSheet(
+            "QWidget#overlayCard{background:#f0f4fc; border-radius:16px;}"
+        )
+        # border-radius görünmesi için
+        self._card.setAttribute(Qt.WA_StyledBackground, True)
+        self._position_card()
+
+        # Kart içi layout: sol panel + sağ panel yan yana
+        card_lay = QHBoxLayout(self._card)
+        card_lay.setContentsMargins(0, 0, 0, 0)
+        card_lay.setSpacing(0)
+
+        # Sol panel
         self._side_panel = _SideTreePanel(
             self._events, self._year, self._month,
             detail_handler=self._detail_handler,
-            parent=self
+            parent=self._card
         )
-        root.addWidget(self._side_panel)
+        self._side_panel.setFixedWidth(320)
+        card_lay.addWidget(self._side_panel)
 
-        # ── Sağ panel ─────────────────────────────────────────────────────
-        right = QWidget()
-        right.setObjectName("detailRightBg")
+        # Sağ panel
+        right = QWidget(self._card)
+        right.setObjectName("calRight")
+        right.setStyleSheet(
+            "QWidget#calRight{background:#f0f4fc;"
+            "border-top-right-radius:16px;"
+            "border-bottom-right-radius:16px;}"
+        )
         right_lay = QVBoxLayout(right)
         right_lay.setContentsMargins(0, 0, 0, 0)
         right_lay.setSpacing(0)
+        card_lay.addWidget(right, 1)
 
-        # Topbar
-        topbar = QWidget()
-        topbar.setObjectName("detailTopbarBg")
+        # ── Topbar ──────────────────────────────────────────────────────
+        topbar = QWidget(right)
+        topbar.setStyleSheet(
+            "QWidget{"
+            "background:qlineargradient(x1:0,y1:0,x2:1,y2:0,"
+            "stop:0 #1e293b,stop:1 #0f172a);"
+            "border-top-right-radius:16px;"
+            "}"
+        )
+        topbar.setFixedHeight(70)
         tb_lay = QHBoxLayout(topbar)
-        tb_lay.setContentsMargins(20, 12, 20, 12)
+        tb_lay.setContentsMargins(22, 0, 22, 0)
+        tb_lay.setSpacing(14)
         month_title = QLabel(f"{TR_MONTHS[self._month]} {self._year}")
         month_title.setStyleSheet(
-            "font-size:24px; font-weight:900; color:#0f172a; background:transparent;"
+            "font-size:26px; font-weight:900; color:#ffffff; background:transparent;"
         )
         tb_lay.addWidget(month_title, 1)
         hint_lbl = QLabel("Gün hücresine tıkla → sol panel filtreler")
-        hint_lbl.setStyleSheet("color:#64748b; font-size:11px; background:transparent;")
+        hint_lbl.setStyleSheet(
+            "color:rgba(148,163,184,0.8); font-size:11px; background:transparent;"
+        )
         tb_lay.addWidget(hint_lbl)
         back_btn = QPushButton("← Yıla dön")
-        back_btn.setObjectName("secondary")
+        back_btn.setStyleSheet(
+            "QPushButton{background:rgba(255,255,255,0.12); color:#ffffff;"
+            "border:1px solid rgba(255,255,255,0.25); border-radius:8px;"
+            "font-size:12px; font-weight:600; padding:6px 14px;}"
+            "QPushButton:hover{background:rgba(255,255,255,0.22);}"
+        )
         back_btn.clicked.connect(self.close)
         tb_lay.addWidget(back_btn)
         right_lay.addWidget(topbar)
 
-        # Gün başlıkları
-        dh = QWidget()
-        dh.setObjectName("dayHeaderBg")
+        # ── Gün başlıkları ──────────────────────────────────────────────
+        dh = QWidget(right)
+        dh.setStyleSheet("QWidget{background:#1e293b;}")
         dh_lay = QGridLayout(dh)
         dh_lay.setContentsMargins(16, 6, 16, 6)
         dh_lay.setHorizontalSpacing(6)
         dh_lay.setVerticalSpacing(0)
-        for i, dn in enumerate(["PZT", "SAL", "ÇAR", "PER", "CUM", "CMT", "PAZ"]):
+        for i, dn in enumerate(["PZT","SAL","ÇAR","PER","CUM","CMT","PAZ"]):
             l = QLabel(dn)
             l.setAlignment(Qt.AlignCenter)
             l.setStyleSheet(
-                "background:transparent; color:#64748b;"
+                "background:transparent; color:rgba(148,163,184,0.9);"
                 "font-size:11px; font-weight:900; letter-spacing:.6px;"
             )
             dh_lay.addWidget(l, 0, i)
         right_lay.addWidget(dh)
 
-        # Takvim
+        # ── Takvim grid ─────────────────────────────────────────────────
         cal_scroll = QScrollArea()
         cal_scroll.setWidgetResizable(True)
         cal_scroll.setObjectName("plainScroll")
+        cal_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._cal_host = QWidget()
-        self._cal_host.setObjectName("detailRightBg")
+        self._cal_host.setStyleSheet("QWidget{background:#f0f4fc;}")
         self._cal_grid = QGridLayout(self._cal_host)
         self._cal_grid.setContentsMargins(16, 10, 16, 16)
         self._cal_grid.setHorizontalSpacing(6)
@@ -729,9 +902,12 @@ class _MonthDetailDialog(QDialog):
         cal_scroll.setWidget(self._cal_host)
         right_lay.addWidget(cal_scroll, 1)
 
-        root.addWidget(right, 1)
+        self._render_cal()
 
-        self._render_all()
+    def _build(self, container=None):
+        """Compat — artık _build_overlay kullanıyoruz."""
+        pass
+
 
     # ── Veri ──────────────────────────────────────────────────────────────
     def _for_day(self, day: int) -> List[dict]:
@@ -885,6 +1061,10 @@ class _MonthDetailDialog(QDialog):
     def _on_rec_click(self, ev: dict):
         if self._detail_handler and self._detail_handler(ev):
             self.close()
+
+    def exec(self):
+        """Compat shim — overlay olduğu için exec çağrısı show'a düşer."""
+        self.show()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1052,6 +1232,15 @@ class _MonthCard(_ClickFrame):
 # Ana Pencere
 # ─────────────────────────────────────────────────────────────────────────────
 class ContractCalendarWindow(QDialog):
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, '_active_detail') and self._active_detail:
+            try:
+                self._active_detail.setGeometry(self.rect())
+                self._active_detail._position_card()
+            except RuntimeError:
+                self._active_detail = None
+
     def paintEvent(self, event):
         """Gökyüzü tonu radial gradient arka plan."""
         from PySide6.QtGui import QPainter, QRadialGradient, QLinearGradient, QColor, QBrush
@@ -1097,11 +1286,18 @@ class ContractCalendarWindow(QDialog):
         self._nav_locked = False
         self.setWindowTitle(f"{APP_TITLE} - Tarih Takip")
         self.resize(1680, 940)
+        self.setWindowFlags(
+            Qt.Window |
+            Qt.WindowCloseButtonHint |
+            Qt.WindowMinimizeButtonHint |
+            Qt.WindowMaximizeButtonHint
+        )
         self.setStyleSheet(
             STYLE
             + _EXTRA_QSS
             + "QFrame#calendarTopbar{background:transparent; border-bottom:none;}"
         )
+        self._active_detail = None
         self._build()
         self.refresh_data(rebuild_index=not bool(self.contract_index))
 
@@ -1390,10 +1586,23 @@ class ContractCalendarWindow(QDialog):
     # ── Ay detay ──────────────────────────────────────────────────────────
     def _open_month(self, month: int):
         evs = self._for_month(self.current_year, month)
-        dlg = _MonthDetailDialog(evs, self.current_year, month,
-                                  self._on_detail, self)
-        dlg.exec()
+        self._active_detail = _MonthDetailDialog(
+            evs, self.current_year, month,
+            self._on_detail, self
+        )
+        self._active_detail.closed.connect(self._on_detail_closed)
+
+    def _on_detail_closed(self):
+        self._active_detail = None
         self._render_year()
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key_Escape:
+            if hasattr(self, '_active_detail') and self._active_detail:
+                self._active_detail.close()
+                return
+            self.close()
+        super().keyPressEvent(event)
 
     def _on_detail(self, ev: dict) -> bool:
         if not self.detail_handler:
