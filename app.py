@@ -664,6 +664,7 @@ COL_T_DATE = 5
 COL_REMAINING = 6
 COL_TAGS = 7
 COL_SUMMARY = 8
+PLATFORM_SELECTED_ROLE = Qt.UserRole + 100
 
 
 class PlatformListDelegate(QStyledItemDelegate):
@@ -696,7 +697,11 @@ class PlatformListDelegate(QStyledItemDelegate):
 
         # PySide6: option.state is StateFlag enum — use QStyle.StateFlag members
         state = option.state
-        is_selected = bool(state & QStyle.State_Selected)
+        # QListWidget'in native selection state'i tekli seçim/current item ile sınırlı
+        # kalabildiği için platform seçim mantığını ayrı bir item role'ünden okuyoruz.
+        # Böylece çoklu seçimde selected_platforms set'indeki her satır aynı aktif
+        # stili alır; focus/current satır tek başına selected gibi boyanmaz.
+        is_selected = bool(index.data(PLATFORM_SELECTED_ROLE))
         is_hover    = bool(state & QStyle.State_MouseOver)
 
         # Arka plan
@@ -10667,10 +10672,13 @@ class MainWindow(QMainWindow):
                 else:
                     item.setData(Qt.CheckStateRole, None)
                     item.setFlags(flags & ~Qt.ItemIsUserCheckable)
-                item.setSelected(platform in self.selected_platforms)
+                is_selected = platform in self.selected_platforms
+                item.setData(PLATFORM_SELECTED_ROLE, is_selected)
+                item.setSelected(is_selected)
         finally:
             self._updating_platform_list = False
         count = len(self.selected_platforms)
+        self.platform_list.viewport().update()
         self.platform_selection_badge.setText(f"{count} seçili")
         self.platform_selection_badge.setVisible(count > 0)
         self.platform_info_label.setText(f"{count} platform · sağ tık ile düzenle")
@@ -10764,6 +10772,7 @@ class MainWindow(QMainWindow):
             for i in range(self.platform_list.count()):
                 item = self.platform_list.item(i)
                 item.setCheckState(Qt.Unchecked)
+                item.setData(PLATFORM_SELECTED_ROLE, False)
                 item.setSelected(False)
         finally:
             self._updating_platform_list = False
