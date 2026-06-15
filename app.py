@@ -10109,9 +10109,10 @@ class MainWindow(QMainWindow):
         self.query_logo_bg.setObjectName("logoWatermark")
         self.query_logo_bg.setStyleSheet("background: transparent;")
         self.query_logo_bg.setAlignment(Qt.AlignCenter)
+        # Dekoratif logo sadece arka plan davranışı göstermeli; tablo etkileşimini
+        # ve hücrelerin okunabilirliğini hiçbir durumda engellememeli.
         self.query_logo_bg.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         self.query_logo_bg.hide()
-        self.query_logo_bg.setAttribute(Qt.WA_TransparentForMouseEvents, True)
 
         logo_opacity = QGraphicsOpacityEffect(self.query_logo_bg)
         logo_opacity.setOpacity(0.55)
@@ -10127,7 +10128,7 @@ class MainWindow(QMainWindow):
         self.index_progress_badge.setText("Excel %0")
         self.index_progress_badge.hide()
         self.index_progress_badge.raise_()
-        self.query_logo_bg.raise_()
+        self._send_query_logo_to_back()
 
     def update_connection_badge(self, mode: str):
         m = str(mode or "").strip().lower()
@@ -10279,7 +10280,7 @@ class MainWindow(QMainWindow):
             self.query_logo_bg.setGeometry(x, y, scaled.width(), scaled.height())
             self.query_logo_bg.setPixmap(scaled)
             self.query_logo_bg.show()
-            self.query_logo_bg.raise_()
+            self._send_query_logo_to_back()
         except Exception:
             try:
                 if hasattr(self, "query_logo_bg"):
@@ -10497,6 +10498,19 @@ class MainWindow(QMainWindow):
 
         return px
 
+    def _send_query_logo_to_back(self) -> None:
+        """Keep the decorative platform logo behind the contract table viewport."""
+        try:
+            if not hasattr(self, "query_logo_bg") or not hasattr(self, "contract_table"):
+                return
+            self.query_logo_bg.lower()
+            viewport = self.contract_table.viewport()
+            if viewport is not None:
+                self.query_logo_bg.stackUnder(viewport)
+            self.query_logo_bg.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        except Exception:
+            pass
+
     def _build_query_logo_strip(self, platforms: List[str]) -> Optional[QPixmap]:
         logos: List[QPixmap] = []
 
@@ -10571,7 +10585,9 @@ class MainWindow(QMainWindow):
                 current_selected = list(getattr(self, "selected_platforms", set()) or [])
                 targets = [str(p).strip() for p in current_selected if str(p or "").strip()]
 
-            if not targets:
+            # Dekoratif logo yalnızca tek platform seçiliyken gösterilir. Çoklu seçim,
+            # tüm platformlar veya genel görünümde tabloyu kapatabilecek watermark yoktur.
+            if len(set(targets)) != 1:
                 self._query_logo_source = None
                 self.query_logo_bg.hide()
                 self.query_logo_bg.clear()
@@ -10681,7 +10697,7 @@ class MainWindow(QMainWindow):
             self.update_query_logo_background(platform)
         else:
             self.right_title.setText(f"{len(selected)} Platform - Sözleşmeler")
-            self.update_query_logo_background(selected)
+            self.update_query_logo_background(None)
         self.refresh_platform_list_ui()
         self.schedule_apply_contract_filter()
 
