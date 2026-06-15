@@ -72,13 +72,13 @@ from src.ui.dialogs.platform_component_manager import PlatformComponentManagerDi
 from src.ui.message_boxes import ask_yes_no
 
 from PySide6.QtCore import Qt, QDate, QObject, QThread, Signal, QTimer, QPoint, QSize, QEvent, QPropertyAnimation, QEasingCurve, QUrl
-from PySide6.QtGui import QFont, QFontMetrics, QColor, QPixmap, QIcon, QPainter, QAction, QCursor, QCloseEvent, QDesktopServices
+from PySide6.QtGui import QFont, QFontMetrics, QColor, QPixmap, QIcon, QPainter, QAction, QCursor, QCloseEvent, QDesktopServices, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget,QGraphicsOpacityEffect, QGraphicsDropShadowEffect, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QPushButton, QListWidget, QListWidgetItem, QTableWidget, QTableWidgetItem,
     QTreeWidget, QTreeWidgetItem, QDialog, QLineEdit, QComboBox, QDateEdit, QSpinBox, QDoubleSpinBox,
     QMessageBox, QFileDialog, QFrame, QScrollArea, QCheckBox, QHeaderView,
-    QSizePolicy, QProgressBar, QProgressDialog, QStyledItemDelegate, QTextEdit, QToolTip,
+    QSizePolicy, QProgressBar, QProgressDialog, QStyledItemDelegate, QTextEdit,
     QToolButton, QMenu, QInputDialog, QWidgetAction, QStackedWidget, QAbstractItemView, QStyle
 )
 from shiboken6 import isValid as _qt_is_valid
@@ -2380,53 +2380,80 @@ class ElidedValueLabel(QLabel):
         super().setText(metrics.elidedText(self._full_text, Qt.ElideRight, max(20, self.width() - 2)))
 
 
-class PlatformTabsWidget(QScrollArea):
+class PlatformTabsWidget(QWidget):
     """Header içinde gömülü premium/neon platform sekme rayı."""
 
     activePlatformChanged = Signal(int)
 
+    RAIL_HEIGHT = 30
+    SCROLL_HEIGHT = 28
+    BUTTON_HEIGHT = 24
+
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._platforms: List[str] = []
-        self._active = ""
+        self._platforms: List[dict] = []
+        self._active = 0
         self._content_width = 76
         self._min_scroll_width = 260
         self._max_width = 340
         self._buttons: Dict[int, QPushButton] = {}
-        # Scroll alanı üst barda genişleyebilir; iç chip host'u ise içerik kadar
-        # kalmalı. widgetResizable=True olursa host viewport genişliğine zorlanıp
-        # tek chip'in büyük bir mavi bar gibi algılanmasına neden olabiliyor.
-        self.setWidgetResizable(False)
-        self.setFrameShape(QFrame.NoFrame)
-        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.setFixedHeight(30)
+        self.setFixedHeight(self.RAIL_HEIGHT)
         self.setSizePolicy(QSizePolicy.MinimumExpanding, QSizePolicy.Fixed)
-        self.viewport().setStyleSheet("background:transparent;border:0;")
-        self.setObjectName("PlatformTabRail")
-        self._apply_rail_style(single=True)
+
+        outer = QHBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        self._rail = QFrame(self)
+        self._rail.setObjectName("PlatformTabRail")
+        self._rail.setFixedHeight(self.RAIL_HEIGHT)
+        self._rail.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        rail_lay = QHBoxLayout(self._rail)
+        rail_lay.setContentsMargins(3, 1, 3, 1)
+        rail_lay.setSpacing(0)
+
+        self._scroll = QScrollArea(self._rail)
+        self._scroll.setObjectName("PlatformTabScroll")
+        self._scroll.setWidgetResizable(False)
+        self._scroll.setFrameShape(QFrame.NoFrame)
+        self._scroll.setFixedHeight(self.SCROLL_HEIGHT)
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self._scroll.viewport().setStyleSheet("background:transparent;border:0;")
+        rail_lay.addWidget(self._scroll, 1, Qt.AlignVCenter)
+        outer.addWidget(self._rail, 1, Qt.AlignVCenter)
+
         self._host = QWidget()
         self._host.setObjectName("PlatformTabScrollContent")
         self._host.setStyleSheet("QWidget#PlatformTabScrollContent{background:transparent;border:0;}")
         self._host.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self._host.setFixedHeight(26)
         self._lay = QHBoxLayout(self._host)
-        self._lay.setContentsMargins(4, 2, 4, 2)
-        self._lay.setSpacing(8)
+        self._lay.setContentsMargins(2, 1, 2, 1)
+        self._lay.setSpacing(6)
         self._lay.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        self.setWidget(self._host)
+        self._scroll.setWidget(self._host)
+        self._apply_rail_style()
 
-    def _apply_rail_style(self, single: bool):
-        self.setStyleSheet("""
-            QScrollArea#PlatformTabRail {
+    def _apply_rail_style(self):
+        self._rail.setStyleSheet("""
+            QFrame#PlatformTabRail {
                 background: rgba(7, 28, 58, 0.45);
-                border: 1px solid rgba(80, 140, 210, 0.35);
-                border-radius: 15px;
+                border: 1px solid rgba(80, 140, 210, 0.38);
+                border-radius: 14px;
                 padding: 0px;
                 margin: 0px;
-                min-height: 30px;
-                max-height: 30px;
             }
-            QScrollArea#PlatformTabRail > QWidget > QWidget { background:transparent; }
+        """)
+        self._scroll.setStyleSheet("""
+            QScrollArea#PlatformTabScroll {
+                background: transparent;
+                border: none;
+                padding: 0px;
+                margin: 0px;
+            }
+            QScrollArea#PlatformTabScroll > QWidget > QWidget { background:transparent; }
             QScrollBar:horizontal { height:0px; background:transparent; }
         """)
 
@@ -2446,8 +2473,6 @@ class PlatformTabsWidget(QScrollArea):
                 seen.add(key)
                 vals.append({"platform_id": pid, "platform_name": name, "is_primary": is_primary})
         self._platforms = vals
-        if not self._platforms and str(active_platform_id or "").strip():
-            self._platforms = []
         active_id = int(active_platform_id or 0)
         valid_ids = {int(p.get("platform_id") or 0) for p in self._platforms}
         if active_id not in valid_ids:
@@ -2467,10 +2492,9 @@ class PlatformTabsWidget(QScrollArea):
         metrics = QFontMetrics(self.font())
         total_width = 0
         single = len(self._platforms) <= 1
-        self._apply_rail_style(single=single)
-        margins = (4, 2, 4, 2)
+        margins = (2, 1, 2, 1)
         self._lay.setContentsMargins(*margins)
-        max_height = 28
+        self._lay.setSpacing(6)
         for platform in self._platforms:
             name = str(platform.get("platform_name") or "")
             pid = int(platform.get("platform_id") or 0)
@@ -2479,7 +2503,7 @@ class PlatformTabsWidget(QScrollArea):
             btn.setProperty("platform_id", pid)
             btn.setCheckable(True)
             btn.setCursor(Qt.PointingHandCursor)
-            btn.setFixedHeight(max_height)
+            btn.setFixedHeight(self.BUTTON_HEIGHT)
             chip_width = min(150, max(74 if single else 70, metrics.horizontalAdvance(name) + (32 if single else 30)))
             btn.setFixedWidth(chip_width)
             btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
@@ -2493,9 +2517,7 @@ class PlatformTabsWidget(QScrollArea):
                     font-weight: 900;
                     font-size: 11px;
                     letter-spacing: 0.35px;
-                    padding: 3px 13px;
-                    min-height: 24px;
-                    max-height: 26px;
+                    padding: 2px 12px;
                     border-radius: 12px;
                     text-align: center;
                 }
@@ -2520,7 +2542,7 @@ class PlatformTabsWidget(QScrollArea):
                 }
             """)
             btn.clicked.connect(lambda _=False, platform_id=pid: self._set_active(platform_id))
-            self._lay.addWidget(btn, 0, Qt.AlignLeft | Qt.AlignVCenter)
+            self._lay.addWidget(btn, 0, Qt.AlignVCenter)
             self._buttons[pid] = btn
             total_width += chip_width
         self._refresh_button_states()
@@ -2528,7 +2550,7 @@ class PlatformTabsWidget(QScrollArea):
             total_width += self._lay.spacing() * max(0, len(self._platforms) - 1)
         left, _top, right, _bottom = margins
         total_width += left + right
-        self._host.setFixedSize(max(1, total_width), 30)
+        self._host.setFixedSize(max(1, total_width), 26)
         self._content_width = max(70, total_width)
         fixed_width = min(self._content_width, self._max_width)
         if len(self._platforms) >= 4:
@@ -2543,7 +2565,7 @@ class PlatformTabsWidget(QScrollArea):
     def _ensure_active_visible(self):
         active_btn = self._buttons.get(int(self._active or 0))
         if active_btn is not None:
-            self.ensureWidgetVisible(active_btn, 24, 0)
+            self._scroll.ensureWidgetVisible(active_btn, 24, 0)
 
     def _refresh_button_states(self):
         active_id = int(self._active or 0)
@@ -2559,7 +2581,7 @@ class PlatformTabsWidget(QScrollArea):
     def wheelEvent(self, event):
         delta = event.angleDelta().x() or event.angleDelta().y()
         if delta:
-            bar = self.horizontalScrollBar()
+            bar = self._scroll.horizontalScrollBar()
             bar.setValue(bar.value() - delta)
             event.accept()
             return
@@ -2569,13 +2591,13 @@ class PlatformTabsWidget(QScrollArea):
         width = min(max(70, self._content_width), self._max_width)
         if len(self._platforms) >= 4:
             width = max(self._min_scroll_width, width)
-        return QSize(width, 30)
+        return QSize(width, self.RAIL_HEIGHT)
 
     def minimumSizeHint(self) -> QSize:
         width = min(max(70, self._content_width), self._max_width)
         if len(self._platforms) >= 4:
             width = min(width, self._min_scroll_width)
-        return QSize(width, 30)
+        return QSize(width, self.RAIL_HEIGHT)
 
     def _set_active(self, platform_id: int):
         platform_id = int(platform_id or 0)
@@ -2584,6 +2606,96 @@ class PlatformTabsWidget(QScrollArea):
         self._active = platform_id
         self._refresh_button_states()
         self.activePlatformChanged.emit(platform_id)
+
+
+class HeaderUserPopup(QFrame):
+    """Modern owner list popup for the contract detail header."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent, Qt.Popup | Qt.FramelessWindowHint)
+        self.setObjectName("HeaderUserPopup")
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
+        self.setMouseTracking(True)
+        shadow = QGraphicsDropShadowEffect(self)
+        shadow.setBlurRadius(22)
+        shadow.setOffset(0, 8)
+        shadow.setColor(QColor(0, 0, 0, 95))
+        self.setGraphicsEffect(shadow)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+        card = QFrame(self)
+        card.setObjectName("HeaderUserPopupCard")
+        root.addWidget(card)
+        self._lay = QVBoxLayout(card)
+        self._lay.setContentsMargins(12, 10, 12, 12)
+        self._lay.setSpacing(8)
+        self.setStyleSheet("""
+            QFrame#HeaderUserPopupCard {
+                background: rgba(7, 28, 58, 0.96);
+                border: 1px solid rgba(105, 170, 240, 0.45);
+                border-radius: 10px;
+            }
+            QLabel#HeaderUserPopupTitle {
+                color: #8fc8ff;
+                background: transparent;
+                border: 0;
+                font-size: 10px;
+                font-weight: 900;
+                letter-spacing: 0.8px;
+            }
+            QLabel#HeaderUserPopupName {
+                color: #ffffff;
+                background: transparent;
+                border: 0;
+                font-size: 12px;
+                font-weight: 800;
+            }
+            QLabel#HeaderUserPopupAvatar {
+                color: #eaf5ff;
+                background: rgba(47, 125, 255, 0.34);
+                border: 1px solid rgba(150, 211, 255, 0.42);
+                border-radius: 11px;
+                font-size: 9px;
+                font-weight: 900;
+            }
+        """)
+
+    def set_users(self, users: List[str]) -> None:
+        while self._lay.count():
+            item = self._lay.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.setParent(None)
+                widget.deleteLater()
+        title = QLabel("SÖZLEŞME SAHİPLERİ")
+        title.setObjectName("HeaderUserPopupTitle")
+        self._lay.addWidget(title)
+        for name in users:
+            row = QWidget(self)
+            row.setMouseTracking(True)
+            lay = QHBoxLayout(row)
+            lay.setContentsMargins(0, 0, 0, 0)
+            lay.setSpacing(8)
+            avatar = QLabel(self._initials(name))
+            avatar.setObjectName("HeaderUserPopupAvatar")
+            avatar.setAlignment(Qt.AlignCenter)
+            avatar.setFixedSize(22, 22)
+            label = QLabel(name)
+            label.setObjectName("HeaderUserPopupName")
+            label.setMinimumWidth(130)
+            lay.addWidget(avatar, 0, Qt.AlignVCenter)
+            lay.addWidget(label, 1, Qt.AlignVCenter)
+            self._lay.addWidget(row)
+        self.adjustSize()
+
+    @staticmethod
+    def _initials(name: str) -> str:
+        parts = [p for p in re.split(r"\s+", str(name or "").strip()) if p]
+        if not parts:
+            return "?"
+        letters = "".join(part[0] for part in parts[:2]).upper()
+        return letters[:2]
 
 
 class ContractDialog(StyledDialog):
@@ -5682,8 +5794,10 @@ class ContractWorkWindow(QDialog):
 
         self.meta_values: Dict[str, QLabel] = {}
         self.user_tooltip_text = ""
+        self.user_popup_users: List[str] = []
         self.user_summary_container: Optional[QWidget] = None
         self._user_tooltip_widgets: set[QWidget] = set()
+        self._user_popup: Optional[HeaderUserPopup] = None
         self.platform_tabs_widget: Optional[PlatformTabsWidget] = None
 
         def meta_cell(key, label_text, value_text, *, min_w=70, max_w=None, value_widget=None, tooltip: str = ""):
@@ -5755,6 +5869,7 @@ class ContractWorkWindow(QDialog):
 
         user_text, user_tip = compact_users(self.ci.user, list(getattr(self.ci, "users", []) or []))
         self.user_tooltip_text = user_tip
+        self.user_popup_users = [u.strip() for u in user_tip.splitlines() if u.strip()]
         user_svg = b"""<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' width='16' height='16'>
           <circle cx='8' cy='5.35' r='2.45' fill='none' stroke='#c8e2ff' stroke-width='1.35'/>
           <path d='M3.15 13.35c.48-2.75 2.18-4.15 4.85-4.15s4.37 1.4 4.85 4.15'
@@ -6051,10 +6166,18 @@ class ContractWorkWindow(QDialog):
             user_tooltip_widgets = getattr(self, "_user_tooltip_widgets", set())
             if obj in user_tooltip_widgets:
                 if etype == QEvent.Enter:
-                    self._show_user_tooltip_now(obj)
+                    self._show_user_popup_now(obj)
                     return False
                 if etype == QEvent.Leave:
-                    self._hide_user_tooltip_now()
+                    self._schedule_user_popup_hide()
+                    return False
+
+            popup = getattr(self, "_user_popup", None)
+            if obj is popup:
+                if etype == QEvent.Enter:
+                    return False
+                if etype == QEvent.Leave:
+                    self._schedule_user_popup_hide()
                     return False
 
             side_host = getattr(self, "side_meta_host", None)
@@ -6103,19 +6226,55 @@ class ContractWorkWindow(QDialog):
         widget.setMouseTracking(True)
         self._user_tooltip_widgets.add(widget)
 
-    def _show_user_tooltip_now(self, obj):
-        text = str(getattr(self, "user_tooltip_text", "") or "").strip()
-        if not text:
+    def _show_user_popup_now(self, obj):
+        users = [str(u).strip() for u in getattr(self, "user_popup_users", []) if str(u).strip()]
+        if not users:
             return
         anchor = getattr(self, "user_summary_container", None)
         if not isinstance(anchor, QWidget) or not qt_obj_alive(anchor):
             anchor = obj if isinstance(obj, QWidget) else None
         if not isinstance(anchor, QWidget) or not qt_obj_alive(anchor):
             return
-        QToolTip.showText(anchor.mapToGlobal(QPoint(0, anchor.height() + 4)), text, anchor)
+        popup = getattr(self, "_user_popup", None)
+        if not isinstance(popup, HeaderUserPopup) or not qt_obj_alive(popup):
+            popup = HeaderUserPopup(self)
+            popup.installEventFilter(self)
+            popup.setMouseTracking(True)
+            self._user_popup = popup
+        popup.set_users(users)
+        pos = anchor.mapToGlobal(QPoint(0, anchor.height() + 6))
+        screen = QApplication.screenAt(pos) or QApplication.primaryScreen()
+        if screen:
+            available = screen.availableGeometry()
+            if pos.x() + popup.sizeHint().width() > available.right():
+                pos.setX(max(available.left(), available.right() - popup.sizeHint().width() - 8))
+            if pos.y() + popup.sizeHint().height() > available.bottom():
+                pos.setY(max(available.top(), anchor.mapToGlobal(QPoint(0, -popup.sizeHint().height() - 6)).y()))
+        popup.move(pos)
+        popup.show()
+        popup.raise_()
+
+    def _schedule_user_popup_hide(self):
+        QTimer.singleShot(120, self._hide_user_popup_if_outside)
+
+    def _hide_user_popup_if_outside(self):
+        popup = getattr(self, "_user_popup", None)
+        if not isinstance(popup, HeaderUserPopup) or not qt_obj_alive(popup) or not popup.isVisible():
+            return
+        pos = QCursor.pos()
+        if popup.geometry().contains(pos):
+            return
+        for widget in list(getattr(self, "_user_tooltip_widgets", set()) or []):
+            if isinstance(widget, QWidget) and qt_obj_alive(widget):
+                rect = widget.rect()
+                if rect.isValid() and rect.contains(widget.mapFromGlobal(pos)):
+                    return
+        popup.hide()
 
     def _hide_user_tooltip_now(self):
-        QToolTip.hideText()
+        popup = getattr(self, "_user_popup", None)
+        if isinstance(popup, HeaderUserPopup) and qt_obj_alive(popup):
+            popup.hide()
 
     def configure_summary_columns(self):
         header = self.summary.horizontalHeader()
@@ -9693,6 +9852,7 @@ class MainWindow(QMainWindow):
         self._filter_apply_timer.setSingleShot(True)
         self._filter_apply_timer.timeout.connect(self.apply_contract_filter)
         self.build()
+        self._install_system_admin_shortcut()
         if self.store:
             if not self.contract_index:
                 # UI thread'i bloklamamak için hazır store olsa bile indeksleme yükünü worker'a bırak.
@@ -9883,6 +10043,45 @@ class MainWindow(QMainWindow):
             return True
         QMessageBox.warning(self, "Yetkisiz İşlem", "Bu işlemi yapmak için gerekli yetkiye sahip değilsiniz.")
         return False
+
+    def _install_system_admin_shortcut(self) -> None:
+        self.system_admin_shortcut = QShortcut(QKeySequence("Ctrl+Alt+Shift+A"), self)
+        self.system_admin_shortcut.setContext(Qt.ApplicationShortcut)
+        self.system_admin_shortcut.activated.connect(self.open_system_admin_login_from_shortcut)
+
+    def open_system_admin_login_from_shortcut(self) -> None:
+        if not self.store or not self.is_sts_mode():
+            return
+        if self.current_staff and bool((self.current_staff or {}).get("is_admin")):
+            QMessageBox.information(self, "Sistem Yöneticisi", "Zaten sistem yöneticisi oturumundasınız.")
+            return
+
+        previous_staff = self.current_staff
+        admin_staff = auth.show_system_admin_login_dialog(self._permission_db(), self)
+        if not admin_staff:
+            self.current_staff = previous_staff
+            auth.current_staff = previous_staff
+            return
+
+        self.current_staff = admin_staff
+        auth.current_staff = admin_staff
+        actor_name = str(admin_staff.get("full_name") or admin_staff.get("admin_name") or "Sistem Yöneticisi")
+        if self.store is not None and hasattr(self.store, "actor"):
+            self.store.actor = actor_name
+        self._propagate_current_staff_to_open_windows(admin_staff)
+        self._refresh_permission_actions()
+        QMessageBox.information(self, "Sistem Yöneticisi", "Sistem yöneticisi oturumu açıldı.")
+
+    def _propagate_current_staff_to_open_windows(self, staff: dict) -> None:
+        for widget in QApplication.topLevelWidgets():
+            if widget is self or not isinstance(widget, ContractWorkWindow):
+                continue
+            try:
+                widget.current_staff = staff
+                if getattr(widget, "store", None) is self.store and hasattr(widget.store, "actor"):
+                    widget.store.actor = str(staff.get("full_name") or "Sistem Yöneticisi")
+            except Exception:
+                pass
 
     def open_staff_permissions_dialog(self, initial_tab: str = "staffRoles"):
         if not self.store or not self.is_sts_mode():
@@ -10109,9 +10308,10 @@ class MainWindow(QMainWindow):
         self.query_logo_bg.setObjectName("logoWatermark")
         self.query_logo_bg.setStyleSheet("background: transparent;")
         self.query_logo_bg.setAlignment(Qt.AlignCenter)
+        # Dekoratif logo sadece arka plan davranışı göstermeli; tablo etkileşimini
+        # ve hücrelerin okunabilirliğini hiçbir durumda engellememeli.
         self.query_logo_bg.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         self.query_logo_bg.hide()
-        self.query_logo_bg.setAttribute(Qt.WA_TransparentForMouseEvents, True)
 
         logo_opacity = QGraphicsOpacityEffect(self.query_logo_bg)
         logo_opacity.setOpacity(0.55)
@@ -10127,7 +10327,7 @@ class MainWindow(QMainWindow):
         self.index_progress_badge.setText("Excel %0")
         self.index_progress_badge.hide()
         self.index_progress_badge.raise_()
-        self.query_logo_bg.raise_()
+        self._send_query_logo_to_back()
 
     def update_connection_badge(self, mode: str):
         m = str(mode or "").strip().lower()
@@ -10279,7 +10479,7 @@ class MainWindow(QMainWindow):
             self.query_logo_bg.setGeometry(x, y, scaled.width(), scaled.height())
             self.query_logo_bg.setPixmap(scaled)
             self.query_logo_bg.show()
-            self.query_logo_bg.raise_()
+            self._send_query_logo_to_back()
         except Exception:
             try:
                 if hasattr(self, "query_logo_bg"):
@@ -10497,6 +10697,19 @@ class MainWindow(QMainWindow):
 
         return px
 
+    def _send_query_logo_to_back(self) -> None:
+        """Keep the decorative platform logo behind the contract table viewport."""
+        try:
+            if not hasattr(self, "query_logo_bg") or not hasattr(self, "contract_table"):
+                return
+            self.query_logo_bg.lower()
+            viewport = self.contract_table.viewport()
+            if viewport is not None:
+                self.query_logo_bg.stackUnder(viewport)
+            self.query_logo_bg.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        except Exception:
+            pass
+
     def _build_query_logo_strip(self, platforms: List[str]) -> Optional[QPixmap]:
         logos: List[QPixmap] = []
 
@@ -10571,7 +10784,9 @@ class MainWindow(QMainWindow):
                 current_selected = list(getattr(self, "selected_platforms", set()) or [])
                 targets = [str(p).strip() for p in current_selected if str(p or "").strip()]
 
-            if not targets:
+            # Dekoratif logo yalnızca tek platform seçiliyken gösterilir. Çoklu seçim,
+            # tüm platformlar veya genel görünümde tabloyu kapatabilecek watermark yoktur.
+            if len(set(targets)) != 1:
                 self._query_logo_source = None
                 self.query_logo_bg.hide()
                 self.query_logo_bg.clear()
@@ -10681,7 +10896,7 @@ class MainWindow(QMainWindow):
             self.update_query_logo_background(platform)
         else:
             self.right_title.setText(f"{len(selected)} Platform - Sözleşmeler")
-            self.update_query_logo_background(selected)
+            self.update_query_logo_background(None)
         self.refresh_platform_list_ui()
         self.schedule_apply_contract_filter()
 
@@ -11155,6 +11370,7 @@ class MainWindow(QMainWindow):
                 if not staff:
                     return
                 self.current_staff = staff
+                auth.current_staff = staff
                 self.start_sts_load(sel)
             else:
                 self.start_excel_load(sel)
