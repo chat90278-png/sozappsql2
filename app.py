@@ -2464,7 +2464,7 @@ class PlatformTabsWidget(QScrollArea):
         self._apply_rail_style(single=single)
         margins = (4, 2, 4, 2)
         self._lay.setContentsMargins(*margins)
-        max_height = 26
+        max_height = 28
         for platform in self._platforms:
             name = str(platform.get("platform_name") or "")
             pid = int(platform.get("platform_id") or 0)
