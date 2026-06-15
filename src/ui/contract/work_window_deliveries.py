@@ -92,6 +92,7 @@ def edit_delivery(self, idx: int):
     comp_keys = self._component_display_keys(sys_info)
     other_deliveries = [d for i, d in enumerate(deliveries) if i != idx]
     planned_assigned = {comp: sum(self._as_number(d.planned.get(comp, 0)) for d in other_deliveries) for comp in comp_keys}
+    # Pass existing_delivery so DeliveryDialog can restore unit tracking data
     dlg = self._DeliveryDialog(
         sys_info,
         default_name=current.name,
@@ -101,6 +102,7 @@ def edit_delivery(self, idx: int):
         contract_t0_date=str(getattr(self.ci, "t0_date", "") or ""),
         events_provider=getattr(self, "date_picker_events", None),
         allow_delete=True,
+        existing_delivery=current,
     )
     dlg.name.setText(current.name)
     dlg.status.setCurrentText(current.status or "PLAN")
@@ -115,16 +117,22 @@ def edit_delivery(self, idx: int):
             idx_user = dlg.delivery_user_combo.findText(delivery_user, Qt.MatchExactly)
         dlg.delivery_user_combo.setCurrentIndex(max(0, idx_user))
 
+    # Restore planned/delivered values; use _comp_row for correct row index (unit tracking adds extra rows)
     dlg._updating_qty = True
-    for r, comp in enumerate(dlg.component_keys):
-        p_item = dlg.qty_table.item(r, 1)
-        d_item = dlg.qty_table.item(r, 2)
+    for comp in dlg.component_keys:
+        data_row = dlg._comp_row.get(comp)
+        if data_row is None:
+            continue
+        p_item = dlg.qty_table.item(data_row, 1)
+        d_item = dlg.qty_table.item(data_row, 2)
         if p_item:
             p_item.setText(self._fmt_num(current.planned.get(comp, 0)))
-        if d_item:
+        if d_item and not dlg._is_unit_tracking(comp):
             d_item.setText(self._fmt_num(current.delivered.get(comp, 0)))
-        dlg._update_remaining_row(r)
+        dlg._update_remaining_row(data_row)
     dlg._updating_qty = False
+    # Sync unit tracking panels that were created during _populate_qty_table
+    dlg._sync_all_delivered_from_panels()
     dlg.refresh_assignment_card()
 
     overlay = QWidget(self)
