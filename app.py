@@ -1115,8 +1115,8 @@ class StyledDialog(QDialog):
         label.setText(f"{icons.get(kind, 'i')}  {visible_text}")
         label.setToolTip(text)
         label.setStyleSheet(
-            f"QLabel#footerStatus{{color:{fg};background:{bg};border:1px solid {border};"
-            "border-radius:7px;padding:6px 10px;font-size:12px;font-weight:700;}}"
+            f"color:{fg};background-color:{bg};border:1px solid {border};"
+            "border-radius:7px;padding:6px 10px;font-size:12px;font-weight:700;"
         )
         label.show()
 
