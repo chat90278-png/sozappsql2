@@ -1115,8 +1115,8 @@ class StyledDialog(QDialog):
         label.setText(f"{icons.get(kind, 'i')}  {visible_text}")
         label.setToolTip(text)
         label.setStyleSheet(
-            f"QLabel#footerStatus{{color:{fg};background:{bg};border:1px solid {border};"
-            "border-radius:7px;padding:6px 10px;font-size:12px;font-weight:700;}}"
+            f"color:{fg};background-color:{bg};border:1px solid {border};"
+            "border-radius:7px;padding:6px 10px;font-size:12px;font-weight:700;"
         )
         label.show()
 
@@ -2659,26 +2659,18 @@ class HeaderUserPopup(QFrame):
     def __init__(self, parent=None):
         super().__init__(parent, Qt.Popup | Qt.FramelessWindowHint)
         self.setObjectName("HeaderUserPopup")
-        self.setAttribute(Qt.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WA_ShowWithoutActivating, True)
         self.setMouseTracking(True)
-        shadow = QGraphicsDropShadowEffect(self)
-        shadow.setBlurRadius(22)
-        shadow.setOffset(0, 8)
-        shadow.setColor(QColor(0, 0, 0, 95))
-        self.setGraphicsEffect(shadow)
-        root = QVBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(0)
-        card = QFrame(self)
-        card.setObjectName("HeaderUserPopupCard")
-        root.addWidget(card)
-        self._lay = QVBoxLayout(card)
+        self.setMinimumWidth(220)
+        self.setMinimumHeight(80)
+        self._users: List[str] = []
+        self._lay = QVBoxLayout(self)
         self._lay.setContentsMargins(12, 10, 12, 12)
         self._lay.setSpacing(8)
         self.setStyleSheet("""
-            QFrame#HeaderUserPopupCard {
-                background: rgba(7, 28, 58, 0.96);
-                border: 1px solid rgba(105, 170, 240, 0.45);
+            QFrame#HeaderUserPopup {
+                background-color: #071C3A;
+                border: 1px solid #2D6EB8;
                 border-radius: 10px;
             }
             QLabel#HeaderUserPopupTitle {
@@ -2687,7 +2679,6 @@ class HeaderUserPopup(QFrame):
                 border: 0;
                 font-size: 10px;
                 font-weight: 900;
-                letter-spacing: 0.8px;
             }
             QLabel#HeaderUserPopupName {
                 color: #ffffff;
@@ -2698,8 +2689,8 @@ class HeaderUserPopup(QFrame):
             }
             QLabel#HeaderUserPopupAvatar {
                 color: #eaf5ff;
-                background: rgba(47, 125, 255, 0.34);
-                border: 1px solid rgba(150, 211, 255, 0.42);
+                background-color: #2F7DFF;
+                border: 1px solid #96D3FF;
                 border-radius: 11px;
                 font-size: 9px;
                 font-weight: 900;
@@ -2707,6 +2698,10 @@ class HeaderUserPopup(QFrame):
         """)
 
     def set_users(self, users: List[str]) -> None:
+        clean_users = [str(u).strip() for u in users if str(u).strip()]
+        if clean_users == self._users and self._lay.count():
+            return
+        self._users = clean_users
         while self._lay.count():
             item = self._lay.takeAt(0)
             widget = item.widget()
@@ -2716,7 +2711,7 @@ class HeaderUserPopup(QFrame):
         title = QLabel("SÖZLEŞME SAHİPLERİ")
         title.setObjectName("HeaderUserPopupTitle")
         self._lay.addWidget(title)
-        for name in users:
+        for name in self._users:
             row = QWidget(self)
             row.setMouseTracking(True)
             lay = QHBoxLayout(row)
@@ -6321,6 +6316,9 @@ class ContractWorkWindow(QDialog):
     def _register_user_tooltip_widget(self, widget):
         if not isinstance(widget, QWidget):
             return
+        anchor = getattr(self, "user_summary_container", None)
+        if isinstance(anchor, QWidget) and widget is not anchor:
+            return
         widget.installEventFilter(self)
         widget.setMouseTracking(True)
         self._user_tooltip_widgets.add(widget)
@@ -6336,19 +6334,26 @@ class ContractWorkWindow(QDialog):
             return
         popup = getattr(self, "_user_popup", None)
         if not isinstance(popup, HeaderUserPopup) or not qt_obj_alive(popup):
-            popup = HeaderUserPopup(self)
+            popup = HeaderUserPopup(None)
             popup.installEventFilter(self)
             popup.setMouseTracking(True)
             self._user_popup = popup
         popup.set_users(users)
+        popup.adjustSize()
+        hint = popup.sizeHint().expandedTo(QSize(220, 80))
+        popup.resize(hint)
         pos = anchor.mapToGlobal(QPoint(0, anchor.height() + 6))
         screen = QApplication.screenAt(pos) or QApplication.primaryScreen()
         if screen:
             available = screen.availableGeometry()
-            if pos.x() + popup.sizeHint().width() > available.right():
-                pos.setX(max(available.left(), available.right() - popup.sizeHint().width() - 8))
-            if pos.y() + popup.sizeHint().height() > available.bottom():
-                pos.setY(max(available.top(), anchor.mapToGlobal(QPoint(0, -popup.sizeHint().height() - 6)).y()))
+            if pos.x() + popup.width() > available.right():
+                pos.setX(max(available.left(), available.right() - popup.width() - 8))
+            if pos.y() + popup.height() > available.bottom():
+                pos.setY(max(available.top(), anchor.mapToGlobal(QPoint(0, -popup.height() - 6)).y()))
+        if popup.isVisible():
+            if popup.pos() != pos:
+                popup.move(pos)
+            return
         popup.move(pos)
         popup.show()
         popup.raise_()
@@ -6363,11 +6368,11 @@ class ContractWorkWindow(QDialog):
         pos = QCursor.pos()
         if popup.geometry().contains(pos):
             return
-        for widget in list(getattr(self, "_user_tooltip_widgets", set()) or []):
-            if isinstance(widget, QWidget) and qt_obj_alive(widget):
-                rect = widget.rect()
-                if rect.isValid() and rect.contains(widget.mapFromGlobal(pos)):
-                    return
+        anchor = getattr(self, "user_summary_container", None)
+        if isinstance(anchor, QWidget) and qt_obj_alive(anchor):
+            rect = anchor.rect()
+            if rect.isValid() and rect.contains(anchor.mapFromGlobal(pos)):
+                return
         popup.hide()
 
     def _hide_user_tooltip_now(self):
