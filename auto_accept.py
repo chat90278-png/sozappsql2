@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QComboBox, QSpinBox, QWidget, QFrame, QHeaderView, QStackedWidget,
 )
 from src.ui.date_picker import build_date_input
+from src.ui.message_boxes import ask_yes_no
 
 try:
     from src.models.app_models import DeliveryInfo
@@ -708,14 +709,12 @@ def open_auto_accept_dialog(work_window):
         QMessageBox.information(work_window, "Tanımlanabilir yok", "Bu sistemde kabullere tanımlanabilecek bileşen miktarı kalmadı.")
         return
     if existing:
-        ans = QMessageBox.question(
+        if not ask_yes_no(
             work_window,
             "Mevcut kabuller var",
             "Bu sisteme ait mevcut kabuller var. Otomatik kabuller mevcut listenin sonuna eklensin mi?",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.Yes,
-        )
-        if ans != QMessageBox.Yes:
+            default_yes=True,
+        ):
             return
     dlg = AutoAcceptDialog(work_window, sys_info, count, work_window)
     overlay = QWidget(work_window)
