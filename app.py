@@ -2348,10 +2348,11 @@ class PlatformTabsWidget(QScrollArea):
         self.setFixedHeight(32)
         self.setSizePolicy(QSizePolicy.MinimumExpanding, QSizePolicy.Fixed)
         self.viewport().setStyleSheet("background:transparent;border:0;")
-        self.setObjectName("platformTabsRail")
+        self.setObjectName("PlatformTabRail")
         self._apply_rail_style(single=True)
         self._host = QWidget()
-        self._host.setStyleSheet("background:transparent;")
+        self._host.setObjectName("PlatformTabScrollContent")
+        self._host.setStyleSheet("QWidget#PlatformTabScrollContent{background:transparent;border:0;}")
         self._host.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         self._lay = QHBoxLayout(self._host)
         self._lay.setContentsMargins(0, 3, 0, 3)
@@ -2361,8 +2362,14 @@ class PlatformTabsWidget(QScrollArea):
 
     def _apply_rail_style(self, single: bool):
         self.setStyleSheet("""
-            QScrollArea#platformTabsRail {background:transparent;border:0;border-radius:0;}
-            QScrollArea#platformTabsRail > QWidget > QWidget { background:transparent; }
+            QScrollArea#PlatformTabRail {
+                background: rgba(7, 28, 58, 0.45);
+                border: 1px solid rgba(80, 140, 210, 0.35);
+                border-radius: 15px;
+                min-height: 30px;
+                max-height: 32px;
+            }
+            QScrollArea#PlatformTabRail > QWidget > QWidget { background:transparent; }
             QScrollBar:horizontal { height:0px; background:transparent; }
         """)
 
@@ -5637,8 +5644,10 @@ class ContractWorkWindow(QDialog):
             div.setFixedSize(1, 32)
             return cell, div
 
-        def compact_users(value: str) -> Tuple[str, str]:
-            users = [x.strip() for x in re.split(r"[,;]+", str(value or "")) if x.strip()]
+        def compact_users(value: str, user_list: Optional[List[str]] = None) -> Tuple[str, str]:
+            users = [str(x).strip() for x in (user_list or []) if str(x).strip()]
+            if not users:
+                users = [x.strip() for x in re.split(r"[,;]+", str(value or "")) if x.strip()]
             if not users:
                 return "-", ""
             shown = users[0] if len(users) == 1 else f"{users[0]} +{len(users) - 1}"
@@ -5668,7 +5677,7 @@ class ContractWorkWindow(QDialog):
             row.addWidget(val, 1, Qt.AlignVCenter)
             return wrap
 
-        user_text, user_tip = compact_users(self.ci.user)
+        user_text, user_tip = compact_users(self.ci.user, list(getattr(self.ci, "users", []) or []))
         user_svg = b"""<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' width='16' height='16'>
           <circle cx='8' cy='5.35' r='2.45' fill='none' stroke='#c8e2ff' stroke-width='1.35'/>
           <path d='M3.15 13.35c.48-2.75 2.18-4.15 4.85-4.15s4.37 1.4 4.85 4.15'
@@ -6095,7 +6104,9 @@ class ContractWorkWindow(QDialog):
     def refresh_contract_header(self):
         if not hasattr(self, "meta_values"):
             return
-        users = [x.strip() for x in re.split(r"[,;]+", str(self.ci.user or "")) if x.strip()]
+        users = [str(x).strip() for x in (list(getattr(self.ci, "users", []) or [])) if str(x).strip()]
+        if not users:
+            users = [x.strip() for x in re.split(r"[,;]+", str(self.ci.user or "")) if x.strip()]
         user_text = "-" if not users else (users[0] if len(users) == 1 else f"{users[0]} +{len(users) - 1}")
         mapping = {
             "no": self.ci.no,
