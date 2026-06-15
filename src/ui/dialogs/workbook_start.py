@@ -4,8 +4,9 @@ from pathlib import Path
 from typing import Optional
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QDialog, QVBoxLayout, QLabel, QHBoxLayout, QPushButton, QFileDialog, QMessageBox
+from PySide6.QtWidgets import QDialog, QVBoxLayout, QLabel, QHBoxLayout, QPushButton, QFileDialog
 
+from src.ui.message_boxes import show_warning
 from src.ui.theme import STYLE
 
 
@@ -76,7 +77,7 @@ class WorkbookStartDialog(QDialog):
                 self.selected_path = path
                 self.accept()
                 return
-        QMessageBox.warning(self, "Dosya uygun değil", "Lütfen .xlsx/.xlsm veya .sts uzantılı dosya bırakın.")
+        show_warning(self, "Dosya uygun değil", "Lütfen .xlsx/.xlsm veya .sts uzantılı dosya bırakın.")
 
     def pick_file(self):
         p, _ = QFileDialog.getOpenFileName(self, "Veri dosyası seç", str(Path.cwd()), "Data (*.sts *.xlsx *.xlsm)")

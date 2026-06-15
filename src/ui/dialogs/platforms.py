@@ -6,8 +6,9 @@ from typing import Optional
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor
-from PySide6.QtWidgets import QCheckBox, QDialog, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget, QHeaderView
+from PySide6.QtWidgets import QCheckBox, QDialog, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget, QHeaderView
 
+from src.ui.message_boxes import show_information, show_warning
 from src.services.excel_store import ExcelStore
 from src.ui.theme import STYLE
 
@@ -67,7 +68,7 @@ class PlatformDialog(QDialog):
     def save(self):
         n = safe_sheet_name(self.name.text())
         if not n:
-            QMessageBox.warning(self, "Eksik", "Platform adı girin.")
+            show_warning(self, "Eksik", "Platform adı girin.")
             return
         self.store.create_platform(n, logo_source=self.logo_path or None)
         self.accept()
@@ -184,4 +185,4 @@ class PlatformManagerDialog(QDialog):
         self.store.reload_from_disk()
         self.changed = True
         self.settings_saved.emit()
-        QMessageBox.information(self, "Bilgi", "Platform ayarları kaydedildi")
+        show_information(self, "Bilgi", "Platform ayarları kaydedildi")

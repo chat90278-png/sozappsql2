@@ -14,7 +14,6 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QLabel,
-    QMessageBox,
     QPushButton,
     QScrollArea,
     QTableWidget,
@@ -26,6 +25,7 @@ from PySide6.QtWidgets import (
     QSizePolicy,
 )
 
+from src.ui.message_boxes import show_warning
 from src.domain.contract_timing import contract_timing
 from src.models.app_models import ContractInfo, DeliveryInfo, SystemInfo
 from src.services.excel_store import ExcelStore
@@ -1212,7 +1212,7 @@ class ContractSummaryDialog(QDialog):
     def open_detail(self):
         ctx = self.primary_context()
         if not ctx:
-            QMessageBox.warning(self, "Bulunamadı", "Sözleşme detayı bulunamadı.")
+            show_warning(self, "Bulunamadı", "Sözleşme detayı bulunamadı.")
             return
         if self.detail_handler:
             self.detail_handler(ctx.item)
