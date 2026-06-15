@@ -2066,19 +2066,27 @@ class MultiUserSelectWidget(QWidget):
         pl = QHBoxLayout(pill)
         pl.setContentsMargins(10, 4, 8, 4)
         pl.setSpacing(5)
-        lbl = QLabel(name)
+        max_label_width = max(90, self._available_pill_width() - 44)
+        display_name = QFontMetrics(self.font()).elidedText(str(name), Qt.ElideRight, max_label_width)
+        lbl = QLabel(display_name)
+        lbl.setToolTip(str(name))
+        lbl.setMaximumWidth(max_label_width)
         lbl.setStyleSheet(
             f"color:{fg};font-size:12px;font-weight:600;background:transparent;border:none;"
         )
         pl.addWidget(lbl)
-        x = QLabel("×")
-        x.setStyleSheet(
-            f"color:{fg};font-size:15px;background:transparent;border:none;padding:0 1px;"
-        )
-        x.setCursor(Qt.PointingHandCursor)
-        x.mousePressEvent = lambda e, n=name: self._remove_user(e, n)
-        pl.addWidget(x)
+        if self._pill_removable(name):
+            x = QLabel("×")
+            x.setStyleSheet(
+                f"color:{fg};font-size:15px;background:transparent;border:none;padding:0 1px;"
+            )
+            x.setCursor(Qt.PointingHandCursor)
+            x.mousePressEvent = lambda e, n=name: self._remove_user(e, n)
+            pl.addWidget(x)
         return pill
+
+    def _pill_removable(self, name: str) -> bool:
+        return True
 
     def _pill_width(self, name: str) -> int:
         metrics = QFontMetrics(self.font())
@@ -2330,6 +2338,7 @@ class MultiPlatformSelectWidget(MultiUserSelectWidget):
         super().__init__(parent)
         self._placeholder = "Platform seçiniz..."
         self._platform_id_by_name: Dict[str, int] = {}
+        self._locked_platform_keys: set[str] = set()
         self._display.setObjectName("multiPlatformDisplay")
         self._display.setStyleSheet(
             "QFrame#multiPlatformDisplay{background:white;border:1.5px solid #d8e2ed;border-radius:8px;}"
@@ -2375,6 +2384,13 @@ class MultiPlatformSelectWidget(MultiUserSelectWidget):
     def set_selected_platforms(self, names: List[str]):
         self.set_users(names)
 
+    def set_locked_platforms(self, names: List[str]):
+        self._locked_platform_keys = {str(name or "").strip().casefold() for name in names or [] if str(name or "").strip()}
+        self._render_pills()
+
+    def _pill_removable(self, name: str) -> bool:
+        return str(name or "").strip().casefold() not in self._locked_platform_keys
+
     def currentText(self) -> str:
         vals = self.selected_platforms()
         return vals[0] if vals else ""
@@ -2400,7 +2416,16 @@ class MultiPlatformSelectWidget(MultiUserSelectWidget):
 
     def _on_dropdown_changed(self, names: List[str]):
         old = self.currentText()
-        super()._on_dropdown_changed(names)
+        locked = [name for name in self._selected if str(name or "").strip().casefold() in self._locked_platform_keys]
+        merged: List[str] = []
+        seen = set()
+        for name in list(locked) + list(names or []):
+            clean = str(name or "").strip()
+            key = clean.casefold()
+            if clean and key not in seen:
+                seen.add(key)
+                merged.append(clean)
+        super()._on_dropdown_changed(merged)
         new = self.currentText()
         if old != new:
             self.currentTextChanged.emit(new)
@@ -2906,10 +2931,16 @@ class ContractDialog(StyledDialog):
             layout.activate()
         hint = self.minimumSizeHint()
         size_hint = self.sizeHint()
-        self.resize(
+        target = QSize(
             max(self._default_size.width(), hint.width(), size_hint.width()),
             max(self._default_size.height(), hint.height(), size_hint.height()),
         )
+        screen = QApplication.screenAt(self.pos()) or QApplication.primaryScreen()
+        if screen:
+            available = screen.availableGeometry().size()
+            target.setWidth(min(target.width(), max(720, available.width() - 80)))
+            target.setHeight(min(target.height(), max(560, available.height() - 100)))
+        self.resize(target)
 
     def _on_user_selection_changed(self):
         self.update_user_yi_yd()
@@ -3244,7 +3275,7 @@ class ContractEditDialog(StyledDialog):
         self.user_to_yi_yd = {u.get("name", ""): u.get("yi_yd", "Yİ") for u in self.user_records}
         self.staff_records = self.store.list_staff_for_engineer_selection() if hasattr(self.store, "list_staff_for_engineer_selection") else []
         self.result: Optional[ContractInfo] = None
-        self._default_size = QSize(700, 600)
+        self._default_size = QSize(820, 660)
         self.build()
         self._resize_to_safe_default()
 
@@ -3266,9 +3297,26 @@ class ContractEditDialog(StyledDialog):
         info.setWordWrap(True)
         root.addWidget(info)
 
+        self._form_scroll = QScrollArea(self)
+        self._form_scroll.setFrameShape(QFrame.NoFrame)
+        self._form_scroll.setWidgetResizable(True)
+        self._form_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._form_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self._form_scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self._form_scroll.setStyleSheet("QScrollArea{background:transparent;border:0;} QScrollArea > QWidget > QWidget{background:transparent;}")
+        self._form_container = QWidget(self._form_scroll)
+        self._form_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        form = QVBoxLayout(self._form_container)
+        form.setContentsMargins(0, 0, 0, 0)
+        form.setSpacing(12)
+        self._form_scroll.setWidget(self._form_container)
+        root.addWidget(self._form_scroll, 1)
+
         grid = QGridLayout()
-        grid.setHorizontalSpacing(14)
-        grid.setVerticalSpacing(6)
+        grid.setHorizontalSpacing(16)
+        grid.setVerticalSpacing(10)
+        grid.setColumnStretch(0, 1)
+        grid.setColumnStretch(1, 1)
 
         def readonly(text: str) -> QLineEdit:
             w = QLineEdit(str(text or ""))
@@ -3287,6 +3335,7 @@ class ContractEditDialog(StyledDialog):
         self._platform_select = MultiPlatformSelectWidget(self)
         self._platform_select.set_platforms(self.store.load_platforms() if hasattr(self.store, "load_platforms") else self.store.platform_names())
         self._platform_select.set_selected_platforms(self._locked_platforms)
+        self._platform_select.set_locked_platforms(self._locked_platforms)
         self._platform_help = QLabel("Kayıtlı platformlar çıkarılamaz; yalnızca yeni platform eklenebilir.")
         self._platform_help.setObjectName("muted")
         self._platform_help.setWordWrap(True)
@@ -3362,6 +3411,9 @@ class ContractEditDialog(StyledDialog):
         self.t0.textChanged.connect(self._recalc)
         self.months.valueChanged.connect(self._recalc)
         self.user.changed.connect(self.update_user_yi_yd)
+        self.user.changed.connect(self._on_dynamic_field_changed)
+        self._platform_select.currentTextChanged.connect(lambda _text: self._on_dynamic_field_changed())
+        self.responsible_engineers.changed.connect(self._on_dynamic_field_changed)
         self.update_user_yi_yd()
         self._recalc()
 
@@ -3375,7 +3427,7 @@ class ContractEditDialog(StyledDialog):
         add_field("Sorumlu Mühendis", self.responsible_engineers, 1, 1)
         add_field("Sözleşme Tipi", self._type_lbl, 2, 0)
         add_field("İmza Tarihi", self.sig_wrap, 2, 1)
-        root.addLayout(grid)
+        form.addLayout(grid)
 
         timeline_card = QFrame()
         timeline_card.setObjectName("systemFormCard")
@@ -3396,11 +3448,12 @@ class ContractEditDialog(StyledDialog):
         timeline.setColumnStretch(0, 2)
         timeline.setColumnStretch(2, 1)
         timeline.setColumnStretch(4, 2)
-        root.addWidget(timeline_card)
+        form.addWidget(timeline_card)
 
-        root.addWidget(form_label("Not"))
-        root.addWidget(self.note)
-        root.addWidget(self._no_dup_warn)
+        form.addWidget(form_label("Not"))
+        form.addWidget(self.note)
+        form.addWidget(self._no_dup_warn)
+        form.addStretch(1)
 
         btn_row = QHBoxLayout()
         btn_row.addStretch()
@@ -3408,10 +3461,35 @@ class ContractEditDialog(StyledDialog):
         cancel.setObjectName("secondary")
         cancel.clicked.connect(self.reject)
         save_btn = QPushButton(self.save_text)
+        save_btn.setDefault(True)
+        save_btn.setAutoDefault(True)
         save_btn.clicked.connect(self.save)
+        self._save_btn = save_btn
         btn_row.addWidget(cancel)
         btn_row.addWidget(save_btn)
         root.addLayout(btn_row)
+
+    def _on_dynamic_field_changed(self):
+        for widget_name in ("_form_container", "_form_scroll", "user", "_platform_select", "responsible_engineers"):
+            widget = getattr(self, widget_name, None)
+            if isinstance(widget, QWidget):
+                widget.updateGeometry()
+        layout = getattr(self, "_form_container", None).layout() if hasattr(self, "_form_container") else None
+        if layout is not None:
+            layout.invalidate()
+        QTimer.singleShot(0, self._resize_to_safe_default)
+
+    def keyPressEvent(self, event):
+        if event.key() in (Qt.Key_Return, Qt.Key_Enter):
+            if isinstance(self.focusWidget(), QTextEdit):
+                super().keyPressEvent(event)
+                return
+            self.save()
+            return
+        if event.key() == Qt.Key_Escape:
+            self.reject()
+            return
+        super().keyPressEvent(event)
 
     def _resize_to_safe_default(self):
         layout = self.layout()
@@ -3420,10 +3498,16 @@ class ContractEditDialog(StyledDialog):
             layout.activate()
         hint = self.minimumSizeHint()
         size_hint = self.sizeHint()
-        self.resize(
+        target = QSize(
             max(self._default_size.width(), hint.width(), size_hint.width()),
             max(self._default_size.height(), hint.height(), size_hint.height()),
         )
+        screen = QApplication.screenAt(self.pos()) or QApplication.primaryScreen()
+        if screen:
+            available = screen.availableGeometry().size()
+            target.setWidth(min(target.width(), max(720, available.width() - 80)))
+            target.setHeight(min(target.height(), max(560, available.height() - 100)))
+        self.resize(target)
 
     def _initial_platforms(self) -> List[str]:
         raw = list(getattr(self.ci, "platforms", []) or [])
