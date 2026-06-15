@@ -4680,20 +4680,8 @@ class MultiSystemDialog(StyledDialog):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        title_row = QHBoxLayout()
-        title_row.setContentsMargins(16, 12, 16, 10)
-        title = QLabel("Çoklu Sistem Ekle")
-        title.setObjectName("multiTitle")
-        title_row.addWidget(title, 1)
-        close_btn = QPushButton("×")
-        close_btn.setObjectName("secondary")
-        close_btn.setFixedSize(30, 28)
-        close_btn.clicked.connect(self.reject)
-        title_row.addWidget(close_btn, 0)
-        root.addLayout(title_row)
-
         body = QHBoxLayout()
-        body.setContentsMargins(16, 10, 16, 12)
+        body.setContentsMargins(16, 12, 16, 12)
         body.setSpacing(14)
         root.addLayout(body, 1)
 
