@@ -72,7 +72,7 @@ from src.ui.dialogs.platform_component_manager import PlatformComponentManagerDi
 from src.ui.message_boxes import ask_yes_no
 
 from PySide6.QtCore import Qt, QDate, QObject, QThread, Signal, QTimer, QPoint, QSize, QEvent, QPropertyAnimation, QEasingCurve, QUrl
-from PySide6.QtGui import QFont, QFontMetrics, QColor, QPixmap, QIcon, QPainter, QAction, QCursor, QCloseEvent, QDesktopServices
+from PySide6.QtGui import QFont, QFontMetrics, QColor, QPixmap, QIcon, QPainter, QAction, QCursor, QCloseEvent, QDesktopServices, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget,QGraphicsOpacityEffect, QGraphicsDropShadowEffect, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QPushButton, QListWidget, QListWidgetItem, QTableWidget, QTableWidgetItem,
@@ -9852,6 +9852,7 @@ class MainWindow(QMainWindow):
         self._filter_apply_timer.setSingleShot(True)
         self._filter_apply_timer.timeout.connect(self.apply_contract_filter)
         self.build()
+        self._install_system_admin_shortcut()
         if self.store:
             if not self.contract_index:
                 # UI thread'i bloklamamak için hazır store olsa bile indeksleme yükünü worker'a bırak.
@@ -10042,6 +10043,45 @@ class MainWindow(QMainWindow):
             return True
         QMessageBox.warning(self, "Yetkisiz İşlem", "Bu işlemi yapmak için gerekli yetkiye sahip değilsiniz.")
         return False
+
+    def _install_system_admin_shortcut(self) -> None:
+        self.system_admin_shortcut = QShortcut(QKeySequence("Ctrl+Alt+Shift+A"), self)
+        self.system_admin_shortcut.setContext(Qt.ApplicationShortcut)
+        self.system_admin_shortcut.activated.connect(self.open_system_admin_login_from_shortcut)
+
+    def open_system_admin_login_from_shortcut(self) -> None:
+        if not self.store or not self.is_sts_mode():
+            return
+        if self.current_staff and bool((self.current_staff or {}).get("is_admin")):
+            QMessageBox.information(self, "Sistem Yöneticisi", "Zaten sistem yöneticisi oturumundasınız.")
+            return
+
+        previous_staff = self.current_staff
+        admin_staff = auth.show_system_admin_login_dialog(self._permission_db(), self)
+        if not admin_staff:
+            self.current_staff = previous_staff
+            auth.current_staff = previous_staff
+            return
+
+        self.current_staff = admin_staff
+        auth.current_staff = admin_staff
+        actor_name = str(admin_staff.get("full_name") or admin_staff.get("admin_name") or "Sistem Yöneticisi")
+        if self.store is not None and hasattr(self.store, "actor"):
+            self.store.actor = actor_name
+        self._propagate_current_staff_to_open_windows(admin_staff)
+        self._refresh_permission_actions()
+        QMessageBox.information(self, "Sistem Yöneticisi", "Sistem yöneticisi oturumu açıldı.")
+
+    def _propagate_current_staff_to_open_windows(self, staff: dict) -> None:
+        for widget in QApplication.topLevelWidgets():
+            if widget is self or not isinstance(widget, ContractWorkWindow):
+                continue
+            try:
+                widget.current_staff = staff
+                if getattr(widget, "store", None) is self.store and hasattr(widget.store, "actor"):
+                    widget.store.actor = str(staff.get("full_name") or "Sistem Yöneticisi")
+            except Exception:
+                pass
 
     def open_staff_permissions_dialog(self, initial_tab: str = "staffRoles"):
         if not self.store or not self.is_sts_mode():
@@ -11330,6 +11370,7 @@ class MainWindow(QMainWindow):
                 if not staff:
                     return
                 self.current_staff = staff
+                auth.current_staff = staff
                 self.start_sts_load(sel)
             else:
                 self.start_excel_load(sel)
