@@ -546,6 +546,9 @@ CREATE TABLE IF NOT EXISTS activity_logs(id INTEGER PRIMARY KEY AUTOINCREMENT,cr
         # Document folders were added after embedded contract files shipped.
         if self._ensure_column("contract_files", "folder_id", "INTEGER"):
             migrated.append("contract_files.folder_id")
+        if self._ensure_column("contracts", "responsible_engineer_id", "INTEGER"):
+            migrated.append("contracts.responsible_engineer_id")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_contracts_responsible_engineer_id ON contracts(responsible_engineer_id)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_deliveries_delivery_user_id ON deliveries(delivery_user_id)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_contract_file_folders_contract_id ON contract_file_folders(contract_id)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_contract_file_folders_parent_id ON contract_file_folders(parent_id)")
