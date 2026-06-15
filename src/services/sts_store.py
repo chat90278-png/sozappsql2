@@ -1496,6 +1496,64 @@ class STSStore:
                     for component_id, delivery_component_id in existing_components.items():
                         if component_id not in desired_component_ids:
                             self.db.conn.execute("DELETE FROM delivery_components WHERE id=?", (delivery_component_id,))
+                    # Upsert delivery_component_units for unit-tracking components
+                    component_units = getattr(delivery, "component_units", {}) or {}
+                    for cname, slots in component_units.items():
+                        # Get component_id and check if unit tracking is enabled
+                        cid_row = self.db.conn.execute(
+                            "SELECT id, requires_unit_tracking FROM components WHERE name=?", (cname,)
+                        ).fetchone()
+                        if not cid_row or not int(cid_row[1] or 0):
+                            continue
+                        comp_cid = int(cid_row[0])
+                        # Get delivery_component_id
+                        dc_row = self.db.conn.execute(
+                            "SELECT id FROM delivery_components WHERE delivery_id=? AND component_id=?",
+                            (did, comp_cid)
+                        ).fetchone()
+                        if not dc_row:
+                            continue
+                        dc_id = int(dc_row[0])
+                        planned_qty = int(float((delivery.planned or {}).get(cname, 0) or 0))
+                        ts_now = __import__('datetime').datetime.now().isoformat(timespec='seconds')
+                        # Delete slots beyond planned_qty
+                        if planned_qty >= 0:
+                            self.db.conn.execute(
+                                "DELETE FROM delivery_component_units WHERE delivery_component_id=? AND slot_no>?",
+                                (dc_id, planned_qty)
+                            )
+                        # Upsert each slot
+                        for slot in (slots or []):
+                            slot_no = int(slot.get("slot_no", 0))
+                            if slot_no < 1 or slot_no > planned_qty:
+                                continue
+                            identifier = str(slot.get("identifier") or "").strip()
+                            is_delivered = int(bool(slot.get("is_delivered", 0)))
+                            note = str(slot.get("note") or "")
+                            existing_unit = self.db.conn.execute(
+                                "SELECT id FROM delivery_component_units WHERE delivery_component_id=? AND slot_no=?",
+                                (dc_id, slot_no)
+                            ).fetchone()
+                            if existing_unit:
+                                self.db.conn.execute(
+                                    "UPDATE delivery_component_units SET identifier=?,is_delivered=?,note=?,updated_at=? WHERE id=?",
+                                    (identifier, is_delivered, note, ts_now, int(existing_unit[0]))
+                                )
+                            else:
+                                self.db.conn.execute(
+                                    "INSERT INTO delivery_component_units(delivery_component_id,slot_no,identifier,is_delivered,note,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",
+                                    (dc_id, slot_no, identifier, is_delivered, note, ts_now, ts_now)
+                                )
+                        # Ensure all slots up to planned_qty exist (create missing empty slots)
+                        existing_slot_nos = {int(r[0]) for r in self.db.conn.execute(
+                            "SELECT slot_no FROM delivery_component_units WHERE delivery_component_id=?", (dc_id,)
+                        ).fetchall()}
+                        for sn in range(1, planned_qty + 1):
+                            if sn not in existing_slot_nos:
+                                self.db.conn.execute(
+                                    "INSERT OR IGNORE INTO delivery_component_units(delivery_component_id,slot_no,identifier,is_delivered,note,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",
+                                    (dc_id, sn, "", 0, "", ts_now, ts_now)
+                                )
         ci.entry_start_row = int(cid or 0)
         setattr(ci, "id", int(cid or 0))
         setattr(ci, "contract_id", int(cid or 0))
@@ -1578,9 +1636,24 @@ class STSStore:
             systems.append(si)
         for d in self.db.conn.execute("SELECT d.*,s.name AS delivery_system,u.name AS delivery_user FROM deliveries d JOIN systems s ON s.id=d.system_id LEFT JOIN users u ON u.id=d.delivery_user_id WHERE d.contract_id=? AND COALESCE(s.platform_id, ?) = ? ORDER BY s.name,d.sort_order,d.id",(r['id'], active_platform_id, active_platform_id)):
             payload=json.loads(d['payload_json'] or "{}")
-            rows=self.db.conn.execute("SELECT c.name,dc.planned,dc.delivered FROM delivery_components dc JOIN components c ON c.id=dc.component_id WHERE dc.delivery_id=?",(d['id'],)).fetchall()
+            rows=self.db.conn.execute("SELECT c.name,dc.planned,dc.delivered,dc.id as dc_id,c.requires_unit_tracking,c.unit_tracking_label FROM delivery_components dc JOIN components c ON c.id=dc.component_id WHERE dc.delivery_id=?",(d['id'],)).fetchall()
             planned={x[0]:float(x[1] or 0) for x in rows}; delivered={x[0]:float(x[2] or 0) for x in rows}
-            di=DeliveryInfo(name=d['name'],status=d['status'] or "",acceptance_date=d['acceptance_date'] or "",note=d['note'] or "",planned_acceptance_date=d['planned_acceptance_date'] or "",planned=planned,delivered=delivered,t0_date=payload.get('t0_date',''),t0_months=int(payload.get('t0_months',0) or 0),completion_date=payload.get('completion_date',''),delivery_user=d['delivery_user'] or "")
+            # Load component_units for unit-tracking components
+            component_units = {}
+            for row in rows:
+                cname = row[0]
+                requires_tracking = int(row[4] or 0) if len(row) > 4 else 0
+                dc_id = int(row[3]) if len(row) > 3 else 0
+                if requires_tracking and dc_id:
+                    unit_rows = self.db.conn.execute(
+                        "SELECT slot_no, identifier, is_delivered, note FROM delivery_component_units WHERE delivery_component_id=? ORDER BY slot_no",
+                        (dc_id,)
+                    ).fetchall()
+                    component_units[cname] = [
+                        {"slot_no": int(u[0]), "identifier": str(u[1] or ""), "is_delivered": int(u[2] or 0), "note": str(u[3] or "")}
+                        for u in unit_rows
+                    ]
+            di=DeliveryInfo(name=d['name'],status=d['status'] or "",acceptance_date=d['acceptance_date'] or "",note=d['note'] or "",planned_acceptance_date=d['planned_acceptance_date'] or "",planned=planned,delivered=delivered,t0_date=payload.get('t0_date',''),t0_months=int(payload.get('t0_months',0) or 0),completion_date=payload.get('completion_date',''),delivery_user=d['delivery_user'] or "",component_units=component_units)
             deliveries.setdefault(d['delivery_system'],[]).append(di)
         return ci, systems, deliveries
 
@@ -1592,3 +1665,25 @@ class STSStore:
         self.db.conn.execute("DELETE FROM contracts WHERE id=?",(cid,)); self.db.conn.commit()
         self._log("contract_deleted", entity_type="contract", entity_id=cid, platform=str(platform or ""), contract_no=str(contract_no or ""), source="Contract Detail", message="Sözleşme silindi", before=dict(before) if before else None, actor=actor or self.current_actor())
         return {"platform":platform,"contract_no":contract_no,"start_row":cid,"end_row":cid,"deleted_rows":1}
+
+    # ---- Unit tracking helpers ----
+    def get_unit_tracking_components(self) -> dict:
+        """Kuyruk no takibi açık bileşenleri {name: label} olarak döner."""
+        out = {}
+        try:
+            rows = self.db.conn.execute(
+                "SELECT name, unit_tracking_label FROM components WHERE requires_unit_tracking=1 AND active=1"
+            ).fetchall()
+            for r in rows:
+                out[str(r[0] or "")] = str(r[1] or "Kuyruk No")
+        except Exception:
+            pass
+        return out
+
+    def set_component_unit_tracking(self, component_name: str, enabled: bool, label: str = "Kuyruk No") -> None:
+        """Bileşen için unit tracking aç/kapat."""
+        self.db.conn.execute(
+            "UPDATE components SET requires_unit_tracking=?, unit_tracking_label=? WHERE name=?",
+            (1 if enabled else 0, str(label or "Kuyruk No"), str(component_name or ""))
+        )
+        self.db.conn.commit()
