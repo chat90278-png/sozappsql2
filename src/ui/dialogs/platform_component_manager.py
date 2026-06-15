@@ -4,7 +4,7 @@ import hashlib
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QPoint, QMimeData, QRect, Qt, Signal, QSize
+from PySide6.QtCore import QEvent, QPoint, QMimeData, QRect, Qt, Signal, QSize
 from PySide6.QtGui import QAction, QColor, QDrag, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
     QStyledItemDelegate,
     QTableWidget,
     QTableWidgetItem,
+    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -962,9 +963,31 @@ QPushButton#dangerButton {{ background:#FFF5F5; color:#DC2626; border:1px solid 
             target_h = max(460, min(200 + len(self.components) * 52 + 52 + 38 + 46, 760))
             self.resize(target_w, target_h)
 
+    def eventFilter(self, obj, event):
+        if (
+            event.type() == QEvent.KeyPress
+            and self.popover
+            and self.popover.isVisible()
+            and bool(obj.property("componentPopoverSaveOnReturn"))
+            and event.key() in (Qt.Key_Return, Qt.Key_Enter)
+        ):
+            save = getattr(self, "_component_popover_save", None)
+            if callable(save):
+                save()
+                return True
+        return super().eventFilter(obj, event)
+
     def keyPressEvent(self, event):
-        from PySide6.QtCore import Qt as _Qt
-        if event.key() == _Qt.Key_Escape:
+        if event.key() in (Qt.Key_Return, Qt.Key_Enter):
+            if self.popover and self.popover.isVisible():
+                if isinstance(self.focusWidget(), QTextEdit):
+                    super().keyPressEvent(event)
+                    return
+                save = getattr(self, "_component_popover_save", None)
+                if callable(save):
+                    save()
+                    return
+        if event.key() == Qt.Key_Escape:
             if self.popover and self.popover.isVisible():
                 self._hide_popover()
                 return
@@ -1414,14 +1437,22 @@ QPushButton#dangerButton {{ background:#FFF5F5; color:#DC2626; border:1px solid 
         cancel = QPushButton("İptal", objectName="dangerButton")
         cancel.clicked.connect(self._hide_popover)
         save = QPushButton("Kaydet", objectName="pcPrimaryButton")
+        save.setDefault(True)
+        save.setAutoDefault(True)
         foot_lay.addWidget(cancel)
         foot_lay.addWidget(save)
         lay.addWidget(foot_sep)
         lay.addWidget(foot_frame)
 
+        self._component_popover_saving = False
+
         def do_save():
+            if getattr(self, "_component_popover_saving", False):
+                return
+            self._component_popover_saving = True
             clean = name.text().strip()
             if not clean:
+                self._component_popover_saving = False
                 show_warning(self, "Eksik", "Bileşen adı girin.")
                 return
             old_platforms = dict((comp or {}).get("platforms") or {})
@@ -1438,7 +1469,14 @@ QPushButton#dangerButton {{ background:#FFF5F5; color:#DC2626; border:1px solid 
             self._hide_popover()
             self._mark_saved("Bileşen kaydedildi")
             self._load_data()
+            self._component_popover_saving = False
 
+        self._component_popover_save = do_save
+        for return_widget in (name, unit, note):
+            return_widget.setProperty("componentPopoverSaveOnReturn", True)
+            return_widget.installEventFilter(self)
+        name.returnPressed.connect(do_save)
+        note.returnPressed.connect(do_save)
         save.clicked.connect(do_save)
         self._show_popover()
 
