@@ -582,7 +582,47 @@ CREATE TABLE IF NOT EXISTS activity_logs(id INTEGER PRIMARY KEY AUTOINCREMENT,cr
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_document_locks_contract_id "
             "ON document_locks(contract_id)"
         )
-        self.conn.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version','10')")
+        # --- Schema v11: unit tracking için yeni kolon ve tablo ---
+        if self._ensure_column("components", "requires_unit_tracking", "INTEGER DEFAULT 0"):
+            migrated.append("components.requires_unit_tracking")
+        if self._ensure_column("components", "unit_tracking_label", "TEXT DEFAULT ''"):
+            migrated.append("components.unit_tracking_label")
+            # Backfill: "hava araci" normalize edilen bileşenler için tracking aç
+            self.conn.execute("""
+                UPDATE components
+                SET requires_unit_tracking=1, unit_tracking_label='Kuyruk No'
+                WHERE LOWER(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(
+                    name,
+                    'ı','i'), 'İ','i'), 'ş','s'), 'ğ','g'), 'ü','u'), 'ö','o'), 'ç','c'))
+                  LIKE '%hava%araci%'
+                  OR LOWER(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(
+                    name,
+                    'ı','i'), 'İ','i'), 'ş','s'), 'ğ','g'), 'ü','u'), 'ö','o'), 'ç','c'))
+                  LIKE '%hava_araci%'
+            """)
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS delivery_component_units (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                delivery_component_id INTEGER NOT NULL,
+                slot_no INTEGER NOT NULL,
+                identifier TEXT DEFAULT '',
+                is_delivered INTEGER DEFAULT 0,
+                note TEXT DEFAULT '',
+                created_at TEXT,
+                updated_at TEXT,
+                UNIQUE(delivery_component_id, slot_no),
+                FOREIGN KEY(delivery_component_id) REFERENCES delivery_components(id) ON DELETE CASCADE
+            )
+        """)
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_delivery_component_units_dc "
+            "ON delivery_component_units(delivery_component_id)"
+        )
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_delivery_component_units_identifier "
+            "ON delivery_component_units(identifier)"
+        )
+        self.conn.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version','11')")
         self.conn.commit()
         return migrated
 
