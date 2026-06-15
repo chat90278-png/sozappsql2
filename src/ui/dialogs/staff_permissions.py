@@ -27,15 +27,13 @@ from src import auth
 from src.ui.message_boxes import ask_yes_no, show_information, show_warning
 from src.ui.theme import STYLE
 
-ROLE_ORDER = ["admin", "manager", "personnel", "viewer"]
+ROLE_ORDER = ["manager", "personnel", "viewer"]
 ROLE_COLORS = {
-    "admin":     "#1457d9",
     "manager":   "#22a447",
     "personnel": "#f59e0b",
     "viewer":    "#7c3aed",
 }
 ROLE_BG_COLORS = {
-    "admin":     "#eaf1ff",
     "manager":   "#eaf8ef",
     "personnel": "#fff7e8",
     "viewer":    "#f3eaff",

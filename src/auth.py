@@ -105,7 +105,6 @@ LEGACY_PERMISSIONS = [
 ]
 
 DEFAULT_ROLE_PERMISSIONS = {
-    "admin": {code for code, *_ in DEFAULT_PERMISSIONS},
     "manager": {
         "view_contracts", "create_contracts", "edit_contracts", "delete_contracts", "export_data",
         "manage_acceptances", "manage_terms", "manage_labels", "manage_platforms", "manage_components",
@@ -257,7 +256,6 @@ def ensure_authorization_schema(db_or_path: sqlite3.Connection | str | Path) -> 
 
 def _seed_authorization_defaults(conn: sqlite3.Connection) -> None:
     roles = [
-        ("admin", "Admin", 1),
         ("manager", "Yönetici", 1),
         ("personnel", "Personel", 1),
         ("viewer", "Görüntüleyici", 1),
@@ -298,13 +296,27 @@ def _seed_authorization_defaults(conn: sqlite3.Connection) -> None:
 def _migrate_staff_roles(conn: sqlite3.Connection) -> None:
     role_ids = {str(r["name"]): int(r["id"]) for r in conn.execute("SELECT id,name FROM roles")}
     default_role_id = role_ids.get("personnel")
-    staff_rows = conn.execute("SELECT id, role, role_id FROM staff").fetchall()
+    manager_role_id = role_ids.get("manager", default_role_id)
+    admin_role_id = role_ids.get("admin")
+    has_system_admin = conn.execute("SELECT 1 FROM system_admins WHERE COALESCE(is_active,1)=1 LIMIT 1").fetchone() is not None
+    staff_columns = _table_columns(conn, "staff")
+    role_name_expr = "role_name" if "role_name" in staff_columns else "NULL AS role_name"
+    staff_rows = conn.execute(f"SELECT id, role, role_id, {role_name_expr} FROM staff").fetchall()
     single_staff_id = int(staff_rows[0]["id"]) if len(staff_rows) == 1 else None
     for row in staff_rows:
+        legacy = str(row["role"] or "personnel").strip()
+        legacy_role_name = str(row["role_name"] or "").strip() if "role_name" in row.keys() else ""
+        role_id = int(row["role_id"]) if row["role_id"] is not None else None
+        is_admin_staff = legacy == "admin" or legacy_role_name == "admin" or (admin_role_id is not None and role_id == int(admin_role_id))
+        if is_admin_staff and has_system_admin:
+            conn.execute(
+                "UPDATE staff SET role_id=?, role=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                (manager_role_id, "manager", int(row["id"])),
+            )
+            continue
         if row["role_id"] is not None:
             continue
-        legacy = str(row["role"] or "personnel").strip()
-        normalized = "admin" if single_staff_id == int(row["id"]) else ("personnel" if legacy == "staff" else legacy)
+        normalized = "manager" if single_staff_id == int(row["id"]) else ("personnel" if legacy in {"staff", "admin"} else legacy)
         conn.execute(
             "UPDATE staff SET role_id=?, role=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
             (role_ids.get(normalized, default_role_id), normalized, int(row["id"])),
@@ -368,7 +380,7 @@ def get_staff_by_device(db_or_path: sqlite3.Connection | str | Path, device_name
 
 def _default_role_for_new_staff(conn: sqlite3.Connection) -> int:
     has_staff = int(conn.execute("SELECT COUNT(*) FROM staff").fetchone()[0] or 0) > 0
-    role_name = "personnel" if has_staff else "admin"
+    role_name = "personnel" if has_staff else "manager"
     row = conn.execute("SELECT id FROM roles WHERE name=?", (role_name,)).fetchone()
     return int(row["id"])
 
@@ -581,7 +593,12 @@ def list_roles(db_or_path: sqlite3.Connection | str | Path) -> list[dict[str, An
     ensure_authorization_schema(db_or_path)
     conn, should_close = _connection_from(db_or_path)
     try:
-        return [dict(r) for r in conn.execute("SELECT id,name,display_name,is_system,created_at,updated_at FROM roles ORDER BY id").fetchall()]
+        return [
+            dict(r)
+            for r in conn.execute(
+                "SELECT id,name,display_name,is_system,created_at,updated_at FROM roles WHERE name <> 'admin' ORDER BY id"
+            ).fetchall()
+        ]
     finally:
         if should_close:
             conn.close()
