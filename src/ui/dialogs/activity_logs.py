@@ -1,7 +1,7 @@
 from __future__ import annotations
 import json
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QComboBox, QPushButton, QTableWidget, QTableWidgetItem, QHeaderView, QMessageBox, QPlainTextEdit
+from PySide6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QComboBox, QPushButton, QTableWidget, QTableWidgetItem, QHeaderView, QPlainTextEdit
 from src.services.sts_database import format_log_timestamp
 from src.ui.theme import STYLE
 

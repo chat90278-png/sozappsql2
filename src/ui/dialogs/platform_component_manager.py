@@ -19,7 +19,6 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMenu,
-    QMessageBox,
     QPushButton,
     QSizePolicy,
     QStackedLayout,
@@ -32,6 +31,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from src.ui.message_boxes import ask_yes_no, show_warning
 NAVY = "#0F1F3D"
 GRID = "#E2E8F0"
 MUTED = "#7A8AA3"
@@ -970,15 +970,11 @@ QPushButton#dangerButton {{ background:#FFF5F5; color:#DC2626; border:1px solid 
                 return
             # Popover kapalı — değişiklik varsa uyar
             if self.changed and self.change_count > 0:
-                from PySide6.QtWidgets import QMessageBox as _MB
-                mb = _MB(self)
-                mb.setWindowTitle("Çıkmak istiyor musunuz?")
-                mb.setText(f"{self.change_count} kaydedilmemiş değişiklik var. Çıkmak istiyor musunuz?")
-                mb.setIcon(_MB.Question)
-                mb.setStandardButtons(_MB.Yes | _MB.No)
-                mb.setDefaultButton(_MB.No)
-                mb.setStyleSheet("QLabel { background: transparent; color: #334155; selection-background-color: transparent; }")
-                if mb.exec() == _MB.Yes:
+                if ask_yes_no(
+                    self,
+                    "Çıkmak istiyor musunuz?",
+                    f"{self.change_count} kaydedilmemiş değişiklik var. Çıkmak istiyor musunuz?",
+                ):
                     self.reject()
             else:
                 self.reject()
@@ -1241,7 +1237,7 @@ QPushButton#dangerButton {{ background:#FFF5F5; color:#DC2626; border:1px solid 
             self._mark_saved("Bileşen durumu güncellendi")
             self._load_data()
         elif chosen == delete:
-            if QMessageBox.question(self, "Bileşen Sil", f"{comp.get('name')} silinsin mi?") == QMessageBox.Yes:
+            if ask_yes_no(self, "Bileşen Sil", f"{comp.get('name')} silinsin mi?"):
                 self.store.delete_component(str(comp.get("name") or ""))
                 self._mark_saved("Bileşen silindi")
                 self._load_data()
@@ -1264,7 +1260,7 @@ QPushButton#dangerButton {{ background:#FFF5F5; color:#DC2626; border:1px solid 
             self._mark_saved("Platform durumu güncellendi")
             self._load_data()
         elif chosen == delete:
-            if QMessageBox.question(self, "Platform Sil", f"{platform.get('name')} silinsin mi?") == QMessageBox.Yes:
+            if ask_yes_no(self, "Platform Sil", f"{platform.get('name')} silinsin mi?"):
                 self.store.delete_platform(str(platform.get("name") or ""))
                 self._mark_saved("Platform silindi")
                 self._load_data()
@@ -1426,7 +1422,7 @@ QPushButton#dangerButton {{ background:#FFF5F5; color:#DC2626; border:1px solid 
         def do_save():
             clean = name.text().strip()
             if not clean:
-                QMessageBox.warning(self, "Eksik", "Bileşen adı girin.")
+                show_warning(self, "Eksik", "Bileşen adı girin.")
                 return
             old_platforms = dict((comp or {}).get("platforms") or {})
             payload = {
@@ -1537,7 +1533,7 @@ QPushButton#dangerButton {{ background:#FFF5F5; color:#DC2626; border:1px solid 
         def do_save():
             clean = name.text().strip().upper()
             if not clean:
-                QMessageBox.warning(self, "Eksik", "Platform adı girin.")
+                show_warning(self, "Eksik", "Platform adı girin.")
                 return
             old_name = str((platform or {}).get("name") or clean)
             if is_new:
@@ -1662,15 +1658,11 @@ QPushButton#dangerButton {{ background:#FFF5F5; color:#DC2626; border:1px solid 
             event.ignore()
             return
         if self.changed and self.change_count > 0:
-            from PySide6.QtWidgets import QMessageBox as _MB
-            mb = _MB(self)
-            mb.setWindowTitle("Çıkmak istiyor musunuz?")
-            mb.setText(f"{self.change_count} kaydedilmemiş değişiklik var. Çıkmak istiyor musunuz?")
-            mb.setIcon(_MB.Question)
-            mb.setStandardButtons(_MB.Yes | _MB.No)
-            mb.setDefaultButton(_MB.No)
-            mb.setStyleSheet("QLabel { background: transparent; color: #334155; selection-background-color: transparent; }")
-            if mb.exec() == _MB.No:
+            if not ask_yes_no(
+                self,
+                "Çıkmak istiyor musunuz?",
+                f"{self.change_count} kaydedilmemiş değişiklik var. Çıkmak istiyor musunuz?",
+            ):
                 event.ignore()
                 return
         event.accept()

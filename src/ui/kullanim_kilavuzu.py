@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-import sys
 
 from PySide6.QtCore import QSize, Qt, QTimer, QUrl
 from PySide6.QtGui import QDesktopServices, QImageReader, QPixmap
@@ -14,14 +13,14 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QPushButton,
-    QMessageBox,
     QScrollArea,
     QSizePolicy,
-    QMessageBox,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
+
+from src.ui.message_boxes import show_warning
 
 GUIDE_IMAGE_DIR = Path(__file__).resolve().parent / "assets" / "guide_screens"
 GUIDE_SCREENSHOT_TARGET_SIZE = QSize(1280, 700)
@@ -425,14 +424,14 @@ class UsageGuideDialog(QDialog):
     def open_comprehensive_pdf_guide(self):
         pdf_path = app_folder() / COMPREHENSIVE_GUIDE_PDF
         if not pdf_path.is_file():
-            QMessageBox.warning(
+            show_warning(
                 self,
                 "Kapsamlı Kullanma Kılavuzu",
                 f"{COMPREHENSIVE_GUIDE_PDF} dosyası uygulama klasöründe bulunamadı.\n\nAranan klasör:\n{app_folder()}",
             )
             return
         if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(pdf_path))):
-            QMessageBox.warning(
+            show_warning(
                 self,
                 "Kapsamlı Kullanma Kılavuzu",
                 f"PDF dosyası açılamadı:\n{pdf_path}",

@@ -8,7 +8,6 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
-    QMessageBox,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -16,6 +15,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from src.ui.message_boxes import show_warning
 from src.ui.theme import STYLE
 
 
@@ -182,7 +182,7 @@ QDialog#excelExportDialog QLabel, QDialog#excelExportDialog QCheckBox { backgrou
     def accept_options(self):
         plats = self._selected_platforms()
         if not plats:
-            QMessageBox.warning(self, "Excel’e Aktar", "En az bir platform seçmelisiniz.")
+            show_warning(self, "Excel’e Aktar", "En az bir platform seçmelisiniz.")
             return
 
         self.result_options = {

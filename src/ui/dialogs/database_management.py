@@ -24,7 +24,6 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QListWidget,
     QListWidgetItem,
-    QMessageBox,
     QPushButton,
     QPlainTextEdit,
     QSplitter,
@@ -36,6 +35,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from src.ui.message_boxes import ask_yes_no, show_warning
 from src.ui.theme import STYLE
 from src import auth
 from src.ui.dialogs.database_access import (
@@ -367,7 +367,7 @@ QLabel#sqlHint { color:#94a3b8; font-size:11px; }
         return auth.has_permission(self.current_staff, permission_code, self._permission_db())
 
     def _show_permission_error(self, permission_code: str):
-        QMessageBox.warning(self, "Yetkisiz İşlem", "Bu işlemi yapmak için gerekli yetkiye sahip değilsiniz.")
+        show_warning(self, "Yetkisiz İşlem", "Bu işlemi yapmak için gerekli yetkiye sahip değilsiniz.")
 
     def _table_required_permission(self, table: str) -> Optional[str]:
         return table_required_permission(table)
@@ -1084,7 +1084,7 @@ QLabel#sqlHint { color:#94a3b8; font-size:11px; }
         msg = "Bu işlem veriyi değiştirebilir. Devam edilsin mi?"
         if op in {"DROP", "ALTER", "VACUUM", "ATTACH", "DETACH", "REINDEX"}:
             msg = "Bu işlem veritabanı yapısını/veriyi değiştirebilir. Devam edilsin mi?"
-        return QMessageBox.question(self, "SQL Terminal Onayı", msg) == QMessageBox.Yes
+        return ask_yes_no(self, "SQL Terminal Onayı", msg)
 
     def _set_sql_status(self, text: str, error: bool = False):
         self.sql_status_lbl.setText(text)

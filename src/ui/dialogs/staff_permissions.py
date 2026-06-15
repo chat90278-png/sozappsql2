@@ -14,7 +14,6 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
     QLineEdit,
-    QMessageBox,
     QPushButton,
     QSplitter,
     QTableWidget,
@@ -25,6 +24,7 @@ from PySide6.QtWidgets import (
 )
 
 from src import auth
+from src.ui.message_boxes import ask_yes_no, show_information, show_warning
 from src.ui.theme import STYLE
 
 ROLE_ORDER = ["admin", "manager", "personnel", "viewer"]
@@ -1033,7 +1033,7 @@ class StaffPermissionsDialog(QDialog):
 
     def start_new_staff(self) -> None:
         if not (self._has("create_staff") or self._has("manage_staff")):
-            QMessageBox.warning(self, "Yetkisiz İşlem",
+            show_warning(self, "Yetkisiz İşlem",
                                 "Bu işlemi yapmak için gerekli yetkiye sahip değilsiniz.")
             return
         self.selected_staff_id = None
@@ -1044,13 +1044,13 @@ class StaffPermissionsDialog(QDialog):
         full_name   = self.full_name_input.text().strip()
         device_name = self.device_name_input.text().strip()
         if not full_name or not device_name:
-            QMessageBox.warning(self, "Eksik bilgi", "Ad Soyad ve Cihaz Adı zorunludur.")
+            show_warning(self, "Eksik bilgi", "Ad Soyad ve Cihaz Adı zorunludur.")
             return
         try:
             if self.selected_staff_id is None:
                 pwd = self.password_input.text()
                 if not pwd:
-                    QMessageBox.warning(self, "Eksik bilgi", "Yeni personel için şifre zorunludur.")
+                    show_warning(self, "Eksik bilgi", "Yeni personel için şifre zorunludur.")
                     return
                 auth.create_staff_by_admin(
                     self.db_or_path, self.current_user, device_name, full_name, pwd,
@@ -1071,18 +1071,18 @@ class StaffPermissionsDialog(QDialog):
                 auth.update_staff_record(self.db_or_path, self.current_user,
                                          int(self.selected_staff_id), **kw)
             self.refresh_all()
-            QMessageBox.information(self, "Personel ve Yetki Yönetimi",
+            show_information(self, "Personel ve Yetki Yönetimi",
                                     "Personel bilgileri kaydedildi.")
         except PermissionError:
-            QMessageBox.warning(self, "Yetkisiz İşlem",
+            show_warning(self, "Yetkisiz İşlem",
                                 "Bu işlemi yapmak için gerekli yetkiye sahip değilsiniz.")
         except Exception as exc:
-            QMessageBox.warning(self, "Personel Kaydet", str(exc))
+            show_warning(self, "Personel Kaydet", str(exc))
 
     def reset_password(self) -> None:
         if self.selected_staff_id is None: return
         if not self._has("reset_staff_passwords"):
-            QMessageBox.warning(self, "Yetkisiz İşlem",
+            show_warning(self, "Yetkisiz İşlem",
                                 "Bu işlemi yapmak için gerekli yetkiye sahip değilsiniz.")
             return
         dlg = QDialog(self); dlg.setWindowTitle("Şifre Sıfırla")
@@ -1096,13 +1096,13 @@ class StaffPermissionsDialog(QDialog):
         form.addRow(brow)
         if dlg.exec() != QDialog.Accepted: return
         if not pwd.text():
-            QMessageBox.warning(self, "Eksik bilgi", "Şifre boş olamaz."); return
+            show_warning(self, "Eksik bilgi", "Şifre boş olamaz."); return
         try:
             auth.reset_staff_password(self.db_or_path, self.current_user,
                                        int(self.selected_staff_id), pwd.text())
-            QMessageBox.information(self, "Şifre Sıfırla", "Şifre güncellendi.")
+            show_information(self, "Şifre Sıfırla", "Şifre güncellendi.")
         except Exception as exc:
-            QMessageBox.warning(self, "Şifre Sıfırla", str(exc))
+            show_warning(self, "Şifre Sıfırla", str(exc))
 
     # ── Role buttons ──────────────────────────────────────────────────────────
     def _populate_role_buttons(self) -> None:
@@ -1247,17 +1247,19 @@ class StaffPermissionsDialog(QDialog):
                 self.parent()._refresh_permission_actions()
             self.save_message.show()
         except PermissionError:
-            QMessageBox.warning(self, "Yetkisiz İşlem",
+            show_warning(self, "Yetkisiz İşlem",
                                 "Bu işlemi yapmak için gerekli yetkiye sahip değilsiniz.")
         except Exception as exc:
-            QMessageBox.warning(self, "Yetki Yönetimi", str(exc))
+            show_warning(self, "Yetki Yönetimi", str(exc))
 
     def restore_selected_role_defaults(self) -> None:
         if self.active_role_id is None: return
-        ans = QMessageBox.question(
-            self, "Varsayılanlara Dön",
-            "Seçili rolün yetkileri varsayılan değerlere döndürülecek. Devam edilsin mi?")
-        if ans != QMessageBox.Yes: return
+        if not ask_yes_no(
+            self,
+            "Varsayılanlara Dön",
+            "Seçili rolün yetkileri varsayılan değerlere döndürülecek. Devam edilsin mi?",
+        ):
+            return
         try:
             role = next((r for r in self.roles if int(r["id"]) == int(self.active_role_id)), None)
             if not role: return
@@ -1271,7 +1273,7 @@ class StaffPermissionsDialog(QDialog):
             if self.parent() is not None and hasattr(self.parent(), "_refresh_permission_actions"):
                 self.parent()._refresh_permission_actions()
         except Exception as exc:
-            QMessageBox.warning(self, "Varsayılanlara Dön", str(exc))
+            show_warning(self, "Varsayılanlara Dön", str(exc))
 
 
 # ── Aliases ───────────────────────────────────────────────────────────────────

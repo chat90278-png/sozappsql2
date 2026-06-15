@@ -736,6 +736,7 @@ def reset_role_permissions_to_defaults(db_or_path: sqlite3.Connection | str | Pa
 
 def _build_staff_register_dialog(db_or_path: sqlite3.Connection | str | Path, device_name: str, parent=None):
     from PySide6.QtCore import Qt
+    from src.ui.message_boxes import show_warning
     from PySide6.QtWidgets import (
         QDialog,
         QFormLayout,
@@ -743,7 +744,6 @@ def _build_staff_register_dialog(db_or_path: sqlite3.Connection | str | Path, de
         QHBoxLayout,
         QLabel,
         QLineEdit,
-        QMessageBox,
         QPushButton,
         QVBoxLayout,
     )
@@ -807,22 +807,22 @@ def _build_staff_register_dialog(db_or_path: sqlite3.Connection | str | Path, de
             password = self.password_edit.text()
             password_repeat = self.password_repeat_edit.text()
             if not full_name:
-                QMessageBox.warning(self, "Eksik bilgi", "Personel Adı Soyadı boş bırakılamaz.")
+                show_warning(self, "Eksik bilgi", "Personel Adı Soyadı boş bırakılamaz.")
                 self.full_name_edit.setFocus()
                 return
             if not password:
-                QMessageBox.warning(self, "Eksik bilgi", "Şifre boş bırakılamaz.")
+                show_warning(self, "Eksik bilgi", "Şifre boş bırakılamaz.")
                 self.password_edit.setFocus()
                 return
             if password != password_repeat:
-                QMessageBox.warning(self, "Şifreler eşleşmiyor", "Girdiğiniz şifreler eşleşmiyor. Lütfen tekrar deneyin.")
+                show_warning(self, "Şifreler eşleşmiyor", "Girdiğiniz şifreler eşleşmiyor. Lütfen tekrar deneyin.")
                 self.password_repeat_edit.setFocus()
                 self.password_repeat_edit.selectAll()
                 return
             try:
                 row = create_staff(db_or_path, str(device_name or ""), full_name, password)
             except sqlite3.IntegrityError:
-                QMessageBox.warning(self, "Kayıt mevcut", "Bu cihaz için personel kaydı zaten mevcut. Lütfen giriş yapın.")
+                show_warning(self, "Kayıt mevcut", "Bu cihaz için personel kaydı zaten mevcut. Lütfen giriş yapın.")
                 return
             self.staff = enrich_staff_permissions(db_or_path, build_current_staff(row))
             self.accept()
@@ -831,6 +831,7 @@ def _build_staff_register_dialog(db_or_path: sqlite3.Connection | str | Path, de
 
 
 def _build_staff_login_dialog(db_or_path: sqlite3.Connection | str | Path, row, parent=None):
+    from src.ui.message_boxes import show_warning
     from PySide6.QtWidgets import (
         QDialog,
         QFormLayout,
@@ -838,7 +839,6 @@ def _build_staff_login_dialog(db_or_path: sqlite3.Connection | str | Path, row, 
         QHBoxLayout,
         QLabel,
         QLineEdit,
-        QMessageBox,
         QPushButton,
         QVBoxLayout,
     )
@@ -891,15 +891,15 @@ def _build_staff_login_dialog(db_or_path: sqlite3.Connection | str | Path, row, 
 
         def _submit(self):
             if int(row["is_active"] if row["is_active"] is not None else 1) == 0:
-                QMessageBox.warning(self, "Personel pasif", "Bu kullanıcı pasif durumdadır. Sistem yöneticinizle iletişime geçin.")
+                show_warning(self, "Personel pasif", "Bu kullanıcı pasif durumdadır. Sistem yöneticinizle iletişime geçin.")
                 return
             password = self.password_edit.text()
             if not password:
-                QMessageBox.warning(self, "Eksik bilgi", "Personel Şifresi boş bırakılamaz.")
+                show_warning(self, "Eksik bilgi", "Personel Şifresi boş bırakılamaz.")
                 self.password_edit.setFocus()
                 return
             if not verify_password(password, str(row["password_hash"] or "")):
-                QMessageBox.warning(self, "Giriş başarısız", "Personel şifresi hatalı. Lütfen tekrar deneyin.")
+                show_warning(self, "Giriş başarısız", "Personel şifresi hatalı. Lütfen tekrar deneyin.")
                 self.password_edit.setFocus()
                 self.password_edit.selectAll()
                 return
@@ -925,9 +925,9 @@ def show_staff_login_dialog(db_or_path: sqlite3.Connection | str | Path, row, pa
 
 def _show_staff_inactive_message(parent=None) -> None:
     try:
-        from PySide6.QtWidgets import QMessageBox
+        from src.ui.message_boxes import show_warning
 
-        QMessageBox.warning(parent, "Personel pasif", "Bu kullanıcı pasif durumdadır. Sistem yöneticinizle iletişime geçin.")
+        show_warning(parent, "Personel pasif", "Bu kullanıcı pasif durumdadır. Sistem yöneticinizle iletişime geçin.")
     except Exception:
         pass
 
@@ -1110,15 +1110,17 @@ def verify_staff_password_by_id(db_or_path: sqlite3.Connection | str | Path, sta
 
 
 def require_document_unlock_password(parent, db_or_path: sqlite3.Connection | str | Path, lock_state: dict[str, Any]) -> bool:
-    from PySide6.QtWidgets import QDialog, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton, QVBoxLayout
+    from PySide6.QtWidgets import QDialog, QHBoxLayout, QLabel, QLineEdit, QPushButton, QVBoxLayout
+
+    from src.ui.message_boxes import show_warning
 
     staff_id = lock_state.get("locked_by_staff_id")
     if staff_id is None:
-        QMessageBox.warning(parent, "Belgeler Kilitli", "Kilidi açacak personel kaydı bulunamadı veya pasif durumda.")
+        show_warning(parent, "Belgeler Kilitli", "Kilidi açacak personel kaydı bulunamadı veya pasif durumda.")
         return False
     row = get_staff_by_id(db_or_path, int(staff_id))
     if not row or int(row["is_active"] if row["is_active"] is not None else 1) == 0:
-        QMessageBox.warning(parent, "Belgeler Kilitli", "Kilidi açacak personel kaydı bulunamadı veya pasif durumda.")
+        show_warning(parent, "Belgeler Kilitli", "Kilidi açacak personel kaydı bulunamadı veya pasif durumda.")
         return False
 
     full_name = str(lock_state.get("locked_by_full_name") or row["full_name"] or "Personel")
@@ -1157,12 +1159,12 @@ def require_document_unlock_password(parent, db_or_path: sqlite3.Connection | st
     def submit():
         password = password_edit.text()
         if not password:
-            QMessageBox.warning(dlg, "Eksik bilgi", "Personel Şifresi boş bırakılamaz.")
+            show_warning(dlg, "Eksik bilgi", "Personel Şifresi boş bırakılamaz.")
             password_edit.setFocus()
             return
         valid = verify_staff_password_by_id(db_or_path, int(staff_id), password)
         if not valid:
-            QMessageBox.warning(dlg, "Şifre hatalı", "Şifre hatalı.")
+            show_warning(dlg, "Şifre hatalı", "Şifre hatalı.")
             password_edit.setFocus()
             password_edit.selectAll()
             return
