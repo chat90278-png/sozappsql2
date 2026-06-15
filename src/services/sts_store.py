@@ -940,7 +940,7 @@ class STSStore:
             raise ValueError("Bu dosya türü desteklenmiyor.")
         size = source.stat().st_size
         if size > MAX_CONTRACT_FILE_SIZE_BYTES:
-            raise ValueError("Dosya boyutu 50 MB üstünde olamaz.")
+            raise ValueError("Dosya boyutu 120 MB üstünde olamaz.")
         try:
             content = source.read_bytes()
         except OSError as exc:
@@ -999,21 +999,54 @@ class STSStore:
         if not row:
             raise ValueError("Klasör bulunamadı.")
         before = dict(row)
-        # Klasör altındaki dosya sayısını kontrol et (alt klasörler dahil, CASCADE siler)
-        file_count = self.db.conn.execute(
-            "SELECT COUNT(*) FROM contract_files WHERE folder_id IN "
-            "(WITH RECURSIVE sub(id) AS (SELECT ? UNION ALL SELECT f.id FROM contract_file_folders f JOIN sub ON f.parent_id=sub.id) SELECT id FROM sub)",
-            (int(folder_id),),
-        ).fetchone()[0]
+
+        # Tüm alt klasör id'lerini recursive topla (kendisi dahil)
+        def collect_all_ids(fid):
+            ids = [int(fid)]
+            children = self.db.conn.execute(
+                "SELECT id FROM contract_file_folders WHERE parent_id=?",
+                (int(fid),),
+            ).fetchall()
+            for child in children:
+                ids.extend(collect_all_ids(int(child[0])))
+            return ids
+
+        all_folder_ids = collect_all_ids(int(folder_id))
+        subfolder_count = len(all_folder_ids) - 1  # kendisi hariç alt klasör sayısı
+
+        if all_folder_ids:
+            placeholders = ",".join("?" for _ in all_folder_ids)
+            file_count = self.db.conn.execute(
+                f"SELECT COUNT(*) FROM contract_files WHERE folder_id IN ({placeholders})",
+                all_folder_ids,
+            ).fetchone()[0]
+        else:
+            file_count = 0
+
         with self.db.tx():
-            self.db.conn.execute("DELETE FROM contract_file_folders WHERE id=?", (int(folder_id),))
+            if all_folder_ids:
+                placeholders = ",".join("?" for _ in all_folder_ids)
+                self.db.conn.execute(
+                    f"DELETE FROM contract_files WHERE folder_id IN ({placeholders})",
+                    all_folder_ids,
+                )
+                self.db.conn.execute(
+                    f"DELETE FROM contract_file_folders WHERE id IN ({placeholders})",
+                    all_folder_ids,
+                )
+
         self._log(
             "document_folder_deleted",
             entity_type="document_folder",
             entity_id=int(folder_id),
             source="Document Manager",
-            message=f"Belge klasörü silindi ({file_count} dosya etkilendi)",
-            before={"name": before.get("name"), "parent_id": before.get("parent_id"), "file_count": file_count},
+            message=f"Belge klasörü silindi ({file_count} dosya, {subfolder_count} alt klasör etkilendi)",
+            before={
+                "name": before.get("name"),
+                "parent_id": before.get("parent_id"),
+                "file_count": file_count,
+                "subfolder_count": subfolder_count,
+            },
         )
         return True
 
@@ -1025,6 +1058,91 @@ class STSStore:
         if deleted:
             self._log("document_deleted", entity_type="document", entity_id=int(file_id), source="Document Manager", message="Belge silindi", before=dict(before) if before else None)
         return deleted
+
+    def move_contract_file(self, file_id: int, target_folder_id):
+        """Dosyayı hedef klasöre taşı. target_folder_id=None köke taşır."""
+        row = self.db.conn.execute(
+            "SELECT id,contract_id,folder_id,filename FROM contract_files WHERE id=?",
+            (int(file_id),),
+        ).fetchone()
+        if not row:
+            raise ValueError("Dosya bulunamadı.")
+        file_data = dict(row)
+        contract_id = int(file_data["contract_id"])
+
+        real_target = None
+        if target_folder_id not in (None, "", 0):
+            real_target = self._validate_contract_folder_id(contract_id, target_folder_id)
+
+        ts = now_iso()
+        with self.db.tx():
+            self.db.conn.execute(
+                "UPDATE contract_files SET folder_id=?, updated_at=? WHERE id=?",
+                (real_target, ts, int(file_id)),
+            )
+        self._log(
+            "document_moved",
+            entity_type="document",
+            entity_id=int(file_id),
+            source="Document Manager",
+            message="Belge taşındı",
+            before={"folder_id": file_data.get("folder_id")},
+            after={"folder_id": real_target},
+        )
+        return True
+
+    def move_contract_file_folder(self, folder_id: int, target_parent_id):
+        """Klasörü hedef parent altına taşı. target_parent_id=None köke taşır."""
+        row = self.db.conn.execute(
+            "SELECT id,contract_id,parent_id,name FROM contract_file_folders WHERE id=?",
+            (int(folder_id),),
+        ).fetchone()
+        if not row:
+            raise ValueError("Klasör bulunamadı.")
+        folder_data = dict(row)
+        contract_id = int(folder_data["contract_id"])
+
+        real_parent = None
+        if target_parent_id not in (None, "", 0):
+            real_parent = self._validate_contract_folder_id(contract_id, target_parent_id)
+
+        # Klasörün kendi alt ağacına taşınmasını engelle
+        if real_parent is not None:
+            def is_descendant(fid, anc_id):
+                r = self.db.conn.execute(
+                    "SELECT parent_id FROM contract_file_folders WHERE id=?", (int(fid),)
+                ).fetchone()
+                if not r:
+                    return False
+                pid = r[0]
+                if pid is None:
+                    return False
+                if int(pid) == int(anc_id):
+                    return True
+                return is_descendant(int(pid), anc_id)
+            if int(real_parent) == int(folder_id) or is_descendant(real_parent, folder_id):
+                raise ValueError("Klasör kendi alt klasörüne taşınamaz.")
+
+        # Aynı seviyede aynı isim var mı?
+        if self._folder_name_exists(contract_id, real_parent, str(folder_data["name"]), exclude_id=int(folder_id)):
+            raise ValueError("Hedef klasörde aynı adda bir klasör zaten var.")
+
+        ts = now_iso()
+        with self.db.tx():
+            self.db.conn.execute(
+                "UPDATE contract_file_folders SET parent_id=?, updated_at=? WHERE id=?",
+                (real_parent, ts, int(folder_id)),
+            )
+        self._log(
+            "document_folder_moved",
+            entity_type="document_folder",
+            entity_id=int(folder_id),
+            source="Document Manager",
+            message="Belge klasörü taşındı",
+            before={"parent_id": folder_data.get("parent_id")},
+            after={"parent_id": real_parent},
+        )
+        return True
 
     def _contract_users(self, contract_id: int) -> List[str]:
         rows = self.db.conn.execute(
