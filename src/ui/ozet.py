@@ -111,6 +111,34 @@ class SummaryContext:
     deliveries: Dict[str, List[DeliveryInfo]]
 
 
+def latest_acceptance_date_from_deliveries(deliveries: Dict[str, List[DeliveryInfo]]) -> str:
+    dates: List[date] = []
+    for delivery_list in (deliveries or {}).values():
+        for delivery in delivery_list or []:
+            parsed = parse_iso_date(getattr(delivery, "acceptance_date", ""))
+            if parsed:
+                dates.append(parsed)
+    if not dates:
+        return ""
+    return max(dates).isoformat()
+
+
+def latest_acceptance_date_for_system(ctx: SummaryContext, system_name: str, fallback: str = "") -> str:
+    system_deliveries = {system_name: list((ctx.deliveries or {}).get(system_name, []))}
+    latest = latest_acceptance_date_from_deliveries(system_deliveries)
+    if latest:
+        return latest
+    return fallback if parse_iso_date(fallback) else ""
+
+
+def latest_acceptance_date_for_context(ctx: SummaryContext) -> str:
+    latest = latest_acceptance_date_from_deliveries(ctx.deliveries)
+    if latest:
+        return latest
+    fallback = ctx.ci.acceptance_date if ctx.ci else ""
+    return fallback if parse_iso_date(fallback) else ""
+
+
 class ContractSummaryDialog(QDialog):
     """Ana sayfadaki özet ikonundan açılan sözleşme/sistem özet ekranı."""
 
@@ -855,7 +883,7 @@ class ContractSummaryDialog(QDialog):
             if not ci:
                 continue
             deadline = parse_iso_date(ci.completion_date)
-            acceptance = str(ci.acceptance_date or "")
+            acceptance = latest_acceptance_date_for_context(ctx)
             rows.append([
                 ctx.button_label.replace("Ana Söz.", "Ana Sözleşme"),
                 display_date(ci.completion_date),
@@ -890,13 +918,13 @@ class ContractSummaryDialog(QDialog):
     def refresh_dates(self, ci: Optional[ContractInfo]):
         deadline = parse_iso_date(ci.completion_date if ci else self.item.get("completion_date", ""))
         self.termin_value.setText(display_date(ci.completion_date if ci else self.item.get("completion_date", "")))
-        acceptance = str((ci.acceptance_date if ci else "") or "")
-        if not acceptance:
-            for ctx in self.selected_contexts():
-                for delivery_list in ctx.deliveries.values():
-                    for delivery in delivery_list:
-                        if str(delivery.acceptance_date or "").strip():
-                            acceptance = str(delivery.acceptance_date or "")
+        scoped_deliveries: Dict[str, List[DeliveryInfo]] = {}
+        for ctx in self.selected_contexts():
+            for system_name, delivery_list in (ctx.deliveries or {}).items():
+                scoped_deliveries.setdefault(system_name, []).extend(delivery_list or [])
+        acceptance = latest_acceptance_date_from_deliveries(scoped_deliveries)
+        if not acceptance and ci:
+            acceptance = ci.acceptance_date if parse_iso_date(ci.acceptance_date) else ""
         status = ci.status if ci else self.item.get("status", "")
         self.days_value.setText(delivery_timing_text(deadline, parse_iso_date(acceptance), status))
         self.acceptance_value.setText(display_date(acceptance))
@@ -1012,7 +1040,7 @@ class ContractSummaryDialog(QDialog):
                     ctx.button_label.replace("Ana Söz.", "Ana Sözleşme"),
                     status_label(ci.status if ci else ctx.item.get("status", "")),
                     iso_display(ci.completion_date if ci else ctx.item.get("completion_date", "")),
-                    iso_display(ci.acceptance_date if ci else ""),
+                    iso_display(latest_acceptance_date_for_context(ctx)),
                     str(len(ctx.systems)),
                 ])
             self._render_info_rows(rows, status_col=1)
@@ -1030,7 +1058,7 @@ class ContractSummaryDialog(QDialog):
                 sys.name,
                 status_label(sys.status),
                 iso_display(sys.completion_date),
-                iso_display(getattr(sys, "acceptance_date", "")),
+                iso_display(latest_acceptance_date_for_system(ctx, sys.name, getattr(sys, "acceptance_date", ""))),
                 fmt_num(acceptance_count),
             ])
         self._render_info_rows(rows, status_col=1)
