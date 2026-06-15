@@ -5,693 +5,1401 @@ import calendar
 from datetime import date, datetime
 from typing import Callable, Dict, List, Optional
 
-from PySide6.QtCore import Qt, QPoint, Signal
+from PySide6.QtCore import Qt, QPropertyAnimation, QEasingCurve, QTimer, Signal
 from PySide6.QtWidgets import (
-    QApplication,
-    QButtonGroup,
-    QDialog,
-    QFrame,
-    QGridLayout,
-    QHBoxLayout,
-    QLabel,
-    QMessageBox,
-    QComboBox,
-    QPushButton,
-    QScrollArea,
-    QVBoxLayout,
-    QWidget,
+    QApplication, QDialog, QFrame, QGridLayout, QHBoxLayout,
+    QLabel, QComboBox, QPushButton, QScrollArea, QSizePolicy,
+    QVBoxLayout, QWidget,
 )
 
-from src.config.app_config import APP_TITLE, TR_MONTHS, TR_WEEKDAYS
-from src.models.app_models import SystemInfo
+from src.config.app_config import APP_TITLE, TR_MONTHS
 from src.services.excel_store import ExcelStore
 from src.ui.theme import STYLE
 
+_STATUS_ORDER = {"geciken": 0, "kritik": 1, "normal": 2, "tamamlandi": 3, "bos": 9}
+_COLOR  = {"geciken": "#e1473f", "kritik": "#e8b53f", "normal": "#397bd8", "tamamlandi": "#39a96b", "bos": "#d9e1ea"}
+_BG     = {"geciken": "#fef2f2", "kritik": "#fffbeb", "normal":  "#e8f0fe", "tamamlandi": "#ecfdf5"}
+_FG     = {"geciken": "#b91c1c", "kritik": "#92400e", "normal":  "#1f5be3", "tamamlandi": "#047857"}
+_LABEL  = {"geciken": "Geciken", "kritik": "60 gün içinde", "normal": "Normal",
+           "tamamlandi": "Teslim edildi", "bos": "Kayıt yok"}
 
-def parse_calendar_iso_date(text: str) -> Optional[date]:
-    text = (text or "").strip()
-    if not text:
+_EXTRA_QSS = """
+QDialog { background: transparent; }
+
+QFrame#monthCard { border-radius:18px; }
+QFrame#monthCard:hover { border-color:#7eb3d8 !important; }
+QScrollArea#plainScroll { border:none; background:transparent; }
+QScrollArea#plainScroll > QWidget > QWidget { background:transparent; }
+QScrollArea#yearGridScroll { border:none; background:transparent; }
+QScrollArea#yearGridScroll > QWidget { background:transparent; }
+QScrollArea#yearGridScroll QWidget#calBg { background:transparent; }
+QWidget#calBg { background: transparent; }
+QWidget#detailSideBg { background:#f8fafc; border-right:1px solid #e2e8f0; }
+QWidget#detailRightBg { background:#f0f4fc; }
+QWidget#detailTopbarBg { background:#ffffff; border-bottom:1px solid #e2e8f0; }
+QWidget#dayHeaderBg { background:#f0f4fc; border-bottom:1px solid #e2e8f0; }
+QFrame#dayCellNormal { background:#ffffff; border:1px solid #d8e2ed; border-radius:10px; min-height:90px; }
+QFrame#dayCellToday  { background:#ffffff; border:2px solid #1f5be3; border-radius:10px; min-height:90px; }
+QFrame#dayCellSelected { background:#ffffff; border:2px solid #5b9bd5; border-radius:10px; min-height:90px; }
+QFrame#dayCellEmpty  { background:transparent; border:1px solid transparent; border-radius:10px; min-height:90px; }
+QFrame#statCard { background:#ffffff; border:1px solid #e2e8f0; border-radius:10px; }
+QFrame#recCard  { background:#ffffff; border:1px solid #e2e8f0; border-radius:8px; }
+
+/* Modern ince scrollbar */
+QScrollArea QScrollBar:vertical {
+    width: 6px;
+    background: transparent;
+    margin: 4px 2px;
+}
+QScrollArea QScrollBar::handle:vertical {
+    background: #d1d9e0;
+    border-radius: 3px;
+    min-height: 30px;
+}
+QScrollArea QScrollBar::handle:vertical:hover {
+    background: #9aabb8;
+}
+QScrollArea QScrollBar::add-line:vertical,
+QScrollArea QScrollBar::sub-line:vertical {
+    height: 0px;
+}
+QScrollArea QScrollBar::add-page:vertical,
+QScrollArea QScrollBar::sub-page:vertical {
+    background: transparent;
+}
+QScrollArea QScrollBar:horizontal { height: 0px; }
+"""
+
+
+def _parse_date(text: str) -> Optional[date]:
+    t = (text or "").strip()
+    if not t:
         return None
     try:
-        return datetime.strptime(text, "%Y-%m-%d").date()
+        return datetime.strptime(t, "%Y-%m-%d").date()
     except ValueError:
         return None
 
 
-class CalendarEventChip(QLabel):
-    doubleClicked = Signal(object)
+def _effective_date(item: dict) -> Optional[date]:
+    """
+    Sistem kaydı  → completion_date (termin)
+    Kabul kaydı   → acceptance_date > planned_acceptance_date > None
+    """
+    ctype = str(item.get("type") or "").lower()
+    if "sistem" in ctype:
+        return _parse_date(str(item.get("completion_date") or ""))
+    d = _parse_date(str(item.get("acceptance_date") or ""))
+    if d:
+        return d
+    return _parse_date(str(item.get("planned_acceptance_date") or ""))
 
-    def __init__(self, text: str, event_data: dict, parent=None):
-        super().__init__(text, parent)
-        self.event_data = dict(event_data or {})
-        self.setCursor(Qt.PointingHandCursor)
 
-    def mouseDoubleClickEvent(self, event):
-        self.doubleClicked.emit(self.event_data)
-        super().mouseDoubleClickEvent(event)
+def _classify(item: dict, eff: date, today: date) -> str:
+    s = str(item.get("status") or "").lower()
+    # Gerçek kabul tarihi varsa → tamamlandı
+    if item.get("acceptance_date") or "tamam" in s or "teslim" in s:
+        return "tamamlandi"
+    # planned_acceptance_date kullanılıyorsa normal sınıflandırma
+    delta = (eff - today).days
+    if delta < 0:  return "geciken"
+    if delta <= 60: return "kritik"
+    return "normal"
 
 
-class CalendarEventCard(QFrame):
-    clicked = Signal(object)
+def _first_col(year: int, month1: int) -> int:
+    """Pazartesi=0 … Pazar=6 (month1 is 1-indexed)."""
+    return date(year, month1, 1).weekday()
 
-    def __init__(self, event_data: dict, parent=None):
+
+def _elide(text: str, n: int = 16) -> str:
+    s = str(text or "")
+    return s if len(s) <= n else s[:n - 1] + "…"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+class _ClickFrame(QFrame):
+    clicked = Signal()
+    def mousePressEvent(self, ev):
+        if ev.button() == Qt.LeftButton:
+            self.clicked.emit()
+        super().mousePressEvent(ev)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Kayıt kartı (sol panel)
+# ─────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# Sol Panel — Ağaç yapısı (Platform → Sözleşme → SD → Sistem)
+# ─────────────────────────────────────────────────────────────────────────────
+
+_STATUS_COLORS = {
+    "geciken":    ("#fef2f2", "#a32d2d", "#e1473f"),
+    "kritik":     ("#fffbeb", "#854f0b", "#e8b53f"),
+    "normal":     ("#e6f1fb", "#185fa5", "#397bd8"),
+    "tamamlandi": ("#eaf3de", "#047857", "#39a96b"),
+}
+_STATUS_LABEL = {
+    "geciken": "Geciken", "kritik": "60 gün",
+    "normal": "Normal", "tamamlandi": "Teslim",
+}
+_WORST_ORDER = ["geciken", "kritik", "normal", "tamamlandi"]
+
+
+def _worst_cls(classes):
+    for c in _WORST_ORDER:
+        if c in classes:
+            return c
+    return "normal"
+
+
+def _date_label(ev: dict) -> str:
+    """Tarihin ne olduğunu etiketle."""
+    if ev.get("acceptance_date"):
+        return "Kabul"
+    if ev.get("planned_acceptance_date") and "sistem" not in str(ev.get("type","")).lower():
+        return "Planlanan"
+    return "Termin"
+
+
+def _date_display(ev: dict) -> tuple:
+    """(etiket, tarih_str, renk) döndür."""
+    ctype = str(ev.get("type") or "").lower()
+    acc = str(ev.get("acceptance_date") or "")
+    plan = str(ev.get("planned_acceptance_date") or "")
+    comp = str(ev.get("completion_date") or "")
+
+    if "sistem" in ctype:
+        d = _parse_date(comp)
+        return ("Termin", d.strftime("%d.%m.%Y") if d else "—", "#64748b")
+
+    if acc:
+        d = _parse_date(acc)
+        ds = d.strftime("%d.%m.%Y") if d else acc
+        # Erken mi geç mi?
+        if plan and d:
+            pd = _parse_date(plan)
+            if pd:
+                diff = (d - pd).days
+                if diff < 0:
+                    return ("Kabul ✓", f"{ds} ({abs(diff)}g erken)", "#047857")
+                elif diff > 0:
+                    return ("Kabul ⚠", f"{ds} ({diff}g geç)", "#854f0b")
+        return ("Kabul", ds, "#047857")
+    if plan:
+        d = _parse_date(plan)
+        return ("Planlanan", d.strftime("%d.%m.%Y") if d else plan, "#185fa5")
+    return ("—", "—", "#94a3b8")
+
+
+class _BadgeLabel(QLabel):
+    """Renkli durum etiketi."""
+    def __init__(self, cls: str, parent=None):
         super().__init__(parent)
-        self.event_data = dict(event_data or {})
-        self.setCursor(Qt.PointingHandCursor)
+        bg, fg, _ = _STATUS_COLORS.get(cls, ("#f1f5f9", "#475569", "#94a3b8"))
+        txt = _STATUS_LABEL.get(cls, cls)
+        self.setText(txt)
+        self.setStyleSheet(
+            f"background:{bg}; color:{fg}; border-radius:4px;"
+            "padding:1px 6px; font-size:9px; font-weight:700; border:none;"
+        )
+        self.setFixedHeight(16)
 
-    def mousePressEvent(self, event):
-        if event.button() == Qt.LeftButton:
-            self.clicked.emit(self.event_data)
-        super().mousePressEvent(event)
+
+class _TreeRow(QFrame):
+    """Tıklanabilir ağaç satırı."""
+    clicked = Signal()
+
+    def __init__(self, indent: int, icon: str, label: str,
+                 cls: str = "", has_children: bool = False,
+                 date_lbl: str = "", date_val: str = "", date_color: str = "",
+                 dimmed: bool = False, parent=None):
+        super().__init__(parent)
+        self.setObjectName("treeRow")
+        self._has_children = has_children
+        self._expanded = True
+        self.setStyleSheet("QFrame#treeRow{background:transparent; border:none;}")
+        if has_children:
+            self.setCursor(Qt.PointingHandCursor)
+
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(indent, 2, 6, 2)
+        lay.setSpacing(5)
+
+        if has_children:
+            self._chev = QLabel("▶")
+            self._chev.setStyleSheet(
+                "background:transparent; color:#94a3b8; font-size:9px; border:none;"
+            )
+            self._chev.setFixedWidth(10)
+            lay.addWidget(self._chev)
+        else:
+            spacer = QLabel()
+            spacer.setFixedWidth(10)
+            spacer.setStyleSheet("background:transparent; border:none;")
+            lay.addWidget(spacer)
+
+        if icon:
+            ic = QLabel(icon)
+            ic.setStyleSheet("background:transparent; color:#94a3b8; font-size:11px; border:none;")
+            ic.setFixedWidth(14)
+            lay.addWidget(ic)
+
+        name_lbl = QLabel(label)
+        name_lbl.setStyleSheet(
+            f"background:transparent; font-size:11px; font-weight:500;"
+            f"color:{'#94a3b8' if dimmed else '#1e293b'}; border:none;"
+        )
+        name_lbl.setWordWrap(False)
+        name_lbl.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        lay.addWidget(name_lbl, 1)
+
+        if date_val and date_val != "—":
+            dl = QLabel(date_val)
+            dl.setStyleSheet(
+                f"background:transparent; font-size:9px; color:{date_color}; border:none;"
+                "white-space:nowrap;"
+            )
+            lay.addWidget(dl)
+
+        if cls:
+            lay.addWidget(_BadgeLabel(cls))
+
+        if dimmed:
+            self.setStyleSheet(
+                "QFrame#treeRow{background:transparent; border:none; opacity:0.3;}"
+            )
+
+    def set_expanded(self, expanded: bool):
+        self._expanded = expanded
+        if hasattr(self, "_chev"):
+            self._chev.setText("▼" if expanded else "▶")
+
+    def mousePressEvent(self, ev):
+        if ev.button() == Qt.LeftButton and self._has_children:
+            self.clicked.emit()
+        super().mousePressEvent(ev)
+
+    def enterEvent(self, ev):
+        if self._has_children:
+            self.setStyleSheet(
+                "QFrame#treeRow{background:rgba(0,0,0,0.04); border:none; border-radius:6px;}"
+            )
+        super().enterEvent(ev)
+
+    def leaveEvent(self, ev):
+        self.setStyleSheet("QFrame#treeRow{background:transparent; border:none;}")
+        super().leaveEvent(ev)
 
 
-class CalendarMorePopup(QFrame):
-    """Açılan gün kutusu: sığmayan sözleşme/sistemleri hücrenin altında listeler."""
+class _CollapsibleSection(QWidget):
+    """Açılır/kapanır içerik."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._lay = QVBoxLayout(self)
+        self._lay.setContentsMargins(0, 0, 0, 0)
+        self._lay.setSpacing(1)
+        self._visible = True
 
-    def __init__(self, events: List[dict], chip_style: Callable[[str], str], detail_cb: Callable[[dict], None], parent=None):
-        super().__init__(parent, Qt.Popup | Qt.FramelessWindowHint)
-        self.events = list(events or [])
-        self.chip_style = chip_style
-        self.detail_cb = detail_cb
-        self.setObjectName("calendarMorePopup")
-        self.setStyleSheet(STYLE)
+    def add(self, w: QWidget):
+        self._lay.addWidget(w)
+
+    def set_visible(self, v: bool):
+        self._visible = v
+        self.setVisible(v)
+
+
+class _SideTreePanel(QWidget):
+    """
+    Sol panel — Platform > Sözleşme > SD/Kabul > Sistem ağacı.
+    Stat kartlarına tıklanınca filtreler, tekrar tıklayınca kalkar.
+    """
+
+    def __init__(self, events: List[dict], year: int, month: int,
+                 detail_handler=None, parent=None):
+        super().__init__(parent)
+        self._events = events
+        self._year = year
+        self._month = month
+        self._month1 = month + 1
+        self._detail_handler = detail_handler
+        self._active_filter: Optional[str] = None
+        self._sections: List[tuple] = []  # (row, section) pairs
+        self.setObjectName("detailSideBg")
+        self.setFixedWidth(300)
         self._build()
 
     def _build(self):
-        root = QVBoxLayout(self)
-        root.setContentsMargins(10, 8, 10, 10)
-        root.setSpacing(6)
-        arrow = QLabel("▲")
-        arrow.setObjectName("calendarPopupArrow")
-        arrow.setAlignment(Qt.AlignCenter)
-        root.addWidget(arrow)
-        title = QLabel(f"Bu günde {len(self.events)} kayıt")
-        title.setObjectName("calendarPopupTitle")
-        root.addWidget(title)
-        for ev in self.events:
-            chip = CalendarEventChip(self._event_label(ev), ev, self)
-            chip.setStyleSheet(self.chip_style(ev.get("status_class", "normal")))
-            chip.setToolTip(self._tooltip(ev))
-            chip.doubleClicked.connect(self.detail_cb)
-            root.addWidget(chip)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
 
-    def _event_label(self, ev: dict) -> str:
-        if ev.get("mode") == "system":
-            return f"• {ev.get('no', '')} · {ev.get('system_label', '')}"
-        return f"• {ev.get('no', '')} · {ev.get('platform', '')}"
+        # Başlık
+        hdr = QWidget()
+        hdr.setObjectName("detailSideBg")
+        hl = QVBoxLayout(hdr)
+        hl.setContentsMargins(16, 14, 16, 8)
+        hl.setSpacing(3)
+        kicker = QLabel(f"{self._year} / {TR_MONTHS[self._month].upper()}")
+        kicker.setStyleSheet(
+            "color:#64748b; font-size:10px; font-weight:900; background:transparent;"
+        )
+        hl.addWidget(kicker)
+        title = QLabel("Kayıt Paneli")
+        title.setStyleSheet(
+            "color:#0f172a; font-size:17px; font-weight:900; background:transparent;"
+        )
+        hl.addWidget(title)
+        outer.addWidget(hdr)
 
-    def _tooltip(self, ev: dict) -> str:
-        parts = [
-            f"Sözleşme: {ev.get('no', '')}",
-            f"Platform: {ev.get('platform', '')}",
+        # Stat kartları
+        stats_w = QWidget()
+        stats_w.setObjectName("detailSideBg")
+        sg = QGridLayout(stats_w)
+        sg.setContentsMargins(10, 4, 10, 6)
+        sg.setSpacing(5)
+        self._stat_btns: Dict[str, QFrame] = {}
+        self._stat_nums: Dict[str, QLabel] = {}
+        items = [
+            ("geciken", "Geciken", "#fef2f2", "#a32d2d", "#e1473f"),
+            ("kritik",  "60 gün",  "#fffbeb", "#854f0b", "#e8b53f"),
+            ("tamamlandi","Teslim","#eaf3de", "#047857", "#39a96b"),
+            (None,      "Toplam",  "#f8fafc", "#374151", "#94a3b8"),
         ]
-        if ev.get("mode") == "system":
-            parts.append(f"Sistem: {ev.get('system_label', '')}")
-        parts.extend([
-            f"Kullanıcı: {ev.get('user', '')}",
-            f"Tür: {ev.get('type', '')}",
-            f"Bitiş: {ev.get('deadline').isoformat() if ev.get('deadline') else ''}",
-            f"Durum: {ev.get('status', '')}",
-        ])
-        return "\n".join(parts)
+        for i, (key, lbl, bg, fg, border) in enumerate(items):
+            card = QFrame()
+            card.setObjectName(f"statCard_{key or 'total'}")
+            card.setStyleSheet(
+                f"QFrame{{background:{bg}; border:1.5px solid transparent;"
+                f"border-radius:8px; cursor:pointer;}}"
+            )
+            card.setCursor(Qt.PointingHandCursor if key else Qt.ArrowCursor)
+            cl = QVBoxLayout(card)
+            cl.setContentsMargins(6, 5, 6, 5)
+            cl.setSpacing(0)
+            num = QLabel("0")
+            num.setAlignment(Qt.AlignCenter)
+            num.setStyleSheet(
+                f"background:transparent; font-size:18px; font-weight:900;"
+                f"color:{fg}; border:none;"
+            )
+            sub = QLabel(lbl)
+            sub.setAlignment(Qt.AlignCenter)
+            sub.setStyleSheet(
+                f"background:transparent; font-size:9px; color:{fg}; opacity:.8; border:none;"
+            )
+            cl.addWidget(num)
+            cl.addWidget(sub)
+            sg.addWidget(card, i // 2, i % 2)
+            self._stat_nums[key or "_total"] = num
+            self._stat_btns[key or "_total"] = (card, border, bg)
+            if key:
+                card.mousePressEvent = (
+                    lambda e, k=key: self._on_stat_click(k)
+                )
+            else:
+                card.mousePressEvent = lambda e: self._on_stat_click(None)
+        outer.addWidget(stats_w)
+
+        # Filtre bar
+        self._filter_bar = QWidget()
+        self._filter_bar.setObjectName("detailSideBg")
+        fb_lay = QHBoxLayout(self._filter_bar)
+        fb_lay.setContentsMargins(12, 3, 12, 3)
+        fb_lay.setSpacing(6)
+        self._filter_lbl = QLabel("")
+        self._filter_lbl.setStyleSheet(
+            "font-size:10px; font-weight:700; background:transparent; border:none;"
+        )
+        self._filter_lbl.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        fb_lay.addWidget(self._filter_lbl, 1)
+        clear_btn = QPushButton("✕ temizle")
+        clear_btn.setStyleSheet(
+            "QPushButton{background:transparent; color:#94a3b8; border:0.5px solid #d1d9e0;"
+            "border-radius:3px; padding:1px 5px; font-size:9px;}"
+            "QPushButton:hover{color:#475569; background:#f1f5f9;}"
+        )
+        clear_btn.setFixedHeight(18)
+        clear_btn.clicked.connect(lambda: self._on_stat_click(None))
+        fb_lay.addWidget(clear_btn)
+        self._filter_bar.setVisible(False)
+        outer.addWidget(self._filter_bar)
+
+        sep = QFrame()
+        sep.setFrameShape(QFrame.HLine)
+        sep.setStyleSheet("background:#e2e8f0; max-height:1px;")
+        outer.addWidget(sep)
+
+        # Ağaç scroll
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setObjectName("plainScroll")
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self._tree_host = QWidget()
+        self._tree_host.setObjectName("detailSideBg")
+        self._tree_lay = QVBoxLayout(self._tree_host)
+        self._tree_lay.setContentsMargins(8, 6, 8, 10)
+        self._tree_lay.setSpacing(2)
+        self._tree_lay.addStretch()
+        scroll.setWidget(self._tree_host)
+        outer.addWidget(scroll, 1)
+
+        self._refresh_tree()
+
+    # ── veri ────────────────────────────────────────────────────────────
+    def _filtered_events(self) -> List[dict]:
+        f = self._active_filter
+        if not f:
+            return list(self._events)
+        return [e for e in self._events if e["_cls"] == f]
+
+    def _counts(self):
+        c = {"geciken": 0, "kritik": 0, "tamamlandi": 0}
+        for e in self._events:
+            if e["_cls"] in c:
+                c[e["_cls"]] += 1
+        return c
+
+    def _group_by_platform(self, events: List[dict]):
+        """events → {platform: {no: {type: [ev]}}}"""
+        result = {}
+        for ev in events:
+            pl = str(ev.get("platform") or "?")
+            no = str(ev.get("no") or "?")
+            tp = str(ev.get("type") or "?")
+            result.setdefault(pl, {}).setdefault(no, {}).setdefault(tp, []).append(ev)
+        return result
+
+    # ── render ───────────────────────────────────────────────────────────
+    def _refresh_tree(self):
+        # Temizle
+        while self._tree_lay.count() > 1:
+            item = self._tree_lay.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        # Stats güncelle
+        c = self._counts()
+        for k, num in self._stat_nums.items():
+            num.setText(str(len(self._events) if k == "_total" else c.get(k, 0)))
+
+        # Aktif filtre stat kartı vurgula
+        for k, (card, border_color, bg) in self._stat_btns.items():
+            active = (k == self._active_filter) or (k == "_total" and not self._active_filter)
+            if active and k != "_total":
+                card.setStyleSheet(
+                    f"QFrame{{background:{bg}; border:1.5px solid {border_color}; border-radius:8px;}}"
+                )
+            else:
+                card.setStyleSheet(
+                    f"QFrame{{background:{bg}; border:1.5px solid transparent; border-radius:8px;}}"
+                )
+
+        events = self._filtered_events()
+        if not events:
+            empty = QLabel("Bu filtrede kayıt yok.")
+            empty.setStyleSheet(
+                "color:#94a3b8; font-size:11px; background:transparent; padding:12px;"
+            )
+            empty.setAlignment(Qt.AlignCenter)
+            self._tree_lay.insertWidget(0, empty)
+            return
+
+        grouped = self._group_by_platform(events)
+        all_events = list(self._events)
+        insert_idx = 0
+
+        for platform, contracts in sorted(grouped.items()):
+            # Platform satırı
+            pl_evs = [e for e in all_events if e.get("platform") == platform]
+            pl_cls = _worst_cls([e["_cls"] for e in pl_evs])
+            _, _, pl_dot = _STATUS_COLORS.get(pl_cls, ("", "", "#94a3b8"))
+            pl_row = _TreeRow(
+                indent=6, icon="●", label=platform,
+                cls=pl_cls, has_children=True,
+                parent=self._tree_host
+            )
+            # Dot rengini platform rengine çevir — platform rengi önceden belirlenemiyor
+            # en kötü durumu yansıt
+            self._tree_lay.insertWidget(insert_idx, pl_row)
+            insert_idx += 1
+
+            pl_section = _CollapsibleSection(self._tree_host)
+            self._tree_lay.insertWidget(insert_idx, pl_section)
+            insert_idx += 1
+            pl_row.clicked.connect(
+                lambda chk=pl_row, sec=pl_section: self._toggle(chk, sec)
+            )
+
+            for no, types in sorted(contracts.items()):
+                # Sözleşme satırı
+                no_evs = [e for e in all_events if e.get("platform") == platform and e.get("no") == no]
+                no_cls = _worst_cls([e["_cls"] for e in no_evs])
+                no_row = _TreeRow(
+                    indent=16, icon="📄", label=no,
+                    cls=no_cls, has_children=True,
+                    parent=self._tree_host
+                )
+                pl_section.add(no_row)
+
+                no_section = _CollapsibleSection(self._tree_host)
+                pl_section.add(no_section)
+                no_row.clicked.connect(
+                    lambda chk=no_row, sec=no_section: self._toggle(chk, sec)
+                )
+
+                for ctype, evs in sorted(types.items()):
+                    # SD / Ana Sözleşme / Sistem tipi satırı
+                    t_cls = _worst_cls([e["_cls"] for e in evs])
+                    has_sub = len(evs) > 1
+
+                    first_ev = evs[0]
+                    dlbl, dval, dcol = _date_display(first_ev)
+                    dimmed = (self._active_filter is not None and
+                              all(e["_cls"] != self._active_filter for e in evs))
+
+                    t_row = _TreeRow(
+                        indent=28, icon="—",
+                        label=ctype,
+                        cls=t_cls,
+                        has_children=has_sub,
+                        date_val=dval if not has_sub else "",
+                        date_color=dcol,
+                        dimmed=dimmed,
+                        parent=self._tree_host
+                    )
+                    no_section.add(t_row)
+
+                    if has_sub:
+                        t_section = _CollapsibleSection(self._tree_host)
+                        no_section.add(t_section)
+                        t_row.clicked.connect(
+                            lambda chk=t_row, sec=t_section: self._toggle(chk, sec)
+                        )
+                        for ev in sorted(evs, key=lambda x: x["_eff_date"]):
+                            ev_dlbl, ev_dval, ev_dcol = _date_display(ev)
+                            sys_row = _TreeRow(
+                                indent=40, icon="·",
+                                label=str(ev.get("title") or ev.get("no") or ""),
+                                cls=ev["_cls"],
+                                has_children=False,
+                                date_val=ev_dval,
+                                date_color=ev_dcol,
+                                dimmed=(self._active_filter is not None and
+                                        ev["_cls"] != self._active_filter),
+                                parent=self._tree_host
+                            )
+                            t_section.add(sys_row)
+                    else:
+                        # Tek kayıt — tıklanınca detay
+                        ev = evs[0]
+                        t_row.setCursor(Qt.PointingHandCursor)
+                        t_row._has_children = False
+
+    def _toggle(self, row: _TreeRow, section: _CollapsibleSection):
+        expanded = not section._visible
+        section.set_visible(expanded)
+        row.set_expanded(expanded)
+
+    def _on_stat_click(self, key: Optional[str]):
+        if key is None or key == self._active_filter:
+            self._active_filter = None
+        else:
+            self._active_filter = key
+
+        # Filtre bar
+        if self._active_filter:
+            bg, fg, _ = _STATUS_COLORS.get(self._active_filter, ("", "#374151", ""))
+            self._filter_lbl.setText(
+                f"● {_STATUS_LABEL.get(self._active_filter, '')} filtresi aktif"
+            )
+            self._filter_lbl.setStyleSheet(
+                f"font-size:10px; font-weight:700; color:{fg}; background:transparent; border:none;"
+            )
+            self._filter_bar.setVisible(True)
+        else:
+            self._filter_bar.setVisible(False)
+
+        self._refresh_tree()
+
+    def update_events(self, events: List[dict]):
+        self._events = events
+        self._refresh_tree()
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Ay Detay Dialog
+# ─────────────────────────────────────────────────────────────────────────────
+# Ay Detay Dialog
+# ─────────────────────────────────────────────────────────────────────────────
+class _MonthDetailDialog(QDialog):
+    def __init__(self, events: List[dict], year: int, month: int,
+                 detail_handler: Optional[Callable], parent=None):
+        super().__init__(parent)
+        self._events = events
+        self._year = year
+        self._month = month          # 0-indexed
+        self._month1 = month + 1     # 1-indexed for calendar/date
+        self._detail_handler = detail_handler
+        self._today = date.today()
+        self._sel_day: Optional[int] = None
+        self.setWindowTitle(f"{TR_MONTHS[month]} {year} - STS")
+        self.setWindowFlags(Qt.Dialog | Qt.WindowCloseButtonHint)
+        self.resize(1340, 800)
+        self.setStyleSheet(STYLE + _EXTRA_QSS)
+        self._build()
+        # fade-in
+        self.setWindowOpacity(0.0)
+        anim = QPropertyAnimation(self, b"windowOpacity", self)
+        anim.setDuration(280)
+        anim.setStartValue(0.0)
+        anim.setEndValue(1.0)
+        anim.setEasingCurve(QEasingCurve.OutCubic)
+        anim.start()
+        self._anim = anim
+
+    # ── UI ────────────────────────────────────────────────────────────────
+    def _build(self):
+        root = QHBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        # ── Sol panel — ağaç yapısı ────────────────────────────────────────
+        self._side_panel = _SideTreePanel(
+            self._events, self._year, self._month,
+            detail_handler=self._detail_handler,
+            parent=self
+        )
+        root.addWidget(self._side_panel)
+
+        # ── Sağ panel ─────────────────────────────────────────────────────
+        right = QWidget()
+        right.setObjectName("detailRightBg")
+        right_lay = QVBoxLayout(right)
+        right_lay.setContentsMargins(0, 0, 0, 0)
+        right_lay.setSpacing(0)
+
+        # Topbar
+        topbar = QWidget()
+        topbar.setObjectName("detailTopbarBg")
+        tb_lay = QHBoxLayout(topbar)
+        tb_lay.setContentsMargins(20, 12, 20, 12)
+        month_title = QLabel(f"{TR_MONTHS[self._month]} {self._year}")
+        month_title.setStyleSheet(
+            "font-size:24px; font-weight:900; color:#0f172a; background:transparent;"
+        )
+        tb_lay.addWidget(month_title, 1)
+        hint_lbl = QLabel("Gün hücresine tıkla → sol panel filtreler")
+        hint_lbl.setStyleSheet("color:#64748b; font-size:11px; background:transparent;")
+        tb_lay.addWidget(hint_lbl)
+        back_btn = QPushButton("← Yıla dön")
+        back_btn.setObjectName("secondary")
+        back_btn.clicked.connect(self.close)
+        tb_lay.addWidget(back_btn)
+        right_lay.addWidget(topbar)
+
+        # Gün başlıkları
+        dh = QWidget()
+        dh.setObjectName("dayHeaderBg")
+        dh_lay = QGridLayout(dh)
+        dh_lay.setContentsMargins(16, 6, 16, 6)
+        dh_lay.setHorizontalSpacing(6)
+        dh_lay.setVerticalSpacing(0)
+        for i, dn in enumerate(["PZT", "SAL", "ÇAR", "PER", "CUM", "CMT", "PAZ"]):
+            l = QLabel(dn)
+            l.setAlignment(Qt.AlignCenter)
+            l.setStyleSheet(
+                "background:transparent; color:#64748b;"
+                "font-size:11px; font-weight:900; letter-spacing:.6px;"
+            )
+            dh_lay.addWidget(l, 0, i)
+        right_lay.addWidget(dh)
+
+        # Takvim
+        cal_scroll = QScrollArea()
+        cal_scroll.setWidgetResizable(True)
+        cal_scroll.setObjectName("plainScroll")
+        self._cal_host = QWidget()
+        self._cal_host.setObjectName("detailRightBg")
+        self._cal_grid = QGridLayout(self._cal_host)
+        self._cal_grid.setContentsMargins(16, 10, 16, 16)
+        self._cal_grid.setHorizontalSpacing(6)
+        self._cal_grid.setVerticalSpacing(6)
+        cal_scroll.setWidget(self._cal_host)
+        right_lay.addWidget(cal_scroll, 1)
+
+        root.addWidget(right, 1)
+
+        self._render_all()
+
+    # ── Veri ──────────────────────────────────────────────────────────────
+    def _for_day(self, day: int) -> List[dict]:
+        return [e for e in self._events if e["_eff_date"].day == day]
+
+    def _counts(self) -> Dict[str, int]:
+        c = {"geciken": 0, "kritik": 0, "tamamlandi": 0}
+        for e in self._events:
+            if e["_cls"] in c:
+                c[e["_cls"]] += 1
+        return c
+
+    # ── Render ────────────────────────────────────────────────────────────
+    def _render_all(self):
+        self._render_cal()
+
+    def _update_side_for_day(self, day: Optional[int]):
+        """Gün seçilince sol paneli güncelle."""
+        if day:
+            evs = self._for_day(day)
+        else:
+            evs = self._events
+        self._side_panel.update_events(evs)
+
+    def _render_cal(self):
+        while self._cal_grid.count():
+            item = self._cal_grid.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        days_in_month = calendar.monthrange(self._year, self._month1)[1]
+        first_col = _first_col(self._year, self._month1)
+        idx = 0
+
+        for _ in range(first_col):
+            b = QFrame()
+            b.setObjectName("dayCellEmpty")
+            b.setMinimumHeight(90)
+            self._cal_grid.addWidget(b, idx // 7, idx % 7)
+            idx += 1
+
+        for day in range(1, days_in_month + 1):
+            is_today = (
+                self._today.year == self._year
+                and self._today.month == self._month1
+                and self._today.day == day
+            )
+            selected = self._sel_day == day
+            day_evs = self._for_day(day)
+            cell = self._build_cell(day, day_evs, is_today, selected)
+            self._cal_grid.addWidget(cell, idx // 7, idx % 7)
+            idx += 1
+
+        while idx % 7 != 0:
+            b = QFrame()
+            b.setObjectName("dayCellEmpty")
+            b.setMinimumHeight(90)
+            self._cal_grid.addWidget(b, idx // 7, idx % 7)
+            idx += 1
+
+        for c in range(7):
+            self._cal_grid.setColumnStretch(c, 1)
+
+    def _build_cell(self, day: int, evs: List[dict],
+                    is_today: bool, selected: bool) -> QFrame:
+        if is_today:
+            obj = "dayCellToday"
+        elif selected:
+            obj = "dayCellSelected"
+        else:
+            obj = "dayCellNormal"
+        frame = QFrame()
+        frame.setObjectName(obj)
+        frame.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        frame.setCursor(Qt.PointingHandCursor)
+
+        # Click via event filter trick
+        def _press(ev, d=day):
+            if ev.button() == Qt.LeftButton:
+                self._on_day_click(d)
+        frame.mousePressEvent = _press
+
+        lay = QVBoxLayout(frame)
+        lay.setContentsMargins(7, 5, 7, 5)
+        lay.setSpacing(3)
+
+        # Üst satır: gün no + noktalar + bugün badge
+        top = QHBoxLayout()
+        top.setSpacing(3)
+        num_l = QLabel(str(day))
+        num_l.setStyleSheet(
+            "background:transparent; font-size:12px; font-weight:900;"
+            "color:#64748b; border:none;"
+        )
+        top.addWidget(num_l)
+        top.addStretch()
+        for ev in evs[:4]:
+            dot = QLabel("●")
+            dot.setStyleSheet(
+                f"color:{_COLOR.get(ev['_cls'], '#d9e1ea')};"
+                "font-size:7px; background:transparent; border:none;"
+            )
+            top.addWidget(dot)
+        if is_today:
+            tb = QLabel("bugün")
+            tb.setStyleSheet(
+                "background:#e8f0fe; color:#1f5be3; border-radius:6px;"
+                "padding:1px 5px; font-size:8px; font-weight:900; border:none;"
+            )
+            top.addWidget(tb)
+        lay.addLayout(top)
+
+        # Chip'ler max 2
+        for ev in evs[:2]:
+            cls = ev["_cls"]
+            txt = _elide(str(ev.get("title") or ev.get("no") or ""), 16)
+            chip = QLabel(txt)
+            chip.setStyleSheet(
+                f"background:{_BG.get(cls, '#f8fafc')};"
+                f"color:{_FG.get(cls, '#475569')};"
+                f"border:none; border-left:3px solid {_COLOR.get(cls, '#d9e1ea')};"
+                "border-radius:4px; padding:2px 5px;"
+                "font-size:10px; font-weight:700;"
+            )
+            chip.setToolTip(str(ev.get("title") or ev.get("no") or ""))
+            lay.addWidget(chip)
+
+        extra = len(evs) - 2
+        if extra > 0:
+            more = QLabel(f"+{extra}")
+            more.setStyleSheet(
+                "background:#f1f5f9; color:#64748b; border-radius:4px;"
+                "padding:1px 5px; font-size:9px; font-weight:700; border:none;"
+            )
+            lay.addWidget(more)
+
+        lay.addStretch()
+        return frame
+
+    # ── Handlers ──────────────────────────────────────────────────────────
+    def _on_day_click(self, day: int):
+        self._sel_day = None if self._sel_day == day else day
+        self._update_side_for_day(self._sel_day)
+        self._render_cal()
+
+    def _clear_filter(self):
+        self._sel_day = None
+        self._update_side_for_day(None)
+        self._render_cal()
+
+    def _on_rec_click(self, ev: dict):
+        if self._detail_handler and self._detail_handler(ev):
+            self.close()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Ay kartı — yıl grid'indeki küçük kart
+# ─────────────────────────────────────────────────────────────────────────────
+class _MonthCard(_ClickFrame):
+    def __init__(self, year: int, month: int, events: List[dict],
+                 today: date, parent=None):
+        super().__init__(parent)
+        self.setObjectName("monthCard")
+        self.setCursor(Qt.PointingHandCursor)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self._build(year, month, events, today)
+
+    def _build(self, year: int, month: int, events: List[dict], today: date):
+        month1 = month + 1
+
+        # En kötü durum rengi → üst şerit
+        best_cls = "bos"
+        if events:
+            best_cls = min(events, key=lambda e: _STATUS_ORDER.get(e["_cls"], 9))["_cls"]
+        bar = _COLOR.get(best_cls, _COLOR["bos"])
+
+        self.setStyleSheet(
+            f"QFrame#monthCard{{background:rgba(255,253,248,230);"
+            f"border:1px solid rgba(210,225,240,180);"
+            f"border-top:5px solid {bar}; border-radius:20px;}}"
+            "QFrame#monthCard:hover{"
+            f"border-color:rgba(180,200,220,220); border-top:5px solid {bar};"
+            "}"
+        )
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(12, 10, 12, 8)
+        outer.setSpacing(4)
+
+        # Başlık
+        head = QHBoxLayout()
+        head.setSpacing(4)
+        name_l = QLabel(TR_MONTHS[month])
+        name_l.setStyleSheet(
+            "background:transparent; font-size:13px; font-weight:900;"
+            "color:#0f172a; border:none;"
+        )
+        head.addWidget(name_l)
+        head.addStretch()
+        if events:
+            cnt = QLabel(f"{len(events)} kayıt")
+            cnt.setStyleSheet(
+                "background:#f1f5f9; color:#64748b; border-radius:8px;"
+                "padding:2px 8px; font-size:10px; font-weight:700; border:none;"
+            )
+            head.addWidget(cnt)
+        outer.addLayout(head)
+
+        # ── Mini takvim ızgarası ─────────────────────────────────────────
+        mini_w = QWidget()
+        mini_w.setStyleSheet("background:transparent;")
+        mg = QGridLayout(mini_w)
+        mg.setContentsMargins(0, 2, 0, 2)
+        mg.setHorizontalSpacing(2)
+        mg.setVerticalSpacing(2)
+
+        for i, dn in enumerate(["Pt", "Sa", "Ça", "Pe", "Cu", "Ct", "Pz"]):
+            l = QLabel(dn)
+            l.setAlignment(Qt.AlignCenter)
+            l.setStyleSheet(
+                "background:transparent; color:#94a3b8;"
+                "font-size:7px; font-weight:700; border:none;"
+            )
+            mg.addWidget(l, 0, i)
+
+        days_in_month = calendar.monthrange(year, month1)[1]
+        fc = _first_col(year, month1)
+
+        ev_by_day: Dict[int, List[dict]] = {}
+        for e in events:
+            ev_by_day.setdefault(e["_eff_date"].day, []).append(e)
+
+        idx = 0
+        for _ in range(fc):
+            mg.addWidget(QLabel(""), 1, idx)
+            idx += 1
+
+        for day in range(1, days_in_month + 1):
+            row = 1 + idx // 7
+            col = idx % 7
+            is_today = (today.year == year and today.month == month1 and today.day == day)
+            day_evs = ev_by_day.get(day, [])
+
+            # Gün hücresi — kutu içinde (HTML .cell gibi)
+            if is_today:
+                cell_style = (
+                    "QFrame{background:rgba(232,240,254,200);"
+                    "border:1px solid rgba(57,123,216,.55); border-radius:5px;}"
+                )
+            elif day_evs:
+                cell_style = (
+                    "QFrame{background:rgba(255,255,255,180);"
+                    "border:1px solid rgba(180,200,220,160); border-radius:5px;}"
+                )
+            else:
+                cell_style = (
+                    "QFrame{background:rgba(255,255,255,90);"
+                    "border:1px solid rgba(200,215,230,120); border-radius:5px;}"
+                )
+            cell_w = QFrame()
+            cell_w.setStyleSheet(cell_style)
+            cell_lay = QVBoxLayout(cell_w)
+            cell_lay.setContentsMargins(2, 1, 2, 1)
+            cell_lay.setSpacing(0)
+
+            num_l = QLabel(str(day))
+            num_l.setAlignment(Qt.AlignCenter)
+            num_color = "#1f5be3" if is_today else "#475569"
+            num_l.setStyleSheet(
+                f"background:transparent; color:{num_color};"
+                "font-size:8px; font-weight:800; border:none;"
+            )
+            cell_lay.addWidget(num_l)
+
+            if day_evs:
+                best_ev = min(day_evs, key=lambda e: _STATUS_ORDER.get(e["_cls"], 9))
+                dot = QLabel("●")
+                dot.setAlignment(Qt.AlignCenter)
+                dot.setStyleSheet(
+                    f"color:{_COLOR.get(best_ev['_cls'], '#d9e1ea')};"
+                    "font-size:5px; background:transparent; border:none;"
+                )
+                cell_lay.addWidget(dot)
+
+            mg.addWidget(cell_w, row, col)
+            idx += 1
+
+        outer.addWidget(mini_w, 1)
+
+        # ── Alt chip listesi ─────────────────────────────────────────────
+        chip_row = QHBoxLayout()
+        chip_row.setSpacing(4)
+        for ev in events[:3]:
+            cls = ev["_cls"]
+            d = ev["_eff_date"]
+            txt = f"{d.day} · {_elide(str(ev.get('type') or ''), 9)}"
+            chip = QLabel(txt)
+            chip.setStyleSheet(
+                f"background:{_BG.get(cls, '#f8fafc')};"
+                f"color:{_FG.get(cls, '#475569')};"
+                "border-radius:6px; padding:2px 6px; font-size:9px;"
+                "font-weight:700; border:none;"
+            )
+            chip.setToolTip(str(ev.get("title") or ev.get("no") or ""))
+            chip_row.addWidget(chip)
+        if len(events) > 3:
+            more = QLabel(f"+{len(events)-3} daha")
+            more.setStyleSheet(
+                "background:#f1f5f9; color:#64748b; border-radius:6px;"
+                "padding:2px 5px; font-size:9px; border:none;"
+            )
+            chip_row.addWidget(more)
+        chip_row.addStretch()
+        outer.addLayout(chip_row)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Ana Pencere
+# ─────────────────────────────────────────────────────────────────────────────
 class ContractCalendarWindow(QDialog):
-    MODE_CONTRACT = "contract"
-    MODE_SYSTEM = "system"
+    def paintEvent(self, event):
+        """Gökyüzü tonu radial gradient arka plan."""
+        from PySide6.QtGui import QPainter, QRadialGradient, QLinearGradient, QColor, QBrush
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        w, h = self.width(), self.height()
+        # Base: açık gökyüzü mavi
+        painter.fillRect(0, 0, w, h, QColor("#d6e8f8"))
+        # Sol üst: derin mavi radial
+        grad1 = QRadialGradient(0, 0, w * 0.45)
+        grad1.setColorAt(0, QColor(56, 130, 210, 80))
+        grad1.setColorAt(0.5, QColor(56, 130, 210, 30))
+        grad1.setColorAt(1, QColor(56, 130, 210, 0))
+        painter.fillRect(0, 0, w, h, QBrush(grad1))
+        # Sağ üst: amber/amber-mavi
+        grad2 = QRadialGradient(w, 0, w * 0.35)
+        grad2.setColorAt(0, QColor(232, 181, 63, 55))
+        grad2.setColorAt(1, QColor(232, 181, 63, 0))
+        painter.fillRect(0, 0, w, h, QBrush(grad2))
+        # Alt: hafif daha koyu mavi geçiş
+        grad3 = QLinearGradient(0, h * 0.6, 0, h)
+        grad3.setColorAt(0, QColor(180, 210, 240, 0))
+        grad3.setColorAt(1, QColor(160, 200, 235, 40))
+        painter.fillRect(0, 0, w, h, QBrush(grad3))
+        painter.end()
 
-    def __init__(self, store: ExcelStore, contract_index: Optional[List[dict]] = None, parent=None, detail_handler: Optional[Callable[[dict], bool]] = None):
+    def __init__(
+        self,
+        store: ExcelStore,
+        contract_index: Optional[List[dict]] = None,
+        parent=None,
+        detail_handler: Optional[Callable[[dict], bool]] = None,
+    ):
         super().__init__(parent)
         self.store = store
         self.contract_index = list(contract_index or [])
         self.detail_handler = detail_handler
         self.today = date.today()
         self.current_year = self.today.year
-        self.current_month = self.today.month
-        self.view_mode = self.MODE_CONTRACT
-        self.events: List[dict] = []
-        self.contract_events: List[dict] = []
-        self.system_events: Optional[List[dict]] = None
         self.platform_filter_value = ""
-        self._refreshing_platform_filter = False
-        self.last_updated_at: Optional[datetime] = None
-        self._more_popup: Optional[CalendarMorePopup] = None
+        self._refreshing_pf = False
+        self._all_events: List[dict] = []
+        self._nav_locked = False
         self.setWindowTitle(f"{APP_TITLE} - Tarih Takip")
         self.resize(1680, 940)
-        self.setStyleSheet(STYLE)
-        self.build()
+        self.setStyleSheet(
+            STYLE
+            + _EXTRA_QSS
+            + "QFrame#calendarTopbar{background:transparent; border-bottom:none;}"
+        )
+        self._build()
         self.refresh_data(rebuild_index=not bool(self.contract_index))
 
-    def build(self):
-        root = QHBoxLayout(self)
+    # ── UI ────────────────────────────────────────────────────────────────
+    def _build(self):
+        root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        self.sidebar = QFrame()
-        self.sidebar.setObjectName("calendarSidebar")
-        self.sidebar.setFixedWidth(300)
-        side_lay = QVBoxLayout(self.sidebar)
-        side_lay.setContentsMargins(16, 14, 16, 14)
-        side_lay.setSpacing(12)
+        # ── Topbar ────────────────────────────────────────────────────────
+        topbar = QFrame()
+        topbar.setObjectName("calendarTopbar")
+        topbar.setMinimumHeight(76)
+        # Şeffaf arka plan — body gradient'i görünsün
+        topbar.setStyleSheet(
+            "QFrame#calendarTopbar{"
+            "background:transparent;"
+            "border-bottom:none;"
+            "}"
+        )
+        tb = QHBoxLayout(topbar)
+        tb.setContentsMargins(22, 10, 22, 10)
+        tb.setSpacing(18)
 
-        self.side_title = QLabel("ÖZET")
-        self.side_title.setObjectName("calendarSection")
-        side_lay.addWidget(self.side_title)
+        # ── Sol: ‹ [kicker / yıl] › — HTML tasarımı birebir ──────────────
+        nav_btn_style = (
+            "QPushButton{"
+            "background:rgba(255,255,255,220);"
+            "border:1px solid rgba(200,218,235,200);"
+            "border-radius:21px;"
+            "font-size:22px; font-weight:900;"
+            "color:#17202d; padding:0px;}"
+            "QPushButton:hover{"
+            "background:rgba(255,255,255,255);"
+            "border-color:#94a3b8;}"
+            "QPushButton:disabled{"
+            "color:#94a3b8;"
+            "background:rgba(255,255,255,100);}"
+        )
+        self._btn_prev = QPushButton("‹")
+        self._btn_prev.setStyleSheet(nav_btn_style)
+        self._btn_prev.setFixedSize(42, 42)
+        self._btn_prev.setCursor(Qt.PointingHandCursor)
+        self._btn_prev.clicked.connect(lambda: self._change_year(-1))
 
-        stats_grid = QGridLayout()
-        stats_grid.setHorizontalSpacing(8)
-        stats_grid.setVerticalSpacing(8)
-        self.stat_overdue = self._make_stat_card("0", "GECİKEN")
-        self.stat_critical = self._make_stat_card("0", "60 GÜN İÇİNDE")
-        self.stat_active = self._make_stat_card("0", "AKTİF")
-        self.stat_done = self._make_stat_card("0", "TAMAMLANDI")
-        stats_grid.addWidget(self.stat_overdue, 0, 0)
-        stats_grid.addWidget(self.stat_critical, 0, 1)
-        stats_grid.addWidget(self.stat_active, 1, 0)
-        stats_grid.addWidget(self.stat_done, 1, 1)
-        side_lay.addLayout(stats_grid)
+        yr_title = QVBoxLayout()
+        yr_title.setSpacing(0)
+        yr_title.setContentsMargins(0, 0, 0, 0)
+        kicker = QLabel("KY-STS / TERMİN & KABUL TAKVİMİ")
+        kicker.setStyleSheet(
+            "color:#6b7280; background:transparent; font-size:10px; font-weight:900;"
+            "letter-spacing:.13em;"
+        )
+        self._yr_lbl = QLabel(str(self.current_year))
+        self._yr_lbl.setStyleSheet(
+            "color:#17202d; background:transparent;"
+            "font-size:38px; font-weight:950; letter-spacing:-.04em;"
+        )
+        yr_title.addWidget(kicker)
+        yr_title.addWidget(self._yr_lbl)
 
-        self.overdue_title = QLabel("🔴 GECİKEN SÖZLEŞMELER")
-        self.overdue_title.setObjectName("calendarSection")
-        side_lay.addWidget(self.overdue_title)
-        self.overdue_box = QVBoxLayout()
-        self.overdue_box.setSpacing(6)
-        side_lay.addLayout(self.overdue_box)
+        self._btn_next = QPushButton("›")
+        self._btn_next.setStyleSheet(nav_btn_style)
+        self._btn_next.setFixedSize(42, 42)
+        self._btn_next.setCursor(Qt.PointingHandCursor)
+        self._btn_next.clicked.connect(lambda: self._change_year(1))
 
-        self.critical_title = QLabel("🟡 60 GÜN İÇİNDE DOLACAK")
-        self.critical_title.setObjectName("calendarSection")
-        side_lay.addWidget(self.critical_title)
-        self.critical_box = QVBoxLayout()
-        self.critical_box.setSpacing(6)
-        side_lay.addLayout(self.critical_box)
-        side_lay.addStretch()
-        root.addWidget(self.sidebar, 0)
+        year_nav = QHBoxLayout()
+        year_nav.setSpacing(12)
+        year_nav.setContentsMargins(0, 0, 0, 0)
+        year_nav.addWidget(self._btn_prev)
+        year_nav.addLayout(yr_title)
+        year_nav.addWidget(self._btn_next)
+        tb.addLayout(year_nav)
 
-        self.main = QFrame()
-        self.main.setObjectName("calendarMain")
-        main_lay = QVBoxLayout(self.main)
-        main_lay.setContentsMargins(0, 0, 0, 0)
-        main_lay.setSpacing(0)
+        # ── Orta: legend — pill kutular HTML gibi ────────────────────────
+        tb.addStretch()
+        legend_items = [
+            ("Geciken",      "#e1473f"),
+            ("60 gün içinde","#e8b53f"),
+            ("Normal",       "#397bd8"),
+            ("Teslim edildi","#39a96b"),
+        ]
+        for txt, color in legend_items:
+            pill = QPushButton()
+            pill.setEnabled(False)
+            pill.setStyleSheet(
+                "QPushButton{"
+                "background:rgba(255,255,255,220);"
+                "border:1px solid rgba(200,218,235,200);"
+                "border-radius:18px;"
+                "padding:7px 13px 7px 10px;"
+                "font-size:12px; font-weight:800; color:#6b7280;"
+                "text-align:left;"
+                "}"
+                "QPushButton:disabled{"
+                "background:rgba(255,255,255,220);"
+                "border:1px solid rgba(200,218,235,200);"
+                "color:#6b7280;"
+                "}"
+            )
+            pill.setText(f"⬤  {txt}")
+            pill.setStyleSheet(
+                pill.styleSheet()
+                + f"QPushButton{{color:#6b7280;}}"
+            )
+            # Dot renkli, metin gri — QLabel ile daha kolay
+            # Pill: QLabel kullan, stylesheet ile tam yuvarlak
+            pill_w = QLabel()
+            pill_w.setFixedHeight(34)
+            pill_w.setTextFormat(Qt.RichText)
+            pill_w.setText(
+                f'<span style="color:{color};font-size:11px;">⬤</span>'
+                f'<span style="color:#374151;font-size:12px;font-weight:800;">&nbsp;&nbsp;{txt}</span>'
+            )
+            pill_w.setStyleSheet(
+                "QLabel{"
+                "background:rgba(255,255,255,220);"
+                "border:1px solid rgba(200,218,235,200);"
+                "border-radius:17px;"
+                "padding:0px 14px 0px 10px;"
+                "}"
+            )
+            tb.addWidget(pill_w)
+        tb.addStretch()
 
-        top = QFrame()
-        top.setObjectName("calendarTopbar")
-        top_lay = QHBoxLayout(top)
-        top_lay.setContentsMargins(18, 10, 18, 10)
-        top_lay.setSpacing(12)
-        tleft = QVBoxLayout()
-        tleft.setContentsMargins(0, 0, 0, 0)
-        tleft.setSpacing(2)
-        t1 = QLabel("KONFİGÜRASYON YÖNETİMİ — TARİH TAKİP")
-        t1.setObjectName("calendarTopTitle")
-        self.top_sub = QLabel("Son güncelleme: —")
-        self.top_sub.setObjectName("calendarTopSub")
-        tleft.addWidget(t1)
-        tleft.addWidget(self.top_sub)
-        top_lay.addLayout(tleft, 1)
-
+        # ── Sağ: platform filtresi ────────────────────────────────────────
         self.platform_filter = QComboBox()
         self.platform_filter.setObjectName("calendarPlatformFilter")
-        self.platform_filter.setMinimumWidth(180)
-        self.platform_filter.currentIndexChanged.connect(self.on_platform_filter_changed)
-        top_lay.addWidget(self.platform_filter, 0)
+        self.platform_filter.setMinimumWidth(160)
+        self.platform_filter.setStyleSheet(
+            "QComboBox{background:rgba(255,255,255,220); color:#374151;"
+            "border:1px solid rgba(200,218,235,200); border-radius:17px;"
+            "padding:7px 14px; font-size:12px; font-weight:800;}"
+            "QComboBox::drop-down{border:none; width:24px;}"
+            "QComboBox::down-arrow{width:10px; height:10px;}"
+            "QComboBox:hover{background:rgba(255,255,255,255); border-color:#94a3b8;}"
+        )
+        self.platform_filter.setFixedHeight(34)
+        self.platform_filter.currentIndexChanged.connect(self._on_pf_changed)
+        tb.addWidget(self.platform_filter)
 
-        mode_box = QFrame()
-        mode_box.setObjectName("calendarModeSwitch")
-        mode_lay = QHBoxLayout(mode_box)
-        mode_lay.setContentsMargins(4, 4, 4, 4)
-        mode_lay.setSpacing(2)
-        self.btn_contract_mode = QPushButton("Sözleşme")
-        self.btn_system_mode = QPushButton("Sistem")
-        self.mode_group = QButtonGroup(self)
-        self.mode_group.setExclusive(True)
-        for btn, mode in ((self.btn_contract_mode, self.MODE_CONTRACT), (self.btn_system_mode, self.MODE_SYSTEM)):
-            btn.setObjectName("calendarModeButton")
-            btn.setCheckable(True)
-            btn.setProperty("mode", mode)
-            btn.setMinimumHeight(30)
-            self.mode_group.addButton(btn)
-            mode_lay.addWidget(btn)
-        self.btn_contract_mode.setChecked(True)
-        self.btn_contract_mode.clicked.connect(lambda: self.set_view_mode(self.MODE_CONTRACT))
-        self.btn_system_mode.clicked.connect(lambda: self.set_view_mode(self.MODE_SYSTEM))
-        top_lay.addWidget(mode_box, 0)
-        main_lay.addWidget(top, 0)
+        root.addWidget(topbar)
 
-        nav = QFrame()
-        nav.setObjectName("calendarNav")
-        nav_lay = QHBoxLayout(nav)
-        nav_lay.setContentsMargins(20, 10, 20, 10)
-        nav_lay.setSpacing(8)
-        self.month_title = QLabel("")
-        self.month_title.setObjectName("calendarMonth")
-        nav_lay.addWidget(self.month_title, 1)
-        self.btn_today = QPushButton("Bugün")
-        self.btn_today.setObjectName("secondary")
-        self.btn_prev = QPushButton("‹")
-        self.btn_prev.setObjectName("secondary")
-        self.btn_next = QPushButton("›")
-        self.btn_next.setObjectName("secondary")
-        for b in (self.btn_today, self.btn_prev, self.btn_next):
-            b.setMinimumHeight(30)
-        nav_lay.addWidget(self.btn_today)
-        nav_lay.addWidget(self.btn_prev)
-        nav_lay.addWidget(self.btn_next)
-        self.btn_today.clicked.connect(self.go_today)
-        self.btn_prev.clicked.connect(self.go_prev_month)
-        self.btn_next.clicked.connect(self.go_next_month)
-        main_lay.addWidget(nav, 0)
+        # ── Yıl grid ──────────────────────────────────────────────────────
+        self._grid_scroll = QScrollArea()
+        self._grid_scroll.setWidgetResizable(True)
+        self._grid_scroll.setObjectName("yearGridScroll")
+        self._grid_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._grid_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self._grid_scroll.setStyleSheet(
+            "QScrollArea#yearGridScroll{background:transparent; border:none;}"
+            "QScrollArea#yearGridScroll > QWidget{background:transparent;}"
+        )
+        self._grid_host = QWidget()
+        self._grid_host.setObjectName("calBg")
+        # Şeffaf — paintEvent'teki gradient görünsün
+        self._grid_host.setAttribute(Qt.WA_TranslucentBackground, False)
+        self._grid_host.setStyleSheet("QWidget#calBg{background:transparent;}")
+        self._year_grid = QGridLayout(self._grid_host)
+        self._year_grid.setContentsMargins(20, 16, 20, 20)
+        self._year_grid.setHorizontalSpacing(12)
+        self._year_grid.setVerticalSpacing(12)
+        self._grid_scroll.setWidget(self._grid_host)
+        root.addWidget(self._grid_scroll, 1)
 
-        days_row = QFrame()
-        days_row.setObjectName("calendarDaysRow")
-        days_lay = QGridLayout(days_row)
-        days_lay.setContentsMargins(20, 8, 20, 8)
-        days_lay.setHorizontalSpacing(6)
-        days_lay.setVerticalSpacing(0)
-        for i, dname in enumerate(TR_WEEKDAYS):
-            lab = QLabel(dname)
-            lab.setObjectName("calendarDayHeader")
-            lab.setAlignment(Qt.AlignCenter)
-            days_lay.addWidget(lab, 0, i)
-        main_lay.addWidget(days_row, 0)
-
-        self.grid_scroll = QScrollArea()
-        self.grid_scroll.setWidgetResizable(True)
-        self.grid_scroll.setObjectName("plainScroll")
-        self.grid_host = QWidget()
-        self.grid_layout = QGridLayout(self.grid_host)
-        self.grid_layout.setContentsMargins(20, 8, 20, 14)
-        self.grid_layout.setHorizontalSpacing(6)
-        self.grid_layout.setVerticalSpacing(6)
-        self.grid_scroll.setWidget(self.grid_host)
-        main_lay.addWidget(self.grid_scroll, 1)
-
-        foot = QFrame()
-        foot.setObjectName("calendarFooter")
-        foot_lay = QHBoxLayout(foot)
-        foot_lay.setContentsMargins(20, 6, 20, 8)
-        foot_lay.setSpacing(14)
-        for txt, obj in [("● Geciken", "legendRed"), ("● 60 Gün İçinde", "legendAmber"), ("● Normal", "legendBlue"), ("● Tamamlandı", "legendGreen")]:
-            l = QLabel(txt)
-            l.setObjectName(obj)
-            foot_lay.addWidget(l)
-        foot_lay.addStretch()
-        self.footer_note = QLabel("")
-        self.footer_note.setObjectName("calendarFooterNote")
-        foot_lay.addWidget(self.footer_note)
-        main_lay.addWidget(foot, 0)
-        root.addWidget(self.main, 1)
-
-    def _norm(self, s: str) -> str:
-        txt = str(s or "").strip().lower()
-        return txt.replace("ı", "i").replace("İ", "i").replace("ş", "s").replace("ğ", "g").replace("ü", "u").replace("ö", "o").replace("ç", "c")
-
-    def _classify(self, item: dict, deadline: date) -> str:
-        status = self._norm(str(item.get("status", "")))
-        if "tamam" in status or "teslim edildi" in status:
-            return "tamamlandi"
-        delta = (deadline - self.today).days
-        if delta < 0:
-            return "geciken"
-        if delta <= 60:
-            return "kritik"
-        return "normal"
-
-    def refresh_data(self, rebuild_index: bool = True):
-        if rebuild_index:
-            self.contract_index = self.store.build_contract_index()
-        self.system_events = None
-        self.contract_events = self._build_contract_events()
-        if self.view_mode == self.MODE_SYSTEM:
-            self.events = self._build_system_events()
-        else:
-            self.events = list(self.contract_events)
-        self.events.sort(key=lambda x: x["deadline"])
-        self.last_updated_at = datetime.now()
-        self.refresh_platform_filter()
-        self.update_sidebar()
-        self.render_month()
-
-    def refresh_from_index(self, store: Optional[ExcelStore] = None, contract_index: Optional[List[dict]] = None):
-        if store is not None:
-            self.store = store
-        if contract_index is not None:
-            self.contract_index = list(contract_index or [])
-        self.refresh_data(rebuild_index=False)
-
-    def refresh_platform_filter(self):
-        if not hasattr(self, "platform_filter"):
-            return
-        current = str(self.platform_filter_value or "")
-        try:
-            platforms = [str(p or "") for p in self.store.platform_names()] if self.store else []
-        except Exception:
-            platforms = []
-        if not platforms:
-            platforms = sorted({str(it.get("platform", "") or "") for it in self.contract_index if str(it.get("platform", "") or "")})
-        platforms = [p for p in platforms if p]
-        self._refreshing_platform_filter = True
-        try:
-            self.platform_filter.blockSignals(True)
-            self.platform_filter.clear()
-            self.platform_filter.addItem("Tümü", "")
-            for platform in platforms:
-                self.platform_filter.addItem(platform, platform)
-            idx = self.platform_filter.findData(current)
-            if idx < 0:
-                current = ""
-                idx = 0
-            self.platform_filter.setCurrentIndex(idx)
-            self.platform_filter_value = current
-        finally:
-            self.platform_filter.blockSignals(False)
-            self._refreshing_platform_filter = False
-
-    def on_platform_filter_changed(self):
-        if self._refreshing_platform_filter:
-            return
-        self.platform_filter_value = str(self.platform_filter.currentData() or "")
-        self.update_sidebar()
-        self.render_month()
-
-    def visible_events(self) -> List[dict]:
-        selected = str(self.platform_filter_value or "")
-        if not selected:
-            return list(self.events)
-        return [ev for ev in self.events if str(ev.get("platform", "") or "") == selected]
-
-    def update_last_refresh_label(self):
-        if not hasattr(self, "top_sub"):
-            return
-        if self.last_updated_at:
-            self.top_sub.setText(f"Son güncelleme: {self.last_updated_at.strftime('%Y-%m-%d %H:%M:%S')}")
-        else:
-            self.top_sub.setText("Son güncelleme: —")
-
-    def _build_contract_events(self) -> List[dict]:
+    # ── Veri ──────────────────────────────────────────────────────────────
+    def _build_events(self) -> List[dict]:
+        today = self.today
         events: List[dict] = []
-        for it in self.contract_index:
-            d = parse_calendar_iso_date(str(it.get("completion_date", "") or ""))
-            if not d:
+
+        for item in self.contract_index:
+            eff = _effective_date(item)
+            if not eff:
                 continue
-            cls = self._classify(it, d)
+            cls = _classify(item, eff, today)
+            no = str(item.get("no") or "")
+            ctype = str(item.get("type") or item.get("contract_type") or "")
+            title = str(item.get("content") or item.get("note") or "")
+            if not title:
+                title = f"{no} · {ctype}" if ctype else no
             events.append({
-                "mode": self.MODE_CONTRACT,
-                "row": int(it.get("row", 0) or 0),
-                "platform": str(it.get("platform", "") or ""),
-                "no": str(it.get("no", "") or ""),
-                "user": str(it.get("user", "") or ""),
-                "type": str(it.get("type", "") or ""),
-                "status": str(it.get("status", "") or ""),
-                "status_class": cls,
-                "deadline": d,
-                "content": str(it.get("content", "") or ""),
+                "_eff_date": eff, "_cls": cls,
+                "row": int(item.get("row") or 0),
+                "platform": str(item.get("platform") or ""),
+                "no": no, "user": str(item.get("user") or ""),
+                "type": ctype, "title": title,
+                "status": str(item.get("status") or ""),
+                "acceptance_date": str(item.get("acceptance_date") or ""),
+                "planned_acceptance_date": str(item.get("planned_acceptance_date") or ""),
+                "completion_date": str(item.get("completion_date") or ""),
             })
-        return events
 
-    def _system_event(self, base: dict, system: SystemInfo) -> Optional[dict]:
-        deadline = parse_calendar_iso_date(str(system.completion_date or "")) or parse_calendar_iso_date(str(base.get("completion_date", "") or ""))
-        if not deadline:
-            return None
-        status = str(system.status or base.get("status", "") or "")
-        item = dict(base)
-        item["status"] = status
-        cls = self._classify(item, deadline)
-        return {
-            "mode": self.MODE_SYSTEM,
-            "row": int(base.get("row", 0) or 0),
-            "platform": str(base.get("platform", "") or ""),
-            "no": str(base.get("no", "") or ""),
-            "user": str(base.get("user", "") or ""),
-            "type": str(base.get("type", "") or ""),
-            "status": status,
-            "status_class": cls,
-            "deadline": deadline,
-            "content": str(base.get("content", "") or ""),
-            "system_label": str(system.name or ""),
-        }
-
-    def _build_system_events(self) -> List[dict]:
-        if self.system_events is not None:
-            return list(self.system_events)
-        QApplication.setOverrideCursor(Qt.WaitCursor)
+        # Sistem olayları (lazy, hata tolere edilir)
         try:
-            events: List[dict] = []
-            for base in self.contract_index:
-                platform = str(base.get("platform", "") or "")
-                no = str(base.get("no", "") or "")
-                row = int(base.get("row", 0) or 0)
+            for item in self.contract_index:
+                platform = str(item.get("platform") or "")
+                no = str(item.get("no") or "")
+                row = int(item.get("row") or 0)
                 if not platform or not no:
                     continue
                 try:
-                    _ci, systems, _deliveries = self.store.load_contract_structure(platform, no, start_row=row if row > 0 else None)
+                    _ci, systems, _ = self.store.load_contract_structure(
+                        platform, no, start_row=row if row > 0 else None
+                    )
                 except Exception:
                     continue
-                for system in systems or []:
-                    ev = self._system_event(base, system)
-                    if ev:
-                        events.append(ev)
-            self.system_events = sorted(events, key=lambda x: x["deadline"])
-            return list(self.system_events)
-        finally:
-            QApplication.restoreOverrideCursor()
+                for sys_info in systems or []:
+                    acc = _parse_date(str(sys_info.acceptance_date or ""))
+                    comp = _parse_date(str(sys_info.completion_date or ""))
+                    eff_d = acc or comp
+                    if not eff_d:
+                        continue
+                    sys_item = {
+                        "status": str(sys_info.status or ""),
+                        "acceptance_date": sys_info.acceptance_date or "",
+                        "completion_date": sys_info.completion_date or "",
+                    }
+                    cls = _classify(sys_item, eff_d, today)
+                    sys_name = str(sys_info.name or "")
+                    title = f"{no} · {sys_name}" if sys_name else no
+                    events.append({
+                        "_eff_date": eff_d, "_cls": cls,
+                        "row": row, "platform": platform, "no": no,
+                        "user": str(item.get("user") or ""),
+                        "type": "Sistem", "title": title,
+                        "system_label": sys_name,
+                        "status": sys_item["status"],
+                        "acceptance_date": sys_item["acceptance_date"],
+                        "completion_date": sys_item["completion_date"],
+                    })
+        except Exception:
+            pass
 
-    def set_view_mode(self, mode: str):
-        if mode not in {self.MODE_CONTRACT, self.MODE_SYSTEM} or self.view_mode == mode:
+        return events
+
+    def _visible(self) -> List[dict]:
+        pf = self.platform_filter_value
+        if not pf:
+            return list(self._all_events)
+        return [e for e in self._all_events if e.get("platform") == pf]
+
+    def _for_month(self, year: int, month: int) -> List[dict]:
+        """month 0-indexed"""
+        return [
+            e for e in self._visible()
+            if e["_eff_date"].year == year and e["_eff_date"].month == month + 1
+        ]
+
+    # ── Render ────────────────────────────────────────────────────────────
+    def _render_year(self):
+        while self._year_grid.count():
+            item = self._year_grid.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        self._yr_lbl.setText(str(self.current_year))
+
+        for month in range(12):
+            evs = self._for_month(self.current_year, month)
+            card = _MonthCard(self.current_year, month, evs, self.today)
+            card.clicked.connect(lambda m=month: self._open_month(m))
+            self._year_grid.addWidget(card, month // 4, month % 4)
+
+        for c in range(4):
+            self._year_grid.setColumnStretch(c, 1)
+        for r in range(3):
+            self._year_grid.setRowStretch(r, 1)
+
+    # ── Yıl geçişi ────────────────────────────────────────────────────────
+    def _change_year(self, d: int):
+        if self._nav_locked:
             return
-        self.view_mode = mode
-        if self.view_mode == self.MODE_SYSTEM:
-            self.btn_system_mode.setChecked(True)
-            self.events = self._build_system_events()
-        else:
-            self.btn_contract_mode.setChecked(True)
-            self.events = list(self.contract_events)
-        self.events.sort(key=lambda x: x["deadline"])
-        self.update_sidebar()
-        self.render_month()
+        self._nav_locked = True
+        self._btn_prev.setEnabled(False)
+        self._btn_next.setEnabled(False)
+        QTimer.singleShot(60, lambda: self._do_change(d))
 
-    def _clear_layout(self, lay: QVBoxLayout):
-        while lay.count():
-            child = lay.takeAt(0)
-            w = child.widget()
-            if w:
-                w.deleteLater()
+    def _do_change(self, d: int):
+        self.current_year += d
+        self._render_year()
+        self._nav_locked = False
+        self._btn_prev.setEnabled(True)
+        self._btn_next.setEnabled(True)
 
-    def _make_stat_card(self, num: str, lbl: str) -> QFrame:
-        card = QFrame()
-        card.setObjectName("calendarStatCard")
-        l = QVBoxLayout(card)
-        l.setContentsMargins(10, 10, 10, 8)
-        l.setSpacing(2)
-        n = QLabel(str(num))
-        n.setObjectName("calendarStatNum")
-        n.setAlignment(Qt.AlignCenter)
-        t = QLabel(lbl)
-        t.setObjectName("calendarStatLbl")
-        t.setAlignment(Qt.AlignCenter)
-        l.addWidget(n)
-        l.addWidget(t)
-        return card
+    # ── Ay detay ──────────────────────────────────────────────────────────
+    def _open_month(self, month: int):
+        evs = self._for_month(self.current_year, month)
+        dlg = _MonthDetailDialog(evs, self.current_year, month,
+                                  self._on_detail, self)
+        dlg.exec()
+        self._render_year()
 
-    def _set_stat_value(self, card: QFrame, value: int):
-        labels = card.findChildren(QLabel)
-        if labels:
-            labels[0].setText(str(value))
-
-    def _event_card(self, ev: dict, delta_days: int) -> QFrame:
-        f = CalendarEventCard(ev)
-        cls = ev["status_class"]
-        f.setObjectName("eventCardOverdue" if cls == "geciken" else "eventCardWarn")
-        lay = QVBoxLayout(f)
-        lay.setContentsMargins(10, 8, 10, 8)
-        lay.setSpacing(2)
-        no_text = f"#{ev['no']}"
-        if ev.get("mode") == self.MODE_SYSTEM and ev.get("system_label"):
-            no_text += f" · {ev['system_label']}"
-        no = QLabel(no_text)
-        no.setObjectName("eventCardNo")
-        sub_bits = [ev.get("platform", ""), ev.get("user", "")]
-        pl = QLabel(" · ".join([x for x in sub_bits if x]))
-        pl.setObjectName("eventCardSub")
-        if delta_days < 0:
-            dtxt = f"Son: {ev['deadline'].isoformat()} · {abs(delta_days)} gün geçti"
-        else:
-            dtxt = f"Son: {ev['deadline'].isoformat()} · {delta_days} gün kaldı"
-        dd = QLabel(dtxt)
-        dd.setObjectName("eventCardDate")
-        lay.addWidget(no)
-        lay.addWidget(pl)
-        lay.addWidget(dd)
-        f.setToolTip(self._tooltip(ev))
-        f.clicked.connect(self.open_event_detail)
-        return f
-
-    def update_sidebar(self):
-        visible = self.visible_events()
-        overdue = [e for e in visible if e["status_class"] == "geciken"]
-        critical = [e for e in visible if e["status_class"] == "kritik"]
-        done = [e for e in visible if e["status_class"] == "tamamlandi"]
-        active = [e for e in visible if e["status_class"] != "tamamlandi"]
-        entity = "SİSTEM" if self.view_mode == self.MODE_SYSTEM else "SÖZLEŞME"
-        entity_lower = "sistem" if self.view_mode == self.MODE_SYSTEM else "sözleşme"
-
-        self.side_title.setText(f"ÖZET · {entity}")
-        self.overdue_title.setText(f"🔴 GECİKEN {entity}LER")
-        self.critical_title.setText(f"🟡 60 GÜN İÇİNDE DOLACAK {entity}LER")
-        self._set_stat_value(self.stat_overdue, len(overdue))
-        self._set_stat_value(self.stat_critical, len(critical))
-        self._set_stat_value(self.stat_active, len(active))
-        self._set_stat_value(self.stat_done, len(done))
-
-        self._clear_layout(self.overdue_box)
-        self._clear_layout(self.critical_box)
-        for ev in overdue[:8]:
-            delta = (ev["deadline"] - self.today).days
-            self.overdue_box.addWidget(self._event_card(ev, delta))
-        for ev in critical[:8]:
-            delta = (ev["deadline"] - self.today).days
-            self.critical_box.addWidget(self._event_card(ev, delta))
-        if self.overdue_box.count() == 0:
-            info = QLabel(f"Geciken {entity_lower} yok.")
-            info.setObjectName("muted")
-            self.overdue_box.addWidget(info)
-        if self.critical_box.count() == 0:
-            info = QLabel(f"60 gün içinde dolacak {entity_lower} yok.")
-            info.setObjectName("muted")
-            self.critical_box.addWidget(info)
-
-    def go_today(self):
-        self.current_year = self.today.year
-        self.current_month = self.today.month
-        self.render_month()
-
-    def go_prev_month(self):
-        if self.current_month == 1:
-            self.current_month = 12
-            self.current_year -= 1
-        else:
-            self.current_month -= 1
-        self.render_month()
-
-    def go_next_month(self):
-        if self.current_month == 12:
-            self.current_month = 1
-            self.current_year += 1
-        else:
-            self.current_month += 1
-        self.render_month()
-
-    def _clear_grid(self):
-        while self.grid_layout.count():
-            item = self.grid_layout.takeAt(0)
-            w = item.widget()
-            if w:
-                w.deleteLater()
-
-    def _chip_style(self, status_class: str) -> str:
-        if status_class == "geciken":
-            return "background:#fef2f2;color:#b91c1c;border:1px solid #fecaca;border-radius:6px;padding:2px 6px;"
-        if status_class == "kritik":
-            return "background:#fffbeb;color:#b45309;border:1px solid #fde68a;border-radius:6px;padding:2px 6px;"
-        if status_class == "tamamlandi":
-            return "background:#ecfdf5;color:#047857;border:1px solid #86efac;border-radius:6px;padding:2px 6px;"
-        return "background:#e8f0fe;color:#1f5be3;border:1px solid #bfdbfe;border-radius:6px;padding:2px 6px;"
-
-    def _event_label(self, ev: dict) -> str:
-        if ev.get("mode") == self.MODE_SYSTEM:
-            return f"• {ev.get('no', '')} · {ev.get('system_label', '')}"
-        return f"• {ev.get('no', '')} · {ev.get('platform', '')}"
-
-    def _tooltip(self, ev: dict) -> str:
-        parts = [f"Sözleşme: {ev.get('no', '')}", f"Platform: {ev.get('platform', '')}"]
-        if ev.get("mode") == self.MODE_SYSTEM:
-            parts.append(f"Sistem: {ev.get('system_label', '')}")
-        parts.extend([
-            f"Kullanıcı: {ev.get('user', '')}",
-            f"Tür: {ev.get('type', '')}",
-            f"Bitiş: {ev.get('deadline').isoformat() if ev.get('deadline') else ''}",
-            f"Durum: {ev.get('status', '')}",
-        ])
-        return "\n".join(parts)
-
-    def _build_day_cell(self, day: int, day_events: List[dict], is_today: bool) -> QFrame:
-        frame = QFrame()
-        frame.setObjectName("calendarCellToday" if is_today else "calendarCell")
-        v = QVBoxLayout(frame)
-        v.setContentsMargins(8, 6, 8, 6)
-        v.setSpacing(4)
-        top = QHBoxLayout()
-        lbl_day = QLabel(str(day))
-        lbl_day.setObjectName("calendarCellDay")
-        top.addWidget(lbl_day)
-        top.addStretch()
-        if is_today:
-            badge = QLabel("BUGÜN")
-            badge.setObjectName("todayPill")
-            top.addWidget(badge)
-        v.addLayout(top)
-        visible_count = 3
-        for ev in day_events[:visible_count]:
-            chip = CalendarEventChip(self._event_label(ev), ev, frame)
-            chip.setStyleSheet(self._chip_style(ev["status_class"]))
-            chip.setToolTip(self._tooltip(ev))
-            chip.doubleClicked.connect(self.open_event_detail)
-            v.addWidget(chip)
-        if len(day_events) > visible_count:
-            more_btn = QPushButton(f"⌄ +{len(day_events) - visible_count} daha")
-            more_btn.setObjectName("calendarMoreButton")
-            more_btn.setCursor(Qt.PointingHandCursor)
-            more_btn.clicked.connect(lambda _=False, btn=more_btn, events=list(day_events): self.show_more_popup(btn, events))
-            v.addWidget(more_btn)
-        v.addStretch()
-        return frame
-
-    def show_more_popup(self, anchor: QWidget, events: List[dict]):
-        if self._more_popup:
-            self._more_popup.close()
-        self._more_popup = CalendarMorePopup(events, self._chip_style, self.open_event_detail, self)
-        pos = anchor.mapToGlobal(QPoint(0, anchor.height() + 2))
-        self._more_popup.move(pos)
-        self._more_popup.show()
-
-    def render_month(self):
-        month_name = TR_MONTHS[self.current_month - 1]
-        self.month_title.setText(f"{month_name} {self.current_year}")
-        self.update_last_refresh_label()
-        self.footer_note.setText(f"Bugün: {self.today.isoformat()}")
-
-        self._clear_grid()
-        events_by_day: Dict[int, List[dict]] = {}
-        for ev in self.visible_events():
-            d = ev["deadline"]
-            if d.year == self.current_year and d.month == self.current_month:
-                events_by_day.setdefault(d.day, []).append(ev)
-
-        first_weekday, days_in_month = calendar.monthrange(self.current_year, self.current_month)
-        first_col = (first_weekday + 1) % 7
-        cell_index = 0
-
-        for _ in range(first_col):
-            blank = QFrame()
-            blank.setObjectName("calendarCellEmpty")
-            self.grid_layout.addWidget(blank, cell_index // 7, cell_index % 7)
-            cell_index += 1
-
-        for day in range(1, days_in_month + 1):
-            is_today = self.current_year == self.today.year and self.current_month == self.today.month and day == self.today.day
-            cell = self._build_day_cell(day, events_by_day.get(day, []), is_today)
-            self.grid_layout.addWidget(cell, cell_index // 7, cell_index % 7)
-            cell_index += 1
-
-        while cell_index % 7 != 0:
-            blank = QFrame()
-            blank.setObjectName("calendarCellEmpty")
-            self.grid_layout.addWidget(blank, cell_index // 7, cell_index % 7)
-            cell_index += 1
-
-    def open_event_detail(self, ev: dict):
-        if self._more_popup:
-            self._more_popup.close()
-        if self.detail_handler and self.detail_handler(ev):
+    def _on_detail(self, ev: dict) -> bool:
+        if not self.detail_handler:
+            return False
+        result = self.detail_handler(ev)
+        if result:
             self.refresh_data(rebuild_index=True)
             p = self.parent()
             if p and hasattr(p, "refresh"):
@@ -699,8 +1407,58 @@ class ContractCalendarWindow(QDialog):
                     p.refresh()
                 except Exception:
                     pass
+        return bool(result)
+
+    # ── Public API ────────────────────────────────────────────────────────
+    def refresh_data(self, rebuild_index: bool = True):
+        if rebuild_index:
+            try:
+                self.contract_index = self.store.build_contract_index()
+            except Exception:
+                pass
+        self._all_events = self._build_events()
+        self._refresh_pf()
+        self._render_year()
+
+    def refresh_from_index(
+        self,
+        store: Optional[ExcelStore] = None,
+        contract_index: Optional[List[dict]] = None,
+    ):
+        if store is not None:
+            self.store = store
+        if contract_index is not None:
+            self.contract_index = list(contract_index or [])
+        self.refresh_data(rebuild_index=False)
+
+    # ── Platform filtresi ─────────────────────────────────────────────────
+    def _refresh_pf(self):
+        if not hasattr(self, "platform_filter"):
             return
-        platform = str(ev.get("platform", "") or "")
-        no = str(ev.get("no", "") or "")
-        if not platform or not no:
-            QMessageBox.warning(self, "Bulunamadı", "Sözleşme detayları okunamadı.")
+        current = self.platform_filter_value
+        try:
+            platforms = [str(p) for p in self.store.platform_names() if p]
+        except Exception:
+            platforms = sorted({
+                str(e.get("platform") or "")
+                for e in self._all_events if e.get("platform")
+            })
+        self._refreshing_pf = True
+        try:
+            self.platform_filter.blockSignals(True)
+            self.platform_filter.clear()
+            self.platform_filter.addItem("Tümü", "")
+            for p in platforms:
+                self.platform_filter.addItem(p, p)
+            idx = self.platform_filter.findData(current)
+            self.platform_filter.setCurrentIndex(max(idx, 0))
+            self.platform_filter_value = current if idx >= 0 else ""
+        finally:
+            self.platform_filter.blockSignals(False)
+            self._refreshing_pf = False
+
+    def _on_pf_changed(self):
+        if self._refreshing_pf:
+            return
+        self.platform_filter_value = str(self.platform_filter.currentData() or "")
+        self._render_year()
