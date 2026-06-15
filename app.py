@@ -143,7 +143,7 @@ class ContractFileDropButton(QPushButton):
             event.ignore()
             return
         file_paths = []
-        folder_dropped = False
+        folder_paths = []
         unsupported_url = False
         for url in mime.urls():
             if not url.isLocalFile():
@@ -151,15 +151,22 @@ class ContractFileDropButton(QPushButton):
                 continue
             path = Path(url.toLocalFile())
             if path.is_dir():
-                folder_dropped = True
-                continue
-            file_paths.append(str(path))
-        if folder_dropped:
-            self.invalidDrop.emit("Klasör yüklenemez, lütfen dosya seçin.")
+                folder_paths.append(str(path))
+            else:
+                file_paths.append(str(path))
         if unsupported_url:
             self.invalidDrop.emit("Web bağlantısı yüklenemez, lütfen yerel dosya seçin.")
+        if folder_paths:
+            # Klasör sürükle-bırak: parent widget'a ilet
+            parent = self.parent()
+            while parent is not None:
+                if hasattr(parent, "_import_contract_folders"):
+                    parent._import_contract_folders(folder_paths, parent_folder_id=None)
+                    break
+                parent = parent.parent() if hasattr(parent, "parent") else None
         if file_paths:
             self.filesDropped.emit(file_paths)
+        if file_paths or folder_paths:
             event.acceptProposedAction()
         else:
             event.ignore()
@@ -171,11 +178,14 @@ class ContractFileTreeWidget(QTreeWidget):
     filesDropped = Signal(list, object)
     invalidDrop = Signal(str)
 
+    # Signal: (item_kind, item_id, target_folder_id_or_None)
+    itemMoved = Signal(str, int, object)
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setAcceptDrops(True)
-        self.setDragEnabled(False)
-        self.setDragDropMode(QAbstractItemView.DropOnly)
+        self.setDragEnabled(True)
+        self.setDragDropMode(QAbstractItemView.DragDrop)
         self.setDropIndicatorShown(True)
         self.setHeaderHidden(True)
         self.setRootIsDecorated(True)
@@ -186,6 +196,8 @@ class ContractFileTreeWidget(QTreeWidget):
             | QAbstractItemView.SelectedClicked
         )
         self.setContextMenuPolicy(Qt.CustomContextMenu)
+        self._drag_item_kind = None
+        self._drag_item_id = None
 
     def _drop_folder_id(self, pos):
         item = self.itemAt(pos)
@@ -199,11 +211,12 @@ class ContractFileTreeWidget(QTreeWidget):
         return None
 
     def _local_file_paths_from_event(self, event):
+        """Dosya ve klasör yollarını ayrı listeler halinde döner: (file_paths, folder_paths, error)"""
         mime = event.mimeData()
         if not mime.hasUrls():
-            return [], "Yalnızca yerel dosyalar yüklenebilir."
+            return [], [], "Yalnızca yerel dosyalar yüklenebilir."
         file_paths = []
-        folder_dropped = False
+        folder_paths = []
         unsupported_url = False
         for url in mime.urls():
             if not url.isLocalFile():
@@ -211,41 +224,77 @@ class ContractFileTreeWidget(QTreeWidget):
                 continue
             path = Path(url.toLocalFile())
             if path.is_dir():
-                folder_dropped = True
-                continue
-            file_paths.append(str(path))
-        if file_paths:
-            if folder_dropped:
-                self.invalidDrop.emit("Klasör yüklenemez, lütfen dosya seçin.")
-            if unsupported_url:
-                self.invalidDrop.emit("Web bağlantısı yüklenemez, lütfen yerel dosya seçin.")
-            return file_paths, ""
-        if folder_dropped:
-            return [], "Klasör yüklenemez, lütfen dosya seçin."
+                folder_paths.append(str(path))
+            else:
+                file_paths.append(str(path))
         if unsupported_url:
-            return [], "Web bağlantısı yüklenemez, lütfen yerel dosya seçin."
-        return [], "Yüklenecek yerel dosya bulunamadı."
+            self.invalidDrop.emit("Web bağlantısı yüklenemez, lütfen yerel dosya seçin.")
+        if not file_paths and not folder_paths:
+            return [], [], "Yüklenecek yerel dosya veya klasör bulunamadı."
+        return file_paths, folder_paths, ""
+
+    def _get_dragged_item_info(self):
+        """Sürüklenen item'ın kind ve id'sini döner."""
+        item = self.currentItem()
+        if not item:
+            return None, None
+        kind = item.data(0, Qt.UserRole)
+        if kind in ("file", "folder"):
+            return kind, int(item.data(0, Qt.UserRole + 1))
+        return None, None
 
     def dragEnterEvent(self, event):
+        if event.source() is self:
+            # Internal move – kendi tree'sinden sürükleme
+            kind, item_id = self._get_dragged_item_info()
+            if kind in ("file", "folder"):
+                self._drag_item_kind = kind
+                self._drag_item_id = item_id
+                event.acceptProposedAction()
+                return
         if event.mimeData().hasUrls():
             event.acceptProposedAction()
         else:
             event.ignore()
 
     def dragMoveEvent(self, event):
-        if event.mimeData().hasUrls():
+        if event.source() is self:
+            event.acceptProposedAction()
+        elif event.mimeData().hasUrls():
             event.acceptProposedAction()
         else:
             event.ignore()
 
     def dropEvent(self, event):
-        file_paths, error = self._local_file_paths_from_event(event)
-        if not file_paths:
+        pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
+        drop_folder_id = self._drop_folder_id(pos)
+
+        if event.source() is self:
+            # Internal move
+            kind = self._drag_item_kind
+            item_id = self._drag_item_id
+            self._drag_item_kind = None
+            self._drag_item_id = None
+            if kind and item_id is not None:
+                self.itemMoved.emit(kind, item_id, drop_folder_id)
+            event.acceptProposedAction()
+            return
+
+        file_paths, folder_paths, error = self._local_file_paths_from_event(event)
+        if not file_paths and not folder_paths:
             if error:
                 self.invalidDrop.emit(error)
             event.ignore()
             return
-        self.filesDropped.emit(file_paths, self._drop_folder_id(event.position().toPoint() if hasattr(event, "position") else event.pos()))
+        if folder_paths:
+            parent = self.parent()
+            while parent is not None:
+                if hasattr(parent, "_import_contract_folders"):
+                    parent._import_contract_folders(folder_paths, parent_folder_id=drop_folder_id)
+                    break
+                parent = parent.parent() if hasattr(parent, "parent") else None
+        if file_paths:
+            self.filesDropped.emit(file_paths, drop_folder_id)
         event.acceptProposedAction()
 
 def app_icon_path() -> Path:
@@ -5511,6 +5560,10 @@ class ContractWorkWindow(QDialog):
         self._file_dialog_open: bool = False
         self._documents_changed: bool = False
         self._is_dirty: bool = False   # Kullanıcı henüz değişiklik yapmadı
+        # Yeni sözleşme modunda belgeler için in-memory bekleme yapısı
+        self._pending_doc_folders: list = []   # [{id, parent_id, name}]
+        self._pending_doc_files: list = []     # [{id, folder_id, filename, content_blob, file_ext, mime_type, size_bytes, note, created_at}]
+        self._pending_doc_next_id: int = -1    # Negatif id'ler pending anlamına gelir
         self.setWindowTitle(APP_TITLE)
         # QDialog varsayılan olarak ? butonu gösterir — standart pencere butonları ekle
         self.setWindowFlags(
@@ -6294,6 +6347,14 @@ class ContractWorkWindow(QDialog):
             self.ci.entry_start_row = self.original_entry_start_row
             self.original_contract_no = new_key[1]
             self.original_contract_type = new_key[2]
+            # Yeni sözleşme kaydedildikten sonra pending belgeleri DB'ye aktar
+            if getattr(self, "is_new_contract", False) and (self._pending_doc_folders or self._pending_doc_files):
+                try:
+                    self._flush_pending_documents_to_db()
+                except Exception as flush_exc:
+                    QMessageBox.warning(self, "Belge aktarma hatası",
+                        f"Sözleşme kaydedildi ancak belgeler aktarılırken hata oluştu:\n{flush_exc}")
+            self.is_new_contract = False
             self.refresh_sd_sidebar()
             QMessageBox.information(self, "Kaydedildi", "Sözleşme Excel'e yazıldı.")
             self._is_dirty = False
@@ -6351,6 +6412,7 @@ class ContractWorkWindow(QDialog):
         """Build the compact meta bar and its layout-independent floating popover."""
         self._side_meta_open_panel = None
         self._side_meta_last_panel = "files"
+        self._side_meta_manual_height = None   # Kullanıcı ayarlanan panel yüksekliği
         self._side_meta_files: List[dict] = []
         self.side_meta_bar = QFrame()
         self.side_meta_bar.setObjectName("sideMetaBar")
@@ -6483,7 +6545,62 @@ class ContractWorkWindow(QDialog):
         self.side_meta_popover_body_layout = QVBoxLayout(self.side_meta_popover_body)
         self.side_meta_popover_body_layout.setContentsMargins(0, 0, 0, 0)
         self.side_meta_popover_body_layout.setSpacing(6)
-        popover_layout.addWidget(self.side_meta_popover_body, 1)
+        # stretch=1 → body tüm boş alanı doldurur; bu isteniyor
+        # ama tree sabit yükseklikte olunca alt boşluk oluşuyor.
+        # body'nin kendi size policy'sini Minimum yap:
+        from PySide6.QtWidgets import QSizePolicy as _QSP
+        self.side_meta_popover_body.setSizePolicy(_QSP.Expanding, _QSP.Minimum)
+        popover_layout.addWidget(self.side_meta_popover_body, 0)
+        popover_layout.addStretch(1)
+
+        # ── Resize handle (yalnızca bir kere oluşturulur) ──────────────────
+        _rh = QFrame()
+        _rh.setFixedHeight(7)
+        _rh.setCursor(Qt.SizeVerCursor)
+        _rh.setObjectName("popoverResizeHandle")
+        _rh.setStyleSheet(
+            "QFrame#popoverResizeHandle{background:transparent;border:0;border-top:2px solid transparent;}"
+            "QFrame#popoverResizeHandle:hover{background:#e8f0fe;border-top:2px solid #93c5fd;border-radius:3px;}"
+        )
+        _rh.setToolTip("Paneli yeniden boyutlandır")
+        _rh_drag = [None, None]  # [start_y, start_h]
+
+        def _rh_press(event, _s=self):
+            if event.button() == Qt.LeftButton:
+                try:
+                    _rh_drag[0] = event.globalPosition().toPoint().y()
+                except AttributeError:
+                    _rh_drag[0] = event.globalPos().y()
+                _rh_drag[1] = _s.side_meta_popover.height()
+
+        def _rh_move(event, _s=self):
+            if _rh_drag[0] is None:
+                return
+            try:
+                cur_y = event.globalPosition().toPoint().y()
+            except AttributeError:
+                cur_y = event.globalPos().y()
+            delta = cur_y - _rh_drag[0]
+            new_h = max(190, _rh_drag[1] + delta)
+            screen = _s.screen()
+            avail_h = screen.availableGeometry().height() if screen else 900
+            new_h = min(new_h, avail_h - 120)
+            _s._side_meta_manual_height = new_h
+            top = _s.side_meta_bar.height() + 3
+            w = _s.side_meta_popover.width()
+            _s.side_meta_popover.setGeometry(0, top, w, new_h)
+
+        def _rh_release(event):
+            _rh_drag[0] = None
+            _rh_drag[1] = None
+
+        _rh.mousePressEvent = _rh_press
+        _rh.mouseMoveEvent = _rh_move
+        _rh.mouseReleaseEvent = _rh_release
+        popover_layout.addWidget(_rh, 0)
+        popover_layout.setContentsMargins(10, 10, 10, 2)
+        # ────────────────────────────────────────────────────────────────────
+
         self.side_meta_popover.hide()
         QApplication.instance().installEventFilter(self)
         self.position_side_meta_popover()
@@ -6496,17 +6613,29 @@ class ContractWorkWindow(QDialog):
         self.side_meta_popover.adjustSize()
         hint_h = self.side_meta_popover.sizeHint().height()
         top = self.side_meta_bar.height() + 3
-        host_h = self.side_meta_host.height() if self.side_meta_host.height() > 0 else 520
-        max_h = max(120, min(540, host_h - top - 4))
+        host_h = self.side_meta_host.height() if self.side_meta_host.height() > 0 else 700
+        # Ekranın kullanılabilir yüksekliğini hesaba kat
+        screen = self.screen()
+        if screen:
+            avail_h = screen.availableGeometry().height()
+        else:
+            avail_h = 900
+        max_h = max(190, min(avail_h - 120, host_h - top - 4))
+        # Manuel yükseklik kullanıcı tarafından ayarlandıysa öncelikli kullan
+        manual_h = getattr(self, "_side_meta_manual_height", None)
         if getattr(self, "_side_meta_open_panel", None) == "files":
             files = list(getattr(self, "_side_meta_files", []))
             folders = list(getattr(self, "_side_meta_folders", []))
             tree_h = self.document_tree_height(folders, files)
-            # toolbar ~38 + tree + footer ~30 + margins ~26
-            min_h = max(190, tree_h + 94)
+            auto_min_h = max(190, tree_h + 94)
+            if manual_h is not None:
+                min_h = max(190, min(manual_h, max_h))
+            else:
+                min_h = auto_min_h
         else:
             min_h = 80
-        h = max(min_h, min(hint_h, max_h))
+            manual_h = None
+        h = max(min_h, min(hint_h if manual_h is None else manual_h, max_h))
         self.side_meta_popover.setGeometry(0, top, w, h)
         if self.side_meta_popover.isVisible():
             self.side_meta_popover.raise_()
@@ -6546,12 +6675,25 @@ class ContractWorkWindow(QDialog):
         self.side_chevron.setText("∧" if panel else "∨")
 
     def _load_contract_files(self) -> List[dict]:
+        if self.is_new_contract:
+            # Pending modda: in-memory listeden oku
+            folders_by_id = {f["id"]: f for f in self._pending_doc_folders}
+            out = []
+            for f in self._pending_doc_files:
+                item = dict(f)
+                fid = f.get("folder_id")
+                folder = folders_by_id.get(fid) if fid else None
+                item["folder_path"] = folder.get("name", "") if folder else ""
+                out.append(item)
+            return out
         try:
             return list(self.store.list_contract_files(self.ci.platform, self.ci.no, self.ci.contract_type))
         except Exception:
             return []
 
     def _load_contract_file_folders(self) -> List[dict]:
+        if self.is_new_contract:
+            return list(self._pending_doc_folders)
         try:
             return list(self.store.list_contract_file_folders(self.ci.platform, self.ci.no, self.ci.contract_type))
         except Exception:
@@ -6926,6 +7068,9 @@ class ContractWorkWindow(QDialog):
                     tree = self.create_contract_files_tree(folders, files)
                     self.contract_files_tree = tree
                     tree_h = self.document_tree_height(folders, files)
+                    # Tree'yi direkt ekle, yükseklik min+max ile sınırla
+                    # Max = aynı değer → sabit kutu, ama QTreeWidget kendi
+                    # internal scroll'u zaten yönetiyor (editör de içinde kalır)
                     tree.setMinimumHeight(tree_h)
                     tree.setMaximumHeight(tree_h)
                     drop_frame_layout.addWidget(tree)
@@ -7131,15 +7276,23 @@ class ContractWorkWindow(QDialog):
 
     @staticmethod
     def document_tree_height(folders: List[dict], files: List[dict]) -> int:
-        """Dinamik ağaç yüksekliği: satır sayısına göre küçük→orta→max+scroll."""
-        row_count = len(folders or []) + len(files or [])
-        if row_count <= 0:
-            return 110   # boş durum: küçük
-        if row_count <= 3:
-            return max(110, row_count * 30 + 20)
-        if row_count >= 10:
-            return 300   # max → scroll devreye girer
-        return min(300, row_count * 30 + 20)
+        """Dinamik ağaç yüksekliği: satır sayısına göre küçük→orta→büyük+scroll."""
+        # Açık klasörlerdeki dosyaları da say (görünür satır tahmini)
+        folder_ids = {int(f.get("id") or 0) for f in (folders or [])}
+        visible = len(folders or [])
+        for fi in (files or []):
+            fid = fi.get("folder_id")
+            if not fid or int(fid or 0) not in folder_ids:
+                visible += 1  # kökteki dosya
+            else:
+                visible += 1  # klasör içi dosya (açık varsayımı)
+        if visible <= 0:
+            return 110
+        if visible <= 6:
+            return max(120, visible * 30 + 24)
+        if visible <= 15:
+            return max(210, visible * 30 + 24)
+        return 420   # çok kayıt → internal scroll
 
 
     def create_contract_files_tree(self, folders: List[dict], files: List[dict]) -> ContractFileTreeWidget:
@@ -7197,6 +7350,7 @@ class ContractWorkWindow(QDialog):
         )
         tree.filesDropped.connect(lambda paths, folder_id: self._add_contract_files(paths, folder_id))
         tree.invalidDrop.connect(lambda message: QMessageBox.warning(self, "Dosya yüklenemedi", message))
+        tree.itemMoved.connect(self._handle_tree_item_move)
         tree.itemDoubleClicked.connect(self.on_contract_file_tree_double_clicked)
         tree.itemChanged.connect(self.on_contract_file_tree_item_changed)
         tree.customContextMenuRequested.connect(self.show_contract_file_tree_menu)
@@ -7303,6 +7457,42 @@ class ContractWorkWindow(QDialog):
             return
         self._tree_editing = True
         tree.setCurrentItem(item)
+        # Delegate: editör açıldığında arka plan tamamen kapatılsın (overlay bug önlemi)
+        # Her tree nesnesi için delegate kur (render sonrası yeni tree oluşur)
+        if not getattr(tree, "_rename_delegate_set", False):
+            from PySide6.QtWidgets import QStyledItemDelegate
+            from PySide6.QtGui import QColor
+            class _SolidBgDelegate(QStyledItemDelegate):
+                def createEditor(self, parent, option, index):
+                    editor = super().createEditor(parent, option, index)
+                    if editor:
+                        editor.setStyleSheet(
+                            "QLineEdit{"
+                            "  background:#ffffff;"
+                            "  color:#0f172a;"
+                            "  border:2px solid #1f5be3;"
+                            "  border-radius:5px;"
+                            "  padding:1px 4px;"
+                            "  font-size:11px;"
+                            "  min-width:120px;"
+                            "}"
+                        )
+                    return editor
+                def paint(self, painter, option, index):
+                    # PySide6'da option.state bir StateFlag enum'u – int'e cast ederek kontrol et
+                    from PySide6.QtWidgets import QStyle
+                    try:
+                        is_editing = bool(int(option.state) & int(QStyle.State_Editing))
+                    except Exception:
+                        is_editing = False
+                    if is_editing:
+                        from PySide6.QtGui import QColor
+                        painter.fillRect(option.rect, QColor("#ffffff"))
+                        return
+                    super().paint(painter, option, index)
+            tree.setItemDelegate(_SolidBgDelegate(tree))
+            tree._rename_delegate_set = True
+        tree.scrollToItem(item)
         tree.editItem(item, 0)
         def _select_all():
             editor = tree.focusWidget()
@@ -7314,18 +7504,100 @@ class ContractWorkWindow(QDialog):
         if not self._ensure_document_access(interactive=True):
             return
         try:
-            created = self.store.create_contract_file_folder(
-                self.ci.platform, self.ci.no, self.ci.contract_type, parent_id=self._selected_document_folder_id()
-            )
+            parent_id = self._selected_document_folder_id()
+            if self.is_new_contract:
+                # Pending modda in-memory oluştur
+                base_name = "Yeni Klasör"
+                existing = {f["name"] for f in self._pending_doc_folders if f.get("parent_id") == parent_id}
+                name = base_name
+                idx = 2
+                while name in existing:
+                    name = f"{base_name} ({idx})"
+                    idx += 1
+                new_id = self._pending_doc_next_id
+                self._pending_doc_next_id -= 1
+                folder = {"id": new_id, "parent_id": parent_id, "name": name, "created_at": "", "updated_at": ""}
+                self._pending_doc_folders.append(folder)
+                created = folder
+            else:
+                created = self.store.create_contract_file_folder(
+                    self.ci.platform, self.ci.no, self.ci.contract_type, parent_id=parent_id
+                )
             self._mark_documents_changed()
-            self.render_contract_files()
+            # render_contract_files() tüm tree'yi yıkıp yeniden kurar →
+            # editör yanlış konuma açılıyor. Bunun yerine tree'ye direkt item ekle.
             tree = getattr(self, "contract_files_tree", None)
             if tree:
-                matches = tree.findItems(str(created.get("name") or ""), Qt.MatchRecursive | Qt.MatchExactly)
-                for item in matches:
-                    if item.data(0, Qt.UserRole) == "folder" and int(item.data(0, Qt.UserRole + 1)) == int(created.get("id")):
-                        self._start_rename_item(item)
-                        break
+                # Yeni klasör item'ını direkt tree'ye ekle
+                _folder_icon = self._make_folder_icon()
+                new_item = QTreeWidgetItem([str(created.get("name") or "Yeni Klasör")])
+                new_item.setIcon(0, _folder_icon)
+                new_item.setData(0, Qt.UserRole, "folder")
+                new_item.setData(0, Qt.UserRole + 1, int(created.get("id") or 0))
+                new_item.setData(0, Qt.UserRole + 2, created.get("parent_id"))
+                new_item.setData(0, Qt.UserRole + 3, str(created.get("name") or "Yeni Klasör"))
+                new_item.setFlags(new_item.flags() | Qt.ItemIsEditable | Qt.ItemIsDropEnabled)
+                # Parent klasör varsa ona, yoksa köke ekle
+                _parent_folder_id = created.get("parent_id")
+                _parent_item = None
+                if _parent_folder_id:
+                    def _find_parent(n_top):
+                        for _i in range(n_top):
+                            _top = tree.topLevelItem(_i)
+                            if _top and _top.data(0, Qt.UserRole) == "folder":
+                                try:
+                                    if int(_top.data(0, Qt.UserRole + 1)) == int(_parent_folder_id):
+                                        return _top
+                                except Exception:
+                                    pass
+                                for _j in range(_top.childCount()):
+                                    _ch = _top.child(_j)
+                                    if _ch and _ch.data(0, Qt.UserRole) == "folder":
+                                        try:
+                                            if int(_ch.data(0, Qt.UserRole + 1)) == int(_parent_folder_id):
+                                                return _ch
+                                        except Exception:
+                                            pass
+                        return None
+                    _parent_item = _find_parent(tree.topLevelItemCount())
+                if _parent_item:
+                    _parent_item.addChild(new_item)
+                    _parent_item.setExpanded(True)
+                else:
+                    tree.addTopLevelItem(new_item)
+                tree.scrollToItem(new_item)
+                self._start_rename_item(new_item)
+                # Yüksekliği güncelle (1 item arttı)
+                all_f = list(getattr(self, "_side_meta_folders", []))
+                all_files = list(getattr(self, "_side_meta_files", []))
+                new_h = self.document_tree_height(all_f, all_files)
+                tree.setMinimumHeight(new_h)
+                tree.setMaximumHeight(new_h)
+            else:
+                # Tree henüz yok, tam render yap
+                self.render_contract_files()
+                _created_id = int(created.get("id") or 0)
+                def _open_rename_editor():
+                    _tree = getattr(self, "contract_files_tree", None)
+                    if not _tree:
+                        return
+                    def _find(_p, _n):
+                        for _i in range(_n):
+                            _c = _p.child(_i) if _p else _tree.topLevelItem(_i)
+                            if _c and _c.data(0, Qt.UserRole) == "folder":
+                                try:
+                                    if int(_c.data(0, Qt.UserRole + 1)) == _created_id:
+                                        _tree.scrollToItem(_c)
+                                        self._start_rename_item(_c)
+                                        return True
+                                except Exception:
+                                    pass
+                                if _find(_c, _c.childCount()):
+                                    return True
+                        return False
+                    _find(None, _tree.topLevelItemCount())
+                QTimer.singleShot(60, _open_rename_editor)
+            self.update_side_meta_badges()
         except Exception as exc:
             QMessageBox.warning(self, "Klasör eklenemedi", str(exc))
 
@@ -7351,10 +7623,25 @@ class ContractWorkWindow(QDialog):
         if new_name == old_name:
             return
         try:
-            renamed = self.store.rename_contract_file_folder(folder_id, new_name)
-            item.setData(0, Qt.UserRole + 3, str(renamed.get("name") or new_name))
+            if self.is_new_contract:
+                # Pending modda: in-memory güncelle
+                for f in self._pending_doc_folders:
+                    if f["id"] == folder_id:
+                        parent_id = f.get("parent_id")
+                        existing = {pf["name"] for pf in self._pending_doc_folders if pf.get("parent_id") == parent_id and pf["id"] != folder_id}
+                        if new_name in existing:
+                            raise ValueError("Aynı seviyede bu klasör adı zaten var.")
+                        f["name"] = new_name
+                        break
+                item.setData(0, Qt.UserRole + 3, new_name)
+            else:
+                renamed = self.store.rename_contract_file_folder(folder_id, new_name)
+                item.setData(0, Qt.UserRole + 3, str(renamed.get("name") or new_name))
             self._mark_documents_changed()
-            self.render_contract_files()
+            # Ağacı yeniden render ETME – sadece badge güncelle.
+            # render_contract_files() tüm tree'yi silip yeniden kurar,
+            # bu da expand state'i sıfırlayıp dosyaları "kaybeder" görüntüsü verir.
+            self.update_side_meta_badges()
         except Exception as exc:
             self._building_file_tree = True
             try:
@@ -7388,19 +7675,28 @@ class ContractWorkWindow(QDialog):
             return
         self._begin_side_meta_modal_action()
         try:
-            file_count = sum(
-                1 for f in self._side_meta_files
-                if int(f.get("folder_id") or 0) == folder_id
+            msg = (
+                f'"{folder_name}" klasörü, alt klasörleri ve içindeki tüm belgeler STS dosyasından silinecek.\n'
+                "Bu işlem geri alınamaz."
             )
-            msg = f'"{folder_name}" klasörünü silmek istediğinize emin misiniz?'
-            if file_count > 0:
-                msg += f"\n\nBu klasörde {file_count} dosya var. Dosyalar kökde kalacak."
             reply = QMessageBox.question(self, "Klasörü Sil", msg,
                                          QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
             if reply != QMessageBox.Yes:
                 return
             try:
-                self.store.delete_contract_file_folder(folder_id)
+                if self.is_new_contract:
+                    # Pending modda recursive sil
+                    def _collect_pending_folder_ids(fid):
+                        ids = [fid]
+                        for f in self._pending_doc_folders:
+                            if f.get("parent_id") == fid:
+                                ids.extend(_collect_pending_folder_ids(f["id"]))
+                        return ids
+                    all_ids = set(_collect_pending_folder_ids(folder_id))
+                    self._pending_doc_folders = [f for f in self._pending_doc_folders if f["id"] not in all_ids]
+                    self._pending_doc_files = [f for f in self._pending_doc_files if f.get("folder_id") not in all_ids]
+                else:
+                    self.store.delete_contract_file_folder(folder_id)
                 self._mark_documents_changed()
                 self.render_contract_files()
             except Exception as exc:
@@ -7457,8 +7753,11 @@ class ContractWorkWindow(QDialog):
         elif kind == "folder":
             folder_id = int(item.data(0, Qt.UserRole + 1))
             folder_name = str(item.data(0, Qt.UserRole + 3) or item.text(0))
+            # Seçili klasörün parent_id'sini al (üst klasör eklemek için)
+            _folder_parent_id = item.data(0, Qt.UserRole + 2)
             menu.addAction("➕  Dosya Ekle", lambda: self._add_files_to_folder(folder_id))
             menu.addAction("📁  Alt Klasör Ekle", lambda: self._add_subfolder(folder_id))
+            menu.addAction("📂  Üst Klasör Ekle", lambda pid=_folder_parent_id: self._add_subfolder(pid))
             menu.addSeparator()
             menu.addAction("⬇  Klasörü İndir (Klasör Olarak)", lambda fid=folder_id, fname=folder_name: self._download_folder(fid, fname, as_zip=False))
             act = menu.addAction("  Klasörü İndir (ZIP)", lambda fid=folder_id, fname=folder_name: self._download_folder(fid, fname, as_zip=True))
@@ -7492,18 +7791,72 @@ class ContractWorkWindow(QDialog):
         if not self._ensure_document_access(interactive=True):
             return
         try:
-            created = self.store.create_contract_file_folder(
-                self.ci.platform, self.ci.no, self.ci.contract_type, parent_id=parent_folder_id
-            )
+            if self.is_new_contract:
+                base_name = "Yeni Klasör"
+                existing = {f["name"] for f in self._pending_doc_folders if f.get("parent_id") == parent_folder_id}
+                name = base_name
+                idx = 2
+                while name in existing:
+                    name = f"{base_name} ({idx})"
+                    idx += 1
+                new_id = self._pending_doc_next_id
+                self._pending_doc_next_id -= 1
+                folder = {"id": new_id, "parent_id": parent_folder_id, "name": name, "created_at": "", "updated_at": ""}
+                self._pending_doc_folders.append(folder)
+                created = folder
+            else:
+                created = self.store.create_contract_file_folder(
+                    self.ci.platform, self.ci.no, self.ci.contract_type, parent_id=parent_folder_id
+                )
             self._mark_documents_changed()
-            self.render_contract_files()
             tree = getattr(self, "contract_files_tree", None)
             if tree:
-                matches = tree.findItems(str(created.get("name") or ""), Qt.MatchRecursive | Qt.MatchExactly)
-                for m in matches:
-                    if m.data(0, Qt.UserRole) == "folder" and int(m.data(0, Qt.UserRole + 1)) == int(created.get("id")):
-                        self._start_rename_item(m)
-                        break
+                _folder_icon = self._make_folder_icon()
+                new_item = QTreeWidgetItem([str(created.get("name") or "Yeni Klasör")])
+                new_item.setIcon(0, _folder_icon)
+                new_item.setData(0, Qt.UserRole, "folder")
+                new_item.setData(0, Qt.UserRole + 1, int(created.get("id") or 0))
+                new_item.setData(0, Qt.UserRole + 2, created.get("parent_id"))
+                new_item.setData(0, Qt.UserRole + 3, str(created.get("name") or "Yeni Klasör"))
+                new_item.setFlags(new_item.flags() | Qt.ItemIsEditable | Qt.ItemIsDropEnabled)
+                # parent_folder_id'ye sahip tree item'ı bul
+                _pid = parent_folder_id
+                _par = None
+                if _pid:
+                    def _fp(n):
+                        for _i in range(n):
+                            _t = tree.topLevelItem(_i)
+                            if _t and _t.data(0, Qt.UserRole) == "folder":
+                                try:
+                                    if int(_t.data(0, Qt.UserRole + 1)) == int(_pid):
+                                        return _t
+                                except Exception:
+                                    pass
+                                for _j in range(_t.childCount()):
+                                    _c = _t.child(_j)
+                                    if _c and _c.data(0, Qt.UserRole) == "folder":
+                                        try:
+                                            if int(_c.data(0, Qt.UserRole + 1)) == int(_pid):
+                                                return _c
+                                        except Exception:
+                                            pass
+                        return None
+                    _par = _fp(tree.topLevelItemCount())
+                if _par:
+                    _par.addChild(new_item)
+                    _par.setExpanded(True)
+                else:
+                    tree.addTopLevelItem(new_item)
+                tree.scrollToItem(new_item)
+                self._start_rename_item(new_item)
+                all_f = list(getattr(self, "_side_meta_folders", []))
+                all_files = list(getattr(self, "_side_meta_files", []))
+                new_h = self.document_tree_height(all_f, all_files)
+                tree.setMinimumHeight(new_h)
+                tree.setMaximumHeight(new_h)
+            else:
+                self.render_contract_files()
+            self.update_side_meta_badges()
         except Exception as exc:
             QMessageBox.warning(self, "Alt klasör eklenemedi", str(exc))
 
@@ -7549,20 +7902,41 @@ class ContractWorkWindow(QDialog):
         if not target:
             return
         try:
+            added_count = 0
+            errors = []
             with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as zf:
                 seen: dict = {}
                 for fid in file_ids:
-                    filename, _mime, content = self.store.get_contract_file_bytes(fid)
-                    arc_name = filename
-                    if arc_name in seen:
-                        seen[arc_name] += 1
-                        stem = Path(arc_name).stem
-                        ext = Path(arc_name).suffix
-                        arc_name = f"{stem}_{seen[filename]}{ext}"
-                    else:
-                        seen[arc_name] = 0
-                    zf.writestr(arc_name, content)
-            QMessageBox.information(self, "ZIP oluşturuldu", f"{len(file_ids)} dosya ZIP'e eklendi.")
+                    try:
+                        filename, _mime, file_content = self.store.get_contract_file_bytes(fid)
+                        arc_name = filename
+                        if arc_name in seen:
+                            seen[arc_name] += 1
+                            stem = Path(arc_name).stem
+                            ext = Path(arc_name).suffix
+                            arc_name = f"{stem}_{seen[filename]}{ext}"
+                        else:
+                            seen[arc_name] = 0
+                        zf.writestr(arc_name, file_content)
+                        added_count += 1
+                    except Exception as exc:
+                        errors.append(str(exc))
+            if added_count == 0:
+                import os
+                try:
+                    os.unlink(target)
+                except Exception:
+                    pass
+                msg = "Hiçbir dosya ZIP'e eklenemedi."
+                if errors:
+                    msg += "\n\nHatalar:\n" + "\n".join(errors[:5])
+                QMessageBox.warning(self, "ZIP oluşturulamadı", msg)
+                return
+            if errors:
+                msg = f"{added_count} dosya ZIP'e eklendi, {len(errors)} dosya eklenemedi.\n\nİlk hatalar:\n" + "\n".join(errors[:5])
+                QMessageBox.warning(self, "ZIP kısmen oluşturuldu", msg)
+            else:
+                QMessageBox.information(self, "ZIP oluşturuldu", f"{added_count} dosya ZIP'e eklendi.")
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(Path(target).parent)))
         except Exception as exc:
             QMessageBox.warning(self, "ZIP oluşturulamadı", str(exc))
@@ -7644,6 +8018,8 @@ class ContractWorkWindow(QDialog):
             if not target:
                 return
             try:
+                dl_added_count = 0
+                dl_errors = []
                 seen: dict = {}
                 with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as zf:
                     for file_id, filename, arc_prefix in entries:
@@ -7657,11 +8033,27 @@ class ContractWorkWindow(QDialog):
                         else:
                             seen[arc_name] = 0
                         try:
-                            _, _mime, content = self.store.get_contract_file_bytes(file_id)
-                            zf.writestr(arc_name, content)
+                            _, _mime, dl_content = self.store.get_contract_file_bytes(file_id)
+                            zf.writestr(arc_name, dl_content)
+                            dl_added_count += 1
                         except Exception as exc:
-                            pass  # tek dosya hatasını atla
-                QMessageBox.information(self, "ZIP oluşturuldu", f"{len(entries)} dosya ZIP'e eklendi.\n{target}")
+                            dl_errors.append(f"{filename}: {exc}")
+                if dl_added_count == 0:
+                    import os as _os
+                    try:
+                        _os.unlink(target)
+                    except Exception:
+                        pass
+                    msg = "Hiçbir dosya ZIP'e eklenemedi."
+                    if dl_errors:
+                        msg += "\n\nHatalar:\n" + "\n".join(dl_errors[:5])
+                    QMessageBox.warning(self, "ZIP oluşturulamadı", msg)
+                    return
+                if dl_errors:
+                    msg = f"{dl_added_count} dosya ZIP'e eklendi, {len(dl_errors)} dosya eklenemedi.\n\nİlk hatalar:\n" + "\n".join(dl_errors[:5])
+                    QMessageBox.warning(self, "ZIP kısmen oluşturuldu", msg)
+                else:
+                    QMessageBox.information(self, "ZIP oluşturuldu", f"{dl_added_count} dosya ZIP'e eklendi.\n{target}")
                 QDesktopServices.openUrl(QUrl.fromLocalFile(str(Path(target).parent)))
             except Exception as exc:
                 QMessageBox.warning(self, "ZIP oluşturulamadı", str(exc))
@@ -7767,6 +8159,50 @@ class ContractWorkWindow(QDialog):
             return
         self._add_contract_files(paths, self._selected_document_folder_id())
 
+    def _handle_tree_item_move(self, kind: str, item_id: int, target_folder_id):
+        """Tree içinde sürükle-bırak taşıma işlemini yönet."""
+        if not self._ensure_document_access(interactive=True):
+            return
+        try:
+            if self.is_new_contract:
+                # Pending modda in-memory taşıma
+                if kind == "file":
+                    for f in self._pending_doc_files:
+                        if f["id"] == item_id:
+                            f["folder_id"] = target_folder_id
+                            break
+                elif kind == "folder":
+                    # Kendi altına taşınamaz
+                    def is_descendant_pending(fid, anc_id):
+                        for ff in self._pending_doc_folders:
+                            if ff["id"] == fid:
+                                pid = ff.get("parent_id")
+                                if pid is None:
+                                    return False
+                                if pid == anc_id:
+                                    return True
+                                return is_descendant_pending(pid, anc_id)
+                        return False
+                    if target_folder_id == item_id:
+                        QMessageBox.warning(self, "Taşınamaz", "Klasör kendi içine taşınamaz.")
+                        return
+                    if target_folder_id is not None and is_descendant_pending(target_folder_id, item_id):
+                        QMessageBox.warning(self, "Taşınamaz", "Klasör kendi alt klasörüne taşınamaz.")
+                        return
+                    for f in self._pending_doc_folders:
+                        if f["id"] == item_id:
+                            f["parent_id"] = target_folder_id
+                            break
+            else:
+                if kind == "file":
+                    self.store.move_contract_file(item_id, target_folder_id)
+                elif kind == "folder":
+                    self.store.move_contract_file_folder(item_id, target_folder_id)
+            self._mark_documents_changed()
+            self.render_contract_files()
+        except Exception as exc:
+            QMessageBox.warning(self, "Taşıma hatası", str(exc))
+
     def _add_contract_files(self, file_paths, folder_id=None):
         if not self._ensure_document_access(interactive=True):
             return
@@ -7776,6 +8212,8 @@ class ContractWorkWindow(QDialog):
         added = 0
         duplicates = 0
         failures = []
+        ALLOWED = {"pdf", "doc", "docx", "xls", "xlsx", "xlsm", "ppt", "pptx", "png", "jpg", "jpeg", "txt"}
+        BLOCKED = {"exe", "bat", "cmd", "ps1", "sh", "msi", "dll", "com", "scr", "vbs", "js"}
         for raw_path in paths:
             path = Path(raw_path)
             try:
@@ -7787,8 +8225,45 @@ class ContractWorkWindow(QDialog):
                     raise ValueError("Lütfen geçerli bir dosya seçin.")
                 if not os.access(path, os.R_OK):
                     raise ValueError("Dosya okunamıyor.")
-                self.store.add_contract_file(self.ci.platform, self.ci.no, path, self.ci.contract_type, folder_id=folder_id)
-                added += 1
+                if self.is_new_contract:
+                    # Pending modda: bytes olarak in-memory sakla
+                    import mimetypes as _mt
+                    ext = path.suffix.lower().lstrip(".")
+                    if ext in BLOCKED or ext not in ALLOWED:
+                        raise ValueError("Bu dosya türü desteklenmiyor.")
+                    from src.config.app_config import MAX_CONTRACT_FILE_SIZE_BYTES
+                    size = path.stat().st_size
+                    if size > MAX_CONTRACT_FILE_SIZE_BYTES:
+                        raise ValueError("Dosya boyutu 120 MB üstünde olamaz.")
+                    # Duplicate kontrolü
+                    is_dup = any(
+                        f["filename"] == path.name and f.get("size_bytes") == size
+                        for f in self._pending_doc_files
+                    )
+                    if is_dup:
+                        duplicates += 1
+                        continue
+                    content_bytes = path.read_bytes()
+                    mime = _mt.guess_type(path.name)[0] or "application/octet-stream"
+                    new_id = self._pending_doc_next_id
+                    self._pending_doc_next_id -= 1
+                    self._pending_doc_files.append({
+                        "id": new_id,
+                        "folder_id": folder_id,
+                        "filename": path.name,
+                        "file_ext": ext,
+                        "mime_type": mime,
+                        "size_bytes": size,
+                        "content_blob": content_bytes,
+                        "note": "",
+                        "created_at": "",
+                        "updated_at": "",
+                        "_source_path": str(path),
+                    })
+                    added += 1
+                else:
+                    self.store.add_contract_file(self.ci.platform, self.ci.no, path, self.ci.contract_type, folder_id=folder_id)
+                    added += 1
             except Exception as exc:
                 message = str(exc)
                 if "zaten ekli" in message.lower():
@@ -7810,6 +8285,143 @@ class ContractWorkWindow(QDialog):
 
     def _handle_contract_files_drop(self, file_paths):
         self._add_contract_files(file_paths)
+
+    def _flush_pending_documents_to_db(self):
+        """Yeni sözleşme kaydedildikten sonra pending belge ve klasörleri DB'ye yaz."""
+        if not self._pending_doc_folders and not self._pending_doc_files:
+            return
+        # Klasör id eşleme: pending (negatif) id → gerçek DB id
+        id_map: dict = {}  # pending_id → real_db_id
+
+        def flush_folder_tree(pending_parent_id, real_parent_id):
+            """Pending klasörleri hiyerarşiyle DB'ye yaz."""
+            children = [f for f in self._pending_doc_folders if f.get("parent_id") == pending_parent_id]
+            for folder in children:
+                created = self.store.create_contract_file_folder(
+                    self.ci.platform, self.ci.no, self.ci.contract_type,
+                    parent_id=real_parent_id, name=folder["name"]
+                )
+                real_id = int(created.get("id") or 0)
+                id_map[folder["id"]] = real_id
+                flush_folder_tree(folder["id"], real_id)
+
+        flush_folder_tree(None, None)
+
+        # Dosyaları DB'ye yaz
+        for f in self._pending_doc_files:
+            pending_folder_id = f.get("folder_id")
+            real_folder_id = id_map.get(pending_folder_id) if pending_folder_id else None
+            try:
+                src = f.get("_source_path")
+                if src and Path(src).is_file():
+                    self.store.add_contract_file(
+                        self.ci.platform, self.ci.no, Path(src),
+                        self.ci.contract_type, folder_id=real_folder_id, note=f.get("note", "")
+                    )
+                else:
+                    # Dosya path'i yoksa bytes'tan geçici dosya oluştur
+                    import tempfile
+                    suffix = f".{f.get('file_ext', 'bin')}"
+                    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+                        tmp.write(f.get("content_blob", b""))
+                        tmp_path = tmp.name
+                    try:
+                        # Orijinal dosya adını koruyarak ekle
+                        original_name = f.get("filename", "dosya")
+                        target_tmp = Path(tmp_path).parent / original_name
+                        Path(tmp_path).rename(target_tmp)
+                        self.store.add_contract_file(
+                            self.ci.platform, self.ci.no, target_tmp,
+                            self.ci.contract_type, folder_id=real_folder_id, note=f.get("note", "")
+                        )
+                    finally:
+                        try:
+                            import os
+                            if Path(tmp_path).exists():
+                                os.unlink(tmp_path)
+                        except Exception:
+                            pass
+            except Exception:
+                pass  # Tek dosya hatasını yutma ama devam et (duplicate vs)
+
+        # Pending yapıyı temizle
+        self._pending_doc_folders.clear()
+        self._pending_doc_files.clear()
+
+    def _import_contract_folders(self, folder_paths, parent_folder_id=None):
+        """Windows'tan sürüklenen klasörleri recursive olarak STS içine aktarır."""
+        if not self._ensure_document_access(interactive=True):
+            return
+        ALLOWED_EXTS = {"pdf", "doc", "docx", "xls", "xlsx", "xlsm", "ppt", "pptx", "png", "jpg", "jpeg", "txt"}
+
+        added_files = 0
+        skipped_files = 0
+        errors = []
+
+        def import_folder(fs_path, db_parent_id):
+            """Tek klasörü recursive içe aktar. Klasörü DB'de oluştur, dosyalarını ekle."""
+            nonlocal added_files, skipped_files
+            fs_path = Path(fs_path)
+            folder_name = fs_path.name or "Klasör"
+            # Klasörü DB'ye oluştur
+            try:
+                created = self.store.create_contract_file_folder(
+                    self.ci.platform, self.ci.no, self.ci.contract_type,
+                    parent_id=db_parent_id, name=folder_name
+                )
+                db_folder_id = int(created.get("id") or 0)
+            except Exception as exc:
+                errors.append(f"Klasör oluşturulamadı ({folder_name}): {exc}")
+                return
+
+            # Dosyaları ekle
+            try:
+                children = sorted(fs_path.iterdir(), key=lambda p: (p.is_dir(), p.name.casefold()))
+            except Exception as exc:
+                errors.append(f"Klasör okunamadı ({folder_name}): {exc}")
+                return
+
+            for child in children:
+                QApplication.processEvents()
+                if child.is_dir():
+                    import_folder(child, db_folder_id)
+                elif child.is_file():
+                    ext = child.suffix.lower().lstrip(".")
+                    if ext not in ALLOWED_EXTS:
+                        skipped_files += 1
+                        continue
+                    try:
+                        self.store.add_contract_file(
+                            self.ci.platform, self.ci.no, child,
+                            self.ci.contract_type, folder_id=db_folder_id
+                        )
+                        added_files += 1
+                    except Exception as exc:
+                        msg = str(exc)
+                        if "zaten ekli" in msg.lower():
+                            skipped_files += 1
+                        else:
+                            errors.append(f"{child.name}: {msg}")
+
+        for fp in (folder_paths or []):
+            import_folder(fp, parent_folder_id)
+            QApplication.processEvents()
+
+        self._mark_documents_changed()
+        self.render_contract_files()
+
+        # Özet mesajı
+        parts = []
+        if added_files:
+            parts.append(f"{added_files} dosya eklendi")
+        if skipped_files:
+            parts.append(f"{skipped_files} desteklenmeyen/zaten ekli dosya atlandı")
+        summary = ", ".join(parts) if parts else "Eklenecek dosya bulunamadı."
+        if errors:
+            summary += f"\n\nHatalar ({len(errors)}):\n" + "\n".join(errors[:5])
+            QMessageBox.warning(self, "Klasör İçe Aktarma", summary)
+        elif added_files or skipped_files:
+            QMessageBox.information(self, "Klasör İçe Aktarıldı", summary)
 
     def add_contract_file(self):
         self._pick_contract_files()
@@ -7852,7 +8464,10 @@ class ContractWorkWindow(QDialog):
             if QMessageBox.question(self, "Belgeyi Sil", "Belge STS dosyasından silinsin mi? Orijinal dosyaya dokunulmaz.") != QMessageBox.Yes:
                 return
             try:
-                self.store.delete_contract_file(file_id)
+                if self.is_new_contract:
+                    self._pending_doc_files = [f for f in self._pending_doc_files if f["id"] != file_id]
+                else:
+                    self.store.delete_contract_file(file_id)
                 self._mark_documents_changed()
                 self.render_contract_files()
             except Exception as exc:
