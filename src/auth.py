@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 import hmac
 import os
+import re
+import secrets
 import socket
 import sqlite3
 from pathlib import Path
@@ -25,7 +27,7 @@ FULL_ACCESS_PERMISSIONS = {
 # Development switch: keep the authorization schema, roles and permission
 # definitions in place, but temporarily stop permission checks from blocking
 # users. Flip this back to True when the restrictions should be enforced again.
-PERMISSION_RESTRICTIONS_ENABLED = False
+PERMISSION_RESTRICTIONS_ENABLED = True
 
 AUTHORIZATION_REQUIRED_PERMISSIONS = {
     "manage_staff",
@@ -105,7 +107,6 @@ LEGACY_PERMISSIONS = [
 ]
 
 DEFAULT_ROLE_PERMISSIONS = {
-    "admin": {code for code, *_ in DEFAULT_PERMISSIONS},
     "manager": {
         "view_contracts", "create_contracts", "edit_contracts", "delete_contracts", "export_data",
         "manage_acceptances", "manage_terms", "manage_labels", "manage_platforms", "manage_components",
@@ -118,6 +119,46 @@ DEFAULT_ROLE_PERMISSIONS = {
 }
 
 current_staff: Optional[dict[str, Any]] = None
+
+
+_SYSTEM_ADMINS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS system_admins (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    admin_name TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    is_active INTEGER DEFAULT 1,
+    last_login_at TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT
+);
+"""
+
+
+_STAFF_INVITES_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS staff_invites (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    invite_code_hash TEXT NOT NULL,
+    invite_code_hint TEXT,
+    role_id INTEGER NOT NULL,
+    is_active INTEGER DEFAULT 1,
+    max_uses INTEGER DEFAULT 1,
+    used_count INTEGER DEFAULT 0,
+    expires_at TEXT,
+    created_by_admin_id INTEGER,
+    created_by_staff_id INTEGER,
+    created_by_full_name TEXT,
+    created_by_device_name TEXT,
+    used_at TEXT,
+    used_by_staff_id INTEGER,
+    used_by_full_name TEXT,
+    used_by_device_name TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT,
+    FOREIGN KEY(role_id) REFERENCES roles(id) ON DELETE CASCADE,
+    FOREIGN KEY(created_by_staff_id) REFERENCES staff(id) ON DELETE SET NULL,
+    FOREIGN KEY(used_by_staff_id) REFERENCES staff(id) ON DELETE SET NULL
+);
+"""
 
 _STAFF_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS staff (
@@ -214,6 +255,8 @@ def ensure_authorization_schema(db_or_path: sqlite3.Connection | str | Path) -> 
             """
         )
         conn.execute(_STAFF_TABLE_SQL)
+        conn.execute(_SYSTEM_ADMINS_TABLE_SQL)
+        conn.execute(_STAFF_INVITES_TABLE_SQL)
         columns = _table_columns(conn, "staff")
         for name, ddl in (
             ("role_id", "INTEGER"),
@@ -243,7 +286,6 @@ def ensure_authorization_schema(db_or_path: sqlite3.Connection | str | Path) -> 
 
 def _seed_authorization_defaults(conn: sqlite3.Connection) -> None:
     roles = [
-        ("admin", "Admin", 1),
         ("manager", "Yönetici", 1),
         ("personnel", "Personel", 1),
         ("viewer", "Görüntüleyici", 1),
@@ -284,17 +326,198 @@ def _seed_authorization_defaults(conn: sqlite3.Connection) -> None:
 def _migrate_staff_roles(conn: sqlite3.Connection) -> None:
     role_ids = {str(r["name"]): int(r["id"]) for r in conn.execute("SELECT id,name FROM roles")}
     default_role_id = role_ids.get("personnel")
-    staff_rows = conn.execute("SELECT id, role, role_id FROM staff").fetchall()
+    manager_role_id = role_ids.get("manager", default_role_id)
+    admin_role_id = role_ids.get("admin")
+    has_system_admin = conn.execute("SELECT 1 FROM system_admins WHERE COALESCE(is_active,1)=1 LIMIT 1").fetchone() is not None
+    staff_columns = _table_columns(conn, "staff")
+    role_name_expr = "role_name" if "role_name" in staff_columns else "NULL AS role_name"
+    staff_rows = conn.execute(f"SELECT id, role, role_id, {role_name_expr} FROM staff").fetchall()
     single_staff_id = int(staff_rows[0]["id"]) if len(staff_rows) == 1 else None
     for row in staff_rows:
+        legacy = str(row["role"] or "personnel").strip()
+        legacy_role_name = str(row["role_name"] or "").strip() if "role_name" in row.keys() else ""
+        role_id = int(row["role_id"]) if row["role_id"] is not None else None
+        is_admin_staff = legacy == "admin" or legacy_role_name == "admin" or (admin_role_id is not None and role_id == int(admin_role_id))
+        if is_admin_staff and has_system_admin:
+            conn.execute(
+                "UPDATE staff SET role_id=?, role=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                (manager_role_id, "manager", int(row["id"])),
+            )
+            continue
         if row["role_id"] is not None:
             continue
-        legacy = str(row["role"] or "personnel").strip()
-        normalized = "admin" if single_staff_id == int(row["id"]) else ("personnel" if legacy == "staff" else legacy)
+        normalized = "manager" if single_staff_id == int(row["id"]) else ("personnel" if legacy in {"staff", "admin"} else legacy)
         conn.execute(
             "UPDATE staff SET role_id=?, role=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
             (role_ids.get(normalized, default_role_id), normalized, int(row["id"])),
         )
+
+
+
+NORMAL_ROLE_NAMES = {"manager", "personnel", "viewer"}
+
+
+def normalize_invite_code(code: str) -> str:
+    return re.sub(r"[^A-Z0-9]", "", str(code or "").upper())
+
+
+def generate_invite_code() -> str:
+    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+    raw = "".join(secrets.choice(alphabet) for _ in range(7))
+    return f"STS-{raw[:4]}-{raw[4:]}"
+
+
+def _invite_code_hint(invite_code: str) -> str:
+    normalized = normalize_invite_code(invite_code)
+    return f"****-{normalized[-3:]}" if normalized else "****"
+
+
+def _role_row(conn: sqlite3.Connection, role_id: int):
+    return conn.execute("SELECT id,name,display_name FROM roles WHERE id=?", (int(role_id),)).fetchone()
+
+
+def _is_normal_role(row) -> bool:
+    return bool(row and str(row["name"] or "") in NORMAL_ROLE_NAMES)
+
+
+def create_staff_invite(db_or_path: sqlite3.Connection | str | Path, actor: Optional[dict[str, Any]], role_id: int, expires_at=None, max_uses: int = 1) -> dict[str, Any]:
+    if not (actor and bool(actor.get("is_admin"))):
+        require_any_permission(actor, db_or_path, "manage_staff", "create_staff")
+        require_any_permission(actor, db_or_path, "change_staff_roles", "manage_roles")
+    ensure_authorization_schema(db_or_path)
+    conn, should_close = _connection_from(db_or_path)
+    try:
+        role = _role_row(conn, int(role_id))
+        if not _is_normal_role(role):
+            raise ValueError("Yetki kodu yalnızca normal rollere bağlanabilir.")
+        code = generate_invite_code()
+        max_uses_i = max(1, int(max_uses or 1))
+        admin_id = actor.get("admin_id") if actor and actor.get("is_admin") else None
+        staff_id = actor.get("id") if actor and not actor.get("is_admin") else None
+        conn.execute(
+            """
+            INSERT INTO staff_invites(
+                invite_code_hash, invite_code_hint, role_id, is_active, max_uses, used_count,
+                expires_at, created_by_admin_id, created_by_staff_id, created_by_full_name,
+                created_by_device_name, created_at, updated_at
+            ) VALUES(?, ?, ?, 1, ?, 0, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            """,
+            (
+                hash_password(normalize_invite_code(code)), _invite_code_hint(code), int(role_id), max_uses_i,
+                str(expires_at) if expires_at else None, int(admin_id) if admin_id is not None else None,
+                int(staff_id) if staff_id is not None else None, str((actor or {}).get("full_name") or ""),
+                str((actor or {}).get("device_name") or ""),
+            ),
+        )
+        conn.commit()
+        invite_id = int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
+        row = conn.execute(
+            "SELECT si.*, r.name AS role_name, r.display_name AS role_display_name FROM staff_invites si JOIN roles r ON r.id=si.role_id WHERE si.id=?",
+            (invite_id,),
+        ).fetchone()
+        out = dict(row)
+        out["invite_code"] = code
+        return out
+    finally:
+        if should_close:
+            conn.close()
+
+
+def list_staff_invites(db_or_path: sqlite3.Connection | str | Path) -> list[dict[str, Any]]:
+    ensure_authorization_schema(db_or_path)
+    conn, should_close = _connection_from(db_or_path)
+    try:
+        rows = conn.execute(
+            """
+            SELECT si.*, r.name AS role_name, r.display_name AS role_display_name,
+                   CASE
+                     WHEN COALESCE(si.is_active,1) <> 1 THEN 'Pasif'
+                     WHEN COALESCE(si.used_count,0) >= COALESCE(si.max_uses,1) THEN 'Kullanıldı'
+                     WHEN si.expires_at IS NOT NULL AND datetime(si.expires_at) <= datetime('now') THEN 'Süresi Doldu'
+                     ELSE 'Aktif'
+                   END AS status_text
+            FROM staff_invites si
+            LEFT JOIN roles r ON r.id=si.role_id
+            ORDER BY si.created_at DESC, si.id DESC
+            """
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        if should_close:
+            conn.close()
+
+
+def validate_staff_invite(db_or_path: sqlite3.Connection | str | Path, invite_code: str) -> dict[str, Any] | None:
+    ensure_authorization_schema(db_or_path)
+    normalized = normalize_invite_code(invite_code)
+    if not normalized:
+        return None
+    conn, should_close = _connection_from(db_or_path)
+    try:
+        rows = conn.execute(
+            """
+            SELECT si.*, r.name AS role_name, r.display_name AS role_display_name
+            FROM staff_invites si
+            JOIN roles r ON r.id=si.role_id
+            WHERE COALESCE(si.is_active,1)=1
+              AND COALESCE(si.used_count,0) < COALESCE(si.max_uses,1)
+              AND (si.expires_at IS NULL OR datetime(si.expires_at) > datetime('now'))
+            ORDER BY si.created_at DESC, si.id DESC
+            """
+        ).fetchall()
+        for row in rows:
+            if str(row["role_name"] or "") not in NORMAL_ROLE_NAMES:
+                continue
+            if verify_password(normalized, str(row["invite_code_hash"] or "")):
+                return dict(row)
+        return None
+    finally:
+        if should_close:
+            conn.close()
+
+
+def consume_staff_invite_and_create_staff(db_or_path: sqlite3.Connection | str | Path, device_name: str, full_name: str, password: str, invite_code: str) -> dict[str, Any]:
+    ensure_authorization_schema(db_or_path)
+    invite = validate_staff_invite(db_or_path, invite_code)
+    if not invite:
+        # TODO: staff_invite_failed olayı mevcut log altyapısına güvenli bağlanınca yazılacak.
+        raise ValueError("Yetki kodu geçersiz, pasif, kullanılmış veya süresi dolmuş.")
+    conn, should_close = _connection_from(db_or_path)
+    try:
+        row = conn.execute("SELECT * FROM staff_invites WHERE id=?", (int(invite["id"]),)).fetchone()
+        if not row or int(row["is_active"] if row["is_active"] is not None else 1) != 1 or int(row["used_count"] or 0) >= int(row["max_uses"] or 1):
+            raise ValueError("Yetki kodu artık geçerli değil.")
+        if row["expires_at"] is not None and conn.execute("SELECT datetime(?) <= datetime('now')", (row["expires_at"],)).fetchone()[0]:
+            raise ValueError("Yetki kodunun süresi dolmuş.")
+        role = _role_row(conn, int(row["role_id"]))
+        if not _is_normal_role(role):
+            raise ValueError("Yetki kodu geçerli bir role bağlı değil.")
+        conn.execute(
+            """
+            INSERT INTO staff(device_name, full_name, password_hash, role, role_id, is_active, created_at, updated_at)
+            VALUES(?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            """,
+            (str(device_name or ""), str(full_name or "").strip(), hash_password(password), str(role["name"]), int(role["id"])),
+        )
+        staff_id = int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
+        conn.execute(
+            """
+            UPDATE staff_invites
+            SET used_count=COALESCE(used_count,0)+1, used_at=CURRENT_TIMESTAMP,
+                used_by_staff_id=?, used_by_full_name=?, used_by_device_name=?, updated_at=CURRENT_TIMESTAMP
+            WHERE id=?
+            """,
+            (staff_id, str(full_name or "").strip(), str(device_name or ""), int(row["id"])),
+        )
+        conn.commit()
+        # TODO: staff_invite_used olayı mevcut log altyapısına güvenli bağlanınca yazılacak.
+        staff_row = conn.execute(_staff_select_sql("WHERE s.id=?"), (staff_id,)).fetchone()
+        return build_current_staff(staff_row)
+    except sqlite3.IntegrityError as exc:
+        raise ValueError("Bu cihaz için personel kaydı zaten mevcut.") from exc
+    finally:
+        if should_close:
+            conn.close()
 
 
 def get_device_name() -> str:
@@ -354,7 +577,7 @@ def get_staff_by_device(db_or_path: sqlite3.Connection | str | Path, device_name
 
 def _default_role_for_new_staff(conn: sqlite3.Connection) -> int:
     has_staff = int(conn.execute("SELECT COUNT(*) FROM staff").fetchone()[0] or 0) > 0
-    role_name = "personnel" if has_staff else "admin"
+    role_name = "personnel" if has_staff else "manager"
     row = conn.execute("SELECT id FROM roles WHERE name=?", (role_name,)).fetchone()
     return int(row["id"])
 
@@ -398,6 +621,77 @@ def build_current_staff(row) -> dict[str, Any]:
     }
 
 
+def has_active_system_admin(db_or_path: sqlite3.Connection | str | Path) -> bool:
+    ensure_authorization_schema(db_or_path)
+    conn, should_close = _connection_from(db_or_path)
+    try:
+        row = conn.execute("SELECT 1 FROM system_admins WHERE COALESCE(is_active,1)=1 LIMIT 1").fetchone()
+        return row is not None
+    finally:
+        if should_close:
+            conn.close()
+
+
+def create_system_admin(db_or_path: sqlite3.Connection | str | Path, admin_name: str, password: str):
+    ensure_authorization_schema(db_or_path)
+    name = str(admin_name or "").strip()
+    if not name:
+        raise ValueError("Admin adı boş bırakılamaz.")
+    if not password:
+        raise ValueError("Admin şifresi boş bırakılamaz.")
+    conn, should_close = _connection_from(db_or_path)
+    try:
+        conn.execute(
+            """
+            INSERT INTO system_admins(admin_name, password_hash, is_active, created_at, updated_at)
+            VALUES(?, ?, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            """,
+            (name, hash_password(password)),
+        )
+        conn.commit()
+        return conn.execute("SELECT * FROM system_admins WHERE admin_name=?", (name,)).fetchone()
+    finally:
+        if should_close:
+            conn.close()
+
+
+def verify_system_admin_login(db_or_path: sqlite3.Connection | str | Path, admin_name: str, password: str) -> dict[str, Any] | None:
+    ensure_authorization_schema(db_or_path)
+    name = str(admin_name or "").strip()
+    conn, should_close = _connection_from(db_or_path)
+    try:
+        row = conn.execute(
+            "SELECT * FROM system_admins WHERE admin_name=? AND COALESCE(is_active,1)=1",
+            (name,),
+        ).fetchone()
+        if not row or not verify_password(password, str(row["password_hash"] or "")):
+            # TODO: Bağlantı noktası netleştirilince başarısız sistem yöneticisi giriş denemeleri mevcut log altyapısına yazılacak.
+            return None
+        conn.execute("UPDATE system_admins SET last_login_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=?", (int(row["id"]),))
+        conn.commit()
+        row = conn.execute("SELECT * FROM system_admins WHERE id=?", (int(row["id"]),)).fetchone()
+        # TODO: Bağlantı noktası netleştirilince başarılı sistem yöneticisi girişleri mevcut log altyapısına yazılacak.
+        return dict(row) if row else None
+    finally:
+        if should_close:
+            conn.close()
+
+
+def build_system_admin_session(row, device_name: str) -> dict[str, Any]:
+    admin_id = int(row["id"] if hasattr(row, "keys") else row.get("id"))
+    admin_name = str(row["admin_name"] if hasattr(row, "keys") else row.get("admin_name") or "")
+    is_active = row["is_active"] if hasattr(row, "keys") else row.get("is_active")
+    return {
+        "id": 0,
+        "admin_id": admin_id,
+        "full_name": admin_name,
+        "device_name": str(device_name or ""),
+        "is_admin": True,
+        "role_display_name": "Sistem Yöneticisi",
+        "is_active": int(is_active if is_active is not None else 1),
+    }
+
+
 def has_role(role: str, staff: Optional[dict[str, Any]] = None) -> bool:
     raise RuntimeError("Sabit rol kontrolü kullanılmamalı; has_permission(current_user, permission_code) kullanın.")
 
@@ -420,6 +714,8 @@ def has_permission(current_user: Optional[dict[str, Any]], permission_code: str,
     code = str(permission_code or "").strip()
     if not code:
         return False
+    if user and bool(user.get("is_admin")) and int(user.get("is_active") if user.get("is_active") is not None else 1) != 0:
+        return True
     if not PERMISSION_RESTRICTIONS_ENABLED:
         return True
     if not user or int(user.get("is_active") if user.get("is_active") is not None else 1) == 0:
@@ -494,7 +790,12 @@ def list_roles(db_or_path: sqlite3.Connection | str | Path) -> list[dict[str, An
     ensure_authorization_schema(db_or_path)
     conn, should_close = _connection_from(db_or_path)
     try:
-        return [dict(r) for r in conn.execute("SELECT id,name,display_name,is_system,created_at,updated_at FROM roles ORDER BY id").fetchall()]
+        return [
+            dict(r)
+            for r in conn.execute(
+                "SELECT id,name,display_name,is_system,created_at,updated_at FROM roles WHERE name <> 'admin' ORDER BY id"
+            ).fetchall()
+        ]
     finally:
         if should_close:
             conn.close()
@@ -543,6 +844,8 @@ def count_full_access_users(db_or_path: sqlite3.Connection | str | Path, excludi
     ensure_authorization_schema(db_or_path)
     conn, should_close = _connection_from(db_or_path)
     try:
+        if conn.execute("SELECT 1 FROM system_admins WHERE COALESCE(is_active,1)=1 LIMIT 1").fetchone() is not None:
+            return 1
         count = 0
         for row in conn.execute("SELECT id, role_id FROM staff WHERE COALESCE(is_active,1)=1 AND role_id IS NOT NULL").fetchall():
             if excluding_staff_id is not None and int(row["id"]) == int(excluding_staff_id):
@@ -556,6 +859,8 @@ def count_full_access_users(db_or_path: sqlite3.Connection | str | Path, excludi
 
 
 def _would_keep_full_access_user(conn: sqlite3.Connection, changed_staff_id: int | None = None, changed_role_id: int | None = None, changed_role_permissions: dict[str, bool] | None = None, changed_active: int | None = None) -> bool:
+    if conn.execute("SELECT 1 FROM system_admins WHERE COALESCE(is_active,1)=1 LIMIT 1").fetchone() is not None:
+        return True
     for row in conn.execute("SELECT id, role_id, is_active FROM staff").fetchall():
         sid = int(row["id"])
         active = int(row["is_active"] if row["is_active"] is not None else 1)
@@ -577,6 +882,10 @@ def _would_keep_full_access_user(conn: sqlite3.Connection, changed_staff_id: int
 
 def _has_any_permission(actor: Optional[dict[str, Any]], db_or_path: sqlite3.Connection | str | Path | None, *permission_codes: str) -> bool:
     return any(has_permission(actor, code, db_or_path) for code in permission_codes)
+
+
+def has_any_permission(actor: Optional[dict[str, Any]], db_or_path: sqlite3.Connection | str | Path | None, *permission_codes: str) -> bool:
+    return _has_any_permission(actor, db_or_path, *permission_codes)
 
 
 def require_any_permission(actor: Optional[dict[str, Any]], db_or_path: sqlite3.Connection | str | Path | None, *permission_codes: str) -> None:
@@ -734,8 +1043,125 @@ def reset_role_permissions_to_defaults(db_or_path: sqlite3.Connection | str | Pa
             conn.close()
 
 
+
+def _build_system_admin_setup_dialog(db_or_path: sqlite3.Connection | str | Path, parent=None):
+    from src.ui.message_boxes import show_warning
+    from PySide6.QtWidgets import QDialog, QFormLayout, QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton, QVBoxLayout
+    from src.ui.theme import STYLE
+
+    class SystemAdminSetupDialog(QDialog):
+        def __init__(self):
+            super().__init__(parent)
+            self.setWindowTitle("Sistem Yöneticisi Kurulumu")
+            self.setModal(True)
+            self.setStyleSheet(STYLE)
+            self.setFixedWidth(460)
+            root = QVBoxLayout(self)
+            root.setContentsMargins(22, 22, 22, 22)
+            root.setSpacing(14)
+            heading = QLabel("Sistem Yöneticisi Kurulumu")
+            heading.setObjectName("mainTitle")
+            root.addWidget(heading)
+            card = QFrame(); card.setObjectName("card")
+            lay = QVBoxLayout(card); lay.setContentsMargins(18, 18, 18, 18); lay.setSpacing(12)
+            root.addWidget(card)
+            info = QLabel("Bu STS dosyası için cihazdan bağımsız ilk sistem yöneticisi hesabını oluşturun.")
+            info.setWordWrap(True); info.setObjectName("muted")
+            lay.addWidget(info)
+            form = QFormLayout()
+            self.name_edit = QLineEdit(); self.name_edit.setPlaceholderText("Admin Adı")
+            self.password_edit = QLineEdit(); self.password_edit.setEchoMode(QLineEdit.Password)
+            self.repeat_edit = QLineEdit(); self.repeat_edit.setEchoMode(QLineEdit.Password)
+            form.addRow("Admin Adı", self.name_edit)
+            form.addRow("Admin Şifresi", self.password_edit)
+            form.addRow("Şifre Tekrar", self.repeat_edit)
+            lay.addLayout(form)
+            row = QHBoxLayout(); row.addStretch()
+            cancel = QPushButton("Vazgeç"); cancel.clicked.connect(self.reject)
+            primary = QPushButton("Kurulumu Tamamla"); primary.setDefault(True); primary.clicked.connect(self._submit)
+            row.addWidget(cancel); row.addWidget(primary); lay.addLayout(row)
+            self.name_edit.returnPressed.connect(self._submit)
+            self.password_edit.returnPressed.connect(self._submit)
+            self.repeat_edit.returnPressed.connect(self._submit)
+
+        def _submit(self):
+            name = self.name_edit.text().strip()
+            password = self.password_edit.text()
+            repeat = self.repeat_edit.text()
+            if not name or not password or not repeat:
+                show_warning(self, "Eksik bilgi", "Admin adı ve şifre alanları boş bırakılamaz.")
+                return
+            if password != repeat:
+                show_warning(self, "Şifreler eşleşmiyor", "Girdiğiniz şifreler eşleşmiyor. Lütfen tekrar deneyin.")
+                self.repeat_edit.setFocus(); self.repeat_edit.selectAll()
+                return
+            try:
+                create_system_admin(db_or_path, name, password)
+            except sqlite3.IntegrityError:
+                show_warning(self, "Kayıt mevcut", "Bu admin adı zaten kullanılıyor.")
+                return
+            except Exception as exc:
+                show_warning(self, "Kurulum başarısız", str(exc))
+                return
+            self.accept()
+
+    return SystemAdminSetupDialog()
+
+
+def ensure_system_admin_setup(db_or_path: sqlite3.Connection | str | Path, parent=None) -> bool:
+    from PySide6.QtWidgets import QDialog
+    ensure_authorization_schema(db_or_path)
+    if has_active_system_admin(db_or_path):
+        return True
+    dlg = _build_system_admin_setup_dialog(db_or_path, parent)
+    return dlg.exec() == QDialog.Accepted and has_active_system_admin(db_or_path)
+
+
+def show_system_admin_login_dialog(db_or_path: sqlite3.Connection | str | Path, parent=None) -> Optional[dict[str, Any]]:
+    from src.ui.message_boxes import show_warning
+    from PySide6.QtWidgets import QDialog, QFormLayout, QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton, QVBoxLayout
+    from src.ui.theme import STYLE
+
+    class SystemAdminLoginDialog(QDialog):
+        def __init__(self):
+            super().__init__(parent)
+            self.setWindowTitle("Sistem Yöneticisi Girişi")
+            self.setModal(True)
+            self.setStyleSheet(STYLE)
+            self.setFixedWidth(440)
+            self.staff: Optional[dict[str, Any]] = None
+            root = QVBoxLayout(self); root.setContentsMargins(22, 22, 22, 22); root.setSpacing(14)
+            heading = QLabel("Sistem Yöneticisi Girişi"); heading.setObjectName("mainTitle"); root.addWidget(heading)
+            card = QFrame(); card.setObjectName("card"); lay = QVBoxLayout(card); lay.setContentsMargins(18, 18, 18, 18); lay.setSpacing(12); root.addWidget(card)
+            form = QFormLayout()
+            self.name_edit = QLineEdit(); self.name_edit.setPlaceholderText("Admin Adı")
+            self.password_edit = QLineEdit(); self.password_edit.setEchoMode(QLineEdit.Password); self.password_edit.setPlaceholderText("Admin Şifresi")
+            form.addRow("Admin Adı", self.name_edit); form.addRow("Admin Şifresi", self.password_edit); lay.addLayout(form)
+            row = QHBoxLayout(); row.addStretch()
+            cancel = QPushButton("Vazgeç"); cancel.clicked.connect(self.reject)
+            primary = QPushButton("Giriş Yap"); primary.setDefault(True); primary.clicked.connect(self._submit)
+            row.addWidget(cancel); row.addWidget(primary); lay.addLayout(row)
+            self.name_edit.returnPressed.connect(self._submit); self.password_edit.returnPressed.connect(self._submit)
+
+        def _submit(self):
+            name = self.name_edit.text().strip(); password = self.password_edit.text()
+            if not name or not password:
+                show_warning(self, "Eksik bilgi", "Admin adı ve şifre boş bırakılamaz.")
+                return
+            row = verify_system_admin_login(db_or_path, name, password)
+            if not row:
+                show_warning(self, "Giriş başarısız", "Admin adı veya şifre hatalı.")
+                self.password_edit.setFocus(); self.password_edit.selectAll()
+                return
+            self.staff = build_system_admin_session(row, get_device_name())
+            self.accept()
+
+    dlg = SystemAdminLoginDialog()
+    return dlg.staff if dlg.exec() == QDialog.Accepted else None
+
 def _build_staff_register_dialog(db_or_path: sqlite3.Connection | str | Path, device_name: str, parent=None):
     from PySide6.QtCore import Qt
+    from PySide6.QtGui import QKeySequence, QShortcut
     from src.ui.message_boxes import show_warning
     from PySide6.QtWidgets import (
         QDialog,
@@ -783,10 +1209,13 @@ def _build_staff_register_dialog(db_or_path: sqlite3.Connection | str | Path, de
             self.password_edit.setEchoMode(QLineEdit.Password)
             self.password_repeat_edit = QLineEdit()
             self.password_repeat_edit.setEchoMode(QLineEdit.Password)
+            self.invite_code_edit = QLineEdit()
+            self.invite_code_edit.setPlaceholderText("STS-7K4P-92D")
             form.addRow("Cihaz Adı", self.device_edit)
             form.addRow("Personel Adı Soyadı", self.full_name_edit)
             form.addRow("Şifre Belirle", self.password_edit)
             form.addRow("Şifre Tekrar", self.password_repeat_edit)
+            form.addRow("Yetki Kodu", self.invite_code_edit)
             card_layout.addLayout(form)
             row = QHBoxLayout()
             row.addStretch()
@@ -801,6 +1230,13 @@ def _build_staff_register_dialog(db_or_path: sqlite3.Connection | str | Path, de
             self.full_name_edit.returnPressed.connect(self._submit)
             self.password_edit.returnPressed.connect(self._submit)
             self.password_repeat_edit.returnPressed.connect(self._submit)
+            self.invite_code_edit.returnPressed.connect(self._submit)
+            QShortcut(QKeySequence("Ctrl+Alt+Shift+A"), self).activated.connect(self._admin_login)
+
+        def _admin_login(self):
+            self.staff = show_system_admin_login_dialog(db_or_path, self)
+            if self.staff:
+                self.accept()
 
         def _submit(self):
             full_name = self.full_name_edit.text().strip()
@@ -819,12 +1255,21 @@ def _build_staff_register_dialog(db_or_path: sqlite3.Connection | str | Path, de
                 self.password_repeat_edit.setFocus()
                 self.password_repeat_edit.selectAll()
                 return
-            try:
-                row = create_staff(db_or_path, str(device_name or ""), full_name, password)
-            except sqlite3.IntegrityError:
-                show_warning(self, "Kayıt mevcut", "Bu cihaz için personel kaydı zaten mevcut. Lütfen giriş yapın.")
+            invite_code = self.invite_code_edit.text().strip()
+            if not invite_code:
+                show_warning(self, "Eksik bilgi", "Yetki Kodu boş bırakılamaz.")
+                self.invite_code_edit.setFocus()
                 return
-            self.staff = enrich_staff_permissions(db_or_path, build_current_staff(row))
+            try:
+                self.staff = enrich_staff_permissions(
+                    db_or_path,
+                    consume_staff_invite_and_create_staff(db_or_path, str(device_name or ""), full_name, password, invite_code),
+                )
+            except Exception as exc:
+                show_warning(self, "Kayıt başarısız", str(exc))
+                self.invite_code_edit.setFocus()
+                self.invite_code_edit.selectAll()
+                return
             self.accept()
 
     return StaffRegisterDialog()
@@ -832,6 +1277,7 @@ def _build_staff_register_dialog(db_or_path: sqlite3.Connection | str | Path, de
 
 def _build_staff_login_dialog(db_or_path: sqlite3.Connection | str | Path, row, parent=None):
     from src.ui.message_boxes import show_warning
+    from PySide6.QtGui import QKeySequence, QShortcut
     from PySide6.QtWidgets import (
         QDialog,
         QFormLayout,
@@ -888,6 +1334,12 @@ def _build_staff_login_dialog(db_or_path: sqlite3.Connection | str | Path, row, 
             row_layout.addWidget(primary)
             card_layout.addLayout(row_layout)
             self.password_edit.returnPressed.connect(self._submit)
+            QShortcut(QKeySequence("Ctrl+Alt+Shift+A"), self).activated.connect(self._admin_login)
+
+        def _admin_login(self):
+            self.staff = show_system_admin_login_dialog(db_or_path, self)
+            if self.staff:
+                self.accept()
 
         def _submit(self):
             if int(row["is_active"] if row["is_active"] is not None else 1) == 0:
@@ -1086,6 +1538,8 @@ def unlock_documents(
 def can_current_staff_access_documents(lock_state: Optional[dict[str, Any]], staff: Optional[dict[str, Any]]) -> bool:
     state = lock_state or {}
     if int(state.get("is_locked") or 0) == 0:
+        return True
+    if staff and bool(staff.get("is_admin")) and int(staff.get("is_active") if staff.get("is_active") is not None else 1) != 0:
         return True
     if not staff:
         return False
