@@ -418,6 +418,8 @@ class STSDatabase:
         create_if("activity_logs", ("platform_id", "contract_no"), "CREATE INDEX IF NOT EXISTS idx_activity_logs_platform_contract ON activity_logs(platform_id, contract_no)")
         create_if("contract_platforms", ("contract_id",), "CREATE INDEX IF NOT EXISTS idx_contract_platforms_contract ON contract_platforms(contract_id)")
         create_if("contract_platforms", ("platform_id",), "CREATE INDEX IF NOT EXISTS idx_contract_platforms_platform ON contract_platforms(platform_id)")
+        create_if("contract_responsible_engineers", ("contract_id",), "CREATE INDEX IF NOT EXISTS idx_contract_resp_eng_contract ON contract_responsible_engineers(contract_id)")
+        create_if("contract_responsible_engineers", ("staff_id",), "CREATE INDEX IF NOT EXISTS idx_contract_resp_eng_staff ON contract_responsible_engineers(staff_id)")
         create_if("systems", ("contract_id", "platform_id"), "CREATE INDEX IF NOT EXISTS idx_systems_contract_platform ON systems(contract_id, platform_id)")
 
     def init_schema(self):
@@ -551,6 +553,20 @@ CREATE TABLE IF NOT EXISTS activity_logs(id INTEGER PRIMARY KEY AUTOINCREMENT,cr
         self._create_runtime_indexes()
         ensure_staff_table(self.conn)
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_staff_role_id ON staff(role_id)")
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS contract_responsible_engineers (
+                contract_id INTEGER NOT NULL,
+                staff_id INTEGER NOT NULL,
+                sort_order INTEGER DEFAULT 0,
+                is_primary INTEGER DEFAULT 0,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY(contract_id, staff_id),
+                FOREIGN KEY(contract_id) REFERENCES contracts(id) ON DELETE CASCADE,
+                FOREIGN KEY(staff_id) REFERENCES staff(id) ON DELETE CASCADE
+            )
+        """)
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_contract_resp_eng_contract ON contract_responsible_engineers(contract_id)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_contract_resp_eng_staff ON contract_responsible_engineers(staff_id)")
         ensure_document_locks_table(self.conn)
         if "contract_id" not in self._table_columns("document_locks"):
             # Legacy document_locks was a single global row constrained to id=1.

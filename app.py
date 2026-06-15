@@ -2257,6 +2257,51 @@ class MultiUserSelectWidget(QWidget):
             self._dropdown.setFixedWidth(max(self.width(), 240))
 
 
+class MultiStaffSelectWidget(MultiUserSelectWidget):
+    """Personel/staff seçim widget'ı — isim chip'i tutar, kayıt için staff id döndürür."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._placeholder = "Sorumlu mühendis seçiniz..."
+        self._staff_id_by_name: Dict[str, int] = {}
+        self._staff_name_by_id: Dict[int, str] = {}
+
+    def set_staff_options(self, staff_rows: List[dict]):
+        names: List[str] = []
+        self._staff_id_by_name = {}
+        self._staff_name_by_id = {}
+        for row in staff_rows or []:
+            try:
+                sid = int(row.get("id") or row.get("staff_id") or 0)
+            except Exception:
+                sid = 0
+            name = str(row.get("full_name") or row.get("name") or "").strip()
+            if not sid or not name:
+                continue
+            names.append(name)
+            self._staff_id_by_name[name] = sid
+            self._staff_name_by_id[sid] = name
+        self.set_available_users(names)
+
+    def set_selected_staff_ids(self, staff_ids: List[int]):
+        names: List[str] = []
+        for sid in staff_ids or []:
+            name = self._staff_name_by_id.get(int(sid or 0))
+            if name:
+                names.append(name)
+        self.set_users(names)
+
+    def selected_staff_ids(self) -> List[int]:
+        ids: List[int] = []
+        seen = set()
+        for name in self.selected_users():
+            sid = int(self._staff_id_by_name.get(name) or 0)
+            if sid and sid not in seen:
+                seen.add(sid)
+                ids.append(sid)
+        return ids
+
+
 class MultiPlatformSelectWidget(MultiUserSelectWidget):
     """Faz 1 çoklu platform seçim prototipi.
 
@@ -2704,6 +2749,8 @@ class ContractDialog(StyledDialog):
         self.store = store
         self.user_records = store.load_users()
         self.user_to_yi_yd = {u.get("name", ""): u.get("yi_yd", "Yİ") for u in self.user_records}
+        self.current_staff = getattr(parent, "current_staff", None) if parent is not None else auth.current_staff
+        self.staff_records = store.list_staff_for_engineer_selection() if hasattr(store, "list_staff_for_engineer_selection") else []
         self.result: Optional[ContractInfo] = None
         self._sd_verified_info: Optional[dict] = None
         self._sd_anchor_start_row: int = 0
@@ -2752,6 +2799,11 @@ class ContractDialog(StyledDialog):
         self.user = MultiUserSelectWidget(self)
         self.user.set_available_users([u.get("name", "") for u in self.user_records])
         self.yi_yd = QLineEdit(); self.yi_yd.setReadOnly(True); self.yi_yd.setText("Yİ")
+        self.responsible_engineers = MultiStaffSelectWidget(self)
+        self.responsible_engineers.set_staff_options(self.staff_records)
+        current_staff_id = int((self.current_staff or {}).get("id") or 0)
+        if current_staff_id:
+            self.responsible_engineers.set_selected_staff_ids([current_staff_id])
         self.ctype = QComboBox(); self.ctype.addItems(["Ana Sözleşme"])
         self.sd_code = QLineEdit(); self.sd_code.setPlaceholderText("SD-1"); self.sd_code.setEnabled(False)
         self.sig, self.sig_wrap = build_date_input(self, events_provider=self.date_picker_events)
@@ -2780,7 +2832,7 @@ class ContractDialog(StyledDialog):
         add_field("Sözleşme No", no_container, 0, 0)
         add_field("Platform", self.platform, 0, 1)
         add_field("Sözleşmenin Sahibi Kullanıcı", self.user, 1, 0)
-        add_field("Yİ/YD", self.yi_yd, 1, 1)
+        add_field("Sorumlu Mühendis", self.responsible_engineers, 1, 1)
         add_field("Sözleşme Tipi", self.ctype, 2, 0)
         add_field("İmza Tarihi", self.sig_wrap, 2, 1)
         root.addLayout(grid)
@@ -3033,6 +3085,19 @@ class ContractDialog(StyledDialog):
     def selected_platform_ids(self) -> List[int]:
         return self.platform.selected_platform_ids() if hasattr(self.platform, "selected_platform_ids") else []
 
+    def _confirm_empty_responsible_engineer(self) -> bool:
+        if self.responsible_engineers.selected_staff_ids():
+            return True
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Question)
+        box.setWindowTitle("Sorumlu Mühendis")
+        box.setText("Sorumlu mühendis seçilmedi. Devam etmek istiyor musunuz?")
+        yes_btn = box.addButton("Evet", QMessageBox.YesRole)
+        no_btn = box.addButton("Hayır", QMessageBox.NoRole)
+        box.setDefaultButton(no_btn)
+        box.exec()
+        return box.clickedButton() is yes_btn
+
     def save(self):
         if not self.no.text().strip():
             QMessageBox.warning(self, "Eksik", "Sözleşme no girin.")
@@ -3046,6 +3111,8 @@ class ContractDialog(StyledDialog):
         sel_users = self.user.selected_users()
         if not sel_users:
             QMessageBox.warning(self, "Eksik", "Önce Kullanıcı Yönetimi ekranından kullanıcı tanımlayın.")
+            return
+        if not self._confirm_empty_responsible_engineer():
             return
         # Zorunlu tarih ve ay alanları
         sig_ok = bool(self.sig.text().strip())
@@ -3124,6 +3191,11 @@ class ContractDialog(StyledDialog):
             platform_names=self.platform.selected_platform_names(),
             platform_ids=self.platform.selected_platform_ids(),
         )
+        setattr(self.result, "responsible_engineer_ids", self.responsible_engineers.selected_staff_ids())
+        setattr(self.result, "responsible_engineers", [
+            {"staff_id": sid, "full_name": self.responsible_engineers._staff_name_by_id.get(sid, "")}
+            for sid in self.responsible_engineers.selected_staff_ids()
+        ])
         self.accept()
 
 
@@ -3153,6 +3225,7 @@ class ContractEditDialog(StyledDialog):
         self.external_events_provider = getattr(parent, "date_picker_events", None)
         self.user_records = self.store.load_users()
         self.user_to_yi_yd = {u.get("name", ""): u.get("yi_yd", "Yİ") for u in self.user_records}
+        self.staff_records = self.store.list_staff_for_engineer_selection() if hasattr(self.store, "list_staff_for_engineer_selection") else []
         self.result: Optional[ContractInfo] = None
         self._default_size = QSize(700, 600)
         self.build()
@@ -3237,7 +3310,13 @@ class ContractEditDialog(StyledDialog):
         self.yi_yd = QLineEdit()
         self.yi_yd.setReadOnly(True)
         self.yi_yd.setText(str(self.ci.yi_yd or "Yİ"))
-        self.yi_yd.setMinimumHeight(34)
+
+        self.responsible_engineers = MultiStaffSelectWidget(self)
+        self.responsible_engineers.set_staff_options(self.staff_records)
+        responsible_ids = [int(x.get("staff_id") or x.get("id") or 0) for x in list(getattr(self.ci, "responsible_engineers", []) or []) if int(x.get("staff_id") or x.get("id") or 0)]
+        if not responsible_ids:
+            responsible_ids = [int(x or 0) for x in list(getattr(self.ci, "responsible_engineer_ids", []) or []) if int(x or 0)]
+        self.responsible_engineers.set_selected_staff_ids(responsible_ids)
 
         self.sig, self.sig_wrap = build_date_input(self, events_provider=self.date_picker_events)
         self.sig.setText(str(self.ci.signature_date or ""))
@@ -3273,10 +3352,10 @@ class ContractEditDialog(StyledDialog):
 
         add_field("Sözleşme No", self._no_lbl, 0, 0)
         add_field("Platform", self._platform_box, 0, 1)
-        add_field("Sözleşme Tipi", self._type_lbl, 1, 0)
-        add_field("İmza Tarihi", self.sig_wrap, 1, 1)
-        add_field("Kullanıcı", self.user, 2, 0)
-        add_field("Yİ/YD", self.yi_yd, 2, 1)
+        add_field("Sözleşmenin Sahibi Kullanıcı", self.user, 1, 0)
+        add_field("Sorumlu Mühendis", self.responsible_engineers, 1, 1)
+        add_field("Sözleşme Tipi", self._type_lbl, 2, 0)
+        add_field("İmza Tarihi", self.sig_wrap, 2, 1)
         root.addLayout(grid)
 
         timeline_card = QFrame()
@@ -3495,6 +3574,19 @@ class ContractEditDialog(StyledDialog):
             self._no_lbl.setStyleSheet("")
         return False
 
+    def _confirm_empty_responsible_engineer(self) -> bool:
+        if self.responsible_engineers.selected_staff_ids():
+            return True
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Question)
+        box.setWindowTitle("Sorumlu Mühendis")
+        box.setText("Sorumlu mühendis seçilmedi. Devam etmek istiyor musunuz?")
+        yes_btn = box.addButton("Evet", QMessageBox.YesRole)
+        no_btn = box.addButton("Hayır", QMessageBox.NoRole)
+        box.setDefaultButton(no_btn)
+        box.exec()
+        return box.clickedButton() is yes_btn
+
     def save(self):
         new_no_text = self._no_lbl.text().strip()
         if not new_no_text:
@@ -3575,6 +3667,8 @@ class ContractEditDialog(StyledDialog):
         if not selected_users:
             QMessageBox.warning(self, "Zorunlu Alan", "En az bir kullanıcı seçmelisiniz.")
             return
+        if not self._confirm_empty_responsible_engineer():
+            return
         new_ci.users           = selected_users
         new_ci.user            = ", ".join(selected_users)
         new_ci.yi_yd           = self.yi_yd.text().strip() or "Yİ"
@@ -3593,6 +3687,11 @@ class ContractEditDialog(StyledDialog):
         setattr(new_ci, "platforms", [{"platform_id": pid, "platform_name": name} for pid, name in zip(selected_platform_ids, selected_platforms)])
         setattr(new_ci, "platform_names", selected_platforms)
         setattr(new_ci, "platform_ids", selected_platform_ids)
+        setattr(new_ci, "responsible_engineer_ids", self.responsible_engineers.selected_staff_ids())
+        setattr(new_ci, "responsible_engineers", [
+            {"staff_id": sid, "full_name": self.responsible_engineers._staff_name_by_id.get(sid, "")}
+            for sid in self.responsible_engineers.selected_staff_ids()
+        ])
         self.result = new_ci
         self.accept()
 
