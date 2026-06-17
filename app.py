@@ -563,9 +563,38 @@ def contract_date_picker_events(ci: Optional[ContractInfo], systems: Optional[Li
 
 def as_number(v):
     try:
+        if callable(v):
+            return 0.0
+        if isinstance(v, (dict, list, tuple, set)):
+            return 0.0
         return float(v or 0)
+    except RecursionError:
+        try:
+            sys.__stderr__.write("RecursionError in as_number; returning 0.0\n")
+        except Exception:
+            pass
+        return 0.0
     except Exception:
         return 0.0
+
+
+def _global_exc_handler(exc_type, exc, tb):
+    if issubclass(exc_type, RecursionError):
+        try:
+            sys.__stderr__.write("".join(traceback.format_exception_only(exc_type, exc)))
+        except Exception:
+            pass
+        return
+    try:
+        traceback.print_exception(exc_type, exc, tb)
+    except Exception:
+        pass
+    app_instance = QApplication.instance() if "QApplication" in globals() else None
+    if app_instance is not None:
+        try:
+            QMessageBox.critical(None, "Beklenmeyen Hata", f"Uygulamada beklenmeyen bir hata oluştu.\n\n{exc}")
+        except Exception:
+            pass
 
 
 def fmt_num(v) -> str:
@@ -5768,7 +5797,18 @@ class DeliveryDialog(StyledDialog):
         self.system = system
         self.store = getattr(parent, "store", None)
         self.default_name = default_name
-        self.component_keys = list(component_keys or list(self.system.components.keys()))
+        raw_components = getattr(self.system, "components", {}) or {}
+        try:
+            component_names = list(raw_components.keys()) if hasattr(raw_components, "keys") else list(dict(raw_components).keys())
+        except RecursionError:
+            try:
+                sys.__stderr__.write("RecursionError while reading system components; using an empty component list.\n")
+            except Exception:
+                pass
+            component_names = []
+        except Exception:
+            component_names = []
+        self.component_keys = list(component_keys or component_names)
         self.planned_assigned = dict(planned_assigned or {})
         self.contract_t0_date = contract_t0_date
         self.events_provider = events_provider
@@ -5779,6 +5819,7 @@ class DeliveryDialog(StyledDialog):
         self.resize(1280, 700)
         self.inputs: Dict[str, Tuple[QTableWidgetItem, QTableWidgetItem, QTableWidgetItem]] = {}
         self._updating_qty = False
+        self._updating_qty_table = False
         self._status_auto_filling = False
         # Unit tracking state
         self._unit_tracking_map: Dict[str, str] = {}  # {comp_name: label}
@@ -5803,6 +5844,34 @@ class DeliveryDialog(StyledDialog):
 
     def _is_unit_tracking(self, comp: str) -> bool:
         return comp in self._unit_tracking_map
+
+    def _safe_system_components(self) -> Dict[str, float]:
+        raw = getattr(self.system, "components", {}) or {}
+        if isinstance(raw, dict):
+            return raw
+        try:
+            return dict(raw)
+        except RecursionError:
+            try:
+                sys.__stderr__.write("RecursionError while normalizing system components; using empty quantities.\n")
+            except Exception:
+                pass
+            return {}
+        except Exception:
+            return {}
+
+    def _system_component_qty(self, comp: str) -> float:
+        try:
+            components = self._safe_system_components()
+            return max(as_number(components.get(comp, 0)), 0)
+        except RecursionError:
+            try:
+                sys.__stderr__.write(f"RecursionError while reading component quantity for {comp}; using 0.\n")
+            except Exception:
+                pass
+            return 0.0
+        except Exception:
+            return 0.0
 
     # ------------------------------------------------------------------ build
     def build(self):
@@ -5983,63 +6052,64 @@ class DeliveryDialog(StyledDialog):
         """Tüm bileşenler için satırları oluşturur."""
         existing = self._existing_delivery
         self._updating_qty = True
-        self.qty_table.setRowCount(0)
-        self._comp_row.clear()
-        self._row_comp.clear()
-        self.inputs.clear()
+        was_blocked = self.qty_table.blockSignals(True)
+        try:
+            self.qty_table.setRowCount(0)
+            self._comp_row.clear()
+            self._row_comp.clear()
+            self.inputs.clear()
 
-        current_row = 0
-        for comp in self.component_keys:
-            self._comp_row[comp] = current_row
+            current_row = 0
+            for comp in self.component_keys:
+                self._comp_row[comp] = current_row
 
-            # Component name cell with optional arrow for unit tracking
-            if self._is_unit_tracking(comp):
-                comp_widget = self._make_arrow_cell(comp)
-                comp_item = QTableWidgetItem("")
-                comp_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
-            else:
-                comp_widget = None
-                comp_item = QTableWidgetItem(comp)
-                comp_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+                # Component name cell with optional arrow for unit tracking
+                if self._is_unit_tracking(comp):
+                    comp_widget = self._make_arrow_cell(comp)
+                    comp_item = QTableWidgetItem("")
+                    comp_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+                else:
+                    comp_widget = None
+                    comp_item = QTableWidgetItem(comp)
+                    comp_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
 
-            planned_val = "0"
-            delivered_val = "0"
-            if existing:
-                planned_val = fmt_num(float((existing.planned or {}).get(comp, 0) or 0))
-                delivered_val = fmt_num(float((existing.delivered or {}).get(comp, 0) or 0))
+                planned_val = "0"
+                delivered_val = "0"
+                if existing:
+                    planned_val = fmt_num(float((existing.planned or {}).get(comp, 0) or 0))
+                    delivered_val = fmt_num(float((existing.delivered or {}).get(comp, 0) or 0))
 
-            planned = QTableWidgetItem(planned_val)
-            delivered = QTableWidgetItem(delivered_val)
-            remaining = QTableWidgetItem("0")
+                planned = QTableWidgetItem(planned_val)
+                delivered = QTableWidgetItem(delivered_val)
+                remaining = QTableWidgetItem("0")
 
-            planned.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsEditable)
+                planned.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsEditable)
+                delivered.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsEditable)
+                remaining.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+                for it in (planned, delivered, remaining):
+                    it.setTextAlignment(Qt.AlignCenter)
 
-            delivered.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsEditable)
+                self.qty_table.insertRow(current_row)
+                if comp_widget:
+                    self.qty_table.setCellWidget(current_row, 0, comp_widget)
+                else:
+                    self.qty_table.setItem(current_row, 0, comp_item)
+                self.qty_table.setItem(current_row, 1, planned)
+                self.qty_table.setItem(current_row, 2, delivered)
+                self.qty_table.setItem(current_row, 3, remaining)
+                self.qty_table.setRowHeight(current_row, 30)
+                self._row_comp[current_row] = comp
+                self.inputs[comp] = (planned, delivered, remaining)
+                self._update_remaining_row(current_row)
+                if self._is_unit_tracking(comp):
+                    self._ensure_component_units(comp, int(as_number(planned.text())))
+                current_row += 1
+        finally:
+            self.qty_table.blockSignals(was_blocked)
+            self._updating_qty = False
 
-            remaining.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
-            for it in (planned, delivered, remaining):
-                it.setTextAlignment(Qt.AlignCenter)
-
-            self.qty_table.insertRow(current_row)
-            if comp_widget:
-                self.qty_table.setCellWidget(current_row, 0, comp_widget)
-            else:
-                self.qty_table.setItem(current_row, 0, comp_item)
-            self.qty_table.setItem(current_row, 1, planned)
-            self.qty_table.setItem(current_row, 2, delivered)
-            self.qty_table.setItem(current_row, 3, remaining)
-            self.qty_table.setRowHeight(current_row, 30)
-            self._row_comp[current_row] = comp
-            self.inputs[comp] = (planned, delivered, remaining)
-            self._update_remaining_row(current_row)
-            if self._is_unit_tracking(comp):
-                self._ensure_component_units(comp, int(as_number(planned.text())))
-            current_row += 1
-
-        self._updating_qty = False
         self.qty_table.itemChanged.connect(self.on_qty_item_changed)
         self.qty_table.cellClicked.connect(self._on_cell_clicked)
-
         self.refresh_assignment_card()
 
     def _make_arrow_cell(self, comp: str) -> QWidget:
@@ -6167,23 +6237,27 @@ class DeliveryDialog(StyledDialog):
         normal_bg = QColor("#FFFFFF")
         selected_fg = QColor("#0F3B82")
         normal_fg = QColor("#0F172A")
-        for comp, row in self._comp_row.items():
-            active = comp == self.active_unit_component and self.left_panel_mode == "unit_tracking"
-            cell_widget = self.qty_table.cellWidget(row, 0)
-            if cell_widget:
-                cell_widget.setStyleSheet(f"background:{'#EAF3FF' if active else 'transparent'};")
-            btn = self._get_arrow_btn(comp)
-            if btn:
-                btn.setText("◀" if active else "▶")
-                if active:
-                    btn.setStyleSheet("QPushButton#unitTrackingArrow{background:#0F3B82;color:white;border:1px solid #0F3B82;border-radius:5px;font-size:10px;font-weight:900;padding:0;}")
-                else:
-                    btn.setStyleSheet("QPushButton#unitTrackingArrow{background:#DBEAFE;color:#1D4ED8;border:1px solid #93C5FD;border-radius:5px;font-size:10px;font-weight:900;padding:0;} QPushButton#unitTrackingArrow:hover{background:#BFDBFE;}")
-            for c in range(self.qty_table.columnCount()):
-                item = self.qty_table.item(row, c)
-                if item:
-                    item.setBackground(selected_bg if active else normal_bg)
-                    item.setForeground(selected_fg if active else normal_fg)
+        was_blocked = self.qty_table.blockSignals(True)
+        try:
+            for comp, row in self._comp_row.items():
+                active = comp == self.active_unit_component and self.left_panel_mode == "unit_tracking"
+                cell_widget = self.qty_table.cellWidget(row, 0)
+                if cell_widget:
+                    cell_widget.setStyleSheet(f"background:{'#EAF3FF' if active else 'transparent'};")
+                btn = self._get_arrow_btn(comp)
+                if btn:
+                    btn.setText("◀" if active else "▶")
+                    if active:
+                        btn.setStyleSheet("QPushButton#unitTrackingArrow{background:#0F3B82;color:white;border:1px solid #0F3B82;border-radius:5px;font-size:10px;font-weight:900;padding:0;}")
+                    else:
+                        btn.setStyleSheet("QPushButton#unitTrackingArrow{background:#DBEAFE;color:#1D4ED8;border:1px solid #93C5FD;border-radius:5px;font-size:10px;font-weight:900;padding:0;} QPushButton#unitTrackingArrow:hover{background:#BFDBFE;}")
+                for c in range(self.qty_table.columnCount()):
+                    item = self.qty_table.item(row, c)
+                    if item:
+                        item.setBackground(selected_bg if active else normal_bg)
+                        item.setForeground(selected_fg if active else normal_fg)
+        finally:
+            self.qty_table.blockSignals(was_blocked)
 
     # ------------------------------------------------------------------ existing methods
     def request_delete(self):
@@ -6215,6 +6289,7 @@ class DeliveryDialog(StyledDialog):
     def fill_delivered_to_planned(self):
         self._status_auto_filling = True
         self._updating_qty = True
+        was_blocked = self.qty_table.blockSignals(True)
         try:
             for comp in self.component_keys:
                 data_row = self._comp_row.get(comp)
@@ -6229,6 +6304,7 @@ class DeliveryDialog(StyledDialog):
                 delivered_item.setText(fmt_num(as_number(planned_item.text())))
                 self._update_remaining_row(data_row)
         finally:
+            self.qty_table.blockSignals(was_blocked)
             self._updating_qty = False
             self._status_auto_filling = False
         self.refresh_assignment_card()
@@ -6268,7 +6344,7 @@ class DeliveryDialog(StyledDialog):
     def assignment_rows(self) -> List[Tuple[str, float, float]]:
         rows = []
         for comp in self.component_keys:
-            total = max(as_number(self.system.components.get(comp, 0)), 0)
+            total = self._system_component_qty(comp)
             assigned = max(as_number(self.planned_assigned.get(comp, 0)), 0) + self._current_planned_for(comp)
             available = total - assigned
             if abs(available) > 0.0001:
@@ -6290,79 +6366,95 @@ class DeliveryDialog(StyledDialog):
         issue_fg = QColor("#991B1B")
         normal_bg = QColor("#FFFFFF")
         normal_fg = QColor("#0F172A")
-        for comp, data_row in self._comp_row.items():
-            has_issue = comp in over
-            for c in range(self.qty_table.columnCount()):
-                item = self.qty_table.item(data_row, c)
-                if not item:
-                    continue
-                item.setBackground(issue_bg if has_issue else normal_bg)
-                item.setForeground(issue_fg if has_issue else normal_fg)
+        was_blocked = self.qty_table.blockSignals(True)
+        try:
+            for comp, data_row in self._comp_row.items():
+                has_issue = comp in over
+                for c in range(self.qty_table.columnCount()):
+                    item = self.qty_table.item(data_row, c)
+                    if not item:
+                        continue
+                    item.setBackground(issue_bg if has_issue else normal_bg)
+                    item.setForeground(issue_fg if has_issue else normal_fg)
+        finally:
+            self.qty_table.blockSignals(was_blocked)
 
     def refresh_assignment_card(self):
         rows = self.assignment_rows()
-        self.assignment_table.setRowCount(len(rows))
-        for r, (comp, assigned, available) in enumerate(rows):
-            has_issue = available < -0.0001
-            bg = QColor("#FEE2E2") if has_issue else QColor("#FFFFFF")
-            fg = QColor("#991B1B") if has_issue else QColor("#0F172A")
-            values = [comp, assigned, available]
-            for c, v in enumerate(values):
-                item = QTableWidgetItem(fmt_num(v) if c else str(v))
-                item.setTextAlignment(Qt.AlignCenter if c else Qt.AlignLeft | Qt.AlignVCenter)
-                item.setBackground(bg)
-                item.setForeground(fg)
-                self.assignment_table.setItem(r, c, item)
-            self.assignment_table.setRowHeight(r, 30)
+        was_blocked = self.assignment_table.blockSignals(True)
+        try:
+            self.assignment_table.setRowCount(len(rows))
+            for r, (comp, assigned, available) in enumerate(rows):
+                has_issue = available < -0.0001
+                bg = QColor("#FEE2E2") if has_issue else QColor("#FFFFFF")
+                fg = QColor("#991B1B") if has_issue else QColor("#0F172A")
+                values = [comp, assigned, available]
+                for c, v in enumerate(values):
+                    item = QTableWidgetItem(fmt_num(v) if c else str(v))
+                    item.setTextAlignment(Qt.AlignCenter if c else Qt.AlignLeft | Qt.AlignVCenter)
+                    item.setBackground(bg)
+                    item.setForeground(fg)
+                    self.assignment_table.setItem(r, c, item)
+                self.assignment_table.setRowHeight(r, 30)
+        finally:
+            self.assignment_table.blockSignals(was_blocked)
         self.refresh_qty_issue_highlights()
         self._refresh_unit_row_selection()
 
     def fill_all_system_planned(self):
         self._updating_qty = True
-        for comp in self.component_keys:
-            data_row = self._comp_row.get(comp)
-            if data_row is None:
-                continue
-            items = self.inputs.get(comp)
-            if not items:
-                continue
-            planned_item, delivered_item, _ = items
-            if not planned_item:
-                continue
-            system_qty = max(as_number(self.system.components.get(comp, 0)), 0)
-            assigned_qty = max(as_number(self.planned_assigned.get(comp, 0)), 0)
-            allowed_qty = max(system_qty - assigned_qty, 0)
-            planned_item.setText(fmt_num(allowed_qty))
-            if delivered_item and as_number(delivered_item.text()) > allowed_qty:
-                delivered_item.setText(fmt_num(allowed_qty))
-            self._update_remaining_row(data_row)
-            if self._is_unit_tracking(comp):
-                self._update_panel_slot_count(comp, int(allowed_qty))
-        self._updating_qty = False
+        was_blocked = self.qty_table.blockSignals(True)
+        try:
+            for comp in self.component_keys:
+                data_row = self._comp_row.get(comp)
+                if data_row is None:
+                    continue
+                items = self.inputs.get(comp)
+                if not items:
+                    continue
+                planned_item, delivered_item, _ = items
+                if not planned_item:
+                    continue
+                system_qty = self._system_component_qty(comp)
+                assigned_qty = max(as_number(self.planned_assigned.get(comp, 0)), 0)
+                allowed_qty = max(system_qty - assigned_qty, 0)
+                planned_item.setText(fmt_num(allowed_qty))
+                if delivered_item and as_number(delivered_item.text()) > allowed_qty:
+                    delivered_item.setText(fmt_num(allowed_qty))
+                self._update_remaining_row(data_row)
+                if self._is_unit_tracking(comp):
+                    self._update_panel_slot_count(comp, int(allowed_qty))
+        finally:
+            self.qty_table.blockSignals(was_blocked)
+            self._updating_qty = False
         self.refresh_assignment_card()
 
     def fill_remaining_system_planned(self):
         self._updating_qty = True
-        for comp in self.component_keys:
-            data_row = self._comp_row.get(comp)
-            if data_row is None:
-                continue
-            items = self.inputs.get(comp)
-            if not items:
-                continue
-            planned_item, delivered_item, _ = items
-            if not planned_item:
-                continue
-            system_qty = max(as_number(self.system.components.get(comp, 0)), 0)
-            assigned_qty = max(as_number(self.planned_assigned.get(comp, 0)), 0)
-            remaining_qty = max(system_qty - assigned_qty, 0)
-            planned_item.setText(fmt_num(remaining_qty))
-            if delivered_item and as_number(delivered_item.text()) > remaining_qty:
-                delivered_item.setText(fmt_num(remaining_qty))
-            self._update_remaining_row(data_row)
-            if self._is_unit_tracking(comp):
-                self._update_panel_slot_count(comp, int(remaining_qty))
-        self._updating_qty = False
+        was_blocked = self.qty_table.blockSignals(True)
+        try:
+            for comp in self.component_keys:
+                data_row = self._comp_row.get(comp)
+                if data_row is None:
+                    continue
+                items = self.inputs.get(comp)
+                if not items:
+                    continue
+                planned_item, delivered_item, _ = items
+                if not planned_item:
+                    continue
+                system_qty = self._system_component_qty(comp)
+                assigned_qty = max(as_number(self.planned_assigned.get(comp, 0)), 0)
+                remaining_qty = max(system_qty - assigned_qty, 0)
+                planned_item.setText(fmt_num(remaining_qty))
+                if delivered_item and as_number(delivered_item.text()) > remaining_qty:
+                    delivered_item.setText(fmt_num(remaining_qty))
+                self._update_remaining_row(data_row)
+                if self._is_unit_tracking(comp):
+                    self._update_panel_slot_count(comp, int(remaining_qty))
+        finally:
+            self.qty_table.blockSignals(was_blocked)
+            self._updating_qty = False
         self.refresh_assignment_card()
 
     def _update_remaining_row(self, row: int):
@@ -6373,10 +6465,14 @@ class DeliveryDialog(StyledDialog):
             return
         pv = as_number(p.text())
         dv = as_number(d.text())
-        r.setText(fmt_num(max(pv - dv, 0)))
+        was_blocked = self.qty_table.blockSignals(True)
+        try:
+            r.setText(fmt_num(max(pv - dv, 0)))
+        finally:
+            self.qty_table.blockSignals(was_blocked)
 
     def on_qty_item_changed(self, item: QTableWidgetItem):
-        if self._updating_qty or not item:
+        if self._updating_qty or self._updating_qty_table or not item:
             return
         col = item.column()
         if col not in (1, 2):
@@ -6385,31 +6481,35 @@ class DeliveryDialog(StyledDialog):
         comp = self._row_comp.get(row)
         if not comp:
             return
+        self._updating_qty_table = True
         self._updating_qty = True
-        item.setText(fmt_num(as_number(item.text())))
-        if col == 1:
-            # Teslim edilecek değişti
-            new_qty = as_number(item.text())
-            if self._is_unit_tracking(comp):
-                # Ondalıklı değer uyarısı
-                if new_qty != int(new_qty):
-                    self._updating_qty = False
-                    QMessageBox.warning(
-                        self, "Ondalıklı Adet",
-                        f"Bu bileşende teslim edilecek adet tam sayı olmalıdır.\n({comp})"
-                    )
-                    item.setText("0")
-                    self._update_remaining_row(row)
-                    self.refresh_assignment_card()
-                    return
-                self._update_panel_slot_count(comp, int(new_qty))
-            else:
-                if self._is_delivered_status():
-                    delivered_item = self.qty_table.item(row, 2)
-                    if delivered_item:
-                        delivered_item.setText(fmt_num(new_qty))
-        self._update_remaining_row(row)
-        self._updating_qty = False
+        was_blocked = self.qty_table.blockSignals(True)
+        try:
+            item.setText(fmt_num(as_number(item.text())))
+            if col == 1:
+                # Teslim edilecek değişti
+                new_qty = as_number(item.text())
+                if self._is_unit_tracking(comp):
+                    # Ondalıklı değer uyarısı
+                    if new_qty != int(new_qty):
+                        QMessageBox.warning(
+                            self, "Ondalıklı Adet",
+                            f"Bu bileşende teslim edilecek adet tam sayı olmalıdır.\n({comp})"
+                        )
+                        item.setText("0")
+                        self._update_remaining_row(row)
+                        return
+                    self._update_panel_slot_count(comp, int(new_qty))
+                else:
+                    if self._is_delivered_status():
+                        delivered_item = self.qty_table.item(row, 2)
+                        if delivered_item:
+                            delivered_item.setText(fmt_num(new_qty))
+            self._update_remaining_row(row)
+        finally:
+            self.qty_table.blockSignals(was_blocked)
+            self._updating_qty = False
+            self._updating_qty_table = False
         self.refresh_assignment_card()
 
     # ------------------------------------------------------------------ save
@@ -6427,7 +6527,7 @@ class DeliveryDialog(StyledDialog):
             pv = as_number(p.text())
             dv = as_number(d.text())
             assigned_other = max(as_number(self.planned_assigned.get(comp, 0)), 0)
-            system_qty = max(as_number(self.system.components.get(comp, 0)), 0)
+            system_qty = self._system_component_qty(comp)
             if pv + assigned_other > system_qty + 0.0001:
                 QMessageBox.warning(self, "Hata", f"{comp}: tanımlanan toplam miktar sistem adedini aşamaz.")
                 return
@@ -13038,24 +13138,7 @@ class MainWindow(QMainWindow):
 
 
 if __name__ == "__main__":
-    # ── Logging kurulumu ─────────────────────────────────────────────────────
-    # %APPDATA%\STS\sts.log dosyasına yazar (Windows). Diğer platformlarda
-    # kullanıcının ev dizinini kullanır. Exe çalışırken stdout/stderr yoktur;
-    # crash/hata tanısı için tek kaynak bu log dosyasıdır.
-    try:
-        _log_dir = Path(os.environ.get("APPDATA") or Path.home()) / "STS"
-        _log_dir.mkdir(parents=True, exist_ok=True)
-        _log_file = _log_dir / "sts.log"
-        logging.basicConfig(
-            level=logging.WARNING,
-            format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-            handlers=[
-                logging.FileHandler(str(_log_file), encoding="utf-8"),
-            ],
-        )
-    except Exception:
-        logging.basicConfig(level=logging.WARNING)
-
+    sys.excepthook = _global_exc_handler
     configure_windows_app_identity()
     app = QApplication(sys.argv)
 
