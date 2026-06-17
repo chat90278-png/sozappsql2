@@ -1339,6 +1339,193 @@ class STSStore:
         out=[]; tags=self.all_contract_tags_map()
         for p in self.platform_names(): out.extend(self.list_main_contracts(p,tags_map=tags))
         return out
+
+    # ── Takvim için toplu bulk sorgular ───────────────────────────────────────
+    # Bu metodlar doğrudan çağrıldığında mevcut (ana-thread) connection'ı kullanır.
+    # CalendarDataWorker kullandığında kendi geçici connection'ını açarak çağırır
+    # ve sonuç yalnızca list[dict] olarak döner — connection hiçbir zaman taşınmaz.
+
+    def calendar_contract_events_bulk(
+        self,
+        year_from: int,
+        year_to: int,
+        platform_filter: str = "",
+    ) -> list:
+        """Sözleşme bazlı takvim olaylarını tek sorguda döndürür.
+
+        year_from..year_to (inclusive) yıl aralığındaki completion_date veya
+        acceptance_date'e sahip tüm sözleşmeleri döndürür.
+        Sonuç: list[dict] — bağlantı nesnesi taşınmaz.
+        """
+        params: list = [str(year_from), str(year_to)]
+        plat_clause = ""
+        if platform_filter:
+            plat_clause = "AND p.name = ?"
+            params.append(platform_filter)
+
+        sql = f"""
+            SELECT
+                c.id            AS row_id,
+                p.name          AS platform,
+                c.contract_no   AS no,
+                c.contract_type AS type,
+                c.status,
+                c.completion_date,
+                c.acceptance_date,
+                c.note          AS content
+            FROM contracts c
+            JOIN contract_platforms cp ON cp.contract_id = c.id
+            JOIN platforms p           ON p.id = cp.platform_id
+            WHERE (
+                (c.completion_date  IS NOT NULL AND c.completion_date  != ''
+                    AND SUBSTR(c.completion_date,  1, 4) BETWEEN ? AND ?)
+                OR
+                (c.acceptance_date  IS NOT NULL AND c.acceptance_date  != ''
+                    AND SUBSTR(c.acceptance_date,  1, 4) BETWEEN ? AND ?)
+            )
+            {plat_clause}
+            ORDER BY p.name, c.contract_no
+        """
+        full_params = [str(year_from), str(year_to),
+                       str(year_from), str(year_to)]
+        if platform_filter:
+            full_params.append(platform_filter)
+
+        rows = self.db.conn.execute(sql, full_params).fetchall()
+        out = []
+        for r in rows:
+            out.append({
+                "row":              int(r["row_id"]),
+                "platform":         str(r["platform"] or ""),
+                "no":               str(r["no"] or ""),
+                "type":             str(r["type"] or ""),
+                "status":           str(r["status"] or ""),
+                "completion_date":  str(r["completion_date"] or ""),
+                "acceptance_date":  str(r["acceptance_date"] or ""),
+                "planned_acceptance_date": "",
+                "content":          str(r["content"] or ""),
+                "user":             "",
+            })
+        return out
+
+    def calendar_system_delivery_events_bulk(
+        self,
+        year_from: int,
+        year_to: int,
+        platform_filter: str = "",
+    ) -> list:
+        """Sistem ve teslim/kabul bazlı takvim olaylarını tek sorguda döndürür.
+
+        Sistem termini (systems.completion_date) ve teslim/kabul tarihleri
+        (deliveries.acceptance_date, deliveries.planned_acceptance_date) için
+        iki ayrı sorgu çalıştırır, birleştirir.
+        Sonuç: list[dict] — bağlantı nesnesi taşınmaz.
+        """
+        plat_clause = ""
+        base_params = [str(year_from), str(year_to)]
+        if platform_filter:
+            plat_clause = "AND p.name = ?"
+
+        # ── Sistem termini ────────────────────────────────────────────────
+        sys_params = [str(year_from), str(year_to)]
+        if platform_filter:
+            sys_params.append(platform_filter)
+        sys_sql = f"""
+            SELECT
+                c.id            AS contract_row,
+                p.name          AS platform,
+                c.contract_no   AS no,
+                s.name          AS system_name,
+                s.status,
+                s.completion_date,
+                s.acceptance_date
+            FROM systems s
+            JOIN contracts c  ON c.id = s.contract_id
+            JOIN contract_platforms cp ON cp.contract_id = c.id
+            JOIN platforms p  ON p.id = cp.platform_id
+            WHERE s.completion_date IS NOT NULL AND s.completion_date != ''
+              AND SUBSTR(s.completion_date, 1, 4) BETWEEN ? AND ?
+              {plat_clause}
+            ORDER BY p.name, c.contract_no, s.name
+        """
+        sys_rows = self.db.conn.execute(sys_sql, sys_params).fetchall()
+
+        # ── Teslim / kabul ────────────────────────────────────────────────
+        del_params: list = []
+        if platform_filter:
+            del_params_acc  = [str(year_from), str(year_to), platform_filter]
+            del_params_plan = [str(year_from), str(year_to), platform_filter]
+        else:
+            del_params_acc  = [str(year_from), str(year_to)]
+            del_params_plan = [str(year_from), str(year_to)]
+
+        del_sql = f"""
+            SELECT
+                c.id            AS contract_row,
+                p.name          AS platform,
+                c.contract_no   AS no,
+                s.name          AS system_name,
+                d.name          AS delivery_name,
+                d.status,
+                d.acceptance_date,
+                d.planned_acceptance_date
+            FROM deliveries d
+            JOIN systems  s  ON s.id  = d.system_id
+            JOIN contracts c ON c.id  = d.contract_id
+            JOIN contract_platforms cp ON cp.contract_id = c.id
+            JOIN platforms p ON p.id  = cp.platform_id
+            WHERE (
+                (d.acceptance_date IS NOT NULL AND d.acceptance_date != ''
+                    AND SUBSTR(d.acceptance_date, 1, 4) BETWEEN ? AND ?)
+                OR
+                (d.planned_acceptance_date IS NOT NULL AND d.planned_acceptance_date != ''
+                    AND SUBSTR(d.planned_acceptance_date, 1, 4) BETWEEN ? AND ?)
+            )
+            {plat_clause}
+            ORDER BY p.name, c.contract_no, s.name, d.sort_order, d.id
+        """
+        full_del_params = [str(year_from), str(year_to),
+                           str(year_from), str(year_to)]
+        if platform_filter:
+            full_del_params.append(platform_filter)
+        del_rows = self.db.conn.execute(del_sql, full_del_params).fetchall()
+
+        out = []
+        for r in sys_rows:
+            sname = str(r["system_name"] or "")
+            no    = str(r["no"] or "")
+            out.append({
+                "row":              int(r["contract_row"]),
+                "platform":         str(r["platform"] or ""),
+                "no":               no,
+                "type":             "Sistem",
+                "system_label":     sname,
+                "title":            f"{no} · {sname}" if sname else no,
+                "status":           str(r["status"] or ""),
+                "completion_date":  str(r["completion_date"] or ""),
+                "acceptance_date":  str(r["acceptance_date"] or ""),
+                "planned_acceptance_date": "",
+                "user":             "",
+            })
+        for r in del_rows:
+            sname  = str(r["system_name"]  or "")
+            dname  = str(r["delivery_name"] or "")
+            no     = str(r["no"] or "")
+            label  = f"{no} · {sname} / {dname}" if sname else f"{no} / {dname}"
+            out.append({
+                "row":              int(r["contract_row"]),
+                "platform":         str(r["platform"] or ""),
+                "no":               no,
+                "type":             "Teslim/Kabul",
+                "system_label":     sname,
+                "title":            label,
+                "status":           str(r["status"] or ""),
+                "completion_date":  "",
+                "acceptance_date":  str(r["acceptance_date"] or ""),
+                "planned_acceptance_date": str(r["planned_acceptance_date"] or ""),
+                "user":             "",
+            })
+        return out
     def find_main_contract_info(self, platform, contract_no):
         r=self.db.conn.execute("SELECT c.*,p.name AS platform FROM contracts c JOIN contract_platforms cp ON cp.contract_id=c.id JOIN platforms p ON p.id=cp.platform_id WHERE cp.platform_id=? AND c.contract_no=? AND c.is_main=1 LIMIT 1",(self.get_platform_id(platform),contract_no)).fetchone()
         if not r:
