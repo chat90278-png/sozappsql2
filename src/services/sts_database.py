@@ -577,6 +577,11 @@ CREATE TABLE IF NOT EXISTS activity_logs(id INTEGER PRIMARY KEY AUTOINCREMENT,cr
             self.conn.execute("DROP TABLE IF EXISTS document_locks")
             ensure_document_locks_table(self.conn)
             migrated.append("document_locks.contract_id")
+        elif "id" not in self._table_columns("document_locks"):
+            # Tablo var ama id kolonu yok (çok eski şema). Yeniden oluştur.
+            self.conn.execute("DROP TABLE IF EXISTS document_locks")
+            ensure_document_locks_table(self.conn)
+            migrated.append("document_locks.id")
         self.conn.execute("DROP INDEX IF EXISTS idx_document_locks_id")
         self.conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_document_locks_contract_id "
