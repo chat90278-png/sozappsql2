@@ -144,6 +144,11 @@ def _matches_filters(row: dict[str, Any], filters: Optional[dict[str, Any]]) -> 
         value = filters.get(filter_key)
         if value and value != all_value and str(row.get(row_key) or "") != str(value):
             return False
+    owner = filters.get("owner")
+    if owner and owner != "Tümü":
+        owners = [part.strip() for part in str(row.get("Sözleşme Sahibi") or "").split(",")]
+        if str(owner) not in owners:
+            return False
     contract = filters.get("contract")
     if contract and contract != "Tüm seçili sözleşmeler" and str(row.get("Sözleşme") or "") != str(contract):
         return False

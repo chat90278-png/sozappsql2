@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from src.domain.constants import STATUS_VALUES
 from src.ui.theme import STYLE
 
 NAVY = "#0b3679"
@@ -346,13 +347,16 @@ class GroupedBarPreview(QWidget):
         self.users: list[str] = []
         self.parts: list[str] = []
         self.values: dict[str, list[float]] = {}
-        self.setMinimumHeight(740)
+        self.group_width = 150
+        self.setMinimumHeight(620)
 
     def set_data(self, users: list[str], parts: list[str], values: dict[str, list[float]]) -> None:
         self.users = users
         self.parts = parts[:8]
         self.values = {part: values.get(part, [])[:len(self.users)] for part in self.parts}
-        self.setMinimumWidth(max(980, 135 * max(len(self.users), 1) + 300))
+        longest_user = max([len(user) for user in self.users] or [12])
+        self.group_width = max(150, longest_user * 8 + 28)
+        self.setMinimumWidth(max(900, self.group_width * max(len(self.users), 1) + 300))
         self.update()
 
     def paintEvent(self, event):
@@ -363,13 +367,13 @@ class GroupedBarPreview(QWidget):
         if not self.users or not self.parts:
             p.setPen(QColor(MUTED)); p.drawText(r, Qt.AlignCenter, "Veri bulunamadı")
             return
-        chart = r.adjusted(70, 60, -230, -315)
+        chart = r.adjusted(70, 48, -215, -245)
         maxv = max([max(v or [0]) for v in self.values.values()] or [1]) or 1
         for i in range(6):
             y = chart.bottom() - int(chart.height() * i / 5)
             p.setPen(QPen(QColor("#d8d8d8"))); p.drawLine(chart.left(), y, chart.right(), y)
             p.setPen(QColor("#334155")); p.drawText(chart.left() - 42, y + 4, _fmt_amount(maxv * i / 5))
-        group_w = max(118, chart.width() / max(len(self.users), 1)); bar_w = max(4, min(14, int(group_w / (len(self.parts) + 3))))
+        group_w = max(self.group_width, chart.width() / max(len(self.users), 1)); bar_w = max(4, min(12, int(group_w / (len(self.parts) + 4))))
         for ui, user in enumerate(self.users):
             base_x = chart.left() + ui * group_w + group_w * .16
             for pi, part in enumerate(self.parts):
@@ -380,22 +384,21 @@ class GroupedBarPreview(QWidget):
                 p.setPen(Qt.NoPen); p.setBrush(QColor(CHART_COLORS[pi % len(CHART_COLORS)])); p.drawRect(x, y, bar_w, h)
                 if value:
                     p.setPen(QColor("#111827")); p.drawText(x - 2, y - 5, _fmt_amount(value))
-            label = user if len(user) <= 16 else f"{user[:15]}…"
-            p.setPen(QColor("#111827")); p.drawText(int(chart.left() + ui * group_w), chart.bottom() + 24, int(group_w), 22, Qt.AlignCenter, label)
+            p.setPen(QColor("#111827")); p.drawText(int(chart.left() + ui * group_w), chart.bottom() + 22, int(group_w), 22, Qt.AlignCenter, user)
         lx = r.right() - 175; ly = chart.top() + 80
         p.setPen(QColor("#111827")); p.drawText(lx, ly - 25, "PARÇA ADI ▾")
         for i, part in enumerate(self.parts):
             p.fillRect(lx, ly + i * 28, 10, 10, QColor(CHART_COLORS[i % len(CHART_COLORS)])); p.drawText(lx + 18, ly + 10 + i * 28, part[:22])
-        table_top = chart.bottom() + 64
-        table = r.adjusted(105, table_top - r.top(), -220, -25)
-        cols = [""] + self.users; row_h = 26; col_w = table.width() / max(len(cols), 1)
+        table_top = chart.bottom() + 54
+        table = r.adjusted(105, table_top - r.top(), -215, -20)
+        cols = [""] + self.users; row_h = 22; col_w = max(125, table.width() / max(len(cols), 1))
         p.setPen(QPen(QColor("#d8d8d8")))
         for ri, part in enumerate([""] + self.parts):
             for ci, col in enumerate(cols):
                 cell_x = int(table.left() + ci * col_w); cell_y = table.top() + ri * row_h
                 p.drawRect(cell_x, cell_y, int(col_w), row_h)
                 if ri == 0 and ci > 0:
-                    p.drawText(cell_x, cell_y, int(col_w), row_h, Qt.AlignCenter, col if len(col) <= 14 else f"{col[:13]}…")
+                    p.drawText(cell_x, cell_y, int(col_w), row_h, Qt.AlignCenter, col)
                 elif ri > 0 and ci == 0:
                     p.fillRect(cell_x + 8, cell_y + 8, 10, 10, QColor(CHART_COLORS[(ri - 1) % len(CHART_COLORS)])); p.drawText(cell_x + 24, cell_y, int(col_w), row_h, Qt.AlignVCenter, part[:24])
                 elif ri > 0 and ci > 0:
@@ -431,8 +434,8 @@ class DeliveryScheduleReportDialog(QDialog):
     def _build_filters(self):
         frame = QFrame(); frame.setObjectName("filterPanel"); frame.setFixedWidth(300); lay = QVBoxLayout(frame)
         h = QLabel("Rapor Ayarları"); h.setObjectName("panelTitle"); lay.addWidget(h)
-        self.platform = self._combo(["Tümü"]); self.year_range = QLineEdit(str(date.today().year)); self.domestic = self._combo(["Tümü", "Yİ", "YD"]); self.user = self._combo(["Tümü"]); self.contract = self._combo(["Tüm seçili sözleşmeler"]); self.status = self._combo(["Tümü"])
-        for label, widget in [("PLATFORM", self.platform), ("YIL / ARALIK", self.year_range), ("Yİ / YD", self.domestic), ("TESLİM KULLANICISI", self.user), ("SÖZLEŞME", self.contract), ("DURUM", self.status)]:
+        self.platform = self._combo(["Tümü"]); self.year_range = QLineEdit(str(date.today().year)); self.domestic = self._combo(["Tümü", "Yİ", "YD"]); self.owner = self._combo(["Tümü"]); self.contract = self._combo(["Tüm seçili sözleşmeler"]); self.status = self._combo(["Tümü"] + list(STATUS_VALUES))
+        for label, widget in [("PLATFORM", self.platform), ("YIL / ARALIK", self.year_range), ("Yİ / YD", self.domestic), ("SÖZLEŞME SAHİBİ", self.owner), ("SÖZLEŞME", self.contract), ("DURUM", self.status)]:
             l = QLabel(label); l.setObjectName("fieldLabel"); lay.addWidget(l); lay.addWidget(widget)
         btn = QPushButton("Önizlemeyi Yenile"); btn.clicked.connect(self.refresh_preview); lay.addWidget(btn); lay.addStretch(); return frame
 
@@ -494,9 +497,10 @@ class DeliveryScheduleReportDialog(QDialog):
 
     def populate_filters_from_rows(self, rows: list[DeliveryRow]) -> None:
         self._set_combo_items(self.platform, sorted({r.platform for r in rows if r.platform}), "Tümü")
-        self._set_combo_items(self.user, sorted({r.user for r in rows if r.user}), "Tümü")
+        owners = sorted({owner.strip() for r in rows for owner in str(r.owner or "").split(",") if owner.strip() and owner.strip() != "-"})
+        self._set_combo_items(self.owner, owners, "Tümü")
         self._set_combo_items(self.contract, sorted({r.contract for r in rows if r.contract}), "Tüm seçili sözleşmeler")
-        self._set_combo_items(self.status, sorted({r.status for r in rows if r.status}), "Tümü")
+        self._set_combo_items(self.status, list(STATUS_VALUES), "Tümü")
         years = sorted({r.year for r in rows if r.year})
         if years and self.year_range.text().strip() in {"", str(date.today().year)}:
             self.year_range.setText(str(years[0]) if len(years) == 1 else f"{years[0]}-{years[-1]}")
@@ -507,7 +511,7 @@ class DeliveryScheduleReportDialog(QDialog):
         ok = start_year is not None and end_year is not None
         self.year_range.setProperty("invalid", not ok)
         self.year_range.style().unpolish(self.year_range); self.year_range.style().polish(self.year_range)
-        return {"platform": self.platform.currentText(), "year_range": text, "start_year": start_year, "end_year": end_year, "year_range_valid": ok, "yi_yd": self.domestic.currentText(), "user": self.user.currentText(), "contract": self.contract.currentText(), "status": self.status.currentText()}
+        return {"platform": self.platform.currentText(), "year_range": text, "start_year": start_year, "end_year": end_year, "year_range_valid": ok, "yi_yd": self.domestic.currentText(), "owner": self.owner.currentText(), "contract": self.contract.currentText(), "status": self.status.currentText()}
 
     def build_report_payload(self) -> dict[str, Any]:
         return {"filters": self.collect_filters(), "generated_at": date.today().isoformat(), "deliveries": [self._row_payload(row) for row in self.filtered_rows], "matrix": self._matrix_rows(self.filtered_rows)[1], "activity_logs": self.load_activity_log_preview(self.collect_filters())}
@@ -537,7 +541,7 @@ class DeliveryScheduleReportDialog(QDialog):
         rows = [r for r in rows if r.year is not None and filters["start_year"] <= r.year <= filters["end_year"]]
         if filters["platform"] != "Tümü": rows = [r for r in rows if r.platform == filters["platform"]]
         if filters["yi_yd"] != "Tümü": rows = [r for r in rows if r.domestic == filters["yi_yd"]]
-        if filters["user"] != "Tümü": rows = [r for r in rows if r.user == filters["user"]]
+        if filters["owner"] != "Tümü": rows = [r for r in rows if filters["owner"] in [owner.strip() for owner in str(r.owner or "").split(",")]]
         if filters["status"] != "Tümü": rows = [r for r in rows if r.status == filters["status"]]
         if filters["contract"] != "Tüm seçili sözleşmeler": rows = [r for r in rows if r.contract == filters["contract"]]
         self.filtered_rows = rows
