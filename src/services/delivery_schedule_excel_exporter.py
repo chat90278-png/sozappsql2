@@ -17,14 +17,33 @@ SOURCE_HEADERS = [
     "Seviye", "Parça No", "Parça", "Sözleşme Adeti", "Teslim Edilen", "Kalan", "Konfigürasyon Tipi", "Opsiyon / Not", "Durum",
 ]
 
+APP_STATUS_VALUES = ["Eksik", "Gecikti", "Kabul Edildi", "Planlandı", "Teslim Edildi"]
+
 ALLOWED_ENTITY_TYPES = {"contract", "contracts", "delivery", "deliveries", "acceptance", "term", "calendar"}
 ALLOWED_ACTION_KEYWORDS = {"create", "created", "update", "updated", "delete", "deleted", "delivery", "contract", "acceptance", "teslim", "sözleşme", "sozlesme", "termin", "takvim"}
-BLOCKED_KEYWORDS = {"yoğun test log kaydı", "test log", "stress", "bulk", "dummy", "seed", "sql_query_executed"}
+BLOCKED_KEYWORDS = {
+    "yoğun test log kaydı", "test log", "stress", "bulk", "dummy", "seed", "sql_query_executed",
+    "belge klasörü oluşturuldu", "klasör oluşturuldu", "folder created", "document folder",
+    "bileşen listesi güncellendi", "bilesen listesi guncellendi",
+    "bileşen sırası güncellendi", "bilesen sirasi guncellendi",
+    "bileşen eklendi", "bilesen eklendi",
+    "bileşen güncellendi", "bilesen guncellendi",
+    "component list", "component order", "component updated", "component added",
+}
+
+# Fields that indicate a meaningful content change (not just structural/meta changes)
+CONTENT_FIELDS = {
+    "planned", "delivered", "remaining", "quantity", "qty", "miktar", "adet",
+    "planned_acceptance_date", "acceptance_date",
+    "delivery_user_id", "status", "note", "option", "opsiyon",
+    "configuration_type", "config_type", "konfigurasyon_tipi", "konfigürasyon_tipi",
+    "contract_no", "yi_yd",
+}
 FIELD_LABELS = {
     "planned_acceptance_date": "Tahmini Teslimat Tarihi",
     "acceptance_date": "Gerçek Teslim/Kabul Tarihi",
     "delivery_user_id": "Teslim Kullanıcısı",
-    "planned": "Planlanan Miktar",
+    "planned": "Sözleşme Adeti",
     "delivered": "Teslim Edilen Miktar",
     "status": "Durum",
     "note": "Not",
@@ -33,6 +52,10 @@ FIELD_LABELS = {
     "configuration_type": "Konfigürasyon Tipi",
     "config_type": "Konfigürasyon Tipi",
     "option": "Opsiyon",
+    "opsiyon": "Opsiyon",
+    "remaining": "Kalan",
+    "konfigurasyon_tipi": "Konfigürasyon Tipi",
+    "konfigürasyon_tipi": "Konfigürasyon Tipi",
 }
 
 
@@ -41,9 +64,41 @@ class ExcelComUnavailableError(RuntimeError):
 
 
 def _conn_from_store(store: object) -> Optional[sqlite3.Connection]:
+    """Return an SQLite connection from STSStore/STSDatabase safely.
+
+    The dialog usually passes an already-open STSStore, but exported reports
+    may also be triggered from a lightweight wrapper that only exposes a path.
+    Keep this helper defensive so the Excel exporter never crashes just because
+    the store shape is slightly different.
+    """
+    if store is None:
+        return None
     db = getattr(store, "db", None)
     conn = getattr(db, "conn", None)
-    return conn if conn is not None else getattr(store, "conn", None)
+    if isinstance(conn, sqlite3.Connection):
+        try:
+            conn.row_factory = sqlite3.Row
+        except Exception:
+            pass
+        return conn
+    conn = getattr(store, "conn", None)
+    if isinstance(conn, sqlite3.Connection):
+        try:
+            conn.row_factory = sqlite3.Row
+        except Exception:
+            pass
+        return conn
+    path = getattr(store, "path", None) or getattr(db, "path", None)
+    if path:
+        created = sqlite3.connect(str(path))
+        created.row_factory = sqlite3.Row
+        try:
+            created.execute("PRAGMA foreign_keys=ON")
+            created.execute("PRAGMA busy_timeout=5000")
+        except Exception:
+            pass
+        return created
+    return None
 
 
 def extract_year_from_date_text(value: object) -> Optional[int]:
@@ -156,6 +211,7 @@ def _matches_filters(row: dict[str, Any], filters: Optional[dict[str, Any]]) -> 
         ("platform", "Platform", "Tümü"),
         ("yi_yd", "Yİ/YD", "Tümü"),
         ("user", "Teslim Kullanıcısı", "Tümü"),
+        ("delivery_user", "Teslim Kullanıcısı", "Tümü"),
         ("status", "Durum", "Tümü"),
     ]
     for filter_key, row_key, all_value in checks:
@@ -287,6 +343,22 @@ def _extract_revision_parts(row: dict[str, Any]) -> tuple[str, str, str]:
     return _readable_field_name(field), "" if old_value is None else str(old_value), "" if new_value is None else str(new_value)
 
 
+def _normalize_field_key(value: Any) -> str:
+    return str(value or "").strip().lower()
+
+
+def _has_content_field_change(data: dict) -> bool:
+    """Return True if the log row contains a change in a meaningful CONTENT_FIELDS key."""
+    payload = _json_dict(data.get("payload_json"))
+    before = _json_dict(data.get("before_json"))
+    after = _json_dict(data.get("after_json"))
+    field_name = _normalize_field_key(payload.get("field") or payload.get("column") or payload.get("name"))
+    if field_name and field_name in CONTENT_FIELDS:
+        return True
+    all_keys = {_normalize_field_key(key) for key in (set(before.keys()) | set(after.keys()) | set(payload.keys()))}
+    return bool(all_keys & CONTENT_FIELDS)
+
+
 def is_meaningful_revision_log(row: dict) -> bool:
     data = _as_dict(row)
     action = str(data.get("action") or "").strip().lower()
@@ -297,8 +369,9 @@ def is_meaningful_revision_log(row: dict) -> bool:
     combined = " ".join([action, message, source, entity_type, entity_key])
     if "sql terminal" in source:
         return False
+    # If message matches a blocked keyword, only allow it if a real content field changed
     if any(keyword in combined for keyword in BLOCKED_KEYWORDS):
-        return False
+        return _has_content_field_change(data)
     allowed = entity_type in ALLOWED_ENTITY_TYPES or any(keyword in combined for keyword in ALLOWED_ACTION_KEYWORDS)
     if not allowed:
         return False
@@ -319,7 +392,7 @@ def _revision_log_to_row(row: dict[str, Any], index: int) -> dict[str, Any]:
         "revision": f"R{index:03d}",
         "date": str(row.get("created_at") or ""),
         "user": str(row.get("actor") or "-"),
-        "contract": str(row.get("contract_no") or "-"),
+        "contract": str(row.get("resolved_contract_no") or row.get("contract_no") or "-"),
         "delivery": entity_key or "-",
         "field": field,
         "old_value": old_value,
@@ -328,36 +401,184 @@ def _revision_log_to_row(row: dict[str, Any], index: int) -> dict[str, Any]:
     }
 
 
-def load_meaningful_revision_logs(store: object, limit: int = 200) -> list[dict[str, Any]]:
+def _selected_contracts_from_filters(filters: Optional[dict[str, Any]]) -> set[str]:
+    if not filters:
+        return set()
+    explicit = filters.get("_selected_contracts") or filters.get("selected_contracts") or []
+    if isinstance(explicit, str):
+        explicit = [explicit]
+    selected = {str(item).strip() for item in explicit if str(item or "").strip()}
+    contract = str(filters.get("contract") or "").strip()
+    if contract and contract not in {"Tüm seçili sözleşmeler", "Tümü", "-"}:
+        selected.add(contract)
+    return selected
+
+
+def _first_json_value(data: dict[str, Any], *keys: str) -> str:
+    key_set = {key.lower() for key in keys}
+    for json_key in ("payload_json", "before_json", "after_json"):
+        payload = _json_dict(data.get(json_key))
+        for key, value in payload.items():
+            if str(key).strip().lower() in key_set and value not in (None, ""):
+                return str(value).strip()
+    return ""
+
+
+def _resolve_contract_no_by_id(conn: sqlite3.Connection, contract_id: Any) -> str:
+    try:
+        if contract_id in (None, ""):
+            return ""
+        row = conn.execute("SELECT contract_no FROM contracts WHERE id=?", (int(contract_id),)).fetchone()
+        return str(row[0] or "").strip() if row else ""
+    except Exception:
+        return ""
+
+
+def _resolve_delivery_contract_no(conn: sqlite3.Connection, delivery_id: Any) -> str:
+    try:
+        if delivery_id in (None, ""):
+            return ""
+        row = conn.execute(
+            """
+            SELECT c.contract_no
+            FROM deliveries d
+            JOIN contracts c ON c.id = d.contract_id
+            WHERE d.id=?
+            """,
+            (int(delivery_id),),
+        ).fetchone()
+        return str(row[0] or "").strip() if row else ""
+    except Exception:
+        return ""
+
+
+def _resolve_log_contract_no(conn: sqlite3.Connection, data: dict[str, Any]) -> str:
+    for key in ("resolved_contract_no", "contract_no", "contract", "contract_number", "sozlesme", "sözleşme"):
+        value = str(data.get(key) or "").strip()
+        if value and value != "-":
+            return value
+    direct = _first_json_value(data, "contract_no", "contract", "contract_number", "sozlesme", "sözleşme")
+    if direct:
+        return direct
+    contract_id = data.get("contract_id") or _first_json_value(data, "contract_id")
+    resolved = _resolve_contract_no_by_id(conn, contract_id)
+    if resolved:
+        return resolved
+    entity_type = str(data.get("entity_type") or "").strip().lower()
+    entity_id = data.get("entity_id") or data.get("entity") or data.get("id")
+    if entity_type in {"contract", "contracts"}:
+        resolved = _resolve_contract_no_by_id(conn, entity_id)
+        if resolved:
+            return resolved
+    if entity_type in {"delivery", "deliveries", "acceptance"}:
+        resolved = _resolve_delivery_contract_no(conn, entity_id)
+        if resolved:
+            return resolved
+    delivery_id = _first_json_value(data, "delivery_id", "teslimat_id")
+    resolved = _resolve_delivery_contract_no(conn, delivery_id)
+    if resolved:
+        return resolved
+    entity_key = str(data.get("entity_key") or "").strip()
+    match = re.search(r"\bSTS[-_ ]?\d+\b", entity_key, flags=re.IGNORECASE)
+    if match:
+        return match.group(0).replace("_", "-").replace(" ", "-").upper()
+    match = re.fullmatch(r"(?:contract|contracts):?(\d+)", entity_key, flags=re.IGNORECASE)
+    if match:
+        return _resolve_contract_no_by_id(conn, match.group(1))
+    match = re.fullmatch(r"(?:delivery|deliveries|acceptance):?(\d+)", entity_key, flags=re.IGNORECASE)
+    if match:
+        return _resolve_delivery_contract_no(conn, match.group(1))
+    return ""
+
+
+def _fetch_activity_log_rows(conn: sqlite3.Connection, limit: int) -> list[Any]:
+    cols = {str(row[1]) for row in conn.execute("PRAGMA table_info(activity_logs)").fetchall()}
+    select_contract = "'' AS resolved_contract_no"
+    joins: list[str] = []
+    coalesce_parts: list[str] = []
+    if "contract_id" in cols:
+        joins.append("LEFT JOIN contracts c_direct ON c_direct.id = l.contract_id")
+        coalesce_parts.append("c_direct.contract_no")
+    if "entity_id" in cols and "entity_type" in cols:
+        joins.append("LEFT JOIN contracts c_entity ON c_entity.id = l.entity_id AND lower(l.entity_type) IN ('contract','contracts')")
+        joins.append("LEFT JOIN deliveries d_entity ON d_entity.id = l.entity_id AND lower(l.entity_type) IN ('delivery','deliveries','acceptance')")
+        joins.append("LEFT JOIN contracts c_delivery ON c_delivery.id = d_entity.contract_id")
+        coalesce_parts.extend(["c_entity.contract_no", "c_delivery.contract_no"])
+    if coalesce_parts:
+        select_contract = f"COALESCE({', '.join(coalesce_parts)}, '') AS resolved_contract_no"
+    query = f"""
+        SELECT l.*, {select_contract}
+        FROM activity_logs l
+        {' '.join(joins)}
+        ORDER BY l.created_at DESC, l.id DESC
+        LIMIT ?
+    """
+    return conn.execute(query, (max(int(limit or 200) * 8, int(limit or 200)),)).fetchall()
+
+
+def load_meaningful_revision_logs(store: object, limit: int = 200, filters: Optional[dict[str, Any]] = None) -> list[dict[str, Any]]:
     conn = _conn_from_store(store)
     if conn is None:
         return []
-    rows = conn.execute(
-        """
-        SELECT l.*
-        FROM activity_logs l
-        ORDER BY l.created_at DESC
-        LIMIT ?
-        """,
-        (max(int(limit or 200) * 5, int(limit or 200)),),
-    ).fetchall()
+    try:
+        table = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='activity_logs'"
+        ).fetchone()
+        if not table:
+            return []
+        rows = _fetch_activity_log_rows(conn, limit)
+    except Exception:
+        return []
+    selected_contracts = _selected_contracts_from_filters(filters)
     result: list[dict[str, Any]] = []
     for row in rows:
         data = _as_dict(row)
-        if is_meaningful_revision_log(data):
-            result.append(_revision_log_to_row(data, len(result) + 1))
+        if not is_meaningful_revision_log(data):
+            continue
+        resolved_contract = _resolve_log_contract_no(conn, data)
+        if selected_contracts:
+            if not resolved_contract or resolved_contract not in selected_contracts:
+                continue
+        if resolved_contract:
+            data["resolved_contract_no"] = resolved_contract
+        result.append(_revision_log_to_row(data, len(result) + 1))
         if len(result) >= int(limit or 200):
             break
     return result
 
-def load_activity_rows(store: object) -> list[list[Any]]:
+
+def load_activity_rows(store: object, filters: Optional[dict[str, Any]] = None) -> list[list[Any]]:
     return [
         [
             log["revision"], log["date"], log["user"], log["contract"], log["delivery"],
             log["field"], log["old_value"], log["new_value"], log["description"],
         ]
-        for log in load_meaningful_revision_logs(store, limit=200)
+        for log in load_meaningful_revision_logs(store, limit=200, filters=filters)
     ]
+
+
+def _build_pivot_source_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Add zero-value seed rows so the Durum slicer always matches app statuses.
+
+    These extra rows are only written to the hidden pivot source sheet. Since all
+    numeric measures are zero, totals and charts remain unchanged, but Excel can
+    still show the full application status list in the slicer. Seed rows are
+    prepended in application order so the slicer can follow the same order.
+    """
+    if not rows:
+        return rows
+    base_row = dict(rows[0])
+    seeded: list[dict[str, Any]] = []
+    for status in APP_STATUS_VALUES:
+        seed = dict(base_row)
+        seed["Durum"] = status
+        seed["Sözleşme Adeti"] = 0
+        seed["Teslim Edilen"] = 0
+        seed["Kalan"] = 0
+        seed["Opsiyon / Not"] = ""
+        seeded.append(seed)
+    seeded.extend(rows)
+    return seeded
 
 
 def suggested_output_filename(rows: list[dict[str, Any]], created_at: Optional[date] = None) -> str:
@@ -387,36 +608,85 @@ def _ensure_excel():
 
 
 def _write_matrix(ws, rows: list[dict[str, Any]], report_date: str) -> None:
+    """Write the matrix exactly in the approved report layout.
+
+    Row 1 is the dark title band, row 2 contains date/user subheaders,
+    data starts on row 3. Parça Numarası is intentionally blank for now.
+    """
     users = sorted({str(row["Teslim Kullanıcısı"]) for row in rows})
-    user_dates = {user: sorted({str(row["Tarih"]) for row in rows if row["Teslim Kullanıcısı"] == user and row["Tarih"]}) for user in users}
-    headers = ["Seviye", "Parça Numarası", "Teslimat Zamanı"] + users + ["TOPLAM"]
-    ws.Cells(1, 1).Value = report_date
-    ws.Cells(2, 1).Value = f"REV:{REVISION[-3:]}"
-    ws.Cells(2, 4).Value = "Teslimat Adı:"
-    for col, header in enumerate(headers, start=1):
-        ws.Cells(4, col).Value = header
-        if 4 <= col < 4 + len(users):
-            ws.Cells(5, col).Value = ", ".join(user_dates.get(header, [])[:2])
+    user_dates = {
+        user: sorted({str(row["Tarih"]) for row in rows if row["Teslim Kullanıcısı"] == user and row["Tarih"]})
+        for user in users
+    }
+    last_col = 4 + len(users)
+    total_col = last_col
+
+    ws.Cells(1, 1).Value = f"{report_date}\nREV:{REVISION[-3:]}"
+    ws.Cells(1, 1).Interior.Color = 0x79360B
+    ws.Cells(1, 1).Font.Color = 0xFFFFFF
+    ws.Cells(1, 1).Font.Bold = True
+    ws.Cells(1, 1).HorizontalAlignment = -4108
+    ws.Cells(1, 1).VerticalAlignment = -4108
+    ws.Cells(1, 1).WrapText = True
+
+    ws.Range(ws.Cells(1, 2), ws.Cells(1, 3)).Merge()
+    ws.Cells(1, 2).Value = "Teslimat Adı:"
+    ws.Range(ws.Cells(1, 2), ws.Cells(1, 3)).Interior.Color = 0x79360B
+    ws.Range(ws.Cells(1, 2), ws.Cells(1, 3)).Font.Color = 0xFFFFFF
+    ws.Range(ws.Cells(1, 2), ws.Cells(1, 3)).Font.Bold = True
+    ws.Range(ws.Cells(1, 2), ws.Cells(1, 3)).HorizontalAlignment = -4108
+
+    ws.Cells(2, 1).Value = "Seviye"
+    ws.Cells(2, 2).Value = "Parça Numarası"
+    ws.Cells(2, 3).Value = "Teslimat Zamanı"
+
+    for idx, user in enumerate(users, start=4):
+        ws.Cells(1, idx).Value = user
+        ws.Cells(1, idx).Interior.Color = 0x79360B
+        ws.Cells(1, idx).Font.Color = 0xFFFFFF
+        ws.Cells(1, idx).Font.Bold = True
+        ws.Cells(1, idx).HorizontalAlignment = -4108
+        ws.Cells(2, idx).Value = ", ".join(user_dates.get(user, [])[:2])
+        ws.Cells(2, idx).Font.Bold = True
+        ws.Cells(2, idx).HorizontalAlignment = -4108
+
+    ws.Range(ws.Cells(1, total_col), ws.Cells(2, total_col)).Merge()
+    ws.Cells(1, total_col).Value = "TOPLAM"
+    ws.Range(ws.Cells(1, total_col), ws.Cells(2, total_col)).Interior.Color = 0x79360B
+    ws.Range(ws.Cells(1, total_col), ws.Cells(2, total_col)).Font.Color = 0xFFFFFF
+    ws.Range(ws.Cells(1, total_col), ws.Cells(2, total_col)).Font.Bold = True
+    ws.Range(ws.Cells(1, total_col), ws.Cells(2, total_col)).HorizontalAlignment = -4108
+    ws.Range(ws.Cells(1, total_col), ws.Cells(2, total_col)).VerticalAlignment = -4108
+
     by_part: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
-    dates: dict[str, set[str]] = defaultdict(set)
     for row in rows:
         by_part[str(row["Parça"])][str(row["Teslim Kullanıcısı"])] += _safe_float(row["Sözleşme Adeti"])
-        if row.get("Tarih"):
-            dates[str(row["Parça"])].add(str(row["Tarih"]))
-    r = 6
-    for part in sorted(by_part):
+
+    r = 3
+    for part in sorted(by_part, key=lambda p: sum(by_part[p].values()), reverse=True):
         ws.Cells(r, 1).Value = "1"
-        ws.Cells(r, 2).Value = ""
-        ws.Cells(r, 3).Value = ", ".join(sorted(dates[part])[:3])
+        ws.Cells(r, 2).Value = ""  # Parça Numarası şimdilik boş.
+        ws.Cells(r, 3).Value = part
         total = 0.0
         for idx, user in enumerate(users, start=4):
             value = by_part[part].get(user, 0.0)
             total += value
             ws.Cells(r, idx).Value = _fmt_amount(value)
-        ws.Cells(r, 4 + len(users)).Value = _fmt_amount(total)
+        ws.Cells(r, total_col).Value = _fmt_amount(total)
         r += 1
-    _format_table(ws, 4, 1, max(r - 1, 5), len(headers), header_rows=2)
 
+    _format_table(ws, 1, 1, max(r - 1, 3), total_col, header_rows=1)
+    row2 = ws.Range(ws.Cells(2, 1), ws.Cells(2, total_col - 1))
+    row2.Interior.Color = 0xFFFFFF
+    row2.Font.Color = 0x79360B
+    row2.Font.Bold = True
+    row2.HorizontalAlignment = -4108
+    # Strong black closing border below the last data row.
+    closing = ws.Range(ws.Cells(max(r - 1, 3), 1), ws.Cells(max(r - 1, 3), total_col))
+    closing.Borders(9).LineStyle = 1  # xlEdgeBottom
+    closing.Borders(9).Weight = 3
+    closing.Borders(9).Color = 0x000000
+    ws.Columns.AutoFit()
 
 def _format_table(ws, first_row: int, first_col: int, last_row: int, last_col: int, header_rows: int = 1) -> None:
     navy = 0x79360B
@@ -437,37 +707,90 @@ def _format_table(ws, first_row: int, first_col: int, last_row: int, last_col: i
 
 
 def _write_delivery_entry(ws, rows: list[dict[str, Any]], report_date: str, platform_title: str) -> None:
-    headers = ["PARÇA NUMARASI", "KULLANICI ADI", "PARÇA ADI", "MİKTAR", "İHA", "TESLİMAT ZAMANI", "TESLİMAT ZAMANI", "TESLİMAT ADI", "Yİ/YD", "YIL", "SÖZLEŞME ADI", "Konfigürasyon Tipi", "Opsiyon / Not"]
-    ws.Cells(1, 1).Value = report_date
-    ws.Cells(2, 1).Value = f"REV:{REVISION[-3:]}"
-    ws.Cells(2, 4).Value = f"{platform_title} Tahmini Teslimat Takvimi"
+    headers = [
+        "PARÇA NUMARASI", "KULLANICI ADI", "PARÇA ADI", "MİKTAR", "İHA",
+        "TESLİMAT ZAMANI", "TESLİMAT ZAMANI", "TESLİMAT ADI", "Yİ/YD", "YIL",
+        "SÖZLEŞME ADI", "Konfigürasyon Tipi", "Opsiyon / Not",
+    ]
+    last_col = len(headers)
+
+    ws.Range(ws.Cells(1, 1), ws.Cells(2, 2)).Merge()
+    ws.Cells(1, 1).Value = f"{report_date}\nREV:{REVISION[-3:]}"
+    ws.Range(ws.Cells(1, 1), ws.Cells(2, 2)).HorizontalAlignment = -4108
+    ws.Range(ws.Cells(1, 1), ws.Cells(2, 2)).VerticalAlignment = -4108
+    ws.Range(ws.Cells(1, 1), ws.Cells(2, 2)).WrapText = True
+    ws.Range(ws.Cells(1, 1), ws.Cells(2, 2)).Font.Bold = True
+
+    ws.Range(ws.Cells(1, 3), ws.Cells(2, last_col)).Merge()
+    ws.Cells(1, 3).Value = f"{platform_title} Tahmini Teslimat Takvimi"
+    ws.Range(ws.Cells(1, 3), ws.Cells(2, last_col)).HorizontalAlignment = -4108
+    ws.Range(ws.Cells(1, 3), ws.Cells(2, last_col)).VerticalAlignment = -4108
+    ws.Range(ws.Cells(1, 3), ws.Cells(2, last_col)).Font.Bold = True
+    ws.Range(ws.Cells(1, 3), ws.Cells(2, last_col)).Font.Size = 14
+
+    # Row 3 is part of the visual header area as a grey separator band.
+    row3 = ws.Range(ws.Cells(3, 1), ws.Cells(3, last_col))
+    row3.Interior.Color = 0xE7E6E6
+    row3.HorizontalAlignment = -4108
+    row3.VerticalAlignment = -4108
+
     for col, header in enumerate(headers, start=1):
         ws.Cells(4, col).Value = header
+
     r = 5
     last_user = None
-    for row in sorted(rows, key=lambda item: (str(item["Teslim Kullanıcısı"]), str(item["Sözleşme"]), str(item["Parça"]))):
+    sorted_rows = sorted(rows, key=lambda item: (str(item["Teslim Kullanıcısı"]), str(item["Sözleşme"]), str(item["Parça"])))
+    for row in sorted_rows:
         user = str(row["Teslim Kullanıcısı"])
         if user != last_user:
             ws.Cells(r, 1).Value = user
-            ws.Range(ws.Cells(r, 1), ws.Cells(r, len(headers))).Merge()
-            ws.Range(ws.Cells(r, 1), ws.Cells(r, len(headers))).Interior.Color = 0xFCE4D6
-            ws.Range(ws.Cells(r, 1), ws.Cells(r, len(headers))).Font.Bold = True
+            ws.Range(ws.Cells(r, 1), ws.Cells(r, last_col)).Merge()
+            ws.Range(ws.Cells(r, 1), ws.Cells(r, last_col)).Interior.Color = 0xFCE4D6
+            ws.Range(ws.Cells(r, 1), ws.Cells(r, last_col)).Font.Bold = True
+            ws.Range(ws.Cells(r, 1), ws.Cells(r, last_col)).HorizontalAlignment = -4108
+            ws.Range(ws.Cells(r, 1), ws.Cells(r, last_col)).VerticalAlignment = -4108
             r += 1
             last_user = user
-        values = ["", user, row["Parça"], row["Sözleşme Adeti"], "", row["Tarih"], row["Tarih"], row["Teslimat"], row["Yİ/YD"], row["Yıl"], row["Sözleşme"], row["Konfigürasyon Tipi"], row["Opsiyon / Not"]]
-        for col, value in enumerate(values, start=1):
-            ws.Cells(r, col).Value = value
-        r += 1
-    _format_table(ws, 4, 1, max(r - 1, 4), len(headers))
 
+        values = [
+            "", user, row["Parça"], row["Sözleşme Adeti"], "",
+            str(row["Tarih"] or ""), str(row["Tarih"] or ""), row["Teslimat"], row["Yİ/YD"], row["Yıl"],
+            row["Sözleşme"], row["Konfigürasyon Tipi"], row["Opsiyon / Not"],
+        ]
+        for col, value in enumerate(values, start=1):
+            cell = ws.Cells(r, col)
+            if col in (6, 7):
+                cell.NumberFormat = "@"
+                cell.Value = str(value or "")
+            else:
+                cell.Value = value
+            cell.HorizontalAlignment = -4108
+            cell.VerticalAlignment = -4108
+        r += 1
+
+    _format_table(ws, 4, 1, max(r - 1, 4), last_col)
+    used = ws.Range(ws.Cells(1, 1), ws.Cells(max(r - 1, 4), last_col))
+    used.HorizontalAlignment = -4108
+    used.VerticalAlignment = -4108
+    ws.Columns("F:G").NumberFormat = "@"
+    ws.Columns.AutoFit()
 
 def _write_source_sheet(ws, rows: list[dict[str, Any]]) -> None:
     for col, header in enumerate(SOURCE_HEADERS, start=1):
         ws.Cells(1, col).Value = header
     for r, row in enumerate(rows, start=2):
         for c, header in enumerate(SOURCE_HEADERS, start=1):
-            ws.Cells(r, c).Value = row.get(header, "")
+            cell = ws.Cells(r, c)
+            value = row.get(header, "")
+            if header == "Tarih":
+                cell.NumberFormat = "@"
+                cell.Value = str(value or "")
+            else:
+                cell.Value = value
+            cell.HorizontalAlignment = -4108
+            cell.VerticalAlignment = -4108
     _format_table(ws, 1, 1, max(len(rows) + 1, 1), len(SOURCE_HEADERS))
+    ws.Columns.AutoFit()
 
 
 def _write_rev_sheet(ws, activity_rows: list[list[Any]]) -> None:
@@ -476,7 +799,12 @@ def _write_rev_sheet(ws, activity_rows: list[list[Any]]) -> None:
         ws.Cells(1, col).Value = header
     for r, row in enumerate(activity_rows, start=2):
         for c, value in enumerate(row, start=1):
-            ws.Cells(r, c).Value = value
+            cell = ws.Cells(r, c)
+            if c == 2:
+                cell.NumberFormat = "@"
+                cell.Value = str(value or "")
+            else:
+                cell.Value = value
     _format_table(ws, 1, 1, max(len(activity_rows) + 1, 1), len(headers))
 
 
@@ -484,32 +812,59 @@ def _build_dashboard(wb, ws, source_range: str, rows: list[dict[str, Any]], plat
     xl_database = 1
     xl_row_field = 1
     xl_column_field = 2
-    xl_page_field = 3
     xl_sum = -4157
     xl_column_clustered = 51
     xl_bar_clustered = 57
     xl_doughnut = -4120
     xl_line = 4
+
     ws.Range("A1:N1").Merge()
     ws.Range("A1").Value = f"{platform_title} · Tahmini Teslimat Takvimi"
     ws.Range("A1").Interior.Color = 0x79360B
     ws.Range("A1").Font.Color = 0xFFFFFF
     ws.Range("A1").Font.Bold = True
     ws.Range("A1").Font.Size = 18
+    ws.Range("A1").HorizontalAlignment = -4108
+    ws.Range("A1").VerticalAlignment = -4108
+
+    ws.Range("A2:N2").Merge()
     ws.Range("A2").Value = f"Rapor Tarihi: {report_date}    Revizyon: {REVISION}    Değer Türü: Sözleşme Adeti / Teslim Edilecek"
+    ws.Range("A2").HorizontalAlignment = -4108
+    ws.Range("A2").VerticalAlignment = -4108
 
     total = sum(_safe_float(row["Sözleşme Adeti"]) for row in rows)
     users = len({row["Teslim Kullanıcısı"] for row in rows})
     contracts = len({row["Sözleşme"] for row in rows})
     risk = sum(1 for row in rows if _safe_float(row["Kalan"]) > 0 and "tamam" not in str(row["Durum"]).lower())
-    for idx, (label, value) in enumerate((("SÖZLEŞME ADETİ", total), ("TESLİM KULLANICISI", users), ("SÖZLEŞME", contracts), ("RİSKLİ SATIR", risk)), start=1):
-        col = 1 + (idx - 1) * 3
-        box = ws.Range(ws.Cells(4, col), ws.Cells(5, col + 1))
-        box.Merge(); box.Interior.Color = 0xFFF4E8; box.Borders.LineStyle = 1
-        ws.Cells(4, col).Value = label
-        ws.Cells(5, col).Value = _fmt_amount(value)
-        ws.Cells(5, col).Font.Bold = True
-        ws.Cells(5, col).Font.Size = 16
+
+    kpi_specs = [
+        ("SÖZLEŞME ADETİ", total, 1),
+        ("TESLİM KULLANICISI", users, 4),
+        ("SÖZLEŞME", contracts, 7),
+        ("RİSKLİ SATIR", risk, 10),
+    ]
+    for label, value, col in kpi_specs:
+        outer = ws.Range(ws.Cells(4, col), ws.Cells(6, col + 2))
+        outer.Interior.Color = 0xFFF4E8
+        outer.Borders.LineStyle = 1
+        outer.Borders.Color = 0xBFD5F2
+
+        title_rng = ws.Range(ws.Cells(4, col), ws.Cells(4, col + 2))
+        title_rng.Merge()
+        title_rng.Value = label
+        title_rng.Font.Bold = True
+        title_rng.Font.Color = 0x79360B
+        title_rng.HorizontalAlignment = -4108
+        title_rng.VerticalAlignment = -4108
+
+        value_rng = ws.Range(ws.Cells(5, col), ws.Cells(6, col + 2))
+        value_rng.Merge()
+        value_rng.Value = _fmt_amount(value)
+        value_rng.Font.Bold = True
+        value_rng.Font.Size = 18
+        value_rng.Font.Color = 0xE12D0B
+        value_rng.HorizontalAlignment = -4108
+        value_rng.VerticalAlignment = -4108
 
     cache = wb.PivotCaches().Create(SourceType=xl_database, SourceData=source_range)
     pivot_ws = wb.Worksheets("Pivot Ozet")
@@ -519,11 +874,11 @@ def _build_dashboard(wb, ws, source_range: str, rows: list[dict[str, Any]], plat
     data_field = pt.AddDataField(pt.PivotFields("Sözleşme Adeti"), "Sum of Sözleşme Adeti", xl_sum)
     data_field.NumberFormat = "#,##0"
 
-    _create_small_pivot_chart(wb, cache, ws, "Parça", "Sözleşme Adeti", "Parça Bazlı Sözleşme Adeti", xl_bar_clustered, 30, 130, 360, 210, "ptParca")
-    _create_small_pivot_chart(wb, cache, ws, "Yİ/YD", "Sözleşme Adeti", "Yİ / YD Dağılımı", xl_doughnut, 410, 130, 300, 210, "ptYiyd")
-    _create_small_pivot_chart(wb, cache, ws, "Yıl", "Sözleşme Adeti", "Yıllara Göre Sözleşme Adeti", xl_line, 730, 130, 340, 210, "ptYil")
+    pt_part = _create_small_pivot_chart(wb, cache, ws, "Parça", "Sözleşme Adeti", "Parça Bazlı Sözleşme Adeti", xl_bar_clustered, 30, 170, 360, 210, "ptParca")
+    pt_yiyd = _create_small_pivot_chart(wb, cache, ws, "Yİ/YD", "Sözleşme Adeti", "Yİ / YD Dağılımı", xl_doughnut, 410, 170, 300, 210, "ptYiyd")
+    pt_year = _create_small_pivot_chart(wb, cache, ws, "Yıl", "Sözleşme Adeti", "Yıllara Göre Sözleşme Adeti", xl_line, 730, 170, 340, 210, "ptYil")
 
-    chart_obj = ws.ChartObjects().Add(30, 380, 760, 360)
+    chart_obj = ws.ChartObjects().Add(30, 430, 760, 360)
     chart = chart_obj.Chart
     chart.SetSourceData(pt.TableRange2)
     chart.ChartType = xl_column_clustered
@@ -536,9 +891,9 @@ def _build_dashboard(wb, ws, source_range: str, rows: list[dict[str, Any]], plat
         chart.ApplyDataLabels()
     except Exception:
         pass
-    _add_slicers(wb, ws, pt)
-    ws.Columns.AutoFit()
 
+    _add_slicers(wb, ws, pt, [pt_part, pt_yiyd, pt_year])
+    ws.Columns.AutoFit()
 
 def _create_small_pivot_chart(wb, cache, dashboard_ws, row_field: str, value_field: str, title: str, chart_type: int, left: int, top: int, width: int, height: int, table_name: str):
     xl_row_field = 1
@@ -558,21 +913,64 @@ def _create_small_pivot_chart(wb, cache, dashboard_ws, row_field: str, value_fie
     return pt
 
 
-def _add_slicers(wb, ws, pivot_table) -> None:
+def _add_slicers(wb, ws, pivot_table, extra_pivot_tables=None) -> None:
+    """Add real Excel slicers and connect them to every pivot table built from the same cache."""
     fields = ["Yİ/YD", "Yıl", "Teslimat", "Platform", "Sözleşme", "Durum"]
-    left = 830
+    left = 1110
     top = 380
+    extra_pivot_tables = list(extra_pivot_tables or [])
     for idx, field in enumerate(fields):
         try:
             cache = wb.SlicerCaches.Add2(pivot_table, field)
-            cache.Slicers.Add(ws, None, f"sl_{idx}_{field}", field, left, top + idx * 82, 170, 75)
         except Exception:
-            continue
+            try:
+                cache = wb.SlicerCaches.Add(pivot_table, field)
+            except Exception:
+                continue
+        for pt in extra_pivot_tables:
+            try:
+                cache.PivotTables.AddPivotTable(pt)
+            except Exception:
+                pass
+        height = 125 if field == "Durum" else 75
+        try:
+            slicer = cache.Slicers.Add(ws, None, f"sl_{idx}_{_safe_filename(field)}", field, left, top + idx * 82, 170, height)
+        except Exception:
+            try:
+                slicer = cache.Slicers.Add(SlicerDestination=ws, Name=f"sl_{idx}_{_safe_filename(field)}", Caption=field, Left=left, Top=top + idx * 82, Width=170, Height=height)
+            except Exception:
+                slicer = None
+        if slicer is not None:
+            try:
+                slicer.NumberOfColumns = 1
+            except Exception:
+                pass
+            try:
+                slicer.Style = "SlicerStyleLight2"
+            except Exception:
+                pass
+            try:
+                # Show a more complete status list when possible.
+                cache.CrossFilterType = 1
+            except Exception:
+                pass
+            try:
+                cache.SortItems = 1
+            except Exception:
+                pass
+        try:
+            cache.Slicers.Add(ws, None, f"sl_{idx}_{_safe_filename(field)}", field, left, top + idx * 82, 170, 75)
+        except Exception:
+            try:
+                cache.Slicers.Add(SlicerDestination=ws, Name=f"sl_{idx}_{_safe_filename(field)}", Caption=field, Left=left, Top=top + idx * 82, Width=170, Height=75)
+            except Exception:
+                pass
 
 
 def export_delivery_schedule_report(store, output_path, filters=None, progress_cb=None) -> dict:
     output_path = Path(output_path)
     rows = load_delivery_schedule_rows(store, filters=filters)
+    source_rows = _build_pivot_source_rows(rows)
     report_date = date.today().isoformat()
     platforms = sorted({str(row["Platform"]) for row in rows if row.get("Platform")})
     platform_title = platforms[0] if len(platforms) == 1 else "Çoklu Platform"
@@ -597,11 +995,13 @@ def export_delivery_schedule_report(store, output_path, filters=None, progress_c
         ws_rev = wb.Worksheets("REV Takip")
         ws_source = wb.Worksheets("Pivot Kaynak")
         _progress(progress_cb, 25, "Veriler yazılıyor")
-        _write_source_sheet(ws_source, rows)
-        source_range = f"'Pivot Kaynak'!R1C1:R{max(len(rows) + 1, 2)}C{len(SOURCE_HEADERS)}"
+        _write_source_sheet(ws_source, source_rows)
+        source_range = f"'Pivot Kaynak'!R1C1:R{max(len(source_rows) + 1, 2)}C{len(SOURCE_HEADERS)}"
         _write_delivery_entry(ws_entry, rows, report_date, platform_title)
         _write_matrix(ws_matrix, rows, report_date)
-        _write_rev_sheet(ws_rev, load_activity_rows(store))
+        rev_filters = dict(filters or {})
+        rev_filters["_selected_contracts"] = sorted({str(row.get("Sözleşme") or "") for row in rows if row.get("Sözleşme")})
+        _write_rev_sheet(ws_rev, load_activity_rows(store, filters=rev_filters))
         _progress(progress_cb, 55, "Pivot ve grafikler oluşturuluyor")
         _build_dashboard(wb, ws_dashboard, source_range, rows, platform_title, report_date)
         for name in HIDDEN_SHEETS:
