@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Iterable
+import re
+from typing import Any, Iterable, Optional
 
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
 from PySide6.QtGui import QColor, QPainter, QPen
@@ -30,6 +31,49 @@ NAVY = "#0b3679"
 GRID = "#cfe0f4"
 GREEN = "#10a968"
 RED = "#ef4444"
+
+
+def extract_year_from_date_text(value: object) -> Optional[int]:
+    """Return a 4-digit year from mixed delivery-date display strings.
+
+    Supported examples include ``15.07.2026``, ``28-08-2026``,
+    ``TBD-07-2026``, ``2026-07-TBD`` and ``2026-TBD-TBD``.
+    Invalid or yearless values return ``None`` instead of raising.
+    """
+    text = str(value or "").strip()
+    if not text:
+        return None
+
+    match = re.search(r"(?<!\d)(19\d{2}|20\d{2}|21\d{2})(?!\d)", text)
+    if not match:
+        return None
+
+    try:
+        return int(match.group(1))
+    except (TypeError, ValueError):
+        return None
+
+
+def parse_year_range(value: object) -> tuple[Optional[int], Optional[int]]:
+    """Parse report year input without raising.
+
+    Accepted formats are ``YYYY`` and ``YYYY-YYYY``. Reversed ranges are
+    normalized so ``2027-2026`` behaves as ``2026-2027`` instead of crashing.
+    """
+    text = str(value or "").strip()
+    match = re.fullmatch(r"(\d{4})(?:-(\d{4}))?", text)
+    if not match:
+        return None, None
+
+    try:
+        start_year = int(match.group(1))
+        end_year = int(match.group(2) or match.group(1))
+    except (TypeError, ValueError):
+        return None, None
+
+    if start_year > end_year:
+        start_year, end_year = end_year, start_year
+    return start_year, end_year
 
 
 @dataclass(frozen=True)
@@ -195,9 +239,21 @@ class DeliveryScheduleReportDialog(QDialog):
         v = QTableView(); v.setAlternatingRowColors(True); v.setSortingEnabled(False); v.setEditTriggers(QAbstractItemView.NoEditTriggers); v.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents); v.horizontalHeader().setStretchLastSection(True); return v
 
     def collect_filters(self) -> dict[str, str]:
-        text = self.year_range.text().strip(); ok = bool(__import__('re').match(r"^\d{4}(-\d{4})?$", text))
-        self.year_range.setProperty("invalid", not ok); self.year_range.style().unpolish(self.year_range); self.year_range.style().polish(self.year_range)
-        return {"platform": self.platform.currentText(), "year_range": text, "year_range_valid": str(ok), "yi_yd": self.domestic.currentText(), "user": self.user.currentText(), "contract": self.contract.currentText(), "status": self.status.currentText()}
+        text = self.year_range.text().strip()
+        start_year, end_year = parse_year_range(text)
+        ok = start_year is not None and end_year is not None
+        self.year_range.setProperty("invalid", not ok)
+        self.year_range.style().unpolish(self.year_range)
+        self.year_range.style().polish(self.year_range)
+        return {
+            "platform": self.platform.currentText(),
+            "year_range": text,
+            "year_range_valid": str(ok),
+            "yi_yd": self.domestic.currentText(),
+            "user": self.user.currentText(),
+            "contract": self.contract.currentText(),
+            "status": self.status.currentText(),
+        }
 
     def build_report_payload(self) -> dict[str, Any]:
         return {"filters": self.collect_filters(), "deliveries": [row.__dict__ | {"remaining": row.remaining} for row in self.rows], "source": "delivery_schedule_preview"}
@@ -206,14 +262,18 @@ class DeliveryScheduleReportDialog(QDialog):
         filters = self.collect_filters()
         if filters["year_range_valid"] != "True": return
         rows = self.rows
-        year_text = filters["year_range"]
-        if "-" in year_text:
-            start_year, end_year = [int(part) for part in year_text.split("-", 1)]
-        else:
-            start_year = end_year = int(year_text)
-        if start_year > end_year:
-            start_year, end_year = end_year, start_year
-        rows = [r for r in rows if start_year <= int(r.date_text[:4]) <= end_year]
+        start_year, end_year = parse_year_range(filters["year_range"])
+        if start_year is None or end_year is None:
+            return
+
+        filtered_rows = []
+        for row in rows:
+            row_year = extract_year_from_date_text(getattr(row, "date_text", ""))
+            if row_year is None:
+                continue
+            if start_year <= row_year <= end_year:
+                filtered_rows.append(row)
+        rows = filtered_rows
         if filters["yi_yd"] != "Tümü": rows = [r for r in rows if r.domestic == filters["yi_yd"]]
         if filters["user"] != "Tümü": rows = [r for r in rows if r.user == filters["user"]]
         if filters["status"] != "Tümü": rows = [r for r in rows if r.status == filters["status"]]
@@ -240,7 +300,7 @@ class DeliveryScheduleReportDialog(QDialog):
         QMessageBox.information(self, "Excel Oluştur", "Excel üretim modülü sonraki aşamada bağlanacak.")
 
     def _sample_rows(self):
-        return [DeliveryRow("SÖZ-001", "Ali Yılmaz", "Ülke-1", "YD", "Ülke-1 Temmuz Teslimatı", "15.07.2026", "1", "Televizyon", 10, 0, "C Tipi", "Standart Paket / Temmuz teslimat planı.", "Planlandı"), DeliveryRow("SÖZ-001", "Ali Yılmaz", "Ülke-1", "YD", "Ülke-1 Temmuz Teslimatı", "15.07.2026", "1", "Bilgisayar", 1, 0, "C Tipi", "Standart Paket / Temmuz teslimat planı.", "Planlandı"), DeliveryRow("SÖZ-002", "Zeynep Kaya", "Ülke-2", "Yİ", "Ülke-2 Ağustos Teslimatı", "28.08.2026", "1", "Televizyon", 10, 2, "A Tipi", "Opsiyon-1 / Ağustos revizyonu sonrası teslim miktarı güncellendi.", "Planlandı"), DeliveryRow("SÖZ-002", "Zeynep Kaya", "Ülke-2", "Yİ", "Ülke-2 Ağustos Teslimatı", "28.08.2026", "1", "Tablet", 1, 1, "A Tipi", "Tablet teslim tamamlandı.", "Tamamlandı"), DeliveryRow("SÖZ-003", "Mehmet Demir", "Ülke-3", "YD", "Ülke-3 Ekim Teslimatı", "2026-10-TBD", "1", "Kamera", 4, 0, "B Tipi", "Kritik parça tedarik riski.", "Riskli"), DeliveryRow("SÖZ-003", "Mehmet Demir", "Ülke-3", "YD", "Ülke-3 Ekim Teslimatı", "2026-10-TBD", "1", "Kontrol Ünitesi", 1, 1, "B Tipi", "Kontrol ünitesi teslim edildi.", "Tamamlandı"), DeliveryRow("SÖZ-004", "Ayşe Aydın", "Ülke-4", "Yİ", "Ülke-4 Ocak Teslimatı", "2027-01-TBD", "1", "Radar Modülü", 1, 0, "D Tipi", "2027 modernizasyon teslimatı.", "Planlandı")]
+        return [DeliveryRow("SÖZ-001", "Ali Yılmaz", "Ülke-1", "YD", "Ülke-1 Temmuz Teslimatı", "15.07.2026", "1", "Televizyon", 10, 0, "C Tipi", "Standart Paket / Temmuz teslimat planı.", "Planlandı"), DeliveryRow("SÖZ-001", "Ali Yılmaz", "Ülke-1", "YD", "Ülke-1 Temmuz Teslimatı", "TBD-07-2026", "1", "Bilgisayar", 1, 0, "C Tipi", "Standart Paket / Temmuz teslimat planı.", "Planlandı"), DeliveryRow("SÖZ-002", "Zeynep Kaya", "Ülke-2", "Yİ", "Ülke-2 Ağustos Teslimatı", "28-08-2026", "1", "Televizyon", 10, 2, "A Tipi", "Opsiyon-1 / Ağustos revizyonu sonrası teslim miktarı güncellendi.", "Planlandı"), DeliveryRow("SÖZ-002", "Zeynep Kaya", "Ülke-2", "Yİ", "Ülke-2 Ağustos Teslimatı", "28.08.2026", "1", "Tablet", 1, 1, "A Tipi", "Tablet teslim tamamlandı.", "Tamamlandı"), DeliveryRow("SÖZ-003", "Mehmet Demir", "Ülke-3", "YD", "Ülke-3 Ekim Teslimatı", "2026-10-TBD", "1", "Kamera", 4, 0, "B Tipi", "Kritik parça tedarik riski.", "Riskli"), DeliveryRow("SÖZ-003", "Mehmet Demir", "Ülke-3", "YD", "Ülke-3 Ekim Teslimatı", "2026-10-TBD", "1", "Kontrol Ünitesi", 1, 1, "B Tipi", "Kontrol ünitesi teslim edildi.", "Tamamlandı"), DeliveryRow("SÖZ-004", "Ayşe Aydın", "Ülke-4", "Yİ", "Ülke-4 Ocak Teslimatı", "2026-TBD-TBD", "1", "Radar Modülü", 1, 0, "D Tipi", "2027 modernizasyon teslimatı.", "Planlandı")]
 
     def _extra_style(self):
         return f"""
