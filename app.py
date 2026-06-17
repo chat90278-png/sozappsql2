@@ -73,7 +73,6 @@ from src.ui.dialogs.platform_component_manager import PlatformComponentManagerDi
 from src.ui.message_boxes import ask_yes_no
 
 from PySide6.QtCore import Qt, QDate, QObject, QThread, Signal, QTimer, QPoint, QSize, QRect, QEvent, QPropertyAnimation, QEasingCurve, QUrl
-from PySide6.QtWidgets import QLayout
 from PySide6.QtGui import QFont, QFontMetrics, QColor, QPixmap, QIcon, QPainter, QAction, QCursor, QCloseEvent, QDesktopServices, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget,QGraphicsOpacityEffect, QGraphicsDropShadowEffect, QVBoxLayout, QHBoxLayout, QGridLayout,
@@ -5439,198 +5438,82 @@ class MultiSystemDialog(StyledDialog):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# UNIT TRACKING — Kuyruk no / seri no takibi için yardımcı sınıflar
+# UNIT TRACKING — Kuyruk no / seri no takibi için sol panel yardımcı sınıfları
 # ─────────────────────────────────────────────────────────────────────────────
 
-class FlowLayout(QLayout):
-    """Yatay kartları yan yana dizer, alan dolunca alta geçer."""
-
-    def __init__(self, parent=None, h_spacing: int = 8, v_spacing: int = 8):
-        super().__init__(parent)
-        self._items: List = []
-        self._h_spacing = h_spacing
-        self._v_spacing = v_spacing
-
-    def addItem(self, item):
-        self._items.append(item)
-
-    def count(self) -> int:
-        return len(self._items)
-
-    def itemAt(self, index: int):
-        return self._items[index] if 0 <= index < len(self._items) else None
-
-    def takeAt(self, index: int):
-        if 0 <= index < len(self._items):
-            return self._items.pop(index)
-        return None
-
-    def expandingDirections(self):
-        return Qt.Orientations()
-
-    def hasHeightForWidth(self) -> bool:
-        return True
-
-    def heightForWidth(self, width: int) -> int:
-        return self._do_layout(QRect(0, 0, width, 0), test_only=True)
-
-    def setGeometry(self, rect: QRect):
-        super().setGeometry(rect)
-        self._do_layout(rect, test_only=False)
-
-    def sizeHint(self) -> QSize:
-        return self.minimumSize()
-
-    def minimumSize(self) -> QSize:
-        size = QSize()
-        for item in self._items:
-            size = size.expandedTo(item.minimumSize())
-        m = self.contentsMargins()
-        size += QSize(m.left() + m.right(), m.top() + m.bottom())
-        return size
-
-    def _do_layout(self, rect: QRect, test_only: bool) -> int:
-        m = self.contentsMargins()
-        effective_rect = rect.adjusted(m.left(), m.top(), -m.right(), -m.bottom())
-        x = effective_rect.x()
-        y = effective_rect.y()
-        line_height = 0
-        for item in self._items:
-            next_x = x + item.sizeHint().width() + self._h_spacing
-            if next_x - self._h_spacing > effective_rect.right() and line_height > 0:
-                x = effective_rect.x()
-                y = y + line_height + self._v_spacing
-                next_x = x + item.sizeHint().width() + self._h_spacing
-                line_height = 0
-            if not test_only:
-                item.setGeometry(QRect(QPoint(x, y), item.sizeHint()))
-            x = next_x
-            line_height = max(line_height, item.sizeHint().height())
-        return y + line_height - rect.y() + m.bottom()
-
-    def removeWidget(self, widget):
-        for i, item in enumerate(self._items):
-            if item.widget() is widget:
-                self._items.pop(i)
-                return
-
-
-class UnitTrackingCard(QFrame):
-    """Tek bir kuyruk no / seri no slotu icin kart widget'i."""
+class UnitTrackingSlotCard(QFrame):
+    """Sol panelde tek bir kuyruk no / seri no slotunu gösteren kompakt kart."""
 
     changed = Signal()
 
-    CARD_W = 148
-    CARD_H = 108
-
-    def __init__(self, slot_no: int, comp_name: str, label: str = "Kuyruk No",
-                 identifier: str = "", is_delivered: bool = False, parent=None):
+    def __init__(self, slot_no: int, comp_name: str, label: str = "Kuyruk No", identifier: str = "", parent=None):
         super().__init__(parent)
-        self._slot_no = slot_no
-        self._comp_name = comp_name
-        self._label = label or "Kuyruk No"
+        self._slot_no = int(slot_no or 0)
+        self._comp_name = str(comp_name or "")
+        self._label = str(label or "Kuyruk No")
         self._is_duplicate = False
-        self.setFixedSize(self.CARD_W, self.CARD_H)
-        self.setObjectName("unitCard")
-        self._build(identifier, is_delivered)
-        self._apply_style()
+        self.setObjectName("unitSlotCard")
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self._build(identifier)
+        self._apply_state_style()
 
-    def _build(self, identifier: str, is_delivered: bool):
+    def _build(self, identifier: str):
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(8, 6, 8, 6)
-        lay.setSpacing(3)
+        lay.setContentsMargins(10, 8, 10, 8)
+        lay.setSpacing(6)
 
-        hdr = QHBoxLayout()
-        hdr.setSpacing(4)
-        num_lbl = QLabel(f"#{self._slot_no}")
-        num_lbl.setObjectName("unitCardNum")
-        comp_lbl = QLabel(self._comp_name)
-        comp_lbl.setObjectName("unitCardComp")
-        hdr.addWidget(num_lbl)
-        hdr.addStretch()
-        hdr.addWidget(comp_lbl)
-        lay.addLayout(hdr)
+        top = QHBoxLayout()
+        top.setSpacing(8)
+        self._slot_lbl = QLabel(f"#{self._slot_no:03d}")
+        self._slot_lbl.setObjectName("unitSlotNo")
+        self._slot_lbl.setFixedWidth(44)
+        self._slot_lbl.setAlignment(Qt.AlignCenter)
+        top.addWidget(self._slot_lbl, 0)
+
+        self._comp_lbl = QLabel(self._comp_name.upper())
+        self._comp_lbl.setObjectName("unitSlotComp")
+        top.addWidget(self._comp_lbl, 1)
+
+        self._status_lbl = QLabel("Eksik")
+        self._status_lbl.setObjectName("unitSlotBadge")
+        self._status_lbl.setAlignment(Qt.AlignCenter)
+        top.addWidget(self._status_lbl, 0)
+        lay.addLayout(top)
 
         self._edit = QLineEdit()
-        self._edit.setPlaceholderText(f"Orn: TC-{self._slot_no:03d}")
-        self._edit.setText(identifier)
-        self._edit.setObjectName("unitCardEdit")
-        self._edit.setFixedHeight(28)
+        self._edit.setObjectName("unitSlotInput")
+        self._edit.setPlaceholderText(self._label)
+        self._edit.setText(str(identifier or ""))
         self._edit.textChanged.connect(self._on_changed)
         lay.addWidget(self._edit)
 
-        foot = QHBoxLayout()
-        foot.setSpacing(4)
-        self._status_lbl = QLabel("")
-        self._status_lbl.setObjectName("unitCardStatus")
-        foot.addWidget(self._status_lbl, 1)
-        self._delivered_cb = QCheckBox()
-        self._delivered_cb.setToolTip("Teslim Edildi")
-        self._delivered_cb.setChecked(is_delivered)
-        self._delivered_cb.stateChanged.connect(self._on_changed)
-        foot.addWidget(self._delivered_cb)
-        lay.addLayout(foot)
-
-        self._refresh_status()
-
-    def _on_changed(self, _=None):
-        self._refresh_status()
-        self._apply_style()
+    def _on_changed(self, _text: str = ""):
+        self._apply_state_style()
         self.changed.emit()
 
-    def _refresh_status(self):
-        val = self._edit.text().strip()
-        if val and self._is_duplicate:
-            self._status_lbl.setText("Tekrar Var")
-            self._status_lbl.setObjectName("unitCardStatusDuplicate")
-        elif val:
-            self._status_lbl.setText("Tanimlandi")
-            self._status_lbl.setObjectName("unitCardStatusOk")
-        else:
-            self._status_lbl.setText("Eksik")
-            self._status_lbl.setObjectName("unitCardStatusMissing")
-        self._status_lbl.style().unpolish(self._status_lbl)
-        self._status_lbl.style().polish(self._status_lbl)
+    def _status(self) -> str:
+        if self.identifier() and self._is_duplicate:
+            return "duplicate"
+        if self.identifier():
+            return "defined"
+        return "missing"
 
-    def set_duplicate(self, dup: bool):
-        if self._is_duplicate == dup:
-            return
-        self._is_duplicate = dup
-        self._refresh_status()
-        self._apply_style()
-
-    def _apply_style(self):
-        val = self._edit.text().strip()
-        if self._is_duplicate:
-            border = "#F87171"; bg = "#FFF1F1"
-        elif val:
-            border = "#86EFAC"; bg = "#F0FDF4"
+    def _apply_state_style(self):
+        status = self._status()
+        if status == "duplicate":
+            text = "Tekrar Var"; border = "#FCA5A5"; bg = "#FFF1F2"; badge_bg = "#FEE2E2"; badge_fg = "#B91C1C"
+        elif status == "defined":
+            text = "Tanımlandı"; border = "#86EFAC"; bg = "#F0FDF4"; badge_bg = "#DCFCE7"; badge_fg = "#15803D"
         else:
-            border = "#CBD5E1"; bg = "#F8FBFF"
+            text = "Eksik"; border = "#D8E2EE"; bg = "#FFFFFF"; badge_bg = "#F1F5F9"; badge_fg = "#64748B"
+        self._status_lbl.setText(text)
         self.setStyleSheet(f"""
-            QFrame#unitCard {{
-                background: {bg};
-                border: 1.5px solid {border};
-                border-radius: 10px;
-            }}
-            QLabel#unitCardNum {{
-                color: #1E40AF; font-weight: 900; font-size: 11px; background: transparent;
-            }}
-            QLabel#unitCardComp {{
-                color: #475569; font-size: 10px; font-weight: 700; background: transparent;
-            }}
-            QLineEdit#unitCardEdit {{
-                background: #FFFFFF; border: 1px solid #CBD5E1; border-radius: 6px;
-                font-size: 12px; font-weight: 700; color: #0F172A; padding: 3px 7px;
-            }}
-            QLineEdit#unitCardEdit:focus {{ border-color: #3B82F6; }}
-            QLabel#unitCardStatus, QLabel#unitCardStatusOk,
-            QLabel#unitCardStatusMissing, QLabel#unitCardStatusDuplicate {{
-                font-size: 10px; font-weight: 800; background: transparent;
-            }}
-            QLabel#unitCardStatusOk {{ color: #16A34A; }}
-            QLabel#unitCardStatusMissing {{ color: #94A3B8; }}
-            QLabel#unitCardStatusDuplicate {{ color: #DC2626; }}
+            QFrame#unitSlotCard {{ background:{bg}; border:1px solid {border}; border-radius:10px; }}
+            QLabel#unitSlotNo {{ background:#EFF6FF; border:1px solid #BFDBFE; border-radius:7px; color:#0F3B82; font-weight:900; font-size:12px; padding:5px 0; }}
+            QLabel#unitSlotComp {{ color:#64748B; font-size:10px; font-weight:900; background:transparent; }}
+            QLabel#unitSlotBadge {{ background:{badge_bg}; color:{badge_fg}; border:1px solid {border}; border-radius:8px; font-size:10px; font-weight:900; padding:2px 8px; }}
+            QLineEdit#unitSlotInput {{ background:#FFFFFF; border:1px solid #CBD5E1; border-radius:7px; padding:5px 8px; color:#0F172A; font-weight:700; }}
+            QLineEdit#unitSlotInput:focus {{ border-color:#2563EB; }}
         """)
 
     def slot_no(self) -> int:
@@ -5639,183 +5522,234 @@ class UnitTrackingCard(QFrame):
     def identifier(self) -> str:
         return self._edit.text().strip()
 
-    def is_delivered(self) -> bool:
-        return self._delivered_cb.isChecked()
-
-    def set_identifier(self, val: str):
+    def set_identifier(self, value: str):
         self._edit.blockSignals(True)
-        self._edit.setText(str(val or ""))
+        self._edit.setText(str(value or ""))
         self._edit.blockSignals(False)
-        self._refresh_status()
-        self._apply_style()
+        self._apply_state_style()
 
-    def set_delivered(self, val: bool):
-        self._delivered_cb.blockSignals(True)
-        self._delivered_cb.setChecked(bool(val))
-        self._delivered_cb.blockSignals(False)
+    def set_duplicate(self, duplicate: bool):
+        if self._is_duplicate == bool(duplicate):
+            return
+        self._is_duplicate = bool(duplicate)
+        self._apply_state_style()
+
+    def matches(self, query: str, filter_key: str) -> bool:
+        ident = self.identifier()
+        status = self._status()
+        if filter_key == "missing" and status != "missing":
+            return False
+        if filter_key == "defined" and status != "defined":
+            return False
+        if filter_key == "duplicate" and status != "duplicate":
+            return False
+        q = normalize_sheet_name(query)
+        if not q:
+            return True
+        slot_text = f"{self._slot_no} {self._slot_no:03d} #{self._slot_no:03d}"
+        return q in normalize_sheet_name(slot_text) or q in normalize_sheet_name(ident)
 
     def to_dict(self) -> dict:
-        return {
-            "slot_no": self._slot_no,
-            "identifier": self.identifier(),
-            "is_delivered": 1 if self.is_delivered() else 0,
-            "note": "",
-        }
+        return {"slot_no": self._slot_no, "identifier": self.identifier(), "is_delivered": 0, "note": ""}
 
 
-class UnitTrackingPanel(QFrame):
-    """Bir bilesen icin kuyruk no listesi paneli."""
+class UnitTrackingSidePanel(QFrame):
+    """DeliveryDialog sol panelinde kuyruk no / seri no listesini yönetir."""
 
     changed = Signal()
+    backRequested = Signal()
+    clearRequested = Signal()
 
-    def __init__(self, comp_name: str, label: str, slot_count: int,
-                 existing_units: list | None = None, parent=None):
+    def __init__(self, parent=None):
         super().__init__(parent)
-        self._comp_name = comp_name
-        self._label = label or "Kuyruk No"
-        self._cards: List[UnitTrackingCard] = []
-        self.setObjectName("unitTrackingPanel")
-        self.setStyleSheet("""
-            QFrame#unitTrackingPanel {
-                background: #EFF6FF;
-                border: 1px solid #BFDBFE;
-                border-radius: 10px;
-            }
-        """)
+        self._comp_name = ""
+        self._label = "Kuyruk No"
+        self._filter = "all"
+        self._cards: List[UnitTrackingSlotCard] = []
         self._build()
-        self.resize_slots(slot_count, existing_units or [])
 
     def _build(self):
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(12, 10, 12, 10)
+        outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(8)
 
-        hdr = QHBoxLayout()
-        hdr.setSpacing(8)
-        self._title_lbl = QLabel("")
-        self._title_lbl.setStyleSheet(
-            "font-weight: 900; font-size: 13px; color: #1E3A5F; background: transparent;"
-        )
-        hdr.addWidget(self._title_lbl)
-        self._badge = QLabel("")
-        self._badge.setStyleSheet(
-            "background: #DBEAFE; color: #1D4ED8; border-radius: 10px; padding: 2px 10px;"
-            "font-size: 11px; font-weight: 900; border: 1px solid #93C5FD;"
-        )
-        hdr.addWidget(self._badge)
-        hdr.addStretch()
+        top = QHBoxLayout()
+        top.setSpacing(8)
+        self._back_btn = QPushButton("← Bileşen Atama Durumu")
+        self._back_btn.setObjectName("secondary")
+        self._back_btn.setFlat(True)
+        self._back_btn.setStyleSheet("text-align:left; color:#1D4ED8; font-weight:900; border:0; background:transparent;")
+        self._back_btn.clicked.connect(self.backRequested.emit)
+        top.addWidget(self._back_btn, 1)
         self._clear_btn = QPushButton("Temizle")
-        self._clear_btn.setObjectName("secondary")
-        self._clear_btn.setMinimumHeight(28)
-        self._clear_btn.setMaximumHeight(28)
-        self._clear_btn.clicked.connect(self._clear_all)
-        hdr.addWidget(self._clear_btn)
-        outer.addLayout(hdr)
+        self._clear_btn.setObjectName("danger")
+        self._clear_btn.setMinimumHeight(32)
+        self._clear_btn.clicked.connect(self._on_clear)
+        top.addWidget(self._clear_btn, 0)
+        outer.addLayout(top)
+
+        self._title = QLabel("")
+        self._title.setStyleSheet("font-weight:900; font-size:14px; color:#0F172A; background:transparent;")
+        outer.addWidget(self._title)
+
+        stats = QHBoxLayout(); stats.setSpacing(8)
+        self._defined_card = self._stat_card("0/0", "Tanımlı", "#ECFDF5", "#86EFAC", "#047857")
+        self._missing_card = self._stat_card("0", "Eksik", "#FFF7ED", "#FDBA74", "#C2410C")
+        stats.addWidget(self._defined_card[0], 1)
+        stats.addWidget(self._missing_card[0], 1)
+        outer.addLayout(stats)
+
+        self._progress = QProgressBar()
+        self._progress.setRange(0, 100)
+        self._progress.setTextVisible(False)
+        self._progress.setFixedHeight(8)
+        self._progress.setStyleSheet("QProgressBar{border:0;background:#E2E8F0;border-radius:4px;} QProgressBar::chunk{background:#1D9A8A;border-radius:4px;}")
+        outer.addWidget(self._progress)
+
+        self._search = QLineEdit()
+        self._search.setPlaceholderText("Kuyruk no veya slot ara...")
+        self._search.textChanged.connect(self._apply_visibility)
+        outer.addWidget(self._search)
+
+        chips = QHBoxLayout(); chips.setSpacing(5)
+        self._filter_buttons: Dict[str, QPushButton] = {}
+        for key, label in (("all", "Tümü"), ("missing", "Eksik"), ("defined", "Tanımlı"), ("duplicate", "Tekrar")):
+            btn = QPushButton(label)
+            btn.setCheckable(True)
+            btn.setMinimumHeight(28)
+            btn.clicked.connect(lambda _=False, k=key: self._set_filter(k))
+            self._filter_buttons[key] = btn
+            chips.addWidget(btn)
+        chips.addStretch()
+        outer.addLayout(chips)
 
         self._scroll = QScrollArea()
         self._scroll.setFrameShape(QFrame.NoFrame)
         self._scroll.setWidgetResizable(True)
-        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self._scroll.setMinimumHeight(120)
-        self._scroll.setMaximumHeight(270)
-        self._cards_host = QWidget()
-        self._cards_host.setStyleSheet("background: transparent;")
-        self._flow = FlowLayout(self._cards_host, h_spacing=8, v_spacing=8)
-        self._cards_host.setLayout(self._flow)
-        self._scroll.setWidget(self._cards_host)
-        outer.addWidget(self._scroll)
+        self._scroll.setStyleSheet("QScrollArea{background:transparent;border:0;} QScrollArea > QWidget > QWidget{background:transparent;}")
+        self._host = QWidget()
+        self._list = QVBoxLayout(self._host)
+        self._list.setContentsMargins(0, 4, 4, 4)
+        self._list.setSpacing(8)
+        self._list.addStretch()
+        self._scroll.setWidget(self._host)
+        outer.addWidget(self._scroll, 1)
+        self._set_filter("all")
 
-    def _clear_all(self):
+    def _stat_card(self, value: str, caption: str, bg: str, border: str, fg: str):
+        frame = QFrame(); frame.setObjectName("unitStatCard")
+        frame.setStyleSheet(f"QFrame#unitStatCard{{background:{bg}; border:1px solid {border}; border-radius:9px;}}")
+        lay = QVBoxLayout(frame); lay.setContentsMargins(8, 7, 8, 7); lay.setSpacing(1)
+        val = QLabel(value); val.setAlignment(Qt.AlignCenter); val.setStyleSheet(f"font-weight:900; color:{fg}; font-size:13px; background:transparent;")
+        cap = QLabel(caption); cap.setAlignment(Qt.AlignCenter); cap.setStyleSheet("font-weight:800; color:#64748B; font-size:10px; background:transparent;")
+        lay.addWidget(val); lay.addWidget(cap)
+        return frame, val, cap
+
+    def _on_clear(self):
         for card in self._cards:
             card.set_identifier("")
-            card.set_delivered(False)
-        self._update_badge()
-        self._check_duplicates()
+        self._refresh_all()
+        self.clearRequested.emit()
         self.changed.emit()
 
-    def _update_badge(self):
-        defined = sum(1 for c in self._cards if c.identifier())
-        total = len(self._cards)
-        self._title_lbl.setText(f"{self._comp_name} {self._label} Listesi")
-        self._badge.setText(f"{defined} / {total} tanimlı")
+    def _set_filter(self, key: str):
+        self._filter = key
+        for k, btn in self._filter_buttons.items():
+            btn.setChecked(k == key)
+        self._style_filter_buttons()
+        self._apply_visibility()
 
-    def _check_duplicates(self):
-        seen: dict = {}
-        for card in self._cards:
-            val = card.identifier()
-            if val:
-                seen[val] = seen.get(val, 0) + 1
-        for card in self._cards:
-            val = card.identifier()
-            card.set_duplicate(bool(val and seen.get(val, 0) > 1))
+    def _style_filter_buttons(self):
+        for key, btn in self._filter_buttons.items():
+            if btn.isChecked():
+                btn.setStyleSheet("QPushButton{background:#0F3B82;color:white;border:1px solid #0F3B82;border-radius:12px;padding:3px 9px;font-weight:900;font-size:11px;}")
+            else:
+                btn.setStyleSheet("QPushButton{background:white;color:#334155;border:1px solid #CBD5E1;border-radius:12px;padding:3px 9px;font-weight:800;font-size:11px;}")
 
-    def _on_card_changed(self):
-        self._update_badge()
-        self._check_duplicates()
-        self.changed.emit()
+    def set_component(self, comp_name: str, label: str, units: list):
+        self._comp_name = str(comp_name or "")
+        self._label = str(label or "Kuyruk No")
+        self._title.setText(f"{self._comp_name} {self._label} Listesi")
+        self._search.setPlaceholderText(f"{self._label} veya slot ara...")
+        self._rebuild_cards(units or [])
 
-    def resize_slots(self, count: int, existing_units: list):
-        count = max(0, int(count or 0))
-        existing_map = {int(u.get("slot_no", 0)): u for u in (existing_units or []) if u.get("slot_no")}
-        while len(self._cards) > count:
+    def _rebuild_cards(self, units: list):
+        while self._cards:
             card = self._cards.pop()
-            self._flow.removeWidget(card)
+            self._list.removeWidget(card)
             card.setParent(None)
             card.deleteLater()
-        for sn in range(len(self._cards) + 1, count + 1):
-            u = existing_map.get(sn, {})
-            card = UnitTrackingCard(
-                slot_no=sn,
-                comp_name=self._comp_name,
-                label=self._label,
-                identifier=str(u.get("identifier") or ""),
-                is_delivered=bool(int(u.get("is_delivered", 0))),
+        for unit in sorted(units or [], key=lambda u: int(u.get("slot_no", 0) or 0)):
+            card = UnitTrackingSlotCard(
+                int(unit.get("slot_no", 0) or 0),
+                self._comp_name,
+                self._label,
+                str(unit.get("identifier") or ""),
             )
             card.changed.connect(self._on_card_changed)
-            self._flow.addWidget(card)
+            self._list.insertWidget(self._list.count() - 1, card)
             self._cards.append(card)
-        for card in self._cards:
-            sn = card.slot_no()
-            if sn in existing_map:
-                u = existing_map[sn]
-                card.set_identifier(str(u.get("identifier") or ""))
-                card.set_delivered(bool(int(u.get("is_delivered", 0))))
-        self._update_badge()
+        self._refresh_all()
+
+    def _on_card_changed(self):
+        self._refresh_all()
+        self.changed.emit()
+
+    def _refresh_all(self):
         self._check_duplicates()
-        self._cards_host.updateGeometry()
+        self._update_stats()
+        self._apply_visibility()
+
+    def _check_duplicates(self):
+        counts: Dict[str, int] = {}
+        for card in self._cards:
+            ident = card.identifier()
+            if ident:
+                counts[normalize_sheet_name(ident)] = counts.get(normalize_sheet_name(ident), 0) + 1
+        for card in self._cards:
+            ident = card.identifier()
+            card.set_duplicate(bool(ident and counts.get(normalize_sheet_name(ident), 0) > 1))
+
+    def _counts(self) -> Tuple[int, int, int, int]:
+        total = len(self._cards)
+        defined = sum(1 for c in self._cards if c.identifier())
+        duplicate = sum(1 for c in self._cards if c.identifier() and c._status() == "duplicate")
+        missing = total - defined
+        return total, defined, missing, duplicate
+
+    def _update_stats(self):
+        total, defined, missing, duplicate = self._counts()
+        self._defined_card[1].setText(f"{defined}/{total}")
+        self._missing_card[1].setText(str(missing))
+        self._progress.setValue(int((defined / total) * 100) if total else 0)
+        labels = {"all": f"Tümü {total}", "missing": f"Eksik {missing}", "defined": f"Tanımlı {defined}", "duplicate": f"Tekrar {duplicate}"}
+        for key, text in labels.items():
+            self._filter_buttons[key].setText(text)
+
+    def _apply_visibility(self, *_args):
+        query = self._search.text().strip()
+        for card in self._cards:
+            card.setVisible(card.matches(query, self._filter))
 
     def get_units(self) -> list:
-        return [c.to_dict() for c in self._cards]
+        return [card.to_dict() for card in self._cards]
 
     def has_duplicates(self) -> bool:
-        seen: dict = {}
-        for card in self._cards:
-            val = card.identifier()
-            if val:
-                seen[val] = seen.get(val, 0) + 1
-        return any(v > 1 for v in seen.values())
-
-    def defined_count(self) -> int:
-        return sum(1 for c in self._cards if c.identifier())
+        return any(card.identifier() and card._status() == "duplicate" for card in self._cards)
 
     def all_defined(self) -> bool:
-        return all(c.identifier() for c in self._cards)
-
-    def all_delivered(self) -> bool:
-        return all(c.is_delivered() for c in self._cards)
-
-    def delivered_count(self) -> int:
-        return sum(1 for c in self._cards if c.is_delivered())
+        return all(card.identifier() for card in self._cards)
 
 
 class DeliveryDialog(StyledDialog):
     """Kabul / Teslimat ekleme / düzenleme dialog'u.
 
     Unit tracking açık bileşenlerde (requires_unit_tracking=1):
-    - Bileşen hücresinde ▶/▼ ok ikonu görünür.
-    - Ok'a tıklanınca UnitTrackingPanel inline açılır.
-    - 'Teslim Edilen' sütunu read-only olur; paneldeki checkbox sayısından hesaplanır.
+    - Bileşen hücresinde ▶/◀ ok ikonu görünür.
+    - Satır/ok seçilince sol panel kuyruk no / seri no listesine dönüşür.
+    - Ana tablo 4 sütun kalır; inline detail row oluşturulmaz.
     """
 
     def __init__(
@@ -5848,11 +5782,14 @@ class DeliveryDialog(StyledDialog):
         self._status_auto_filling = False
         # Unit tracking state
         self._unit_tracking_map: Dict[str, str] = {}  # {comp_name: label}
-        self._tracking_panels: Dict[str, UnitTrackingPanel] = {}  # comp_name -> panel
-        self._expanded_comp: Optional[str] = None  # şu an açık olan bileşen adı
-        # comp_name -> table row index (data rows only, not panel rows)
+        self.left_panel_mode = "assignment"
+        self.active_unit_component: Optional[str] = None
+        self.unit_filter = "all"
+        self.unit_search_text = ""
+        self._component_units_state: Dict[str, list] = {}
+        # comp_name -> table row index
         self._comp_row: Dict[str, int] = {}
-        # Actual qty_table row -> comp_name or None (panel row)
+        # Actual qty_table row -> comp_name
         self._row_comp: Dict[int, Optional[str]] = {}
         self._load_unit_tracking_map()
         self.build()
@@ -5902,6 +5839,31 @@ class DeliveryDialog(StyledDialog):
         self.assignment_table.setColumnWidth(1, 120)
         self.assignment_table.setColumnWidth(2, 132)
         left_lay.addWidget(self.assignment_table, 1)
+
+        self.assignment_panel = QWidget()
+        assignment_lay = left_lay
+        self.unit_side_panel = UnitTrackingSidePanel()
+        self.unit_side_panel.changed.connect(self._on_unit_side_panel_changed)
+        self.unit_side_panel.backRequested.connect(self._show_assignment_panel)
+        self.unit_side_panel.clearRequested.connect(self._on_unit_side_panel_changed)
+
+        # left_card layout is reused as the assignment page; wrap pages in a stack by moving widgets.
+        self.left_stack = QStackedWidget()
+        self.left_stack.setStyleSheet("background:transparent;")
+        while left_lay.count():
+            item = left_lay.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.setParent(self.assignment_panel)
+        assignment_page_lay = QVBoxLayout(self.assignment_panel)
+        assignment_page_lay.setContentsMargins(0, 0, 0, 0)
+        assignment_page_lay.setSpacing(8)
+        assignment_page_lay.addWidget(alloc_title)
+        assignment_page_lay.addWidget(alloc_hint)
+        assignment_page_lay.addWidget(self.assignment_table, 1)
+        left_lay.addWidget(self.left_stack, 1)
+        self.left_stack.addWidget(self.assignment_panel)
+        self.left_stack.addWidget(self.unit_side_panel)
         outer.addWidget(left_card, 0)
 
         right = QWidget()
@@ -6052,12 +6014,7 @@ class DeliveryDialog(StyledDialog):
 
             planned.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsEditable)
 
-            if self._is_unit_tracking(comp):
-                # Teslim edilen unit tracking'ten hesaplanır
-                delivered.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
-                delivered.setToolTip("Kuyruk no takipli bileşende teslim edilen kartlardan hesaplanır.")
-            else:
-                delivered.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsEditable)
+            delivered.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsEditable)
 
             remaining.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
             for it in (planned, delivered, remaining):
@@ -6075,55 +6032,32 @@ class DeliveryDialog(StyledDialog):
             self._row_comp[current_row] = comp
             self.inputs[comp] = (planned, delivered, remaining)
             self._update_remaining_row(current_row)
-            current_row += 1
-
-            # If unit tracking, create panel row (hidden initially)
             if self._is_unit_tracking(comp):
-                self.qty_table.insertRow(current_row)
-                self.qty_table.setSpan(current_row, 0, 1, 4)
-                self._row_comp[current_row] = None  # panel row marker
-                self.qty_table.setRowHidden(current_row, True)
-                self.qty_table.setRowHeight(current_row, 0)
-                current_row += 1
+                self._ensure_component_units(comp, int(as_number(planned.text())))
+            current_row += 1
 
         self._updating_qty = False
         self.qty_table.itemChanged.connect(self.on_qty_item_changed)
         self.qty_table.cellClicked.connect(self._on_cell_clicked)
 
-        # Restore existing unit panels if editing
-        if existing:
-            for comp, units in (getattr(existing, "component_units", None) or {}).items():
-                if self._is_unit_tracking(comp) and units:
-                    planned_qty = int(float((existing.planned or {}).get(comp, 0) or 0))
-                    self._get_or_create_panel(comp, planned_qty, units)
-            self._sync_all_delivered_from_panels()
-
         self.refresh_assignment_card()
 
     def _make_arrow_cell(self, comp: str) -> QWidget:
-        """Bileşen adının önünde ▶/▼ ok ikonu olan widget döner."""
+        """Bileşen adının önünde sol paneli açan ok ikonu olan widget döner."""
         widget = QWidget()
         widget.setStyleSheet("background: transparent;")
         lay = QHBoxLayout(widget)
         lay.setContentsMargins(6, 0, 6, 0)
-        lay.setSpacing(4)
+        lay.setSpacing(6)
         arrow = QPushButton("▶")
         arrow.setObjectName("unitTrackingArrow")
-        arrow.setFixedSize(18, 18)
-        arrow.setStyleSheet(
-            "QPushButton#unitTrackingArrow {"
-            "  background: #DBEAFE; color: #1D4ED8; border: 1px solid #93C5FD;"
-            "  border-radius: 4px; font-size: 9px; font-weight: 900; padding: 0;"
-            "}"
-            "QPushButton#unitTrackingArrow:hover { background: #BFDBFE; }"
-        )
-        arrow.clicked.connect(lambda _=False, c=comp: self._toggle_panel(c))
+        arrow.setFixedSize(20, 20)
+        arrow.clicked.connect(lambda _=False, c=comp: self._activate_unit_component(c))
         arrow.setProperty("comp", comp)
         lbl = QLabel(comp)
-        lbl.setStyleSheet("background: transparent; font-weight: 600;")
+        lbl.setStyleSheet("background: transparent; font-weight: 700;")
         lay.addWidget(arrow)
         lay.addWidget(lbl, 1)
-        # Store reference so we can update arrow icon
         widget.setProperty("arrow_btn", arrow)
         return widget
 
@@ -6136,70 +6070,70 @@ class DeliveryDialog(StyledDialog):
             return w.property("arrow_btn")
         return None
 
-    def _get_panel_row(self, comp: str) -> Optional[int]:
-        data_row = self._comp_row.get(comp)
-        if data_row is None:
-            return None
-        panel_row = data_row + 1
-        if self._row_comp.get(panel_row) is None and panel_row < self.qty_table.rowCount():
-            return panel_row
-        return None
+    def _existing_units_for(self, comp: str) -> list:
+        if not self._existing_delivery:
+            return []
+        return list((getattr(self._existing_delivery, "component_units", None) or {}).get(comp, []) or [])
 
-    def _get_or_create_panel(self, comp: str, planned_qty: int,
-                              existing_units: list | None = None) -> Optional[UnitTrackingPanel]:
-        if comp in self._tracking_panels:
-            panel = self._tracking_panels[comp]
-            panel.resize_slots(planned_qty, existing_units or [])
-            return panel
-        label = self._unit_tracking_map.get(comp, "Kuyruk No")
-        panel = UnitTrackingPanel(
-            comp_name=comp,
-            label=label,
-            slot_count=planned_qty,
-            existing_units=existing_units,
-        )
-        panel.changed.connect(lambda c=comp: self._on_panel_changed(c))
-        self._tracking_panels[comp] = panel
-        panel_row = self._get_panel_row(comp)
-        if panel_row is not None:
-            self.qty_table.setCellWidget(panel_row, 0, panel)
-            h = panel.sizeHint().height() + 12
-            self.qty_table.setRowHeight(panel_row, max(150, h))
-        return panel
+    def _ensure_component_units(self, comp: str, planned_qty: int) -> list:
+        """Component slot state'ini planned adede göre normalize eder; mevcut değerleri korur."""
+        planned_qty = max(0, int(planned_qty or 0))
+        current = self._component_units_state.get(comp)
+        source = current if current is not None else self._existing_units_for(comp)
+        by_slot = {}
+        for unit in source or []:
+            try:
+                slot_no = int(unit.get("slot_no", 0) or 0)
+            except Exception:
+                slot_no = 0
+            if slot_no > 0:
+                by_slot[slot_no] = {
+                    "slot_no": slot_no,
+                    "identifier": str(unit.get("identifier") or "").strip(),
+                    "is_delivered": int(unit.get("is_delivered", 0) or 0),
+                    "note": str(unit.get("note") or ""),
+                }
+        normalized = []
+        for slot_no in range(1, planned_qty + 1):
+            unit = dict(by_slot.get(slot_no, {}))
+            unit["slot_no"] = slot_no
+            unit["identifier"] = str(unit.get("identifier") or "").strip()
+            unit["is_delivered"] = int(unit.get("is_delivered", 0) or 0)
+            unit["note"] = str(unit.get("note") or "")
+            normalized.append(unit)
+        self._component_units_state[comp] = normalized
+        return normalized
 
-    def _toggle_panel(self, comp: str):
-        """Arrow butonuna tıklanınca panel açılır/kapanır."""
-        panel_row = self._get_panel_row(comp)
-        if panel_row is None:
+    def _current_units_from_panel_if_active(self):
+        comp = self.active_unit_component
+        if comp and self.left_panel_mode == "unit_tracking" and hasattr(self, "unit_side_panel"):
+            self._component_units_state[comp] = self.unit_side_panel.get_units()
+
+    def _activate_unit_component(self, comp: str):
+        if not self._is_unit_tracking(comp):
             return
-        currently_hidden = self.qty_table.isRowHidden(panel_row)
-        if currently_hidden:
-            # Open: ensure panel exists with correct slot count
-            planned_qty = int(as_number(self.inputs[comp][0].text())) if comp in self.inputs else 0
-            self._validate_unit_tracking_qty(comp, planned_qty)
-            existing_units = []
-            if self._existing_delivery:
-                existing_units = (getattr(self._existing_delivery, "component_units", None) or {}).get(comp, [])
-            if comp not in self._tracking_panels:
-                self._get_or_create_panel(comp, planned_qty, existing_units)
-            else:
-                panel = self._tracking_panels[comp]
-                panel.resize_slots(planned_qty, existing_units)
-                ph = panel.sizeHint().height() + 12
-                self.qty_table.setRowHeight(panel_row, max(150, ph))
-            self.qty_table.setRowHidden(panel_row, False)
-            self._expanded_comp = comp
-            btn = self._get_arrow_btn(comp)
-            if btn:
-                btn.setText("▼")
-        else:
-            # Close
-            self.qty_table.setRowHidden(panel_row, True)
-            if self._expanded_comp == comp:
-                self._expanded_comp = None
-            btn = self._get_arrow_btn(comp)
-            if btn:
-                btn.setText("▶")
+        self._current_units_from_panel_if_active()
+        planned_qty = int(as_number(self.inputs.get(comp, (None, None, None))[0].text())) if comp in self.inputs else 0
+        units = self._ensure_component_units(comp, planned_qty)
+        self.left_panel_mode = "unit_tracking"
+        self.active_unit_component = comp
+        self.unit_side_panel.set_component(comp, self._unit_tracking_map.get(comp, "Kuyruk No"), units)
+        self.left_stack.setCurrentWidget(self.unit_side_panel)
+        self._refresh_unit_row_selection()
+
+    def _show_assignment_panel(self):
+        self._current_units_from_panel_if_active()
+        self.left_panel_mode = "assignment"
+        self.active_unit_component = None
+        self.left_stack.setCurrentWidget(self.assignment_panel)
+        self._refresh_unit_row_selection()
+        self.refresh_assignment_card()
+
+    def _on_unit_side_panel_changed(self):
+        comp = self.active_unit_component
+        if not comp:
+            return
+        self._component_units_state[comp] = self.unit_side_panel.get_units()
 
     def _validate_unit_tracking_qty(self, comp: str, qty: float) -> bool:
         """Unit tracking bileşende ondalıklı adet uyarısı."""
@@ -6208,53 +6142,48 @@ class DeliveryDialog(StyledDialog):
         if qty != int(qty):
             QMessageBox.warning(
                 self, "Ondalıklı Adet",
-                f"Kuyruk no takipli bileşenlerde teslim edilecek adet tam sayı olmalıdır.\n({comp})"
+                f"Bu bileşende teslim edilecek adet tam sayı olmalıdır.\n({comp})"
             )
             return False
         return True
 
-    def _on_panel_changed(self, comp: str):
-        """Panel'deki kart değişince teslim edilen sayısını güncelle."""
-        self._sync_delivered_from_panel(comp)
-        self.refresh_assignment_card()
-
-    def _sync_delivered_from_panel(self, comp: str):
-        panel = self._tracking_panels.get(comp)
-        if not panel:
-            return
-        delivered_count = panel.delivered_count()
-        items = self.inputs.get(comp)
-        if not items:
-            return
-        self._updating_qty = True
-        items[1].setText(fmt_num(delivered_count))
-        data_row = self._comp_row.get(comp)
-        if data_row is not None:
-            self._update_remaining_row(data_row)
-        self._updating_qty = False
-
-    def _sync_all_delivered_from_panels(self):
-        for comp in self._tracking_panels:
-            self._sync_delivered_from_panel(comp)
-
     def _on_cell_clicked(self, row: int, col: int):
-        """Bileşen hücresine tıklanınca panel toggle (sadece col 0 ve unit tracking)."""
         comp = self._row_comp.get(row)
         if comp and col == 0 and self._is_unit_tracking(comp):
-            self._toggle_panel(comp)
+            self._activate_unit_component(comp)
 
-    # ------------------------------------------------------------------ slot/panel resize on planned change
     def _update_panel_slot_count(self, comp: str, new_qty: int):
         if not self._is_unit_tracking(comp):
             return
-        existing_units: list = []
-        if comp in self._tracking_panels:
-            existing_units = self._tracking_panels[comp].get_units()
-        panel_row = self._get_panel_row(comp)
-        panel = self._get_or_create_panel(comp, new_qty, existing_units)
-        if panel and panel_row is not None and not self.qty_table.isRowHidden(panel_row):
-            ph = panel.sizeHint().height() + 12
-            self.qty_table.setRowHeight(panel_row, max(150, ph))
+        if comp == self.active_unit_component and self.left_panel_mode == "unit_tracking":
+            self._component_units_state[comp] = self.unit_side_panel.get_units()
+        units = self._ensure_component_units(comp, int(new_qty or 0))
+        if comp == self.active_unit_component and self.left_panel_mode == "unit_tracking":
+            self.unit_side_panel.set_component(comp, self._unit_tracking_map.get(comp, "Kuyruk No"), units)
+        self._refresh_unit_row_selection()
+
+    def _refresh_unit_row_selection(self):
+        selected_bg = QColor("#EAF3FF")
+        normal_bg = QColor("#FFFFFF")
+        selected_fg = QColor("#0F3B82")
+        normal_fg = QColor("#0F172A")
+        for comp, row in self._comp_row.items():
+            active = comp == self.active_unit_component and self.left_panel_mode == "unit_tracking"
+            cell_widget = self.qty_table.cellWidget(row, 0)
+            if cell_widget:
+                cell_widget.setStyleSheet(f"background:{'#EAF3FF' if active else 'transparent'};")
+            btn = self._get_arrow_btn(comp)
+            if btn:
+                btn.setText("◀" if active else "▶")
+                if active:
+                    btn.setStyleSheet("QPushButton#unitTrackingArrow{background:#0F3B82;color:white;border:1px solid #0F3B82;border-radius:5px;font-size:10px;font-weight:900;padding:0;}")
+                else:
+                    btn.setStyleSheet("QPushButton#unitTrackingArrow{background:#DBEAFE;color:#1D4ED8;border:1px solid #93C5FD;border-radius:5px;font-size:10px;font-weight:900;padding:0;} QPushButton#unitTrackingArrow:hover{background:#BFDBFE;}")
+            for c in range(self.qty_table.columnCount()):
+                item = self.qty_table.item(row, c)
+                if item:
+                    item.setBackground(selected_bg if active else normal_bg)
+                    item.setForeground(selected_fg if active else normal_fg)
 
     # ------------------------------------------------------------------ existing methods
     def request_delete(self):
@@ -6297,16 +6226,8 @@ class DeliveryDialog(StyledDialog):
                 planned_item, delivered_item, _ = items
                 if not planned_item or not delivered_item:
                     continue
-                if self._is_unit_tracking(comp):
-                    # Mark all cards as delivered
-                    panel = self._tracking_panels.get(comp)
-                    if panel:
-                        for card in panel._cards:
-                            card.set_delivered(True)
-                        self._sync_delivered_from_panel(comp)
-                else:
-                    delivered_item.setText(fmt_num(as_number(planned_item.text())))
-                    self._update_remaining_row(data_row)
+                delivered_item.setText(fmt_num(as_number(planned_item.text())))
+                self._update_remaining_row(data_row)
         finally:
             self._updating_qty = False
             self._status_auto_filling = False
@@ -6362,14 +6283,6 @@ class DeliveryDialog(StyledDialog):
         for comp, data_row in self._comp_row.items():
             hidden = bool(query and query not in normalize_sheet_name(comp))
             self.qty_table.setRowHidden(data_row, hidden)
-            panel_row = self._get_panel_row(comp)
-            if panel_row is not None:
-                # Hide panel row if comp is hidden or panel is already collapsed
-                if hidden:
-                    self.qty_table.setRowHidden(panel_row, True)
-                # If not hidden and panel was open, keep it open
-                elif comp == self._expanded_comp:
-                    self.qty_table.setRowHidden(panel_row, False)
 
     def refresh_qty_issue_highlights(self):
         over = self.over_assigned_components()
@@ -6402,6 +6315,7 @@ class DeliveryDialog(StyledDialog):
                 self.assignment_table.setItem(r, c, item)
             self.assignment_table.setRowHeight(r, 30)
         self.refresh_qty_issue_highlights()
+        self._refresh_unit_row_selection()
 
     def fill_all_system_planned(self):
         self._updating_qty = True
@@ -6419,14 +6333,12 @@ class DeliveryDialog(StyledDialog):
             assigned_qty = max(as_number(self.planned_assigned.get(comp, 0)), 0)
             allowed_qty = max(system_qty - assigned_qty, 0)
             planned_item.setText(fmt_num(allowed_qty))
-            if delivered_item and not self._is_unit_tracking(comp):
-                if as_number(delivered_item.text()) > allowed_qty:
-                    delivered_item.setText(fmt_num(allowed_qty))
+            if delivered_item and as_number(delivered_item.text()) > allowed_qty:
+                delivered_item.setText(fmt_num(allowed_qty))
             self._update_remaining_row(data_row)
             if self._is_unit_tracking(comp):
                 self._update_panel_slot_count(comp, int(allowed_qty))
         self._updating_qty = False
-        self._sync_all_delivered_from_panels()
         self.refresh_assignment_card()
 
     def fill_remaining_system_planned(self):
@@ -6445,14 +6357,12 @@ class DeliveryDialog(StyledDialog):
             assigned_qty = max(as_number(self.planned_assigned.get(comp, 0)), 0)
             remaining_qty = max(system_qty - assigned_qty, 0)
             planned_item.setText(fmt_num(remaining_qty))
-            if delivered_item and not self._is_unit_tracking(comp):
-                if as_number(delivered_item.text()) > remaining_qty:
-                    delivered_item.setText(fmt_num(remaining_qty))
+            if delivered_item and as_number(delivered_item.text()) > remaining_qty:
+                delivered_item.setText(fmt_num(remaining_qty))
             self._update_remaining_row(data_row)
             if self._is_unit_tracking(comp):
                 self._update_panel_slot_count(comp, int(remaining_qty))
         self._updating_qty = False
-        self._sync_all_delivered_from_panels()
         self.refresh_assignment_card()
 
     def _update_remaining_row(self, row: int):
@@ -6486,7 +6396,7 @@ class DeliveryDialog(StyledDialog):
                     self._updating_qty = False
                     QMessageBox.warning(
                         self, "Ondalıklı Adet",
-                        f"Kuyruk no takipli bileşenlerde teslim edilecek adet tam sayı olmalıdır.\n({comp})"
+                        f"Bu bileşende teslim edilecek adet tam sayı olmalıdır.\n({comp})"
                     )
                     item.setText("0")
                     self._update_remaining_row(row)
@@ -6500,8 +6410,6 @@ class DeliveryDialog(StyledDialog):
                         delivered_item.setText(fmt_num(new_qty))
         self._update_remaining_row(row)
         self._updating_qty = False
-        if self._is_unit_tracking(comp):
-            self._sync_delivered_from_panel(comp)
         self.refresh_assignment_card()
 
     # ------------------------------------------------------------------ save
@@ -6510,6 +6418,7 @@ class DeliveryDialog(StyledDialog):
             QMessageBox.warning(self, "Eksik", "Kabul adı girin.")
             return
 
+        self._current_units_from_panel_if_active()
         planned: Dict[str, float] = {}
         delivered: Dict[str, float] = {}
         component_units: Dict[str, list] = {}
@@ -6522,7 +6431,7 @@ class DeliveryDialog(StyledDialog):
             if pv + assigned_other > system_qty + 0.0001:
                 QMessageBox.warning(self, "Hata", f"{comp}: tanımlanan toplam miktar sistem adedini aşamaz.")
                 return
-            if not self._is_unit_tracking(comp) and dv > pv:
+            if dv > pv:
                 QMessageBox.warning(self, "Hata", f"{comp}: teslim edilen, teslim edilecekten büyük olamaz.")
                 return
             planned[comp] = pv
@@ -6530,35 +6439,34 @@ class DeliveryDialog(StyledDialog):
 
             # Unit tracking validation
             if self._is_unit_tracking(comp) and pv > 0:
-                panel = self._tracking_panels.get(comp)
-                if panel:
-                    if panel.has_duplicates():
-                        QMessageBox.warning(
-                            self, "Tekrar Var",
-                            f"{comp}: Aynı kuyruk no iki kez girilemez. Lütfen düzeltin."
-                        )
-                        return
-                    component_units[comp] = panel.get_units()
-                    # Teslim edildi durumunda tüm alanlar dolu ve teslim edilmiş olmalı
-                    if self._is_delivered_status():
-                        if not panel.all_defined():
-                            QMessageBox.warning(
-                                self, "Eksik Kuyruk No",
-                                f"Teslim Edildi durumunda {comp} için tüm kuyruk no alanları doldurulmalıdır."
-                            )
-                            return
-                        if not panel.all_delivered():
-                            QMessageBox.warning(
-                                self, "Teslim Edilmemiş Slot",
-                                f"Teslim Edildi durumunda {comp} için tüm slotlar teslim edildi olarak işaretlenmelidir."
-                            )
-                            return
-                else:
-                    # Panel açılmamışsa boş slotlar oluştur
-                    component_units[comp] = [
-                        {"slot_no": i + 1, "identifier": "", "is_delivered": 0, "note": ""}
-                        for i in range(int(pv))
-                    ]
+                if pv != int(pv):
+                    QMessageBox.warning(
+                        self, "Ondalıklı Adet",
+                        f"Bu bileşende teslim edilecek adet tam sayı olmalıdır.\n({comp})"
+                    )
+                    return
+                if comp == self.active_unit_component and self.left_panel_mode == "unit_tracking":
+                    self._component_units_state[comp] = self.unit_side_panel.get_units()
+                units = self._ensure_component_units(comp, int(pv))
+                counts: Dict[str, int] = {}
+                for unit in units:
+                    ident = normalize_sheet_name(unit.get("identifier", ""))
+                    if ident:
+                        counts[ident] = counts.get(ident, 0) + 1
+                if any(v > 1 for v in counts.values()):
+                    QMessageBox.warning(
+                        self, "Tekrar Var",
+                        f"{comp}: Aynı kuyruk no iki kez girilemez. Lütfen düzeltin."
+                    )
+                    return
+                if self._is_delivered_status() and any(not str(unit.get("identifier") or "").strip() for unit in units):
+                    label = self._unit_tracking_map.get(comp, "Kuyruk No")
+                    QMessageBox.warning(
+                        self, f"Eksik {label}",
+                        f"Teslim Edildi durumunda {comp} için tüm kuyruk no alanları doldurulmalıdır."
+                    )
+                    return
+                component_units[comp] = units
 
         t0_text = str(getattr(self.system, "t0_date", "") or self.t0_date.text()).strip()
         completion = str(getattr(self.system, "completion_date", "") or self.completion_date_edit.text()).strip()
