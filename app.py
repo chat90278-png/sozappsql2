@@ -5693,7 +5693,7 @@ class UnitTrackingSidePanel(QFrame):
         self._scroll.setWidgetResizable(True)
         self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self._scroll.setStyleSheet("QScrollArea{background:transparent;border:0;} QScrollArea > QWidget > QWidget{background:transparent;}")
+        self._scroll.setStyleSheet(self._modern_scrollbar_qss("QScrollArea"))
         self._host = QWidget()
         self._list = QVBoxLayout(self._host)
         self._list.setContentsMargins(0, 4, 4, 4)
@@ -5702,6 +5702,46 @@ class UnitTrackingSidePanel(QFrame):
         self._scroll.setWidget(self._host)
         outer.addWidget(self._scroll, 1)
         self._set_filter("all")
+
+
+    @staticmethod
+    def _modern_scrollbar_qss(root_selector: str = "QScrollArea") -> str:
+        return f"""
+{root_selector}{{background:transparent;border:0;}}
+{root_selector} > QWidget > QWidget{{background:transparent;}}
+{root_selector} QScrollBar:vertical{{
+    width:11px;
+    background:#F1F5F9;
+    margin:4px 2px 4px 2px;
+    border-radius:5px;
+}}
+{root_selector} QScrollBar::handle:vertical{{
+    background:#B8C7D9;
+    border-radius:5px;
+    min-height:28px;
+}}
+{root_selector} QScrollBar::handle:vertical:hover{{background:#8FA8C6;}}
+{root_selector} QScrollBar::add-line:vertical,
+{root_selector} QScrollBar::sub-line:vertical{{height:0px; background:transparent; border:0;}}
+{root_selector} QScrollBar::add-page:vertical,
+{root_selector} QScrollBar::sub-page:vertical{{background:transparent;}}
+{root_selector} QScrollBar:horizontal{{
+    height:11px;
+    background:#F1F5F9;
+    margin:2px 4px 2px 4px;
+    border-radius:5px;
+}}
+{root_selector} QScrollBar::handle:horizontal{{
+    background:#B8C7D9;
+    border-radius:5px;
+    min-width:28px;
+}}
+{root_selector} QScrollBar::handle:horizontal:hover{{background:#8FA8C6;}}
+{root_selector} QScrollBar::add-line:horizontal,
+{root_selector} QScrollBar::sub-line:horizontal{{width:0px; background:transparent; border:0;}}
+{root_selector} QScrollBar::add-page:horizontal,
+{root_selector} QScrollBar::sub-page:horizontal{{background:transparent;}}
+"""
 
     def _stat_card(self, value: str, caption: str, bg: str, border: str, fg: str):
         frame = QFrame(); frame.setObjectName("unitStatCard")
@@ -5943,6 +5983,7 @@ class DeliveryDialog(StyledDialog):
         self.assignment_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Fixed)
         self.assignment_table.setColumnWidth(1, 120)
         self.assignment_table.setColumnWidth(2, 132)
+        self.assignment_table.setStyleSheet(UnitTrackingSidePanel._modern_scrollbar_qss("QTableWidget"))
         left_lay.addWidget(self.assignment_table, 1)
 
         self.assignment_panel = QWidget()
@@ -6056,6 +6097,7 @@ class DeliveryDialog(StyledDialog):
         self.qty_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Fixed)
         self.qty_table.setColumnWidth(3, 110)
         self.qty_table.setMinimumHeight(200)
+        self.qty_table.setStyleSheet(UnitTrackingSidePanel._modern_scrollbar_qss("QTableWidget"))
         self.qty_table.setItemDelegateForColumn(1, CompactNumberDelegate(self.qty_table))
         self.qty_table.setItemDelegateForColumn(2, CompactNumberDelegate(self.qty_table))
         self.component_search = QLineEdit()
@@ -6154,17 +6196,22 @@ class DeliveryDialog(StyledDialog):
         widget.setStyleSheet("background: transparent;")
         lay = QHBoxLayout(widget)
         lay.setContentsMargins(6, 0, 6, 0)
-        lay.setSpacing(6)
+        lay.setSpacing(0)
         arrow = QPushButton("▶")
         arrow.setObjectName("unitTrackingArrow")
         arrow.setFixedSize(20, 20)
-        arrow.clicked.connect(lambda _=False, c=comp: self._activate_unit_component(c))
+        arrow.clicked.connect(lambda _=False, c=comp: self._toggle_unit_component(c))
         arrow.setProperty("comp", comp)
         lbl = QLabel(comp)
-        lbl.setStyleSheet("background: transparent; font-weight: 700;")
-        lay.addWidget(arrow)
+        lbl.setAlignment(Qt.AlignCenter)
+        lbl.setStyleSheet("background: transparent; color:#0F172A; font-weight: 500;")
+        spacer = QWidget()
+        spacer.setFixedWidth(20)
+        lay.addWidget(arrow, 0, Qt.AlignLeft | Qt.AlignVCenter)
         lay.addWidget(lbl, 1)
+        lay.addWidget(spacer, 0)
         widget.setProperty("arrow_btn", arrow)
+        widget.setProperty("label_widget", lbl)
         return widget
 
     def _get_arrow_btn(self, comp: str) -> Optional[QPushButton]:
@@ -6174,6 +6221,15 @@ class DeliveryDialog(StyledDialog):
         w = self.qty_table.cellWidget(data_row, 0)
         if w:
             return w.property("arrow_btn")
+        return None
+
+    def _get_component_label(self, comp: str) -> Optional[QLabel]:
+        data_row = self._comp_row.get(comp)
+        if data_row is None:
+            return None
+        w = self.qty_table.cellWidget(data_row, 0)
+        if w:
+            return w.property("label_widget")
         return None
 
     def _existing_units_for(self, comp: str) -> list:
@@ -6227,6 +6283,14 @@ class DeliveryDialog(StyledDialog):
         self.left_stack.setCurrentWidget(self.unit_side_panel)
         self._refresh_unit_row_selection()
 
+    def _toggle_unit_component(self, comp: str):
+        if not self._is_unit_tracking(comp):
+            return
+        if self.left_panel_mode == "unit_tracking" and self.active_unit_component == comp:
+            self._show_assignment_panel()
+            return
+        self._activate_unit_component(comp)
+
     def _show_assignment_panel(self):
         self._current_units_from_panel_if_active()
         self.left_panel_mode = "assignment"
@@ -6256,7 +6320,7 @@ class DeliveryDialog(StyledDialog):
     def _on_cell_clicked(self, row: int, col: int):
         comp = self._row_comp.get(row)
         if comp and col == 0 and self._is_unit_tracking(comp):
-            self._activate_unit_component(comp)
+            self._toggle_unit_component(comp)
 
     def _update_panel_slot_count(self, comp: str, new_qty: int):
         if not self._is_unit_tracking(comp):
@@ -6280,6 +6344,13 @@ class DeliveryDialog(StyledDialog):
                 cell_widget = self.qty_table.cellWidget(row, 0)
                 if cell_widget:
                     cell_widget.setStyleSheet(f"background:{'#EAF3FF' if active else 'transparent'};")
+                label = self._get_component_label(comp)
+                if label:
+                    label.setStyleSheet(
+                        "background: transparent; "
+                        f"color:{'#0F3B82' if active else '#0F172A'}; "
+                        f"font-weight:{'900' if active else '500'};"
+                    )
                 btn = self._get_arrow_btn(comp)
                 if btn:
                     btn.setText("◀" if active else "▶")
