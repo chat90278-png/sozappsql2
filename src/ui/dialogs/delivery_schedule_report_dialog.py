@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date
+from pathlib import Path
 import json
 import re
 import sqlite3
@@ -39,6 +40,7 @@ BLUE = "#1f7ed6"
 AMBER = "#f59e0b"
 MUTED = "#64748b"
 CHART_COLORS = ["#5b9bd5", "#ed7d31", "#a5a5a5", "#ffc000", "#4472c4", "#70ad47", "#00a6a6", "#8064a2"]
+ARROW_ICON_PATH = (Path(__file__).resolve().parents[1] / "assets" / "chevron_down.svg").as_posix()
 
 
 def extract_year_from_date_text(value: object) -> Optional[int]:
@@ -425,11 +427,10 @@ class DeliveryScheduleReportDialog(QDialog):
 
     def _build_filters(self):
         frame = QFrame(); frame.setObjectName("filterPanel"); frame.setFixedWidth(300); lay = QVBoxLayout(frame)
-        h = QLabel("Rapor Ayarları"); h.setObjectName("panelTitle"); lay.addWidget(h); lay.addWidget(QLabel("Önizleme açık STS veri dosyasından üretilir."))
+        h = QLabel("Rapor Ayarları"); h.setObjectName("panelTitle"); lay.addWidget(h)
         self.platform = self._combo(["Tümü"]); self.year_range = QLineEdit(str(date.today().year)); self.domestic = self._combo(["Tümü", "Yİ", "YD"]); self.user = self._combo(["Tümü"]); self.contract = self._combo(["Tüm seçili sözleşmeler"]); self.status = self._combo(["Tümü"])
         for label, widget in [("PLATFORM", self.platform), ("YIL / ARALIK", self.year_range), ("Yİ / YD", self.domestic), ("TESLİM KULLANICISI", self.user), ("SÖZLEŞME", self.contract), ("DURUM", self.status)]:
             l = QLabel(label); l.setObjectName("fieldLabel"); lay.addWidget(l); lay.addWidget(widget)
-            if label == "YIL / ARALIK": lay.addWidget(QLabel("Tek yıl: 2026 veya aralık: 2026-2027"))
         btn = QPushButton("Önizlemeyi Yenile"); btn.clicked.connect(self.refresh_preview); lay.addWidget(btn); lay.addStretch(); return frame
 
     def _combo(self, items):
@@ -732,7 +733,7 @@ class DeliveryScheduleReportDialog(QDialog):
             border-top-right-radius:10px;
             border-bottom-right-radius:10px;
         }}
-        QComboBox::down-arrow {{ image:none; width:0; height:0; }}
+        QComboBox::down-arrow {{ image:url("{ARROW_ICON_PATH}"); width:10px; height:6px; }}
         QComboBox QAbstractItemView {{
             background:#ffffff;
             color:#002060;
