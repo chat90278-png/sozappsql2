@@ -343,7 +343,7 @@ class GroupedBarPreview(QWidget):
         self.users: list[str] = []
         self.parts: list[str] = []
         self.values: dict[str, list[float]] = {}
-        self.setMinimumHeight(520)
+        self.setMinimumHeight(740)
 
     def set_data(self, users: list[str], parts: list[str], values: dict[str, list[float]]) -> None:
         self.users = users[:8]
@@ -359,7 +359,7 @@ class GroupedBarPreview(QWidget):
         if not self.users or not self.parts:
             p.setPen(QColor(MUTED)); p.drawText(r, Qt.AlignCenter, "Veri bulunamadı")
             return
-        chart = r.adjusted(70, 55, -210, -185)
+        chart = r.adjusted(70, 60, -220, -315)
         maxv = max([max(v or [0]) for v in self.values.values()] or [1]) or 1
         for i in range(6):
             y = chart.bottom() - int(chart.height() * i / 5)
@@ -381,8 +381,9 @@ class GroupedBarPreview(QWidget):
         p.setPen(QColor("#111827")); p.drawText(lx, ly - 25, "PARÇA ADI ▾")
         for i, part in enumerate(self.parts):
             p.fillRect(lx, ly + i * 28, 10, 10, QColor(CHART_COLORS[i % len(CHART_COLORS)])); p.drawText(lx + 18, ly + 10 + i * 28, part[:22])
-        table = r.adjusted(105, r.height() - 150, -220, -25)
-        cols = [""] + self.users; row_h = 25; col_w = table.width() / max(len(cols), 1)
+        table_top = chart.bottom() + 58
+        table = r.adjusted(105, table_top - r.top(), -220, -25)
+        cols = [""] + self.users; row_h = 26; col_w = table.width() / max(len(cols), 1)
         p.setPen(QPen(QColor("#d8d8d8")))
         for ri, part in enumerate([""] + self.parts):
             for ci, col in enumerate(cols):
@@ -405,7 +406,8 @@ class DeliveryScheduleReportDialog(QDialog):
         self.all_rows: list[DeliveryRow] = []
         self.filtered_rows: list[DeliveryRow] = []
         self.setWindowTitle("Tahmini Teslimat Takvimi")
-        self.resize(1500, 860); self.setMinimumSize(1180, 720)
+        self.setWindowFlags(Qt.Window | Qt.WindowMinimizeButtonHint | Qt.WindowMaximizeButtonHint | Qt.WindowCloseButtonHint)
+        self.resize(1450, 850); self.setMinimumSize(1180, 720)
         self.setStyleSheet(STYLE + self._extra_style())
         self.build_ui()
         self.reload_from_db()
@@ -415,8 +417,8 @@ class DeliveryScheduleReportDialog(QDialog):
         root.addWidget(self._build_filters())
         main = QFrame(); main.setObjectName("reportCard"); ml = QVBoxLayout(main); ml.setContentsMargins(18, 12, 18, 18)
         top = QHBoxLayout(); title = QLabel("Tahmini Teslimat Takvimi"); title.setObjectName("mainTitle"); top.addWidget(title); top.addStretch()
-        self.refresh_btn = QPushButton("Önizlemeyi Yenile"); self.refresh_btn.setObjectName("secondary"); self.refresh_btn.clicked.connect(self.refresh_preview); top.addWidget(self.refresh_btn)
-        self.export_btn = QPushButton("Excel Oluştur"); self.export_btn.clicked.connect(self.on_export_excel_clicked); top.addWidget(self.export_btn); ml.addLayout(top)
+        self.refresh_btn = QPushButton("Önizlemeyi Yenile"); self.refresh_btn.setObjectName("reportSecondaryButton"); self.refresh_btn.clicked.connect(self.refresh_preview); top.addWidget(self.refresh_btn)
+        self.export_btn = QPushButton("Excel Oluştur"); self.export_btn.setObjectName("reportPrimaryButton"); self.export_btn.clicked.connect(self.on_export_excel_clicked); top.addWidget(self.export_btn); ml.addLayout(top)
         self.info_label = QLabel(""); self.info_label.setObjectName("infoLabel"); ml.addWidget(self.info_label)
         self.tabs = QTabWidget(); self.tabs.addTab(self._dashboard_tab(), "Dashboard"); self.tabs.addTab(self._delivery_tab(), "Teslimat Verisi"); self.tabs.addTab(self._matrix_tab(), "Takvim Matrisi"); self.tabs.addTab(self._rev_tab(), "REV Takip")
         ml.addWidget(self.tabs, 1); root.addWidget(main, 1)
@@ -449,7 +451,20 @@ class DeliveryScheduleReportDialog(QDialog):
     def _rev_tab(self): self.rev_view = self._table(); return self.rev_view
 
     def _table(self):
-        v = QTableView(); v.setAlternatingRowColors(True); v.setSortingEnabled(False); v.setEditTriggers(QAbstractItemView.NoEditTriggers); v.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents); v.horizontalHeader().setStretchLastSection(True); return v
+        v = QTableView()
+        v.setAlternatingRowColors(True)
+        v.setSortingEnabled(False)
+        v.setWordWrap(False)
+        v.setShowGrid(True)
+        v.setSelectionBehavior(QAbstractItemView.SelectRows)
+        v.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        v.verticalHeader().setVisible(False)
+        v.verticalHeader().setDefaultSectionSize(42)
+        v.horizontalHeader().setMinimumSectionSize(90)
+        v.horizontalHeader().setDefaultAlignment(Qt.AlignCenter)
+        v.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        v.horizontalHeader().setStretchLastSection(True)
+        return v
 
     def reload_from_db(self) -> None:
         self.conn = _conn_from_store(self.store)
@@ -640,16 +655,134 @@ class DeliveryScheduleReportDialog(QDialog):
 
     def _extra_style(self):
         return f"""
-        QFrame#filterPanel, QFrame#reportCard, QFrame#kpiCard {{ background:#ffffff; border:1px solid {GRID}; border-radius:14px; }}
+        QFrame#filterPanel, QFrame#reportCard, QFrame#kpiCard {{
+            background:#ffffff;
+            border:1px solid {GRID};
+            border-radius:16px;
+        }}
+        QFrame#filterPanel {{ padding:4px; }}
         QLabel#panelTitle {{ color:#002060; font-size:18px; font-weight:900; background:transparent; }}
         QLabel#mainTitle {{ color:#002060; font-size:22px; font-weight:900; background:transparent; }}
-        QLabel#fieldLabel {{ color:#415a86; font-size:11px; font-weight:900; background:transparent; }}
+        QLabel#fieldLabel {{ color:#415a86; font-size:11px; font-weight:900; background:transparent; padding-top:8px; }}
         QLabel#kpiValue {{ color:#075bd8; font-size:28px; font-weight:900; background:transparent; }}
         QLabel#infoLabel {{ color:#b45309; background:transparent; font-weight:800; }}
-        QTabWidget::pane {{ border:1px solid {GRID}; border-radius:10px; background:#ffffff; }}
-        QTabBar::tab {{ padding:10px 18px; margin:3px; color:#415a86; font-weight:900; }}
-        QTabBar::tab:selected {{ background:{NAVY}; color:white; border-radius:9px; }}
-        QHeaderView::section {{ background:{NAVY}; color:white; font-weight:900; padding:8px; border:1px solid #31548b; }}
-        QTableView {{ background:#ffffff; gridline-color:{GRID}; alternate-background-color:#f4f9ff; selection-background-color:#dbeafe; }}
+
+        QPushButton#reportPrimaryButton {{
+            background:#0b4aa2;
+            color:#ffffff;
+            border:1px solid #0b4aa2;
+            border-radius:10px;
+            padding:9px 18px;
+            min-height:18px;
+            font-weight:900;
+        }}
+        QPushButton#reportPrimaryButton:hover {{ background:#075bd8; border-color:#075bd8; }}
+        QPushButton#reportSecondaryButton {{
+            background:#f8fbff;
+            color:#003b83;
+            border:1px solid #bfd5f2;
+            border-radius:10px;
+            padding:9px 18px;
+            min-height:18px;
+            font-weight:900;
+        }}
+        QPushButton#reportSecondaryButton:hover {{ background:#eaf4ff; border-color:#7fb2f0; }}
+
+        QTabWidget::pane {{
+            border:1px solid {GRID};
+            border-radius:12px;
+            background:#ffffff;
+            top:-1px;
+        }}
+        QTabBar {{ background:transparent; }}
+        QTabBar::tab {{
+            background:#f8fbff;
+            color:#415a86;
+            border:1px solid transparent;
+            border-radius:11px;
+            padding:10px 20px;
+            margin:0 5px 7px 0;
+            font-weight:900;
+            min-width:105px;
+        }}
+        QTabBar::tab:hover {{ background:#eaf4ff; color:#003b83; border-color:#bfd5f2; }}
+        QTabBar::tab:selected {{
+            background:{NAVY};
+            color:white;
+            border:1px solid {NAVY};
+            border-radius:11px;
+        }}
+
+        QComboBox, QLineEdit {{
+            background:#f8fbff;
+            color:#002060;
+            border:1px solid #bfd5f2;
+            border-radius:10px;
+            padding:7px 11px;
+            min-height:20px;
+            font-weight:800;
+        }}
+        QComboBox:hover, QLineEdit:hover {{ border-color:#7fb2f0; background:#ffffff; }}
+        QComboBox:focus, QLineEdit:focus {{ border:2px solid #2b7ddd; background:#ffffff; }}
+        QComboBox::drop-down {{
+            subcontrol-origin:padding;
+            subcontrol-position:top right;
+            width:30px;
+            border-left:1px solid #d7e6f8;
+            border-top-right-radius:10px;
+            border-bottom-right-radius:10px;
+        }}
+        QComboBox::down-arrow {{ image:none; width:0; height:0; }}
+        QComboBox QAbstractItemView {{
+            background:#ffffff;
+            color:#002060;
+            border:1px solid #bfd5f2;
+            border-radius:8px;
+            padding:4px;
+            outline:0;
+            selection-background-color:#dbeafe;
+            selection-color:#002060;
+        }}
+
+        QHeaderView::section {{
+            background:{NAVY};
+            color:white;
+            font-weight:900;
+            padding:10px 8px;
+            border:1px solid #31548b;
+        }}
+        QTableView {{
+            background:#ffffff;
+            gridline-color:{GRID};
+            alternate-background-color:#f4f9ff;
+            selection-background-color:#dbeafe;
+            selection-color:#002060;
+            border:1px solid {GRID};
+            border-radius:12px;
+        }}
+        QTableView::item {{ padding:8px 7px; border:0; }}
+        QTableView::item:selected {{ background:#dbeafe; color:#002060; }}
+
+        QScrollBar:vertical {{
+            background:#eef4fb;
+            width:10px;
+            margin:2px;
+            border-radius:5px;
+        }}
+        QScrollBar::handle:vertical {{ background:#9fb6d4; min-height:34px; border-radius:5px; }}
+        QScrollBar::handle:vertical:hover {{ background:#6f8fb8; }}
+        QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height:0; border:0; background:transparent; }}
+        QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background:transparent; }}
+        QScrollBar:horizontal {{
+            background:#eef4fb;
+            height:10px;
+            margin:2px;
+            border-radius:5px;
+        }}
+        QScrollBar::handle:horizontal {{ background:#9fb6d4; min-width:34px; border-radius:5px; }}
+        QScrollBar::handle:horizontal:hover {{ background:#6f8fb8; }}
+        QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ width:0; border:0; background:transparent; }}
+        QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {{ background:transparent; }}
+        QAbstractScrollArea {{ background:#ffffff; border:none; }}
         QLineEdit[invalid="true"] {{ border:2px solid {RED}; background:#fff1f2; }}
         """
