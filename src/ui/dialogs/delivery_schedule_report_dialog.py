@@ -9,7 +9,7 @@ import re
 import sqlite3
 from typing import Any, Iterable, Optional
 
-from PySide6.QtCore import QAbstractTableModel, QModelIndex, QRectF, Qt
+from PySide6.QtCore import QAbstractTableModel, QModelIndex, QObject, QRectF, Qt, QThread, Signal, QTimer
 from PySide6.QtGui import QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -23,10 +23,13 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMessageBox,
+    QProgressBar,
     QPushButton,
     QScrollArea,
     QTabWidget,
     QTableView,
+    QTreeWidget,
+    QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -43,6 +46,70 @@ AMBER = "#f59e0b"
 MUTED = "#64748b"
 CHART_COLORS = ["#5b9bd5", "#ed7d31", "#a5a5a5", "#ffc000", "#4472c4", "#70ad47", "#00a6a6", "#8064a2"]
 ARROW_ICON_PATH = (Path(__file__).resolve().parents[1] / "assets" / "chevron_down.svg").as_posix()
+
+DELIVERY_TREE_STYLE = """
+QTreeWidget {
+    background: white;
+    alternate-background-color: #f4f9ff;
+    border: 1px solid #cfe0f4;
+    color: #002060;
+    selection-background-color: #dbeafe;
+    selection-color: #002060;
+}
+QTreeWidget::item {
+    min-height: 34px;
+    border-bottom: 1px solid #d7e6f8;
+    padding: 4px 6px;
+}
+QTreeWidget::item:selected {
+    background: #dbeafe;
+}
+QHeaderView::section {
+    background-color: #0b3679;
+    color: white;
+    font-weight: bold;
+    padding: 8px;
+    border: 1px solid #2e5b9a;
+}
+QScrollBar:vertical {
+    background: #eef4fb;
+    border: none;
+    width: 10px;
+    margin: 2px;
+    border-radius: 5px;
+}
+QScrollBar::handle:vertical {
+    background: #9ebde0;
+    border-radius: 4px;
+    min-height: 32px;
+}
+QScrollBar::handle:vertical:hover {
+    background: #6f9dcc;
+}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+    width: 0px;
+    height: 0px;
+}
+QScrollBar:horizontal {
+    background: #eef4fb;
+    border: none;
+    height: 10px;
+    margin: 2px;
+    border-radius: 5px;
+}
+QScrollBar::handle:horizontal {
+    background: #9ebde0;
+    border-radius: 4px;
+    min-width: 32px;
+}
+QScrollBar::handle:horizontal:hover {
+    background: #6f9dcc;
+}
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+    width: 0px;
+    height: 0px;
+}
+"""
 
 
 def extract_year_from_date_text(value: object) -> Optional[int]:
@@ -240,15 +307,19 @@ class PartBarWidget(QWidget):
         super().__init__(parent)
         self.data: list[tuple[str, float]] = []
         self.setMinimumHeight(250)
+        self.setMinimumWidth(320)
 
     def set_data(self, data: list[tuple[str, float]]) -> None:
-        self.data = data[:8]
+        # Show ALL items, not just first 8
+        self.data = data
+        self.setMinimumHeight(max(250, 48 + len(self.data) * 28))
+        self.updateGeometry()
         self.update()
 
     def paintEvent(self, event):
         p = QPainter(self); p.setRenderHint(QPainter.Antialiasing)
         r = self.rect().adjusted(16, 16, -16, -16)
-        p.setPen(QColor("#002060")); p.drawText(r, Qt.AlignTop | Qt.AlignLeft, "Parça Bazlı Planlanan Miktar")
+        p.setPen(QColor("#002060")); p.drawText(r, Qt.AlignTop | Qt.AlignLeft, "Parça Bazlı Sözleşme Adeti")
         if not self.data:
             p.setPen(QColor(MUTED)); p.drawText(r, Qt.AlignCenter, "Veri bulunamadı")
             return
@@ -299,9 +370,14 @@ class TrendLineWidget(QWidget):
         super().__init__(parent)
         self.data: list[tuple[int, float, float]] = []
         self.setMinimumHeight(250)
+        self.setMinimumWidth(520)
 
     def set_data(self, data: list[tuple[int, float, float]]) -> None:
         self.data = data
+        # Keep a comfortable base width so the chart is not squeezed,
+        # but still grow wider when many years exist.
+        self.setMinimumWidth(max(520, len(self.data) * 110))
+        self.updateGeometry()
         self.update()
 
     def paintEvent(self, event):
@@ -406,6 +482,160 @@ class GroupedBarPreview(QWidget):
                     p.drawText(cell_x, cell_y, int(col_w), row_h, Qt.AlignCenter, _fmt_amount(vals[ci - 1] if ci - 1 < len(vals) else 0))
 
 
+# ─── Excel Export Worker ──────────────────────────────────────────────────────
+
+class ExcelExportWorker(QObject):
+    progress = Signal(int, str)
+    finished = Signal(dict)
+    failed = Signal(str)
+
+    def __init__(self, store_path: str, output_path: str, filters: dict):
+        super().__init__()
+        self.store_path = store_path
+        self.output_path = output_path
+        self.filters = filters
+
+    def run(self):
+        from src.services.delivery_schedule_excel_exporter import (
+            export_delivery_schedule_report,
+        )
+        import sqlite3
+
+        # Open a fresh SQLite connection in the worker thread
+        try:
+            conn = sqlite3.connect(self.store_path)
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA foreign_keys=ON")
+
+            class _FakeStore:
+                def __init__(self, c):
+                    self.conn = c
+
+            store = _FakeStore(conn)
+            result = export_delivery_schedule_report(
+                store,
+                self.output_path,
+                filters=self.filters,
+                progress_cb=lambda value, message: self.progress.emit(value, message),
+            )
+            self.finished.emit(result)
+        except Exception as exc:
+            self.failed.emit(str(exc))
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+# ─── Loading Overlay ──────────────────────────────────────────────────────────
+
+class ExcelLoadingOverlay(QWidget):
+    def __init__(self, parent: QWidget):
+        super().__init__(parent)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents, False)
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setObjectName("excelLoadingOverlay")
+        self.setStyleSheet("""
+            QWidget#excelLoadingOverlay {
+                background: rgba(0, 10, 40, 160);
+            }
+            QWidget#excelLoadingOverlay QLabel,
+            QFrame#loadingCard QLabel {
+                background: transparent;
+                border: none;
+            }
+        """)
+        self._spinner_angle = 0
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._spin)
+        self._timer.start(50)
+
+        # Card
+        card = QFrame(self)
+        card.setObjectName("loadingCard")
+        card.setAttribute(Qt.WA_StyledBackground, True)
+        card.setFixedWidth(380)
+        card.setStyleSheet("""
+            QFrame#loadingCard {
+                background-color: #ffffff;
+                border-radius: 18px;
+                border: 2px solid #cfe0f4;
+            }
+            QFrame#loadingCard QLabel {
+                background: transparent;
+                border: none;
+            }
+        """)
+        card_lay = QVBoxLayout(card)
+        card_lay.setContentsMargins(32, 28, 32, 28)
+        card_lay.setSpacing(14)
+
+        title = QLabel("Excel raporu hazırlanıyor")
+        title.setAlignment(Qt.AlignCenter)
+        title.setStyleSheet("color: #002060; font-size: 16px; font-weight: 900; background: transparent; border: none;")
+        card_lay.addWidget(title)
+
+        self.spinner_label = QLabel("⠋")
+        self.spinner_label.setAlignment(Qt.AlignCenter)
+        self.spinner_label.setStyleSheet("color: #0b3679; font-size: 28px; background: transparent; border: none;")
+        card_lay.addWidget(self.spinner_label)
+
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setTextVisible(False)
+        self.progress_bar.setFixedHeight(10)
+        self.progress_bar.setStyleSheet("""
+            QProgressBar {
+                background: #e7eef8;
+                border-radius: 5px;
+                border: none;
+            }
+            QProgressBar::chunk {
+                background: #0b3679;
+                border-radius: 5px;
+            }
+        """)
+        card_lay.addWidget(self.progress_bar)
+
+        self.status_label = QLabel("Microsoft Excel başlatılıyor")
+        self.status_label.setAlignment(Qt.AlignCenter)
+        self.status_label.setWordWrap(True)
+        self.status_label.setStyleSheet("color: #415a86; font-size: 12px; background: transparent; border: none;")
+        card_lay.addWidget(self.status_label)
+
+        self._card = card
+        self._position_card()
+
+    def _spin(self):
+        frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+        self._spinner_angle = (self._spinner_angle + 1) % len(frames)
+        self.spinner_label.setText(frames[self._spinner_angle])
+
+    def _position_card(self):
+        if self.parent():
+            pw = self.parent().size()
+            cw = self._card.width()
+            ch = self._card.sizeHint().height()
+            self._card.move((pw.width() - cw) // 2, (pw.height() - ch) // 2)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._position_card()
+
+    def update_progress(self, value: int, message: str):
+        self.progress_bar.setValue(value)
+        self.status_label.setText(message)
+
+    def close(self):
+        self._timer.stop()
+        super().close()
+        self.deleteLater()
+
+
+# ─── Main Dialog ─────────────────────────────────────────────────────────────
+
 class DeliveryScheduleReportDialog(QDialog):
     def __init__(self, parent=None, store=None):
         super().__init__(parent)
@@ -413,6 +643,9 @@ class DeliveryScheduleReportDialog(QDialog):
         self.conn = _conn_from_store(self.store)
         self.all_rows: list[DeliveryRow] = []
         self.filtered_rows: list[DeliveryRow] = []
+        self._export_thread: Optional[QThread] = None
+        self._export_worker: Optional[ExcelExportWorker] = None
+        self._loading_overlay: Optional[ExcelLoadingOverlay] = None
         self.setWindowTitle("Tahmini Teslimat Takvimi")
         self.setWindowFlags(Qt.Window | Qt.WindowMinimizeButtonHint | Qt.WindowMaximizeButtonHint | Qt.WindowCloseButtonHint)
         self.resize(1450, 850); self.setMinimumSize(1180, 720)
@@ -446,9 +679,32 @@ class DeliveryScheduleReportDialog(QDialog):
         w = QScrollArea(); w.setWidgetResizable(True); host = QWidget(); lay = QVBoxLayout(host)
         self.kpi_grid = QGridLayout(); lay.addLayout(self.kpi_grid)
         upper = QHBoxLayout()
-        self.part_bar = PartBarWidget(); self.donut = DonutDistributionWidget(); self.trend = TrendLineWidget()
-        for widget in (self.part_bar, self.donut, self.trend):
-            card = QFrame(); card.setObjectName("reportCard"); cl = QVBoxLayout(card); cl.addWidget(widget); upper.addWidget(card, 1)
+
+        # PartBarWidget wrapped in vertical QScrollArea
+        self.part_bar = PartBarWidget()
+        self.part_bar_scroll = QScrollArea()
+        # Vertical scrolling only; keep the inner chart stretched to card width.
+        self.part_bar_scroll.setWidgetResizable(True)
+        self.part_bar_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.part_bar_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.part_bar_scroll.setWidget(self.part_bar)
+        part_card = QFrame(); part_card.setObjectName("reportCard"); cl = QVBoxLayout(part_card); cl.addWidget(self.part_bar_scroll)
+        upper.addWidget(part_card, 1)
+
+        self.donut = DonutDistributionWidget()
+        donut_card = QFrame(); donut_card.setObjectName("reportCard"); cl2 = QVBoxLayout(donut_card); cl2.addWidget(self.donut)
+        upper.addWidget(donut_card, 1)
+
+        # TrendLineWidget wrapped in horizontal QScrollArea
+        self.trend = TrendLineWidget()
+        self.trend_scroll = QScrollArea()
+        self.trend_scroll.setWidgetResizable(False)
+        self.trend_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.trend_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.trend_scroll.setWidget(self.trend)
+        trend_card = QFrame(); trend_card.setObjectName("reportCard"); cl3 = QVBoxLayout(trend_card); cl3.addWidget(self.trend_scroll)
+        upper.addWidget(trend_card, 1)
+
         lay.addLayout(upper)
         self.chart = GroupedBarPreview()
         self.chart_scroll = QScrollArea()
@@ -459,7 +715,34 @@ class DeliveryScheduleReportDialog(QDialog):
         card = QFrame(); card.setObjectName("reportCard"); cl = QVBoxLayout(card); cl.addWidget(self.chart_scroll); lay.addWidget(card)
         w.setWidget(host); return w
 
-    def _delivery_tab(self): self.delivery_view = self._table(); return self.delivery_view
+    def _delivery_tab(self):
+        """Build the Teslimat Verisi tab as a grouped QTreeWidget."""
+        DELIVERY_COLS = [
+            "Sözleşme", "Sözleşme Sahibi", "Teslim Kullanıcısı", "Yİ/YD",
+            "Teslimat", "Tarih", "Seviye", "Parça",
+            "Sözleşme Adeti", "Teslim", "Kalan",
+            "Konfigürasyon Tipi", "Opsiyon / Not", "Durum",
+        ]
+        self.delivery_tree = QTreeWidget()
+        self.delivery_tree.setColumnCount(len(DELIVERY_COLS))
+        self.delivery_tree.setHeaderLabels(DELIVERY_COLS)
+        self.delivery_tree.setAlternatingRowColors(True)
+        self.delivery_tree.setRootIsDecorated(True)
+        self.delivery_tree.setItemsExpandable(True)
+        self.delivery_tree.setExpandsOnDoubleClick(True)
+        self.delivery_tree.setIndentation(24)
+        self.delivery_tree.setUniformRowHeights(False)
+        self.delivery_tree.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.delivery_tree.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.delivery_tree.setWordWrap(False)
+        self.delivery_tree.header().setMinimumSectionSize(80)
+        self.delivery_tree.header().setSectionResizeMode(QHeaderView.ResizeToContents)
+        self.delivery_tree.header().setStretchLastSection(True)
+        self.delivery_tree.setStyleSheet(DELIVERY_TREE_STYLE)
+        # Keep delivery_view alias for any backward-compat checks
+        self.delivery_view = self.delivery_tree
+        return self.delivery_tree
+
     def _matrix_tab(self): self.matrix_view = self._table(); return self.matrix_view
     def _rev_tab(self): self.rev_view = self._table(); return self.rev_view
 
@@ -521,7 +804,7 @@ class DeliveryScheduleReportDialog(QDialog):
 
     def clear_preview(self) -> None:
         self.filtered_rows = []
-        if not hasattr(self, "delivery_view"):
+        if not hasattr(self, "delivery_tree"):
             return
         self.info_label.setText("" if self.conn else "Açık STS veri dosyası bulunamadı; rapor boş gösteriliyor.")
         self._refresh_kpis([])
@@ -531,7 +814,7 @@ class DeliveryScheduleReportDialog(QDialog):
         self.rev_view.setModel(SimpleTableModel(["Tarih", "Kullanıcı", "Sözleşme", "Teslimat", "Alan", "Eski Değer", "Yeni Değer", "Açıklama"], [], self))
 
     def refresh_preview(self, *_args):
-        if not hasattr(self, "delivery_view"):
+        if not hasattr(self, "delivery_tree"):
             return
         filters = self.collect_filters()
         if not filters["year_range_valid"]:
@@ -590,9 +873,84 @@ class DeliveryScheduleReportDialog(QDialog):
         return result
 
     def _refresh_delivery_table(self, rows: list[DeliveryRow]) -> None:
-        headers = ["Sözleşme", "Sözleşme Sahibi", "Teslim Kullanıcısı", "Yİ/YD", "Teslimat", "Tarih", "Seviye", "Parça", "Plan", "Teslim", "Kalan", "Konfigürasyon Tipi", "Opsiyon / Not", "Durum"]
-        table_rows = [[r.contract, r.owner, r.user, r.domestic, r.delivery, r.date_text, r.level, r.part, _fmt_amount(r.planned), _fmt_amount(r.delivered), _fmt_amount(r.remaining), r.config_type, r.note, r.status] for r in rows]
-        self.delivery_view.setModel(SimpleTableModel(headers, table_rows, self))
+        """Populate the QTreeWidget with contract-grouped, collapsible rows."""
+        self.delivery_tree.clear()
+
+        if not rows:
+            return
+
+        bold_font = QFont()
+        bold_font.setBold(True)
+
+        grouped: dict[str, list[DeliveryRow]] = defaultdict(list)
+        for row in rows:
+            grouped[row.contract].append(row)
+
+        # Sort by contract number
+        for contract_no in sorted(grouped.keys()):
+            contract_rows = grouped[contract_no]
+
+            owners = sorted({r.owner for r in contract_rows if r.owner and r.owner != "-"})
+            users = sorted({r.user for r in contract_rows if r.user and r.user != "Tanımsız"})
+            deliveries = sorted({r.delivery for r in contract_rows if r.delivery and r.delivery != "-"})
+            statuses = sorted({r.status for r in contract_rows if r.status and r.status != "-"})
+
+            total_planned = sum(r.planned for r in contract_rows)
+            total_delivered = sum(r.delivered for r in contract_rows)
+            total_remaining = sum(r.remaining for r in contract_rows)
+
+            users_text = ", ".join(users[:3]) + (f" +{len(users) - 3}" if len(users) > 3 else "")
+            owners_text = ", ".join(owners[:2]) + (f" +{len(owners) - 2}" if len(owners) > 2 else "")
+            statuses_text = ", ".join(statuses[:2])
+
+            parent = QTreeWidgetItem(self.delivery_tree)
+            parent.setText(0, contract_no)
+            parent.setText(1, owners_text)
+            parent.setText(2, users_text)
+            parent.setText(4, f"{len(deliveries)} teslimat · {len(contract_rows)} satır")
+            parent.setText(8, _fmt_amount(total_planned))
+            parent.setText(9, _fmt_amount(total_delivered))
+            parent.setText(10, _fmt_amount(total_remaining))
+            parent.setText(13, statuses_text)
+            parent.setExpanded(False)
+
+            # Style group row
+            for col in range(self.delivery_tree.columnCount()):
+                parent.setBackground(col, QColor("#dceafa"))
+                parent.setForeground(col, QColor("#002060"))
+                parent.setFont(col, bold_font)
+                parent.setToolTip(col, parent.text(col))
+
+            # Detail rows
+            for i, row in enumerate(contract_rows):
+                child = QTreeWidgetItem(parent)
+                child.setText(0, row.contract)
+                child.setText(1, row.owner)
+                child.setText(2, row.user)
+                child.setText(3, row.domestic)
+                child.setText(4, row.delivery)
+                child.setText(5, row.date_text)
+                child.setText(6, row.level)
+                child.setText(7, row.part)
+                child.setText(8, _fmt_amount(row.planned))
+                child.setText(9, _fmt_amount(row.delivered))
+                child.setText(10, _fmt_amount(row.remaining))
+                child.setText(11, row.config_type)
+                child.setText(12, row.note)
+                child.setText(13, row.status)
+
+                # Alternating colors for detail rows
+                bg_color = QColor("#ffffff") if i % 2 == 0 else QColor("#f4f9ff")
+                for col in range(self.delivery_tree.columnCount()):
+                    child.setBackground(col, bg_color)
+                    child.setToolTip(col, child.text(col))
+
+                # Color the status cell
+                status_lower = row.status.lower()
+                if "risk" in status_lower or "gecik" in status_lower:
+                    child.setForeground(13, QColor(RED))
+                elif "tamam" in status_lower or "teslim" in status_lower:
+                    child.setForeground(13, QColor(GREEN))
 
     def _matrix_rows(self, rows: list[DeliveryRow]) -> tuple[list[str], list[list[Any]]]:
         users = sorted({r.user for r in rows})
@@ -601,7 +959,7 @@ class DeliveryScheduleReportDialog(QDialog):
         by_part: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
         part_dates: dict[str, set[str]] = defaultdict(set)
         for row in rows:
-            by_part[row.part][row.user] += row.planned
+            by_part[row.part][row.user] += row.remaining
             if row.date_text:
                 part_dates[row.part].add(row.date_text)
         matrix_rows = []
@@ -620,7 +978,7 @@ class DeliveryScheduleReportDialog(QDialog):
             item = self.kpi_grid.takeAt(0)
             if item.widget(): item.widget().deleteLater()
         risk_count = sum(1 for r in rows if r.remaining > 0 and "tamam" not in r.status.lower())
-        vals = [("Planlanan", sum(r.planned for r in rows)), ("Teslim Edilen", sum(r.delivered for r in rows)), ("Kalan", sum(r.remaining for r in rows)), ("Kullanıcı", len({r.user for r in rows})), ("Sözleşme", len({r.contract for r in rows})), ("Riskli Satır", risk_count)]
+        vals = [("Sözleşme Adeti", sum(r.remaining for r in rows)), ("Kullanıcı", len({r.user for r in rows})), ("Sözleşme", len({r.contract for r in rows})), ("Riskli Satır", risk_count)]
         for i, (name, val) in enumerate(vals):
             card = QFrame(); card.setObjectName("kpiCard"); l = QVBoxLayout(card); a = QLabel(name.upper()); a.setObjectName("fieldLabel"); b = QLabel(_fmt_amount(val)); b.setObjectName("kpiValue"); l.addWidget(a); l.addWidget(b); self.kpi_grid.addWidget(card, 0, i)
 
@@ -630,11 +988,11 @@ class DeliveryScheduleReportDialog(QDialog):
         yearly: dict[int, list[float]] = defaultdict(lambda: [0.0, 0.0])
         user_part: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
         for row in rows:
-            part_totals[row.part] += row.planned
-            yi_yd_totals[row.domestic] += row.planned
+            part_totals[row.part] += row.remaining
+            yi_yd_totals[row.domestic] += row.remaining
             if row.year:
-                yearly[row.year][0] += row.planned; yearly[row.year][1] += row.delivered
-            user_part[row.user][row.part] += row.planned
+                yearly[row.year][0] += row.remaining; yearly[row.year][1] += row.delivered
+            user_part[row.user][row.part] += row.remaining
         part_data = sorted(part_totals.items(), key=lambda item: item[1], reverse=True)
         self.part_bar.set_data(part_data)
         self.donut.set_data(yi_yd_totals.get("Yİ", 0), yi_yd_totals.get("YD", 0))
@@ -647,9 +1005,19 @@ class DeliveryScheduleReportDialog(QDialog):
     def load_activity_log_preview(self, filters: dict[str, Any]) -> list[list[str]]:
         from src.services.delivery_schedule_excel_exporter import load_meaningful_revision_logs
 
-        logs = load_meaningful_revision_logs(self.store, limit=200)
+        log_filters = dict(filters or {})
+        # REV Takip sekmesi, ekrandaki aktif filtre sonucunda kalan sözleşmelerle sınırlı kalır.
+        selected_contracts = sorted({str(row.contract) for row in self.filtered_rows if str(row.contract or "").strip()})
+        if selected_contracts:
+            log_filters["_selected_contracts"] = selected_contracts
+        elif log_filters.get("contract") and log_filters.get("contract") != "Tüm seçili sözleşmeler":
+            log_filters["_selected_contracts"] = [str(log_filters.get("contract"))]
+        else:
+            log_filters["_selected_contracts"] = []
+
+        logs = load_meaningful_revision_logs(self.store, limit=200, filters=log_filters)
         if not logs:
-            return [["", "", "", "", "", "", "", "Henüz anlamlı revizyon kaydı bulunmuyor."]]
+            return [["", "", "", "", "", "", "", "Seçili sözleşme filtrelerine uygun anlamlı revizyon kaydı bulunmuyor."]]
         return [
             [
                 str(log.get("date") or ""),
@@ -664,11 +1032,26 @@ class DeliveryScheduleReportDialog(QDialog):
             for log in logs
         ]
 
+    # ── Export with threading & loading overlay ──────────────────────────────
+
+    def _get_store_path(self) -> Optional[str]:
+        """Return the .sts file path for worker-thread SQLite access."""
+        store = self.store
+        if store is None:
+            return None
+        db = getattr(store, "db", None)
+        path = getattr(db, "path", None) or getattr(store, "path", None)
+        return str(path) if path else None
+
+    def _set_ui_enabled(self, enabled: bool) -> None:
+        for widget in (self.export_btn, self.refresh_btn, self.tabs,
+                       self.platform, self.domestic, self.owner, self.contract, self.status, self.year_range):
+            widget.setEnabled(enabled)
+
     def on_export_excel_clicked(self):
         from src.services.delivery_schedule_excel_exporter import (
             EXCEL_REQUIRED_MESSAGE,
             ExcelComUnavailableError,
-            export_delivery_schedule_report,
             load_delivery_schedule_rows,
             suggested_output_filename,
         )
@@ -677,6 +1060,7 @@ class DeliveryScheduleReportDialog(QDialog):
         if not filters.get("year_range_valid"):
             QMessageBox.warning(self, "Excel Oluştur", "Yıl / aralık formatı hatalı. Örnek: 2026 veya 2026-2027")
             return
+
         preview_rows = load_delivery_schedule_rows(self.store, filters=filters)
         suggested_name = suggested_output_filename(preview_rows)
         output_path, _ = QFileDialog.getSaveFileName(
@@ -687,19 +1071,119 @@ class DeliveryScheduleReportDialog(QDialog):
         )
         if not output_path:
             return
-        try:
-            result = export_delivery_schedule_report(self.store, output_path, filters=filters)
-        except ExcelComUnavailableError:
-            QMessageBox.warning(self, "Microsoft Excel gerekli", EXCEL_REQUIRED_MESSAGE)
+
+        store_path = self._get_store_path()
+        if not store_path:
+            # Fallback: run synchronously if no path available
+            try:
+                from src.services.delivery_schedule_excel_exporter import export_delivery_schedule_report
+                result = export_delivery_schedule_report(self.store, output_path, filters=filters)
+                QMessageBox.information(self, "Excel Oluştur", f"Excel raporu oluşturuldu.\n\nDosya: {result.get('output_path')}\nSatır sayısı: {result.get('row_count')}")
+            except Exception as exc:
+                from src.services.delivery_schedule_excel_exporter import ExcelComUnavailableError as ECUE
+                if isinstance(exc, ECUE):
+                    QMessageBox.warning(self, "Microsoft Excel gerekli", EXCEL_REQUIRED_MESSAGE)
+                else:
+                    QMessageBox.critical(self, "Excel Oluştur", f"Excel raporu oluşturulamadı:\n{exc}")
             return
-        except Exception as exc:
-            QMessageBox.critical(self, "Excel Oluştur", f"Excel raporu oluşturulamadı:\n{exc}")
-            return
+
+        # Save store before export
+        if hasattr(self.store, "save"):
+            try:
+                self.store.save()
+            except Exception:
+                pass
+
+        # Show loading overlay
+        self._loading_overlay = ExcelLoadingOverlay(self)
+        self._loading_overlay.setGeometry(self.rect())
+        self._loading_overlay.show()
+        self._loading_overlay.raise_()
+        self._set_ui_enabled(False)
+
+        # Start worker thread
+        self._export_thread = QThread(self)
+        self._export_worker = ExcelExportWorker(store_path, output_path, filters)
+        self._export_worker.moveToThread(self._export_thread)
+
+        self._export_thread.started.connect(self._export_worker.run)
+        self._export_worker.progress.connect(self._on_export_progress)
+        self._export_worker.finished.connect(self._on_export_finished)
+        self._export_worker.failed.connect(self._on_export_failed)
+        self._export_worker.finished.connect(self._export_thread.quit)
+        self._export_worker.failed.connect(self._export_thread.quit)
+        self._export_thread.finished.connect(self._on_export_thread_finished)
+
+        self._export_thread.start()
+
+    def _on_export_progress(self, value: int, message: str):
+        if self._loading_overlay:
+            self._loading_overlay.update_progress(value, message)
+
+    def _on_export_finished(self, result: dict):
+        self._close_loading()
+        self._set_ui_enabled(True)
         QMessageBox.information(
             self,
             "Excel Oluştur",
             f"Excel raporu oluşturuldu.\n\nDosya: {result.get('output_path')}\nSatır sayısı: {result.get('row_count')}",
         )
+
+    def _on_export_failed(self, error: str):
+        from src.services.delivery_schedule_excel_exporter import EXCEL_REQUIRED_MESSAGE, ExcelComUnavailableError
+        self._close_loading()
+        self._set_ui_enabled(True)
+        if "excel" in error.lower() or "com" in error.lower() or "win32" in error.lower():
+            QMessageBox.warning(self, "Microsoft Excel gerekli", EXCEL_REQUIRED_MESSAGE)
+        else:
+            QMessageBox.critical(self, "Excel Oluştur", f"Excel raporu oluşturulamadı:\n{error}")
+
+    def _close_loading(self):
+        overlay = self._loading_overlay
+        self._loading_overlay = None
+        if overlay:
+            try:
+                overlay.close()
+            except RuntimeError:
+                pass
+
+    def _on_export_thread_finished(self):
+        thread = self.sender()
+        self._export_thread = None
+        self._export_worker = None
+        if thread is not None:
+            try:
+                thread.deleteLater()
+            except RuntimeError:
+                pass
+
+    def _is_export_running(self) -> bool:
+        thread = self._export_thread
+        if thread is None:
+            return False
+        try:
+            return bool(thread.isRunning())
+        except RuntimeError:
+            # PySide wrapper can outlive the C++ QThread after deleteLater().
+            self._export_thread = None
+            self._export_worker = None
+            return False
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        overlay = self._loading_overlay
+        if overlay:
+            try:
+                overlay.setGeometry(self.rect())
+            except RuntimeError:
+                self._loading_overlay = None
+
+    def closeEvent(self, event):
+        if self._is_export_running():
+            QMessageBox.warning(self, "Export Devam Ediyor", "Excel export işlemi devam ediyor. Lütfen bekleyin.")
+            event.ignore()
+            return
+        super().closeEvent(event)
 
     def _extra_style(self):
         return f"""
@@ -725,6 +1209,7 @@ class DeliveryScheduleReportDialog(QDialog):
             font-weight:900;
         }}
         QPushButton#reportPrimaryButton:hover {{ background:#075bd8; border-color:#075bd8; }}
+        QPushButton#reportPrimaryButton:disabled {{ background:#a0aec0; border-color:#a0aec0; }}
         QPushButton#reportSecondaryButton {{
             background:#f8fbff;
             color:#003b83;
@@ -735,6 +1220,7 @@ class DeliveryScheduleReportDialog(QDialog):
             font-weight:900;
         }}
         QPushButton#reportSecondaryButton:hover {{ background:#eaf4ff; border-color:#7fb2f0; }}
+        QPushButton#reportSecondaryButton:disabled {{ background:#f0f0f0; color:#a0aec0; }}
 
         QTabWidget::pane {{
             border:1px solid {GRID};
