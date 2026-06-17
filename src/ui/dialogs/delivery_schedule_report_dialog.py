@@ -348,9 +348,10 @@ class GroupedBarPreview(QWidget):
         self.setMinimumHeight(740)
 
     def set_data(self, users: list[str], parts: list[str], values: dict[str, list[float]]) -> None:
-        self.users = users[:8]
+        self.users = users
         self.parts = parts[:8]
         self.values = {part: values.get(part, [])[:len(self.users)] for part in self.parts}
+        self.setMinimumWidth(max(980, 135 * max(len(self.users), 1) + 300))
         self.update()
 
     def paintEvent(self, event):
@@ -361,13 +362,13 @@ class GroupedBarPreview(QWidget):
         if not self.users or not self.parts:
             p.setPen(QColor(MUTED)); p.drawText(r, Qt.AlignCenter, "Veri bulunamadı")
             return
-        chart = r.adjusted(70, 60, -220, -315)
+        chart = r.adjusted(70, 60, -230, -315)
         maxv = max([max(v or [0]) for v in self.values.values()] or [1]) or 1
         for i in range(6):
             y = chart.bottom() - int(chart.height() * i / 5)
             p.setPen(QPen(QColor("#d8d8d8"))); p.drawLine(chart.left(), y, chart.right(), y)
             p.setPen(QColor("#334155")); p.drawText(chart.left() - 42, y + 4, _fmt_amount(maxv * i / 5))
-        group_w = chart.width() / max(len(self.users), 1); bar_w = max(5, min(18, int(group_w / (len(self.parts) + 2))))
+        group_w = max(118, chart.width() / max(len(self.users), 1)); bar_w = max(4, min(14, int(group_w / (len(self.parts) + 3))))
         for ui, user in enumerate(self.users):
             base_x = chart.left() + ui * group_w + group_w * .16
             for pi, part in enumerate(self.parts):
@@ -378,12 +379,13 @@ class GroupedBarPreview(QWidget):
                 p.setPen(Qt.NoPen); p.setBrush(QColor(CHART_COLORS[pi % len(CHART_COLORS)])); p.drawRect(x, y, bar_w, h)
                 if value:
                     p.setPen(QColor("#111827")); p.drawText(x - 2, y - 5, _fmt_amount(value))
-            p.setPen(QColor("#111827")); p.drawText(int(chart.left() + ui * group_w), chart.bottom() + 24, int(group_w), 20, Qt.AlignCenter, user[:18])
+            label = user if len(user) <= 16 else f"{user[:15]}…"
+            p.setPen(QColor("#111827")); p.drawText(int(chart.left() + ui * group_w), chart.bottom() + 24, int(group_w), 22, Qt.AlignCenter, label)
         lx = r.right() - 175; ly = chart.top() + 80
         p.setPen(QColor("#111827")); p.drawText(lx, ly - 25, "PARÇA ADI ▾")
         for i, part in enumerate(self.parts):
             p.fillRect(lx, ly + i * 28, 10, 10, QColor(CHART_COLORS[i % len(CHART_COLORS)])); p.drawText(lx + 18, ly + 10 + i * 28, part[:22])
-        table_top = chart.bottom() + 58
+        table_top = chart.bottom() + 64
         table = r.adjusted(105, table_top - r.top(), -220, -25)
         cols = [""] + self.users; row_h = 26; col_w = table.width() / max(len(cols), 1)
         p.setPen(QPen(QColor("#d8d8d8")))
@@ -392,7 +394,7 @@ class GroupedBarPreview(QWidget):
                 cell_x = int(table.left() + ci * col_w); cell_y = table.top() + ri * row_h
                 p.drawRect(cell_x, cell_y, int(col_w), row_h)
                 if ri == 0 and ci > 0:
-                    p.drawText(cell_x, cell_y, int(col_w), row_h, Qt.AlignCenter, col[:18])
+                    p.drawText(cell_x, cell_y, int(col_w), row_h, Qt.AlignCenter, col if len(col) <= 14 else f"{col[:13]}…")
                 elif ri > 0 and ci == 0:
                     p.fillRect(cell_x + 8, cell_y + 8, 10, 10, QColor(CHART_COLORS[(ri - 1) % len(CHART_COLORS)])); p.drawText(cell_x + 24, cell_y, int(col_w), row_h, Qt.AlignVCenter, part[:24])
                 elif ri > 0 and ci > 0:
@@ -434,7 +436,7 @@ class DeliveryScheduleReportDialog(QDialog):
         btn = QPushButton("Önizlemeyi Yenile"); btn.clicked.connect(self.refresh_preview); lay.addWidget(btn); lay.addStretch(); return frame
 
     def _combo(self, items):
-        c = QComboBox(); c.addItems(items); c.currentIndexChanged.connect(self.refresh_preview); return c
+        c = QComboBox(); c.addItems(items); return c
 
     def _dashboard_tab(self):
         w = QScrollArea(); w.setWidgetResizable(True); host = QWidget(); lay = QVBoxLayout(host)
@@ -444,7 +446,13 @@ class DeliveryScheduleReportDialog(QDialog):
         for widget in (self.part_bar, self.donut, self.trend):
             card = QFrame(); card.setObjectName("reportCard"); cl = QVBoxLayout(card); cl.addWidget(widget); upper.addWidget(card, 1)
         lay.addLayout(upper)
-        self.chart = GroupedBarPreview(); card = QFrame(); card.setObjectName("reportCard"); cl = QVBoxLayout(card); cl.addWidget(self.chart); lay.addWidget(card)
+        self.chart = GroupedBarPreview()
+        self.chart_scroll = QScrollArea()
+        self.chart_scroll.setWidgetResizable(False)
+        self.chart_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.chart_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.chart_scroll.setWidget(self.chart)
+        card = QFrame(); card.setObjectName("reportCard"); cl = QVBoxLayout(card); cl.addWidget(self.chart_scroll); lay.addWidget(card)
         w.setWidget(host); return w
 
     def _delivery_tab(self): self.delivery_view = self._table(); return self.delivery_view
@@ -471,7 +479,7 @@ class DeliveryScheduleReportDialog(QDialog):
         self.conn = _conn_from_store(self.store)
         self.all_rows = self.load_delivery_rows_from_db()
         self.populate_filters_from_rows(self.all_rows)
-        self.refresh_preview()
+        self.clear_preview()
 
     def _set_combo_items(self, combo: QComboBox, items: list[str], first: str) -> None:
         current = combo.currentText()
@@ -505,6 +513,17 @@ class DeliveryScheduleReportDialog(QDialog):
 
     def _row_payload(self, row: DeliveryRow) -> dict[str, Any]:
         return {"contract_id": row.contract_id, "delivery_id": row.delivery_id, "platform": row.platform, "contract": row.contract, "owner": row.owner, "delivery_user": row.user, "yi_yd": row.domestic, "delivery": row.delivery, "date": row.date_text, "level": row.level, "part": row.part, "planned": row.planned, "delivered": row.delivered, "remaining": row.remaining, "config_type": row.config_type, "note": row.note, "status": row.status}
+
+    def clear_preview(self) -> None:
+        self.filtered_rows = []
+        if not hasattr(self, "delivery_view"):
+            return
+        self.info_label.setText("" if self.conn else "Açık STS veri dosyası bulunamadı; rapor boş gösteriliyor.")
+        self._refresh_kpis([])
+        self._refresh_dashboard_charts([])
+        self._refresh_delivery_table([])
+        self._refresh_matrix_table([])
+        self.rev_view.setModel(SimpleTableModel(["Tarih", "Kullanıcı", "Sözleşme", "Teslimat", "Alan", "Eski Değer", "Yeni Değer", "Açıklama"], [], self))
 
     def refresh_preview(self, *_args):
         if not hasattr(self, "delivery_view"):
@@ -615,7 +634,7 @@ class DeliveryScheduleReportDialog(QDialog):
         self.part_bar.set_data(part_data)
         self.donut.set_data(yi_yd_totals.get("Yİ", 0), yi_yd_totals.get("YD", 0))
         self.trend.set_data([(year, values[0], values[1]) for year, values in sorted(yearly.items())])
-        users = sorted(user_part)[:8]
+        users = sorted(user_part)
         parts = [name for name, _ in part_data[:8]]
         values = {part: [user_part[user].get(part, 0) for user in users] for part in parts}
         self.chart.set_data(users, parts, values)
