@@ -11743,7 +11743,7 @@ class MainWindow(QMainWindow):
     def open_delivery_schedule_report(self):
         from src.ui.dialogs.delivery_schedule_report_dialog import DeliveryScheduleReportDialog
 
-        dlg = DeliveryScheduleReportDialog(self)
+        dlg = DeliveryScheduleReportDialog(self, store=self.store)
         dlg.exec()
 
     def open_usage_guide(self):
