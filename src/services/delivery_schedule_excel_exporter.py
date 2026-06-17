@@ -17,6 +17,24 @@ SOURCE_HEADERS = [
     "Seviye", "Parça No", "Parça", "Sözleşme Adeti", "Teslim Edilen", "Kalan", "Konfigürasyon Tipi", "Opsiyon / Not", "Durum",
 ]
 
+ALLOWED_ENTITY_TYPES = {"contract", "contracts", "delivery", "deliveries", "acceptance", "term", "calendar"}
+ALLOWED_ACTION_KEYWORDS = {"create", "created", "update", "updated", "delete", "deleted", "delivery", "contract", "acceptance", "teslim", "sözleşme", "sozlesme", "termin", "takvim"}
+BLOCKED_KEYWORDS = {"yoğun test log kaydı", "test log", "stress", "bulk", "dummy", "seed", "sql_query_executed"}
+FIELD_LABELS = {
+    "planned_acceptance_date": "Tahmini Teslimat Tarihi",
+    "acceptance_date": "Gerçek Teslim/Kabul Tarihi",
+    "delivery_user_id": "Teslim Kullanıcısı",
+    "planned": "Planlanan Miktar",
+    "delivered": "Teslim Edilen Miktar",
+    "status": "Durum",
+    "note": "Not",
+    "contract_no": "Sözleşme No",
+    "yi_yd": "Yİ/YD",
+    "configuration_type": "Konfigürasyon Tipi",
+    "config_type": "Konfigürasyon Tipi",
+    "option": "Opsiyon",
+}
+
 
 class ExcelComUnavailableError(RuntimeError):
     """Raised when pywin32 or Microsoft Excel COM automation is unavailable."""
@@ -214,32 +232,132 @@ def load_delivery_schedule_rows(store: object, filters: Optional[dict[str, Any]]
     return result
 
 
-def load_activity_rows(store: object) -> list[list[Any]]:
+
+def _as_dict(row: Any) -> dict[str, Any]:
+    if isinstance(row, dict):
+        return row
+    try:
+        return {key: row[key] for key in row.keys()}
+    except Exception:
+        return {}
+
+
+def _json_dict(text: Any) -> dict[str, Any]:
+    if not text:
+        return {}
+    try:
+        value = json.loads(text) if isinstance(text, str) else text
+    except Exception:
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _readable_field_name(value: Any) -> str:
+    field = str(value or "").strip()
+    if not field or len(field) <= 1:
+        return ""
+    return FIELD_LABELS.get(field, field.replace("_", " ").strip().title())
+
+
+def _technical_entity_key(value: Any) -> bool:
+    text = str(value or "").strip().lower()
+    return bool(re.fullmatch(r"(contract|contracts|delivery|deliveries|acceptance|log|row):?\d+", text) or re.fullmatch(r"[a-z_]+:\d+", text))
+
+
+def _extract_revision_parts(row: dict[str, Any]) -> tuple[str, str, str]:
+    before = _json_dict(row.get("before_json"))
+    after = _json_dict(row.get("after_json"))
+    payload = _json_dict(row.get("payload_json"))
+    field = payload.get("field") or payload.get("column") or payload.get("name")
+    if not field and len(before) == 1 and len(after) == 1:
+        before_key = next(iter(before.keys()))
+        after_key = next(iter(after.keys()))
+        if before_key == after_key:
+            field = before_key
+    old_value = payload.get("old") if payload.get("old") is not None else payload.get("before")
+    new_value = payload.get("new") if payload.get("new") is not None else payload.get("after")
+    if field and old_value is None and field in before:
+        old_value = before.get(field)
+    if field and new_value is None and field in after:
+        new_value = after.get(field)
+    if old_value is None and len(before) == 1:
+        old_value = next(iter(before.values()))
+    if new_value is None and len(after) == 1:
+        new_value = next(iter(after.values()))
+    return _readable_field_name(field), "" if old_value is None else str(old_value), "" if new_value is None else str(new_value)
+
+
+def is_meaningful_revision_log(row: dict) -> bool:
+    data = _as_dict(row)
+    action = str(data.get("action") or "").strip().lower()
+    message = str(data.get("message") or "").strip().lower()
+    source = str(data.get("source") or "").strip().lower()
+    entity_type = str(data.get("entity_type") or "").strip().lower()
+    entity_key = str(data.get("entity_key") or "").strip().lower()
+    combined = " ".join([action, message, source, entity_type, entity_key])
+    if "sql terminal" in source:
+        return False
+    if any(keyword in combined for keyword in BLOCKED_KEYWORDS):
+        return False
+    allowed = entity_type in ALLOWED_ENTITY_TYPES or any(keyword in combined for keyword in ALLOWED_ACTION_KEYWORDS)
+    if not allowed:
+        return False
+    field, old_value, new_value = _extract_revision_parts(data)
+    has_json = any(str(data.get(key) or "").strip() not in {"", "{}", "[]", "null"} for key in ("before_json", "after_json", "payload_json"))
+    meaningful_message = len(message) >= 8 and not _technical_entity_key(message)
+    if not has_json and not meaningful_message:
+        return False
+    if not field and not old_value and not new_value and not meaningful_message:
+        return False
+    return True
+
+
+def _revision_log_to_row(row: dict[str, Any], index: int) -> dict[str, Any]:
+    field, old_value, new_value = _extract_revision_parts(row)
+    entity_key = "" if _technical_entity_key(row.get("entity_key")) else str(row.get("entity_key") or "")
+    return {
+        "revision": f"R{index:03d}",
+        "date": str(row.get("created_at") or ""),
+        "user": str(row.get("actor") or "-"),
+        "contract": str(row.get("contract_no") or "-"),
+        "delivery": entity_key or "-",
+        "field": field,
+        "old_value": old_value,
+        "new_value": new_value,
+        "description": str(row.get("message") or ""),
+    }
+
+
+def load_meaningful_revision_logs(store: object, limit: int = 200) -> list[dict[str, Any]]:
     conn = _conn_from_store(store)
     if conn is None:
         return []
-    logs = conn.execute(
+    rows = conn.execute(
         """
         SELECT l.*
         FROM activity_logs l
-        WHERE lower(COALESCE(l.action,'')) LIKE '%delivery%'
-           OR lower(COALESCE(l.action,'')) LIKE '%contract%'
-           OR lower(COALESCE(l.action,'')) LIKE '%acceptance%'
-           OR lower(COALESCE(l.action,'')) LIKE '%teslim%'
-           OR lower(COALESCE(l.action,'')) LIKE '%sözleşme%'
-           OR lower(COALESCE(l.entity_type,'')) IN ('delivery','contract')
         ORDER BY l.created_at DESC
-        LIMIT 200
-        """
+        LIMIT ?
+        """,
+        (max(int(limit or 200) * 5, int(limit or 200)),),
     ).fetchall()
-    rows = []
-    for index, log in enumerate(logs, start=1):
-        rows.append([
-            f"R{index:03d}", str(log["created_at"] or ""), str(log["actor"] or "-"), str(log["contract_no"] or "-"),
-            str(log["entity_key"] or "-"), _json_summary(log["payload_json"] or "") or str(log["action"] or ""),
-            _json_summary(log["before_json"] or ""), _json_summary(log["after_json"] or ""), str(log["message"] or ""),
-        ])
-    return rows
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        data = _as_dict(row)
+        if is_meaningful_revision_log(data):
+            result.append(_revision_log_to_row(data, len(result) + 1))
+        if len(result) >= int(limit or 200):
+            break
+    return result
+
+def load_activity_rows(store: object) -> list[list[Any]]:
+    return [
+        [
+            log["revision"], log["date"], log["user"], log["contract"], log["delivery"],
+            log["field"], log["old_value"], log["new_value"], log["description"],
+        ]
+        for log in load_meaningful_revision_logs(store, limit=200)
+    ]
 
 
 def suggested_output_filename(rows: list[dict[str, Any]], created_at: Optional[date] = None) -> str:

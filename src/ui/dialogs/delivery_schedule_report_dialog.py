@@ -645,34 +645,24 @@ class DeliveryScheduleReportDialog(QDialog):
         self.chart.set_data(users, parts, values)
 
     def load_activity_log_preview(self, filters: dict[str, Any]) -> list[list[str]]:
-        if not self.conn:
-            return []
-        try:
-            logs = self.conn.execute(
-                """
-                SELECT l.*, p.name AS platform
-                FROM activity_logs l
-                LEFT JOIN platforms p ON p.id = l.platform_id
-                WHERE lower(COALESCE(l.action,'')) LIKE '%delivery%'
-                   OR lower(COALESCE(l.action,'')) LIKE '%contract%'
-                   OR lower(COALESCE(l.action,'')) LIKE '%acceptance%'
-                   OR lower(COALESCE(l.action,'')) LIKE '%teslim%'
-                   OR lower(COALESCE(l.action,'')) LIKE '%sözleşme%'
-                   OR lower(COALESCE(l.entity_type,'')) IN ('delivery','contract')
-                ORDER BY l.created_at DESC
-                LIMIT 200
-                """
-            ).fetchall()
-        except Exception:
-            return []
-        rows = []
-        for log in logs:
-            before = _json_summary(log["before_json"] or "")
-            after = _json_summary(log["after_json"] or "")
-            payload = _json_summary(log["payload_json"] or "")
-            field = payload or str(log["action"] or "")
-            rows.append([str(log["created_at"] or ""), str(log["actor"] or "-"), str(log["contract_no"] or "-"), str(log["entity_key"] or "-"), field, before, after, str(log["message"] or "")])
-        return rows
+        from src.services.delivery_schedule_excel_exporter import load_meaningful_revision_logs
+
+        logs = load_meaningful_revision_logs(self.store, limit=200)
+        if not logs:
+            return [["", "", "", "", "", "", "", "Henüz anlamlı revizyon kaydı bulunmuyor."]]
+        return [
+            [
+                str(log.get("date") or ""),
+                str(log.get("user") or "-"),
+                str(log.get("contract") or "-"),
+                str(log.get("delivery") or "-"),
+                str(log.get("field") or ""),
+                str(log.get("old_value") or ""),
+                str(log.get("new_value") or ""),
+                str(log.get("description") or ""),
+            ]
+            for log in logs
+        ]
 
     def on_export_excel_clicked(self):
         from src.services.delivery_schedule_excel_exporter import (
