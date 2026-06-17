@@ -6772,7 +6772,9 @@ class ContractSharePopover(QFrame):
 
     def filename(self) -> str:
         no = re.sub(r"[^A-Za-z0-9_.-]+", "-", str(getattr(self.owner.ci, "no", "") or "sozlesme")).strip("-._") or "sozlesme"
-        return f"STS-{no}__paylasim__{self.share_mode()}.sts"
+        stamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
+        mode = "edit" if self.share_mode() == "duzenle" else "view"
+        return f"STS-{no}__share-{mode}__{stamp}.sts"
 
     def update_preview(self):
         self.preview.setText(self.filename())
@@ -6882,16 +6884,26 @@ class ContractWorkWindow(QDialog):
             return
         view_only = self._share_is_view_only()
         self.setWindowTitle(f"{APP_TITLE} - Paylaşım ({'Görüntüleme' if view_only else 'Düzenleme'})")
+        band = getattr(self, "share_info_band", None)
+        if band is not None:
+            band.setText("Paylaşım Modu: Görüntüleme — Bu dosyada düzenleme kapalıdır." if view_only else "Paylaşım Modu: Düzenleme — Yalnızca bu sözleşme düzenlenebilir.")
+            band.setVisible(True)
         for attr in ("save_btn", "edit_system_btn", "add_system_btn", "add_delivery_btn", "auto_accept_btn", "delete_system_btn"):
             widget = getattr(self, attr, None)
             if widget is not None:
                 widget.setEnabled(not view_only)
+                if view_only:
+                    widget.setToolTip("Paylaşım görüntüleme modunda bu işlem kapalıdır.")
         if hasattr(self, "delete_contract_btn"):
             self.delete_contract_btn.setVisible(not view_only)
             self.delete_contract_btn.setEnabled(not view_only)
+            if view_only:
+                self.delete_contract_btn.setToolTip("Paylaşım görüntüleme modunda bu işlem kapalıdır.")
         header_edit = getattr(self, "header_edit_btn", None)
         if header_edit is not None:
             header_edit.setEnabled(not view_only)
+            if view_only:
+                header_edit.setToolTip("Paylaşım görüntüleme modunda bu işlem kapalıdır.")
         for table_name in ("summary", "del_table"):
             table = getattr(self, table_name, None)
             if table is not None:
@@ -7187,6 +7199,13 @@ class ContractWorkWindow(QDialog):
         body.addWidget(left_block, 0)
 
         right = QFrame(); right.setObjectName("contentPanel"); rv = QVBoxLayout(right); rv.setContentsMargins(16, 10, 16, 12); rv.setSpacing(8); body.addWidget(right, 1)
+
+        self.share_info_band = QLabel("")
+        self.share_info_band.setObjectName("shareInfoBand")
+        self.share_info_band.setWordWrap(True)
+        self.share_info_band.setVisible(False)
+        self.share_info_band.setStyleSheet("QLabel#shareInfoBand{background:#eff6ff;color:#1e3a8a;border:1px solid #bfdbfe;border-radius:8px;padding:6px 10px;font-size:12px;font-weight:700;}")
+        rv.addWidget(self.share_info_band, 0)
 
         self.side_meta_host = QWidget(right)
         self.side_meta_host.setObjectName("contractTabsHost")
@@ -8684,10 +8703,79 @@ class ContractWorkWindow(QDialog):
             btn_bulk_dl.clicked.connect(lambda: self._bulk_download_files(_get_selected_file_ids()))
             btn_bulk_zip.clicked.connect(lambda: self._bulk_zip_files(_get_selected_file_ids()))
 
+    def _contract_document_share_stats(self) -> tuple[int, int]:
+        try:
+            files = list(self._load_contract_files())
+            return len(files), sum(int(item.get("size_bytes", 0) or 0) for item in files)
+        except Exception:
+            return 0, 0
+
+    def _copy_contract_documents_to_share(self, share_store, share_ci) -> tuple[int, int]:
+        folders = list(self._load_contract_file_folders())
+        files = list(self._load_contract_files())
+        if not folders and not files:
+            return 0, 0
+        folder_id_map = {}
+        pending = [dict(f) for f in folders]
+        while pending:
+            progressed = False
+            for folder in pending[:]:
+                old_parent = folder.get("parent_id")
+                if old_parent not in (None, "", 0) and int(old_parent) not in folder_id_map:
+                    continue
+                created = share_store.create_contract_file_folder(
+                    str(share_ci.platform or ""),
+                    str(share_ci.no or ""),
+                    str(share_ci.contract_type or "Ana Sözleşme"),
+                    parent_id=folder_id_map.get(int(old_parent)) if old_parent not in (None, "", 0) else None,
+                    name=str(folder.get("name") or "Klasör"),
+                )
+                folder_id_map[int(folder.get("id"))] = int(created.get("id") or 0)
+                pending.remove(folder)
+                progressed = True
+            if not progressed:
+                break
+        copied = 0
+        total = 0
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir_path = Path(tmpdir)
+            for item in files:
+                file_id = int(item.get("id") or 0)
+                if not file_id:
+                    continue
+                filename, _mime, content = self.store.get_contract_file_bytes(file_id)
+                safe_name = Path(str(filename or f"belge-{file_id}")).name
+                tmp_file = tmpdir_path / safe_name
+                suffix = 1
+                while tmp_file.exists():
+                    tmp_file = tmpdir_path / f"{tmp_file.stem}-{suffix}{tmp_file.suffix}"
+                    suffix += 1
+                tmp_file.write_bytes(content)
+                old_folder_id = item.get("folder_id")
+                new_folder_id = folder_id_map.get(int(old_folder_id)) if old_folder_id not in (None, "", 0) else None
+                share_store.add_contract_file(
+                    str(share_ci.platform or ""),
+                    str(share_ci.no or ""),
+                    tmp_file,
+                    str(share_ci.contract_type or "Ana Sözleşme"),
+                    note=str(item.get("note") or ""),
+                    folder_id=new_folder_id,
+                )
+                copied += 1
+                total += len(content)
+        return copied, total
+
     def create_contract_share_file(self, permission: str, default_filename: str):
         """Create a real single-contract STS share file with share metadata."""
         if not self.require_permission_ui("export_data", "Sözleşme Paylaşımı"):
             return
+        doc_count, doc_bytes = self._contract_document_share_stats()
+        if doc_count > 0:
+            QMessageBox.information(
+                self,
+                "Paylaşım Belgeleri",
+                "Bu sözleşmeye bağlı belgeler paylaşım dosyasına dahil edilir. Dosya boyutu artabilir.",
+            )
         target, _ = QFileDialog.getSaveFileName(self, "Paylaşım Dosyası Oluştur", default_filename, "STS Dosyası (*.sts)")
         if not target:
             return
@@ -8710,6 +8798,7 @@ class ContractWorkWindow(QDialog):
                 [dict(t or {}) for t in self.contract_tags],
                 actor="Sözleşme Paylaşımı",
             )
+            copied_docs, copied_doc_bytes = self._copy_contract_documents_to_share(share_store, share_ci)
             try:
                 share_store.db.conn.commit()
                 share_store.db.close()
@@ -8721,10 +8810,12 @@ class ContractWorkWindow(QDialog):
                 "permission_mode": "edit" if permission == "duzenle" else "view",
                 "source_contract_no": str(getattr(self.ci, "no", "") or ""),
                 "created_at": datetime.now().isoformat(timespec="seconds"),
+                "document_count": copied_docs,
+                "document_bytes": copied_doc_bytes,
             })
             QMessageBox.information(self, "Paylaşım", "Paylaşım STS dosyası oluşturuldu.")
         except Exception as exc:
-            QMessageBox.warning(self, "Paylaşım", f"Paylaşım dosyası oluşturulamadı:\n{exc}")
+            QMessageBox.warning(self, "Paylaşım dosyası oluşturulamadı.", str(exc))
 
     def _make_card_scroll(self):
         scroll = QScrollArea(); scroll.setWidgetResizable(True); scroll.setFrameShape(QFrame.NoFrame)
@@ -8752,7 +8843,10 @@ class ContractWorkWindow(QDialog):
         title = ElidedLabel(name); title.setMinimumWidth(0); title.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed); title.setToolTip(name); title.setStyleSheet("color:#10233d; font-size:12px; font-weight:900;")
         meta = QLabel("Sözleşmeye atanmış etiket"); meta.setStyleSheet("color:#64748b; font-size:10px;")
         column.addWidget(title); column.addWidget(meta)
-        remove = QPushButton("×"); remove.setObjectName("tagRemoveButton"); remove.setFixedSize(29, 29); remove.setToolTip("Etiketi kaldır"); remove.clicked.connect(lambda _=False, nm=name: self.remove_contract_tag(nm))
+        remove = QPushButton("×"); remove.setObjectName("tagRemoveButton"); remove.setFixedSize(29, 29); remove.setToolTip("Etiketi kaldır"); remove.setEnabled(not self._share_is_view_only());
+        if self._share_is_view_only():
+            remove.setToolTip("Paylaşım görüntüleme modunda bu işlem kapalıdır.")
+        remove.clicked.connect(lambda _=False, nm=name: self.remove_contract_tag(nm))
         row.addWidget(dot); row.addWidget(middle, 1); row.addWidget(remove)
         return card
 
@@ -8883,6 +8977,11 @@ class ContractWorkWindow(QDialog):
             "QScrollBar::handle:vertical:hover{background:#9eb8d7;}"
             "QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical{height:0;}"
         )
+        if self._share_is_view_only():
+            tree.setAcceptDrops(False)
+            tree.setDragEnabled(False)
+            tree.setDragDropMode(QAbstractItemView.NoDragDrop)
+            tree.setEditTriggers(QAbstractItemView.NoEditTriggers)
         tree.filesDropped.connect(lambda paths, folder_id: self._add_contract_files(paths, folder_id))
         tree.invalidDrop.connect(lambda message: QMessageBox.warning(self, "Dosya yüklenemedi", message))
         tree.itemMoved.connect(self._handle_tree_item_move)
@@ -8986,6 +9085,8 @@ class ContractWorkWindow(QDialog):
         return None
 
     def _start_rename_item(self, item):
+        if not self._ensure_share_can_edit("Belgeler"):
+            return
         """Klasör rename editörünü aç ve metni seçili göster."""
         tree = getattr(self, "contract_files_tree", None)
         if not tree or not item:
@@ -9149,6 +9250,8 @@ class ContractWorkWindow(QDialog):
             self._start_rename_item(item)
 
     def on_contract_file_tree_item_changed(self, item, column):
+        if not self._ensure_share_can_edit("Belgeler"):
+            return
         if not self._ensure_document_access(interactive=True):
             return
         if getattr(self, "_building_file_tree", False) or not item or item.data(0, Qt.UserRole) != "folder":
@@ -9242,6 +9345,8 @@ class ContractWorkWindow(QDialog):
             self._end_side_meta_modal_action()
 
     def show_contract_file_tree_menu(self, pos):
+        if not self._ensure_share_can_edit("Belgeler"):
+            return
         if not self._ensure_document_access(interactive=True):
             return
         tree = getattr(self, "contract_files_tree", None)
@@ -9307,6 +9412,8 @@ class ContractWorkWindow(QDialog):
         menu.exec(tree.viewport().mapToGlobal(pos))
 
     def _add_files_to_folder(self, folder_id):
+        if not self._ensure_share_can_edit("Belgeler"):
+            return
         """Belirli bir klasöre dosya ekle."""
         if not self._ensure_document_access(interactive=True):
             return
@@ -9324,6 +9431,8 @@ class ContractWorkWindow(QDialog):
             self._add_contract_files(paths, folder_id)
 
     def _add_subfolder(self, parent_folder_id):
+        if not self._ensure_share_can_edit("Belgeler"):
+            return
         """Mevcut klasörün altına alt klasör ekle."""
         if not self._ensure_document_access(interactive=True):
             return
@@ -9479,6 +9588,8 @@ class ContractWorkWindow(QDialog):
             QMessageBox.warning(self, "ZIP oluşturulamadı", str(exc))
 
     def _bulk_delete_files(self, file_ids: list):
+        if not self._ensure_share_can_edit("Belgeler"):
+            return
         """Seçili dosyaları sil."""
         if not self._ensure_document_access(interactive=True):
             return
@@ -9697,6 +9808,8 @@ class ContractWorkWindow(QDialog):
         self._add_contract_files(paths, self._selected_document_folder_id())
 
     def _handle_tree_item_move(self, kind: str, item_id: int, target_folder_id):
+        if not self._ensure_share_can_edit("Belgeler"):
+            return
         """Tree içinde sürükle-bırak taşıma işlemini yönet."""
         if not self._ensure_document_access(interactive=True):
             return
@@ -9741,6 +9854,8 @@ class ContractWorkWindow(QDialog):
             QMessageBox.warning(self, "Taşıma hatası", str(exc))
 
     def _add_contract_files(self, file_paths, folder_id=None):
+        if not self._ensure_share_can_edit("Belgeler"):
+            return
         if not self._ensure_document_access(interactive=True):
             return
         paths = [str(path or "").strip() for path in (file_paths or []) if str(path or "").strip()]
@@ -9886,6 +10001,8 @@ class ContractWorkWindow(QDialog):
         self._pending_doc_files.clear()
 
     def _import_contract_folders(self, folder_paths, parent_folder_id=None):
+        if not self._ensure_share_can_edit("Belgeler"):
+            return
         """Windows'tan sürüklenen klasörleri recursive olarak STS içine aktarır."""
         if not self._ensure_document_access(interactive=True):
             return
@@ -10015,6 +10132,8 @@ class ContractWorkWindow(QDialog):
             self._end_side_meta_modal_action()
 
     def show_contract_file_button_menu(self, file_id: int, button):
+        if not self._ensure_share_can_edit("Belgeler"):
+            return
         if not self._ensure_document_access(interactive=True):
             return
         menu = QMenu(self)
@@ -13496,12 +13615,20 @@ def open_share_contract_window(path: Path | str) -> Optional[ContractWorkWindow]
     if not meta:
         return None
     store = STSStore(Path(path), actor="Paylaşım")
-    contract_id = int(meta.get("contract_id") or 0)
+    rows = store.build_contract_index()
+    if not rows:
+        raise ValueError("Paylaşım dosyasında sözleşme bulunamadı.")
+    source_no = str(meta.get("source_contract_no") or "").strip()
+    selected = None
+    if source_no:
+        selected = next((r for r in rows if str(r.get("no") or "").strip() == source_no), None)
+    if selected is None:
+        contract_id = int(meta.get("contract_id") or 0)
+        selected = next((r for r in rows if int(r.get("row") or 0) == contract_id), None) if contract_id else None
+    selected = selected or rows[0]
+    contract_id = int(selected.get("row") or meta.get("contract_id") or 0)
     if contract_id <= 0:
-        rows = store.build_contract_index()
-        if not rows:
-            raise ValueError("Paylaşım dosyasında sözleşme bulunamadı.")
-        contract_id = int(rows[0].get("row") or 0)
+        raise ValueError("Paylaşım sözleşmesi bulunamadı.")
     row = store.db.conn.execute("SELECT c.contract_no,c.contract_type,p.name AS platform,c.platform_id FROM contracts c JOIN platforms p ON p.id=c.platform_id WHERE c.id=?", (contract_id,)).fetchone()
     if not row:
         raise ValueError("Paylaşım sözleşmesi bulunamadı.")
