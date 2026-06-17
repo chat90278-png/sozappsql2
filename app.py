@@ -11741,6 +11741,8 @@ class MainWindow(QMainWindow):
         self.open_staff_permissions_dialog("rolePermissions")
 
     def open_delivery_schedule_report(self):
+        from src.ui.dialogs.delivery_schedule_report_dialog import DeliveryScheduleReportDialog
+
         dlg = DeliveryScheduleReportDialog(self)
         dlg.exec()
 
