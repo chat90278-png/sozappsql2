@@ -117,7 +117,7 @@ def edit_delivery(self, idx: int):
             idx_user = dlg.delivery_user_combo.findText(delivery_user, Qt.MatchExactly)
         dlg.delivery_user_combo.setCurrentIndex(max(0, idx_user))
 
-    # Restore planned/delivered values; use _comp_row for correct row index (unit tracking adds extra rows)
+    # Restore planned/delivered values; _comp_row maps visible rows in the fixed 4-column table.
     dlg._updating_qty = True
     for comp in dlg.component_keys:
         data_row = dlg._comp_row.get(comp)
@@ -127,12 +127,10 @@ def edit_delivery(self, idx: int):
         d_item = dlg.qty_table.item(data_row, 2)
         if p_item:
             p_item.setText(self._fmt_num(current.planned.get(comp, 0)))
-        if d_item and not dlg._is_unit_tracking(comp):
+        if d_item:
             d_item.setText(self._fmt_num(current.delivered.get(comp, 0)))
         dlg._update_remaining_row(data_row)
     dlg._updating_qty = False
-    # Sync unit tracking panels that were created during _populate_qty_table
-    dlg._sync_all_delivered_from_panels()
     dlg.refresh_assignment_card()
 
     overlay = QWidget(self)
