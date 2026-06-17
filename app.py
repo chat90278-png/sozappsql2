@@ -13,6 +13,7 @@ import traceback
 import tempfile
 import zipfile
 import unicodedata
+import logging
 from pathlib import Path
 from datetime import date, datetime, timedelta
 from typing import Callable, Dict, List, Optional, Protocol, Tuple
@@ -673,6 +674,49 @@ from src.services.excel_store import ExcelStore
 from src.services.sts_store import STSStore
 from src import auth
 from src.workers import ExcelLoadWorker, UserSaveWorker, ContractSaveWorker, AnalyzeDialog
+
+_log = logging.getLogger("STS")
+
+
+class STSLoadWorker(QObject):
+    """STS dosyasını ana thread'i bloklamadan önce doğrular.
+
+    KURAL: Bu worker hiçbir zaman STSStore, STSDatabase veya sqlite3.connect
+    nesnesi ANA THREAD'E AKTARMAZ. SQLite connection thread'e bağlıdır;
+    worker thread'de oluşturulan bir connection ana thread'de kullanılırsa
+    ProgrammingError (check_same_thread=True default) veya veri bozulması olur.
+
+    Worker yalnızca dosya varlığı ve magic-bytes doğrulaması yapar, ardından
+    parametresiz finished() sinyali gönderir. Asıl STSStore ve contract index
+    ana thread'de _on_sts_load_finished() içinde oluşturulur.
+    """
+
+    progress = Signal(int, str)
+    # Sinyalde STSStore / bağlantı nesnesi YOK — sadece kontrol sonucu
+    finished = Signal()
+    failed = Signal(str)
+
+    def __init__(self, path: Path):
+        super().__init__()
+        self.path = Path(path)
+
+    def run(self):
+        try:
+            self.progress.emit(15, "STS dosyası doğrulanıyor...")
+            if not self.path.exists():
+                raise FileNotFoundError(f"Dosya bulunamadı: {self.path}")
+            if not self.path.is_file():
+                raise ValueError(f"Geçerli bir dosya değil: {self.path}")
+            # Hafif ön-kontrol: SQLite magic bytes (connection açmadan)
+            with open(self.path, "rb") as fh:
+                header = fh.read(16)
+            if not header.startswith(b"SQLite format 3"):
+                raise ValueError("Dosya geçerli bir STS/SQLite veritabanı değil.")
+            self.progress.emit(80, "Doğrulama tamamlandı, yükleniyor...")
+            self.finished.emit()
+        except Exception as exc:
+            _log.exception("STSLoadWorker doğrulama hatası")
+            self.failed.emit(str(exc))
 
 
 class SystemTypeStore(Protocol):
@@ -4302,23 +4346,32 @@ class TagManagerDialog(StyledDialog):
             note=self.note_edit.toPlainText().strip(),
             active=bool(self.active_check.isChecked()),
         )
-        self.op_hint.setText("Etiket kaydediliyor...")
-        QApplication.processEvents()
-        self.store.upsert_tag_def(tag)
-        if old_name and self._tag_key(old_name) != self._tag_key(name):
-            self.store.rename_tag_assignments(old_name, name, tag.color)
-            self.store.delete_tag_def(old_name)
-        if is_draft and self.selected_tag_key:
-            self._draft_tags.pop(self.selected_tag_key, None)
-            self._draft_order = [k for k in self._draft_order if k != self.selected_tag_key]
-        self.changed = True
-        self.reload_data(keep_selection=False)
-        self.op_hint.setText("")
-        for i in range(self.tag_list.count()):
-            it = self.tag_list.item(i)
-            if str(it.data(Qt.UserRole) or "") == self._tag_key(name):
-                self.tag_list.setCurrentRow(i)
-                break
+        # processEvents öncesi tüm işlem butonlarını kapat — reentrancy önleme
+        self.save_btn.setEnabled(False)
+        self.del_btn.setEnabled(False)
+        self.cancel_btn.setEnabled(False)
+        try:
+            self.op_hint.setText("Etiket kaydediliyor...")
+            QApplication.processEvents()
+            self.store.upsert_tag_def(tag)
+            if old_name and self._tag_key(old_name) != self._tag_key(name):
+                self.store.rename_tag_assignments(old_name, name, tag.color)
+                self.store.delete_tag_def(old_name)
+            if is_draft and self.selected_tag_key:
+                self._draft_tags.pop(self.selected_tag_key, None)
+                self._draft_order = [k for k in self._draft_order if k != self.selected_tag_key]
+            self.changed = True
+            self.reload_data(keep_selection=False)
+            self.op_hint.setText("")
+            for i in range(self.tag_list.count()):
+                it = self.tag_list.item(i)
+                if str(it.data(Qt.UserRole) or "") == self._tag_key(name):
+                    self.tag_list.setCurrentRow(i)
+                    break
+        finally:
+            self.save_btn.setEnabled(True)
+            self.del_btn.setEnabled(True)
+            self.cancel_btn.setEnabled(True)
 
     def delete_tag(self):
         if not self.selected_tag_key:
@@ -4342,12 +4395,21 @@ class TagManagerDialog(StyledDialog):
             f"'{tag.name}' etiketi silinecek.\nBu etikete ait tüm atamalar da kaldırılır.\n\nDevam edilsin mi?",
         ):
             return
-        self.op_hint.setText("Etiket siliniyor...")
-        QApplication.processEvents()
-        self.store.delete_tag_def(tag.name)
-        self.changed = True
-        self.reload_data(keep_selection=False)
-        self.op_hint.setText("")
+        # processEvents öncesi tüm işlem butonlarını kapat — reentrancy önleme
+        self.save_btn.setEnabled(False)
+        self.del_btn.setEnabled(False)
+        self.cancel_btn.setEnabled(False)
+        try:
+            self.op_hint.setText("Etiket siliniyor...")
+            QApplication.processEvents()
+            self.store.delete_tag_def(tag.name)
+            self.changed = True
+            self.reload_data(keep_selection=False)
+            self.op_hint.setText("")
+        finally:
+            self.save_btn.setEnabled(True)
+            self.del_btn.setEnabled(True)
+            self.cancel_btn.setEnabled(True)
 
 
 class SystemDialog(StyledDialog):
@@ -10779,6 +10841,10 @@ class MainWindow(QMainWindow):
         self._loading = False
         self._loader_thread: Optional[QThread] = None
         self._loader_worker: Optional[ExcelLoadWorker] = None
+        self._sts_loader_thread: Optional[QThread] = None
+        self._sts_loader_worker: Optional[STSLoadWorker] = None
+        self._export_thread: Optional[QThread] = None
+        self._export_worker = None
         self._streaming_index = False
         self._store_loading = False
         self._last_load_timings: Dict[str, float] = {}
@@ -10816,6 +10882,10 @@ class MainWindow(QMainWindow):
 
 
     def export_sts_to_excel(self):
+        if self._export_thread and self._export_thread.isRunning():
+            QMessageBox.information(self, "Excel’e Aktar",
+                                    "İşlem devam ediyor, lütfen bekleyin.")
+            return
         if not self.require_permission_ui("export_data", "Excel’e Aktar"):
             return
         if not self.store:
@@ -10885,11 +10955,16 @@ class MainWindow(QMainWindow):
         self._export_worker.failed.connect(self._export_thread.quit)
         self._export_thread.finished.connect(self._export_worker.deleteLater)
         self._export_thread.finished.connect(self._export_thread.deleteLater)
+        self._export_thread.finished.connect(self._clear_export_refs)
         self._export_thread.start()
 
     # --- Excel export slot'ları: sinyaller worker thread'inden gelir ama bu
     # metotlar ana pencerenin (ana thread) metodu olduğu için Qt bunları
     # QueuedConnection ile ana thread'de çalıştırır. GUI burada güvendedir. ---
+
+    def _clear_export_refs(self):
+        self._export_thread = None
+        self._export_worker = None
 
     def _on_export_progress(self, p, m):
         dlg = getattr(self, "_export_progress", None)
@@ -12064,15 +12139,88 @@ class MainWindow(QMainWindow):
 
 
     def start_sts_load(self, path: Path):
+        """STS dosyasını yükler.
+
+        Adımlar:
+        1. STSLoadWorker arka planda dosya doğrulaması yapar (magic bytes).
+        2. finished() sinyali gelince _on_sts_load_finished() ana thread'de
+           STSStore ve contract_index oluşturur.
+
+        SQLite connection YALNIZCA ana thread'de (adım 2'de) açılır.
+        Worker hiçbir zaman connection nesnesi taşımaz.
+        """
+        if self._sts_loader_thread and self._sts_loader_thread.isRunning():
+            return
         self.path = Path(path)
-        actor = str((self.current_staff or {}).get("full_name") or "Personel")
-        self.store = STSStore(self.path, actor=actor)
-        self.contract_index = self.store.build_contract_index()
+        self.store = None
+        self.contract_index = []
         self._tag_color_map_cache = None
+        self._store_loading = True
+        self.set_loading_state(True, "STS dosyası yükleniyor...")
+
+        thread = QThread(self)
+        worker = STSLoadWorker(self.path)
+        worker.moveToThread(thread)
+
+        thread.started.connect(worker.run)
+        worker.progress.connect(self._on_sts_load_progress)
+        worker.finished.connect(self._on_sts_load_finished)
+        worker.failed.connect(self._on_sts_load_failed)
+        worker.finished.connect(thread.quit)
+        worker.failed.connect(thread.quit)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(self._clear_sts_loader_refs)
+
+        self._sts_loader_thread = thread
+        self._sts_loader_worker = worker
+        thread.start()
+
+    def _clear_sts_loader_refs(self):
+        self._sts_loader_thread = None
+        self._sts_loader_worker = None
+
+    def _on_sts_load_progress(self, percent: int, message: str):
+        self.set_loading_state(True, f"{message}  %{percent}")
+
+    def _on_sts_load_finished(self):
+        """Worker doğrulamayı geçti; STSStore ve index ANA THREAD'de açılır.
+
+        SQLite connection burada oluşur — hiçbir zaman worker thread'den
+        taşınmaz.  build_contract_index() büyük dosyalarda birkaç saniye
+        sürebilir; ilerleyen sürümlerde bu aşama da ayrı bir worker'a
+        taşınabilir (connection o worker'da açılıp kapatılır, yalnızca
+        list[dict] ana thread'e döner).
+        """
+        actor = str((self.current_staff or {}).get("full_name") or "Personel")
+        try:
+            self.store = STSStore(self.path, actor=actor)
+            self.contract_index = self.store.build_contract_index()
+        except Exception as exc:
+            _log.exception("STSStore ana-thread açılış hatası")
+            self._store_loading = False
+            self.set_loading_state(False)
+            self.set_empty_state()
+            QMessageBox.critical(self, "STS yükleme hatası",
+                                 f"STS dosyası açılamadı.\n\n{exc}")
+            return
+        self._tag_color_map_cache = None
+        self._store_loading = False
+        self.set_loading_state(False)
         self._set_platform_items(self.store.platform_names())
         self.update_alert_strip()
         self._apply_platform_selection()
         self.connection_label.setText("✓ STS veri dosyası bağlı")
+        self._apply_version_to_ui()
+        self._remember_version_baseline()
+
+    def _on_sts_load_failed(self, error_text: str):
+        self._store_loading = False
+        self.set_loading_state(False)
+        self.set_empty_state()
+        _log.error("STS doğrulama hatası: %s", error_text)
+        QMessageBox.critical(self, "STS yükleme hatası",
+                             f"STS dosyası okunamadı.\n\n{error_text}")
 
     def is_sts_mode(self) -> bool:
         return (
@@ -12993,6 +13141,28 @@ if __name__ == "__main__":
     sys.excepthook = _global_exc_handler
     configure_windows_app_identity()
     app = QApplication(sys.argv)
+
+    # ── Global yakalanmamış exception handler ────────────────────────────────
+    # QApplication oluşturulduktan SONRA kurulur; böylece handler içinde
+    # QApplication.instance() kontrolü güvenle yapılabilir.
+    # NOT: sys.excepthook yalnızca ana thread ve threading.Thread için çalışır;
+    # QThread içindeki hatalar worker'ların kendi except bloklarında yakalanır.
+    def _global_exc_handler(exc_type, exc_val, exc_tb):
+        if issubclass(exc_type, (KeyboardInterrupt, SystemExit)):
+            sys.__excepthook__(exc_type, exc_val, exc_tb)
+            return
+        _log.critical("Yakalanmamış hata", exc_info=(exc_type, exc_val, exc_tb))
+        # QApplication yoksa veya kapanıyorsa sadece logla, GUI gösterme
+        q_app = QApplication.instance()
+        if q_app is None:
+            return
+        try:
+            msg = f"Beklenmeyen bir hata oluştu.\n\n{exc_val}"
+            QMessageBox.critical(None, "Kritik Hata", msg)
+        except Exception:
+            pass
+
+    sys.excepthook = _global_exc_handler
     app.setApplicationName("STS")
     app.setApplicationDisplayName("STS")
     app.setDesktopFileName(APP_ID)
@@ -13031,6 +13201,7 @@ if __name__ == "__main__":
             else:
                 win.start_excel_load(selected_path)
         except Exception as exc:
+            _log.exception("Başlangıç yükleme hatası")
             traceback.print_exc()
             QMessageBox.critical(win, "Açılış hatası", f"Uygulama başlatılırken hata oluştu.\n\n{exc}")
             app.quit()
