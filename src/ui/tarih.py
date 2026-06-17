@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import calendar
+import logging
+import sqlite3
 from datetime import date, datetime
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Tuple
 
-from PySide6.QtCore import Qt, QPropertyAnimation, QEasingCurve, QTimer, Signal
+from PySide6.QtCore import Qt, QObject, QPropertyAnimation, QEasingCurve, QThread, QTimer, Signal
 from PySide6.QtWidgets import (
     QApplication, QDialog, QFrame, QGridLayout, QHBoxLayout,
     QLabel, QComboBox, QPushButton, QScrollArea, QSizePolicy,
@@ -15,6 +17,170 @@ from PySide6.QtWidgets import (
 from src.config.app_config import APP_TITLE, TR_MONTHS
 from src.services.excel_store import ExcelStore
 from src.ui.theme import STYLE
+
+_log = logging.getLogger("STS.calendar")
+
+
+# ---------------------------------------------------------------------------
+# CalendarDataWorker — ağır veri hazırlığını arka thread'e taşır
+# KURAL: Bu worker hiçbir zaman SQLite connection veya STSStore nesnesi
+#        ana thread'e aktarmaz. Yalnızca list[dict] döndürür.
+# ---------------------------------------------------------------------------
+class CalendarDataWorker(QObject):
+    progress = Signal(int, str)
+    finished = Signal(list, list)  # (contract_events, system_events) - saf veri
+    failed   = Signal(str)
+
+    def __init__(self, db_path, year_from: int, year_to: int,
+                 platform_filter: str = ""):
+        super().__init__()
+        self._db_path         = db_path
+        self._year_from       = int(year_from)
+        self._year_to         = int(year_to)
+        self._platform_filter = str(platform_filter or "")
+
+    def run(self) -> None:
+        conn = None
+        try:
+            self.progress.emit(5, "Veritabanı bağlanıyor...")
+            conn = sqlite3.connect(str(self._db_path))
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA query_only=ON")
+            conn.execute("PRAGMA cache_size=-32000")
+
+            yf = str(self._year_from)
+            yt = str(self._year_to)
+            pf = self._platform_filter
+            pc = "AND p.name = ?" if pf else ""
+
+            self.progress.emit(15, "Sozlesme tarihleri okunuyor...")
+            c_params = [yf, yt, yf, yt]
+            if pf:
+                c_params.append(pf)
+            c_rows = conn.execute(
+                "SELECT c.id AS row_id, p.name AS platform,"
+                " c.contract_no AS no, c.contract_type AS type,"
+                " c.status, c.completion_date, c.acceptance_date,"
+                " c.note AS content"
+                " FROM contracts c"
+                " JOIN contract_platforms cp ON cp.contract_id = c.id"
+                " JOIN platforms p           ON p.id = cp.platform_id"
+                " WHERE ("
+                "   (c.completion_date != '' AND c.completion_date IS NOT NULL"
+                "       AND SUBSTR(c.completion_date,1,4) BETWEEN ? AND ?)"
+                "   OR"
+                "   (c.acceptance_date != '' AND c.acceptance_date IS NOT NULL"
+                "       AND SUBSTR(c.acceptance_date,1,4) BETWEEN ? AND ?)"
+                " ) " + pc +
+                " ORDER BY p.name, c.contract_no",
+                c_params
+            ).fetchall()
+
+            contract_events = [
+                {
+                    "row": int(r["row_id"]),
+                    "platform": str(r["platform"] or ""),
+                    "no": str(r["no"] or ""),
+                    "type": str(r["type"] or ""),
+                    "status": str(r["status"] or ""),
+                    "completion_date": str(r["completion_date"] or ""),
+                    "acceptance_date": str(r["acceptance_date"] or ""),
+                    "planned_acceptance_date": "",
+                    "content": str(r["content"] or ""),
+                    "user": "",
+                }
+                for r in c_rows
+            ]
+
+            self.progress.emit(40, "Sistem termini okunuyor...")
+            s_params = [yf, yt]
+            if pf:
+                s_params.append(pf)
+            s_rows = conn.execute(
+                "SELECT c.id AS contract_row, p.name AS platform,"
+                " c.contract_no AS no, s.name AS system_name,"
+                " s.status, s.completion_date, s.acceptance_date"
+                " FROM systems s"
+                " JOIN contracts c           ON c.id = s.contract_id"
+                " JOIN contract_platforms cp ON cp.contract_id = c.id"
+                " JOIN platforms p           ON p.id = cp.platform_id"
+                " WHERE s.completion_date != '' AND s.completion_date IS NOT NULL"
+                "   AND SUBSTR(s.completion_date,1,4) BETWEEN ? AND ? " + pc +
+                " ORDER BY p.name, c.contract_no, s.name",
+                s_params
+            ).fetchall()
+
+            self.progress.emit(65, "Teslim/kabul tarihleri okunuyor...")
+            d_params = [yf, yt, yf, yt]
+            if pf:
+                d_params.append(pf)
+            d_rows = conn.execute(
+                "SELECT c.id AS contract_row, p.name AS platform,"
+                " c.contract_no AS no,"
+                " s.name AS system_name, d.name AS delivery_name,"
+                " d.status, d.acceptance_date, d.planned_acceptance_date"
+                " FROM deliveries d"
+                " JOIN systems  s  ON s.id  = d.system_id"
+                " JOIN contracts c ON c.id  = d.contract_id"
+                " JOIN contract_platforms cp ON cp.contract_id = c.id"
+                " JOIN platforms p ON p.id  = cp.platform_id"
+                " WHERE ("
+                "   (d.acceptance_date != '' AND d.acceptance_date IS NOT NULL"
+                "       AND SUBSTR(d.acceptance_date,1,4) BETWEEN ? AND ?)"
+                "   OR"
+                "   (d.planned_acceptance_date != '' AND d.planned_acceptance_date IS NOT NULL"
+                "       AND SUBSTR(d.planned_acceptance_date,1,4) BETWEEN ? AND ?)"
+                " ) " + pc +
+                " ORDER BY p.name, c.contract_no, s.name, d.sort_order, d.id",
+                d_params
+            ).fetchall()
+
+            system_events: list = []
+            for r in s_rows:
+                sname = str(r["system_name"] or "")
+                no    = str(r["no"] or "")
+                system_events.append({
+                    "row": int(r["contract_row"]),
+                    "platform": str(r["platform"] or ""),
+                    "no": no, "type": "Sistem",
+                    "system_label": sname,
+                    "title": f"{no} · {sname}" if sname else no,
+                    "status": str(r["status"] or ""),
+                    "completion_date": str(r["completion_date"] or ""),
+                    "acceptance_date": str(r["acceptance_date"] or ""),
+                    "planned_acceptance_date": "",
+                    "user": "",
+                })
+            for r in d_rows:
+                sname = str(r["system_name"] or "")
+                dname = str(r["delivery_name"] or "")
+                no    = str(r["no"] or "")
+                label = f"{no} · {sname} / {dname}" if sname else f"{no} / {dname}"
+                system_events.append({
+                    "row": int(r["contract_row"]),
+                    "platform": str(r["platform"] or ""),
+                    "no": no, "type": "Teslim/Kabul",
+                    "system_label": sname,
+                    "title": label,
+                    "status": str(r["status"] or ""),
+                    "completion_date": "",
+                    "acceptance_date": str(r["acceptance_date"] or ""),
+                    "planned_acceptance_date": str(r["planned_acceptance_date"] or ""),
+                    "user": "",
+                })
+
+            self.progress.emit(90, "Veri hazirlanıyor...")
+            self.finished.emit(contract_events, system_events)
+
+        except Exception as exc:
+            _log.exception("CalendarDataWorker hatası")
+            self.failed.emit(str(exc))
+        finally:
+            if conn:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
 
 _STATUS_ORDER = {"geciken": 0, "kritik": 1, "normal": 2, "tamamlandi": 3, "bos": 9}
 _COLOR  = {"geciken": "#e1473f", "kritik": "#e8b53f", "normal": "#397bd8", "tamamlandi": "#39a96b", "bos": "#d9e1ea"}
@@ -552,8 +718,7 @@ class _SideTreePanel(QWidget):
             self._render_sozlesme_tree(events)
 
     def _render_sistem_tree(self, events: List[dict]):
-        """Platform > Sözleşme No > Sistem adı"""
-        # Gruplama: platform → no → sistem kayıtları
+        """Platform > Sözleşme No > Sistem adı  (lazy: alt kayıtlar açılınca render)"""
         grouped: Dict[str, Dict[str, List[dict]]] = {}
         for ev in events:
             pl = str(ev.get("platform") or "?")
@@ -573,38 +738,49 @@ class _SideTreePanel(QWidget):
             )
             self._tree_lay.insertWidget(insert_idx, pl_row); insert_idx += 1
             pl_sec = _CollapsibleSection(self._tree_host)
+            pl_sec.set_visible(False)   # başlangıçta kapalı — lazy
             self._tree_lay.insertWidget(insert_idx, pl_sec); insert_idx += 1
-            pl_row.clicked.connect(lambda chk=pl_row, sec=pl_sec: self._toggle(chk, sec))
 
-            for no in sorted(pl_evs):
-                no_evs = pl_evs[no]
-                no_cls = _worst_cls([e["_cls"] for e in no_evs])
-                # Sözleşme no — ok yok, sadece etiket (indent)
-                no_lbl = QLabel(f"  📄 {no}")
-                no_lbl.setStyleSheet(
-                    f"background:transparent; font-size:11px; font-weight:600;"
-                    f"color:#374151; padding:4px 6px 2px 24px; border:none;"
+            # Lazy render: section ilk kez açılınca içini doldur
+            _loaded = [False]
+            def _on_toggle(chk=pl_row, sec=pl_sec,
+                           no_map=pl_evs, loaded=_loaded):
+                if not loaded[0]:
+                    loaded[0] = True
+                    self._fill_sistem_section(sec, no_map)
+                self._toggle(chk, sec)
+
+            pl_row.clicked.connect(_on_toggle)
+
+    def _fill_sistem_section(self, pl_sec: "_CollapsibleSection",
+                              no_map: Dict[str, List[dict]]) -> None:
+        """Platform section'ının içini sözleşme+sistem satırlarıyla doldurur."""
+        for no in sorted(no_map):
+            no_evs = no_map[no]
+            no_lbl = QLabel(f"  📄 {no}")
+            no_lbl.setStyleSheet(
+                "background:transparent; font-size:11px; font-weight:600;"
+                "color:#374151; padding:4px 6px 2px 24px; border:none;"
+            )
+            pl_sec.add(no_lbl)
+            for ev in sorted(no_evs, key=lambda x: x["_eff_date"]):
+                _, dval, dcol = _date_display(ev)
+                raw    = str(ev.get("title") or "")
+                no_str = str(ev.get("no") or "")
+                label  = raw[len(no_str)+3:] if raw.startswith(no_str + " · ") else (raw or no_str)
+                if not label or label == no_str:
+                    label = str(ev.get("type") or "")
+                dimmed = self._active_filter is not None and ev["_cls"] != self._active_filter
+                sys_row = _TreeRow(
+                    indent=38, icon="·", label=label,
+                    cls=ev["_cls"], has_children=False,
+                    date_val=dval, date_color=dcol,
+                    dimmed=dimmed, parent=self._tree_host
                 )
-                pl_sec.add(no_lbl)
-
-                for ev in sorted(no_evs, key=lambda x: x["_eff_date"]):
-                    _, dval, dcol = _date_display(ev)
-                    raw = str(ev.get("title") or "")
-                    no_str = str(ev.get("no") or "")
-                    label = raw[len(no_str)+3:] if raw.startswith(no_str+" · ") else (raw or no_str)
-                    if not label or label == no_str:
-                        label = str(ev.get("type") or "")
-                    dimmed = self._active_filter is not None and ev["_cls"] != self._active_filter
-                    sys_row = _TreeRow(
-                        indent=38, icon="·", label=label,
-                        cls=ev["_cls"], has_children=False,
-                        date_val=dval, date_color=dcol,
-                        dimmed=dimmed, parent=self._tree_host
-                    )
-                    sys_row.setCursor(Qt.PointingHandCursor)
-                    ev_ref = ev
-                    sys_row.mousePressEvent = lambda e, ev_=ev_ref: self._on_item_click(ev_)
-                    pl_sec.add(sys_row)
+                sys_row.setCursor(Qt.PointingHandCursor)
+                ev_ref = ev
+                sys_row.mousePressEvent = lambda e, ev_=ev_ref: self._on_item_click(ev_)
+                pl_sec.add(sys_row)
 
     def _render_sozlesme_tree(self, events: List[dict]):
         """Platform > Sözleşme No (sadece)"""
@@ -1298,8 +1474,13 @@ class ContractCalendarWindow(QDialog):
             + "QFrame#calendarTopbar{background:transparent; border-bottom:none;}"
         )
         self._active_detail = None
+        # Worker/thread refs for async data loading
+        self._cal_thread: Optional[QThread] = None
+        self._cal_worker = None
+        # year -> (contract_events, system_events) cache
+        self._event_cache: Dict[int, Tuple[list, list]] = {}
         self._build()
-        self.refresh_data(rebuild_index=not bool(self.contract_index))
+        self.refresh_data(rebuild_index=False)
 
     # ── UI ────────────────────────────────────────────────────────────────
     def _build(self):
@@ -1465,74 +1646,111 @@ class ContractCalendarWindow(QDialog):
         root.addWidget(self._grid_scroll, 1)
 
     # ── Veri ──────────────────────────────────────────────────────────────
-    def _build_events(self) -> List[dict]:
+    def _annotate_events(self, raw_items: list) -> List[dict]:
+        """Ham DB satırlarını takvim event dict'e çevirir (saf hesaplama)."""
         today = self.today
-        events: List[dict] = []
-
-        for item in self.contract_index:
+        out: List[dict] = []
+        for item in raw_items:
             eff = _effective_date(item)
             if not eff:
                 continue
             cls = _classify(item, eff, today)
-            no = str(item.get("no") or "")
+            no    = str(item.get("no") or "")
             ctype = str(item.get("type") or item.get("contract_type") or "")
-            title = str(item.get("content") or item.get("note") or "")
+            title = str(item.get("title") or item.get("content") or item.get("note") or "")
             if not title:
                 title = f"{no} · {ctype}" if ctype else no
-            events.append({
+            out.append({
                 "_eff_date": eff, "_cls": cls,
-                "row": int(item.get("row") or 0),
-                "platform": str(item.get("platform") or ""),
-                "no": no, "user": str(item.get("user") or ""),
+                "row":       int(item.get("row") or 0),
+                "platform":  str(item.get("platform") or ""),
+                "no": no,    "user": str(item.get("user") or ""),
                 "type": ctype, "title": title,
-                "status": str(item.get("status") or ""),
-                "acceptance_date": str(item.get("acceptance_date") or ""),
+                "system_label": str(item.get("system_label") or ""),
+                "status":           str(item.get("status") or ""),
+                "acceptance_date":  str(item.get("acceptance_date") or ""),
                 "planned_acceptance_date": str(item.get("planned_acceptance_date") or ""),
-                "completion_date": str(item.get("completion_date") or ""),
+                "completion_date":  str(item.get("completion_date") or ""),
             })
+        return out
 
-        # Sistem olayları (lazy, hata tolere edilir)
+    def _db_path(self):
+        """STSStore'un db dosya yolunu döndürür; ExcelStore ise None."""
         try:
-            for item in self.contract_index:
-                platform = str(item.get("platform") or "")
-                no = str(item.get("no") or "")
-                row = int(item.get("row") or 0)
-                if not platform or not no:
-                    continue
-                try:
-                    _ci, systems, _ = self.store.load_contract_structure(
-                        platform, no, start_row=row if row > 0 else None
-                    )
-                except Exception:
-                    continue
-                for sys_info in systems or []:
-                    acc = _parse_date(str(sys_info.acceptance_date or ""))
-                    comp = _parse_date(str(sys_info.completion_date or ""))
-                    eff_d = acc or comp
-                    if not eff_d:
-                        continue
-                    sys_item = {
-                        "status": str(sys_info.status or ""),
-                        "acceptance_date": sys_info.acceptance_date or "",
-                        "completion_date": sys_info.completion_date or "",
-                    }
-                    cls = _classify(sys_item, eff_d, today)
-                    sys_name = str(sys_info.name or "")
-                    title = f"{no} · {sys_name}" if sys_name else no
-                    events.append({
-                        "_eff_date": eff_d, "_cls": cls,
-                        "row": row, "platform": platform, "no": no,
-                        "user": str(item.get("user") or ""),
-                        "type": "Sistem", "title": title,
-                        "system_label": sys_name,
-                        "status": sys_item["status"],
-                        "acceptance_date": sys_item["acceptance_date"],
-                        "completion_date": sys_item["completion_date"],
-                    })
+            return getattr(getattr(self.store, "db", None), "path", None)
         except Exception:
-            pass
+            return None
 
-        return events
+    def _start_data_load(self, year: int, invalidate_cache: bool = False):
+        """Verilen yıl için CalendarDataWorker başlatır.
+
+        Cache'de varsa ve invalidate_cache=False ise worker başlatmaz.
+        """
+        if invalidate_cache:
+            self._event_cache.pop(year, None)
+
+        if year in self._event_cache:
+            c_evs, s_evs = self._event_cache[year]
+            self._apply_events(c_evs, s_evs)
+            return
+
+        db_path = self._db_path()
+        if db_path is None:
+            # ExcelStore fallback — contract_index'ten build et (senkron, hızlı)
+            raw = list(self.contract_index)
+            self._all_events = self._annotate_events(raw)
+            self._refresh_pf()
+            self._render_year()
+            return
+
+        # Zaten yükleme varsa iptal et
+        if self._cal_thread and self._cal_thread.isRunning():
+            return
+
+        self._btn_prev.setEnabled(False)
+        self._btn_next.setEnabled(False)
+
+        pf = self.platform_filter_value
+        thread = QThread(self)
+        worker = CalendarDataWorker(db_path, year, year, pf)
+        worker.moveToThread(thread)
+
+        thread.started.connect(worker.run)
+        worker.finished.connect(lambda c, s, y=year: self._on_data_loaded(c, s, y))
+        worker.failed.connect(self._on_data_failed)
+        worker.finished.connect(thread.quit)
+        worker.failed.connect(thread.quit)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(self._clear_cal_refs)
+
+        self._cal_thread = thread
+        self._cal_worker = worker
+        thread.start()
+
+    def _clear_cal_refs(self):
+        self._cal_thread = None
+        self._cal_worker = None
+
+    def _on_data_loaded(self, contract_events: list, system_events: list, year: int):
+        self._event_cache[year] = (list(contract_events), list(system_events))
+        self._apply_events(contract_events, system_events)
+
+    def _on_data_failed(self, error_text: str):
+        _log.error("Takvim veri yuklenemedi: %s", error_text)
+        self._btn_prev.setEnabled(True)
+        self._btn_next.setEnabled(True)
+        self._clear_cal_refs()
+
+    def _apply_events(self, contract_events: list, system_events: list):
+        self._all_events = (
+            self._annotate_events(contract_events)
+            + self._annotate_events(system_events)
+        )
+        self._refresh_pf()
+        self._render_year()
+        self._btn_prev.setEnabled(True)
+        self._btn_next.setEnabled(True)
 
     def _visible(self) -> List[dict]:
         pf = self.platform_filter_value
@@ -1569,19 +1787,12 @@ class ContractCalendarWindow(QDialog):
 
     # ── Yıl geçişi ────────────────────────────────────────────────────────
     def _change_year(self, d: int):
-        if self._nav_locked:
-            return
-        self._nav_locked = True
-        self._btn_prev.setEnabled(False)
-        self._btn_next.setEnabled(False)
-        QTimer.singleShot(60, lambda: self._do_change(d))
-
-    def _do_change(self, d: int):
+        if self._cal_thread and self._cal_thread.isRunning():
+            return  # yükleme sürerken geçiş engelle
         self.current_year += d
-        self._render_year()
-        self._nav_locked = False
-        self._btn_prev.setEnabled(True)
-        self._btn_next.setEnabled(True)
+        self._yr_lbl.setText(str(self.current_year))
+        # Cache'de varsa anında render, yoksa worker başlat
+        self._start_data_load(self.current_year)
 
     # ── Ay detay ──────────────────────────────────────────────────────────
     def _open_month(self, month: int):
@@ -1620,14 +1831,14 @@ class ContractCalendarWindow(QDialog):
 
     # ── Public API ────────────────────────────────────────────────────────
     def refresh_data(self, rebuild_index: bool = True):
+        """Takvim verilerini yeniden yükle.
+
+        rebuild_index=True olduğunda event cache'i temizle ve
+        mevcut yıl için yeni worker başlat.
+        """
         if rebuild_index:
-            try:
-                self.contract_index = self.store.build_contract_index()
-            except Exception:
-                pass
-        self._all_events = self._build_events()
-        self._refresh_pf()
-        self._render_year()
+            self._event_cache.clear()
+        self._start_data_load(self.current_year, invalidate_cache=rebuild_index)
 
     def refresh_from_index(
         self,
@@ -1638,6 +1849,8 @@ class ContractCalendarWindow(QDialog):
             self.store = store
         if contract_index is not None:
             self.contract_index = list(contract_index or [])
+        # Store degisince cache gecersiz
+        self._event_cache.clear()
         self.refresh_data(rebuild_index=False)
 
     # ── Platform filtresi ─────────────────────────────────────────────────
@@ -1670,4 +1883,6 @@ class ContractCalendarWindow(QDialog):
         if self._refreshing_pf:
             return
         self.platform_filter_value = str(self.platform_filter.currentData() or "")
-        self._render_year()
+        # Platform degisti: cache temizle ve yeniden yukle
+        self._event_cache.clear()
+        self._start_data_load(self.current_year)
