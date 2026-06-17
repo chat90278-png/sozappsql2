@@ -6733,43 +6733,92 @@ class DeliveryDialog(StyledDialog):
 class ContractSharePopover(QFrame):
     """Compact contract-scoped sharing panel used inside ContractActionTabs popover."""
 
+    _CARD_BASE = (
+        "QPushButton#sharePermCard{"
+        "background:#ffffff; color:#0b2b54; border:1.5px solid #c5d8ef;"
+        "border-radius:5px; padding:8px 14px; font-size:12px; font-weight:700;"
+        "text-align:left; min-height:52px;"
+        "}"
+        "QPushButton#sharePermCard:hover{"
+        "background:#f4f8fd; border-color:#9fc4f5;"
+        "}"
+    )
+    _CARD_ACTIVE = (
+        "QPushButton#sharePermCard{"
+        "background:#eef5ff; color:#1a4fc4; border:2px solid #2563eb;"
+        "border-radius:5px; padding:8px 14px; font-size:12px; font-weight:700;"
+        "text-align:left; min-height:52px;"
+        "}"
+    )
+
     def __init__(self, owner: "ContractWorkWindow", parent=None):
         super().__init__(parent)
         self.owner = owner
+        self._share_mode_value = "goruntule"
         self.setObjectName("contractSharePanel")
-        self.setStyleSheet("QFrame#contractSharePanel{background:#f8fbff;border:1px solid #dbeafe;border-radius:12px;} QLabel{background:transparent;border:0;} QRadioButton{background:transparent;color:#334155;font-size:12px;} QPushButton#shareCreateButton{background:#2563eb;color:#fff;border:0;border-radius:9px;padding:7px 12px;font-size:12px;font-weight:800;} QPushButton#shareCreateButton:hover{background:#1d4ed8;} QLabel#sharePreview{background:#ffffff;color:#1e3a8a;border:1px solid #bfdbfe;border-radius:8px;padding:7px 9px;font-family:Consolas,monospace;font-size:11px;}")
+        self.setStyleSheet(
+            "QFrame#contractSharePanel{background:#f8fbff;border:1px solid #d0dff0;border-radius:5px;}"
+            "QLabel{background:transparent;border:0;}"
+            "QPushButton#shareCreateButton{background:#2563eb;color:#fff;border:0;border-radius:4px;"
+            "padding:6px 14px;font-size:12px;font-weight:700;min-height:30px;}"
+            "QPushButton#shareCreateButton:hover{background:#1d4ed8;}"
+            "QLabel#sharePreview{background:#ffffff;color:#1e3a8a;border:1px solid #bfdbfe;"
+            "border-radius:4px;padding:6px 9px;font-family:Consolas,monospace;font-size:11px;}"
+        )
         lay = QVBoxLayout(self)
         lay.setContentsMargins(12, 10, 12, 12)
         lay.setSpacing(8)
+
         title = QLabel("Sözleşme Paylaşımı")
-        title.setStyleSheet("color:#10233d;font-size:14px;font-weight:900;")
+        title.setStyleSheet("color:#10233d;font-size:13px;font-weight:700;")
         info = QLabel("Sadece bu sözleşmeyi içeren bağımsız STS dosyası oluştur.")
         info.setWordWrap(True)
-        info.setStyleSheet("color:#475569;font-size:12px;")
+        info.setStyleSheet("color:#475569;font-size:11px;")
         lay.addWidget(title)
         lay.addWidget(info)
-        self.view_radio = QRadioButton("Görüntüleyebilir")
-        self.edit_radio = QRadioButton("Düzenleyebilir")
-        self.view_radio.setChecked(True)
-        self.group = QButtonGroup(self)
-        self.group.addButton(self.view_radio)
-        self.group.addButton(self.edit_radio)
-        row = QHBoxLayout(); row.setSpacing(14)
-        row.addWidget(self.view_radio); row.addWidget(self.edit_radio); row.addStretch(1)
-        lay.addLayout(row)
+
+        cards_row = QHBoxLayout()
+        cards_row.setSpacing(8)
+        cards_row.setContentsMargins(0, 2, 0, 2)
+
+        self._btn_view = QPushButton("👁  Görüntüle\nSadece okuma")
+        self._btn_view.setObjectName("sharePermCard")
+        self._btn_view.setCursor(Qt.PointingHandCursor)
+
+        self._btn_edit = QPushButton("✏  Düzenle\nDüzenleme izni")
+        self._btn_edit.setObjectName("sharePermCard")
+        self._btn_edit.setCursor(Qt.PointingHandCursor)
+
+        self._btn_view.clicked.connect(lambda: self._set_mode("goruntule"))
+        self._btn_edit.clicked.connect(lambda: self._set_mode("duzenle"))
+
+        cards_row.addWidget(self._btn_view, 1)
+        cards_row.addWidget(self._btn_edit, 1)
+        lay.addLayout(cards_row)
+
         self.preview = QLabel("")
         self.preview.setObjectName("sharePreview")
         lay.addWidget(self.preview)
+
         btn = QPushButton("Paylaşım Dosyası Oluştur")
         btn.setObjectName("shareCreateButton")
         btn.clicked.connect(self.create_share_file)
         lay.addWidget(btn, 0, Qt.AlignRight)
-        self.view_radio.toggled.connect(self.update_preview)
-        self.edit_radio.toggled.connect(self.update_preview)
+
+        self._set_mode("goruntule")
+
+    def _set_mode(self, mode: str):
+        self._share_mode_value = mode
+        self._btn_view.setStyleSheet(
+            self._CARD_ACTIVE if mode == "goruntule" else self._CARD_BASE
+        )
+        self._btn_edit.setStyleSheet(
+            self._CARD_ACTIVE if mode == "duzenle" else self._CARD_BASE
+        )
         self.update_preview()
 
     def share_mode(self) -> str:
-        return "duzenle" if self.edit_radio.isChecked() else "goruntule"
+        return self._share_mode_value
 
     def filename(self) -> str:
         no = re.sub(r"[^A-Za-z0-9_.-]+", "-", str(getattr(self.owner.ci, "no", "") or "sozlesme")).strip("-._") or "sozlesme"
@@ -6999,6 +7048,7 @@ class ContractWorkWindow(QDialog):
 
         header = QFrame(); header.setObjectName("contractHeader")
         header.setFixedHeight(68)
+        self.contract_header = header  # sekme konumlandırması için referans
         h = QHBoxLayout(header); h.setContentsMargins(18, 7, 16, 7); h.setSpacing(14)
 
         info_row = QWidget(); info_row.setObjectName("contractHeaderInfoRow")
@@ -7208,17 +7258,21 @@ class ContractWorkWindow(QDialog):
         self.share_info_band.setStyleSheet("QLabel#shareInfoBand{background:#eff6ff;color:#1e3a8a;border:1px solid #bfdbfe;border-radius:8px;padding:6px 10px;font-size:12px;font-weight:700;}")
         rv.addWidget(self.share_info_band, 0)
 
-        self.side_meta_host = QWidget(right)
+        self.side_meta_host = QWidget(self)
         self.side_meta_host.setObjectName("contractTabsHost")
+        self.side_meta_host.setStyleSheet("QWidget#contractTabsHost{background:transparent;border:0;}")
+        self.side_meta_host.setAttribute(Qt.WA_NoSystemBackground, True)
+        self.side_meta_host.setAttribute(Qt.WA_TranslucentBackground, True)
+        self.side_meta_host.setAutoFillBackground(False)
         self.side_meta_host.installEventFilter(self)
-        self.side_meta_host.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         tabs_host_lay = QVBoxLayout(self.side_meta_host)
         tabs_host_lay.setContentsMargins(0, 0, 0, 0)
         tabs_host_lay.setSpacing(0)
         self.contract_action_tabs = ContractActionTabs(self, self.side_meta_host)
         self.build_side_meta_popover_bar(0)
-        tabs_host_lay.addWidget(self.side_meta_bar, 0, Qt.AlignLeft)
-        rv.addWidget(self.side_meta_host, 0)
+        tabs_host_lay.addWidget(self.side_meta_bar, 0, Qt.AlignRight)
+        # side_meta_host layout'a değil, header altına overlay olarak konumlanır
+        QTimer.singleShot(80, self._place_tab_bar)
         self.render_contract_tags()
 
         # ── Üst satır: SİSTEM BİLEŞENLERİ etiketi + Sistemi Düzenle butonu aynı hizada ──
@@ -7365,10 +7419,6 @@ class ContractWorkWindow(QDialog):
                 self._busy_cursor_on = False
             QApplication.processEvents()
 
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        self.position_busy_overlay()
-
     @staticmethod
     def _is_widget_inside(widget, parent_widget) -> bool:
         if widget is None or parent_widget is None:
@@ -7423,6 +7473,7 @@ class ContractWorkWindow(QDialog):
             side_host = getattr(self, "side_meta_host", None)
             if obj is side_host and etype in (QEvent.Resize, QEvent.Show):
                 self.position_side_meta_popover()
+                self._place_tab_bar()
 
             _editing = (
                 getattr(self, "_tree_editing", False)
@@ -7878,71 +7929,32 @@ class ContractWorkWindow(QDialog):
         self._side_meta_files: List[dict] = []
         self.side_meta_bar = QFrame()
         self.side_meta_bar.setObjectName("sideMetaBar")
-        self.side_meta_bar.setFixedHeight(38)
-        self.side_meta_bar.setMaximumWidth(470)
+        self.side_meta_bar.setAutoFillBackground(False)
+        self.side_meta_bar.setAttribute(Qt.WA_TranslucentBackground, True)
+        # Genişlik _place_tab_bar tarafından setFixedWidth ile ayarlanır
         self.side_meta_bar.setStyleSheet(
-            "QFrame#sideMetaBar{"
-            "  background:#f8fbff;"
-            "  border:1px solid #d0dcea;"
-            "  border-radius:10px;"
-            "}"
-            "QPushButton#sideMetaPill{"
-            "  background:transparent;"
-            "  border:0;"
-            "  border-radius:8px;"
-            "  padding:4px 8px;"
-            "  color:#334e6b;"
-            "  font-size:12px;"
-            "  font-weight:700;"
-            "  text-align:left;"
-            "}"
-            "QPushButton#sideMetaPill:hover{"
-            "  background:#f0f5fc;"
-            "}"
-            "QPushButton#sideMetaPill:checked{"
-            "  background:#eef4ff;"
-            "  color:#1d4ed8;"
-            "  border-bottom:2px solid #2563eb;"
-            "}"
-            "QLabel#sideMetaBadge{"
-            "  background:#dbeafe;"
-            "  color:#1d4ed8;"
-            "  border:0;"
-            "  border-radius:9px;"
-            "  padding:1px 7px;"
-            "  font-size:11px;"
-            "  font-weight:800;"
-            "}"
-            "QFrame#sideMetaDivider{"
-            "  background:#d0dcea;"
-            "  min-width:1px;"
-            "  max-width:1px;"
-            "}"
-            "QPushButton#sideMetaChevron{"
-            "  background:transparent;"
-            "  border:0;"
-            "  border-radius:7px;"
-            "  color:#5b7fa6;"
-            "  font-weight:900;"
-            "  font-size:13px;"
-            "}"
-            "QPushButton#sideMetaChevron:hover{"
-            "  background:#f0f5fc;"
-            "  color:#1d4ed8;"
+            "QFrame#sideMetaBar { background:transparent; border:0; }"
+            "QFrame#sideMetaBar QLabel#sideMetaBadge {"
+            "  background:#dbeafe; color:#1d4ed8;"
+            "  border:1px solid #93c5fd; border-radius:8px;"
+            "  padding:1px 5px; font-size:10px; font-weight:700;"
             "}"
         )
         bar_layout = QHBoxLayout(self.side_meta_bar)
-        bar_layout.setContentsMargins(6, 4, 6, 4)
+        bar_layout.setContentsMargins(0, 0, 0, 0)
         bar_layout.setSpacing(0)
 
-        # Tags pill: icon + label inline, then badge outside
+        # Her sekme: buton içine badge gömer, wrapper kullanmaz
+        # Badge butonun sağ üst köşesine absolute yerleştirilir (overlay)
         self.side_btn_tags = QPushButton("🏷  Etiketler")
         self.side_btn_files = QPushButton("📎  Belgeler")
         self.side_btn_share = QPushButton("↗  Paylaşım")
+
+        tabs_controller = getattr(self, "contract_action_tabs", None)
         for panel, button in (("tags", self.side_btn_tags), ("files", self.side_btn_files), ("share", self.side_btn_share)):
             button.setObjectName("sideMetaPill")
             button.setCheckable(True)
-            tabs_controller = getattr(self, "contract_action_tabs", None)
+            button.setAutoFillBackground(False)
             if panel == "tags" and tabs_controller is not None:
                 button.clicked.connect(lambda _checked=False, ctl=tabs_controller: ctl.open_tags())
             elif panel == "files" and tabs_controller is not None:
@@ -7951,77 +7963,122 @@ class ContractWorkWindow(QDialog):
                 button.clicked.connect(lambda _checked=False, ctl=tabs_controller: ctl.open_share())
             else:
                 button.clicked.connect(lambda _checked=False, name=panel: self.toggle_side_meta_popover(name))
-            bar_layout.addWidget(button, 0)
-            badge = QLabel("0")
-            badge.setObjectName("sideMetaBadge")
-            badge.setAlignment(Qt.AlignCenter)
-            badge.setMinimumWidth(22)
-            bar_layout.addWidget(badge, 0)
-            if panel == "tags":
-                self.side_badge_tags = badge
-                # divider between tags and files
-                div = QFrame(); div.setObjectName("sideMetaDivider"); div.setFixedHeight(20)
-                bar_layout.addSpacing(6)
-                bar_layout.addWidget(div, 0)
-                bar_layout.addSpacing(6)
-            elif panel == "files":
-                self.side_badge_files = badge
-                div = QFrame(); div.setObjectName("sideMetaDivider"); div.setFixedHeight(20)
-                bar_layout.addSpacing(6)
-                bar_layout.addWidget(div, 0)
-                bar_layout.addSpacing(6)
-            else:
-                badge.hide()
 
+        # Badge'leri butonlardan bağımsız label olarak tut ama görünür yere koy
+        self.side_badge_tags = QLabel("0")
+        self.side_badge_tags.setObjectName("sideMetaBadge")
+        self.side_badge_tags.setAlignment(Qt.AlignCenter)
+        self.side_badge_tags.setMinimumWidth(20)
+
+        self.side_badge_files = QLabel("0")
+        self.side_badge_files.setObjectName("sideMetaBadge")
+        self.side_badge_files.setAlignment(Qt.AlignCenter)
+        self.side_badge_files.setMinimumWidth(20)
+
+        # Layout: [btn_tags][badge_tags]  [btn_files][badge_files]  [btn_share]  stretch  [chevron]
+        bar_layout.addWidget(self.side_btn_tags, 0)
+        bar_layout.addWidget(self.side_badge_tags, 0)
+        bar_layout.addSpacing(20)
+        bar_layout.addWidget(self.side_btn_files, 0)
+        bar_layout.addWidget(self.side_badge_files, 0)
+        bar_layout.addSpacing(20)
+        bar_layout.addWidget(self.side_btn_share, 0)
         bar_layout.addStretch(1)
+
+        # Doğrudan setStyleSheet — global QPushButton stilini tamamen ezer
+        # border-top:0 (none değil), border-radius Qt sırası: TL TR BR BL
+        _pill_base = (
+            "QPushButton {"
+            "  background: #ffffff;"
+            "  color: #0b2b54;"
+            "  border-left:   1.5px solid #b8d0ed;"
+            "  border-right:  1.5px solid #b8d0ed;"
+            "  border-bottom: 1.5px solid #b8d0ed;"
+            "  border-top:    0px;"
+            "  border-radius: 0px 0px 12px 12px;"
+            "  padding: 8px 22px 10px 22px;"
+            "  font-size: 12px;"
+            "  font-weight: 700;"
+            "  min-width: 90px;"
+            "}"
+            "QPushButton:hover {"
+            "  background: #e8f2ff;"
+            "  color: #0b2b54;"
+            "  border-left:   1.5px solid #5a9ff5;"
+            "  border-right:  1.5px solid #5a9ff5;"
+            "  border-bottom: 1.5px solid #5a9ff5;"
+            "  border-top:    0px;"
+            "  border-radius: 0px 0px 12px 12px;"
+            "  padding: 8px 22px 14px 22px;"
+            "}"
+            "QPushButton:checked {"
+            "  background: #dbeafe;"
+            "  color: #1a4fc4;"
+            "  border-left:   2px solid #2563eb;"
+            "  border-right:  2px solid #2563eb;"
+            "  border-bottom: 2px solid #2563eb;"
+            "  border-top:    0px;"
+            "  border-radius: 0px 0px 12px 12px;"
+            "  padding: 8px 22px 10px 22px;"
+            "}"
+        )
+        for _b in (self.side_btn_tags, self.side_btn_files, self.side_btn_share):
+            _b.setStyleSheet(_pill_base)
+            _b.setAutoFillBackground(False)
+
         self.side_chevron = QPushButton("∨")
         self.side_chevron.setObjectName("sideMetaChevron")
         self.side_chevron.setFixedSize(26, 26)
+        self.side_chevron.setStyleSheet(
+            "QPushButton { background:transparent; border:0; border-radius:4px;"
+            "color:#5b7fa6; font-weight:700; font-size:13px; }"
+            "QPushButton:hover { background:#e8f3ff; color:#1d4ed8; }"
+        )
         self.side_chevron.clicked.connect(self._toggle_side_meta_chevron)
         bar_layout.addWidget(self.side_chevron, 0)
 
-        self.side_meta_popover = QFrame(self.side_meta_host)
+        self.side_meta_popover = QFrame(self)
         self.side_meta_popover.setObjectName("sideMetaPopover")
         self.side_meta_popover.setStyleSheet(
-            "QFrame#sideMetaPopover{background:#ffffff; border:1px solid #d5e0ee; border-radius:14px;}"
-            "QPushButton#sidePanelAdd{background:#2563eb; color:#ffffff; border:0; border-radius:11px; font-size:20px; font-weight:900; padding:0;}"
+            "QFrame#sideMetaPopover{background:#ffffff; border:1px solid #c8d9ed; border-radius:6px;}"
+            "QPushButton#sidePanelAdd{background:#2563eb; color:#ffffff; border:0; border-radius:4px; font-size:20px; font-weight:900; padding:0;}"
             "QPushButton#sidePanelAdd:hover{background:#1d4ed8;}"
             # modern document toolbar buttons
-            "QPushButton#documentActionPrimary{background:#2563eb; color:#ffffff; border:1px solid #2563eb; border-radius:9px; padding:0 12px; font-size:11px; font-weight:800; min-height:28px; max-height:32px;}"
+            "QPushButton#documentActionPrimary{background:#2563eb; color:#ffffff; border:1px solid #2563eb; border-radius:4px; padding:0 12px; font-size:11px; font-weight:700; min-height:28px; max-height:32px;}"
             "QPushButton#documentActionPrimary:hover{background:#1d4ed8; border-color:#1d4ed8;}"
-            "QPushButton#documentAction{background:#f8fbff; color:#102a43; border:1px solid #cfe0f3; border-radius:9px; padding:0 12px; font-size:11px; font-weight:800; min-height:28px; max-height:32px;}"
+            "QPushButton#documentAction{background:#f8fbff; color:#102a43; border:1px solid #cfe0f3; border-radius:4px; padding:0 12px; font-size:11px; font-weight:700; min-height:28px; max-height:32px;}"
             "QPushButton#documentAction:hover{background:#edf5ff; border-color:#9ec5f8;}"
-            "QPushButton#documentLockButton{background:#f8fbff; color:#0f172a; border:1px solid #cfe0f3; border-radius:9px; padding:0; font-size:15px; font-weight:900; min-width:30px; max-width:30px; min-height:28px; max-height:30px;}"
+            "QPushButton#documentLockButton{background:#f8fbff; color:#0f172a; border:1px solid #cfe0f3; border-radius:4px; padding:0; font-size:15px; font-weight:700; min-width:30px; max-width:30px; min-height:28px; max-height:30px;}"
             "QPushButton#documentLockButton:hover{background:#edf5ff; border-color:#9ec5f8;}"
             "QPushButton#documentLockButton[locked=\"true\"]{background:#fff7ed; color:#9a3412; border-color:#fed7aa;}"
-            "QLabel#documentLockInfo{background:#fff7ed; color:#9a3412; border:1px solid #fed7aa; border-radius:8px; padding:4px 8px; font-size:10px; font-weight:700;}"
+            "QLabel#documentLockInfo{background:#fff7ed; color:#9a3412; border:1px solid #fed7aa; border-radius:4px; padding:4px 8px; font-size:10px; font-weight:700;}"
             "QLabel#documentHint{background:transparent; color:#94a3b8; border:0; font-size:10px; padding:0;}"
             # tree drop zone
-            "QFrame#docDropZone{background:#f8fbff; border:1px dashed #c7d7ea; border-radius:12px;}"
+            "QFrame#docDropZone{background:#f8fbff; border:1px dashed #c7d7ea; border-radius:5px;}"
             "QFrame#docDropZone[dragOver=\"true\"]{background:#eef6ff; border-color:#2563eb;}"
             # empty state
             "QLabel#sidePanelEmpty{background:transparent; color:#7b8da5; border:0; font-size:12px;}"
             "QLabel#sidePanelEmptySub{background:transparent; color:#94a3b8; border:0; font-size:10px;}"
             # footer
-            "QFrame#docFooterBar{background:#f8fbff; border-top:1px solid #e6eef8; border-bottom-left-radius:12px; border-bottom-right-radius:12px;}"
+            "QFrame#docFooterBar{background:#f8fbff; border-top:1px solid #e6eef8; border-bottom-left-radius:5px; border-bottom-right-radius:5px;}"
             "QLabel#documentsFooterLeft{background:transparent; color:#94a3b8; border:0; font-size:10px;}"
             "QLabel#documentsFooterRight{background:transparent; color:#334155; border:0; font-size:10px; font-weight:700;}"
             # tag panel
-            "QLabel#sidePanelEmptyTag{background:#f8fbff; color:#64748b; border:1px dashed #c7d6e8; border-radius:11px; padding:13px; font-size:12px;}"
-            "QPushButton#sidePanelAddInline{background:#eef4ff; color:#1d4ed8; border:1px solid #bcd1f2; border-radius:7px; padding:2px 10px; font-size:11px; font-weight:700;}"
+            "QLabel#sidePanelEmptyTag{background:#f8fbff; color:#64748b; border:1px dashed #c7d6e8; border-radius:5px; padding:13px; font-size:12px;}"
+            "QPushButton#sidePanelAddInline{background:#eef4ff; color:#1d4ed8; border:1px solid #bcd1f2; border-radius:4px; padding:2px 10px; font-size:11px; font-weight:700;}"
             "QPushButton#sidePanelAddInline:hover{background:#dbeafe;}"
         )
         shadow = QGraphicsDropShadowEffect(self.side_meta_popover)
-        shadow.setBlurRadius(22)
-        shadow.setOffset(0, 6)
-        shadow.setColor(QColor(15, 45, 74, 55))
+        shadow.setBlurRadius(10)
+        shadow.setOffset(0, 3)
+        shadow.setColor(QColor(15, 45, 74, 38))
         self.side_meta_popover.setGraphicsEffect(shadow)
         popover_layout = QVBoxLayout(self.side_meta_popover)
         popover_layout.setContentsMargins(10, 4, 10, 8)
         popover_layout.setSpacing(6)
         self.side_meta_arrow = QLabel("▲")
         self.side_meta_arrow.setObjectName("sideMetaArrow")
-        self.side_meta_arrow.setStyleSheet("QLabel#sideMetaArrow{background:transparent;color:#ffffff;border:0;font-size:15px;margin:0;padding:0;}")
+        self.side_meta_arrow.setStyleSheet("QLabel#sideMetaArrow{background:transparent;color:#c8d9ed;border:0;font-size:14px;margin:0;padding:0;}")
         popover_layout.addWidget(self.side_meta_arrow, 0, Qt.AlignLeft)
         self.side_meta_popover_body = QWidget()
         self.side_meta_popover_body.setStyleSheet("background:transparent;")
@@ -8088,22 +8145,90 @@ class ContractWorkWindow(QDialog):
         QApplication.instance().installEventFilter(self)
         self.position_side_meta_popover()
 
+    def _place_tab_bar(self):
+        """Sekme barını Durum hücresinin altına, header altından sarkacak şekilde konumlandır."""
+        header = getattr(self, "contract_header", None)
+        bar = getattr(self, "side_meta_bar", None)
+        host = getattr(self, "side_meta_host", None)
+        if not header or not bar or not host:
+            return
+        try:
+            bar_h = 40
+
+            # Header'ın dialog içindeki kesin konumu
+            header_global = header.mapTo(self, QPoint(0, 0))
+            hy = header_global.y()
+            hh = header.height()
+
+            # X: Durum hücresinin (metaCell) tam sol kenarı
+            status_val = (getattr(self, "meta_values", {}) or {}).get("status")
+            sx = None
+            if status_val is not None:
+                # status_val → headerStatusWrap → metaCell zincirini çık
+                w = status_val
+                for _ in range(4):  # en fazla 4 seviye üste çık
+                    if w is None:
+                        break
+                    if w.objectName() == "metaCell":
+                        sx = w.mapTo(self, QPoint(0, 0)).x()
+                        break
+                    w = w.parent()
+
+            if sx is None:
+                # Fallback: "Ana Bilgileri Düzenle" butonunun %60 solundan başla
+                edit_btn = getattr(self, "header_edit_btn", None)
+                sx = int(self.width() * 0.55) if edit_btn is None else max(
+                    int(self.width() * 0.48),
+                    edit_btn.mapTo(self, QPoint(0, 0)).x() - int(self.width() * 0.32)
+                )
+
+            # Sağ sınır: "Ana Bilgileri Düzenle" butonunun tam sol kenarı - 10px boşluk
+            edit_btn = getattr(self, "header_edit_btn", None)
+            if edit_btn is not None:
+                right_edge = edit_btn.mapTo(self, QPoint(0, 0)).x() - 10
+            else:
+                right_edge = self.width() - 16
+
+            host_w = max(280, right_edge - sx)
+            x = sx
+
+            # Y: header'ın tam altından başlasın — biraz içeri girmez
+            y = hy + hh - 2  # 2px header'a yapışık
+
+            host.setGeometry(x, y, host_w, bar_h)
+            bar.setFixedWidth(host_w)
+            host.raise_()
+        except Exception:
+            import traceback; traceback.print_exc()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.position_busy_overlay()
+        QTimer.singleShot(30, self._place_tab_bar)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        QTimer.singleShot(100, self._place_tab_bar)
+
     def position_side_meta_popover(self):
         if not hasattr(self, "side_meta_popover") or not hasattr(self, "side_meta_host"):
             return
-        w = max(300, min(470, self.side_meta_host.width()))
+        host = self.side_meta_host
+        w = max(300, min(470, host.width() if host.width() > 0 else 380))
         self.side_meta_popover.setFixedWidth(w)
         self.side_meta_popover.adjustSize()
         hint_h = self.side_meta_popover.sizeHint().height()
-        top = self.side_meta_bar.height() + 3
-        host_h = self.side_meta_host.height() if self.side_meta_host.height() > 0 else 700
+        # Popover self içinde: host konumundan itibaren bar altına yap
+        bar_h = self.side_meta_bar.height() if hasattr(self, "side_meta_bar") else 38
+        pop_x = host.x() + host.width() - w
+        pop_y = host.y() + bar_h + 3
         # Ekranın kullanılabilir yüksekliğini hesaba kat
         screen = self.screen()
         if screen:
             avail_h = screen.availableGeometry().height()
         else:
             avail_h = 900
-        max_h = max(190, min(avail_h - 120, host_h - top - 4))
+        max_h = max(190, min(avail_h - 120, self.height() - pop_y - 8))
         # Manuel yükseklik kullanıcı tarafından ayarlandıysa öncelikli kullan
         manual_h = getattr(self, "_side_meta_manual_height", None)
         if getattr(self, "_side_meta_open_panel", None) == "files":
@@ -8122,7 +8247,7 @@ class ContractWorkWindow(QDialog):
             min_h = 110
             manual_h = None
         h = max(min_h, min(hint_h if manual_h is None else manual_h, max_h))
-        self.side_meta_popover.setGeometry(0, top, w, h)
+        self.side_meta_popover.setGeometry(pop_x, pop_y, w, h)
         self._position_side_meta_arrow()
         if self.side_meta_popover.isVisible():
             self.side_meta_popover.raise_()
@@ -8138,14 +8263,14 @@ class ContractWorkWindow(QDialog):
             "share": getattr(self, "side_btn_share", None),
         }.get(panel)
         if button is None:
-            arrow.setStyleSheet("QLabel#sideMetaArrow{background:transparent;color:#ffffff;border:0;font-size:15px;margin-left:12px;padding:0;}")
+            arrow.setStyleSheet("QLabel#sideMetaArrow{background:transparent;color:#c8d9ed;border:0;font-size:14px;margin-left:12px;padding:0;}")
             return
         try:
-            center = button.mapTo(self.side_meta_host, QPoint(button.width() // 2, 0)).x()
+            center = button.mapTo(self, QPoint(button.width() // 2, 0)).x() - self.side_meta_popover.x()
         except Exception:
             center = 18
         left = max(8, min(center - 7, max(8, self.side_meta_popover.width() - 24)))
-        arrow.setStyleSheet(f"QLabel#sideMetaArrow{{background:transparent;color:#ffffff;border:0;font-size:15px;margin-left:{left}px;padding:0;}}")
+        arrow.setStyleSheet(f"QLabel#sideMetaArrow{{background:transparent;color:#c8d9ed;border:0;font-size:14px;margin-left:{left}px;padding:0;}}")
 
     def _toggle_side_meta_chevron(self):
         if self._side_meta_open_panel:
@@ -8168,6 +8293,15 @@ class ContractWorkWindow(QDialog):
         self.side_meta_popover.raise_()
         QApplication.processEvents()
         self.position_side_meta_popover()
+        # Kısa opacity fade — konum/boyut değişmez
+        _eff = QGraphicsOpacityEffect(self.side_meta_popover)
+        self.side_meta_popover.setGraphicsEffect(_eff)
+        _anim = QPropertyAnimation(_eff, b"opacity", self.side_meta_popover)
+        _anim.setDuration(130)
+        _anim.setStartValue(0.0)
+        _anim.setEndValue(1.0)
+        _anim.finished.connect(lambda: self.side_meta_popover.setGraphicsEffect(None))
+        _anim.start(QPropertyAnimation.DeleteWhenStopped)
 
     def close_side_meta_popover(self):
         self._side_meta_open_panel = None
@@ -8791,6 +8925,13 @@ class ContractWorkWindow(QDialog):
             share_ci.entry_start_row = 0
             setattr(share_ci, "id", 0)
             setattr(share_ci, "contract_id", 0)
+            # Ana DB platform/staff ID'leri yeni boş DB'de geçersiz — sıfırla
+            share_ci.platform_ids = []
+            share_ci.platforms = []
+            share_ci.platform_id = 0
+            share_ci.primary_platform_id = 0
+            share_ci.responsible_engineer_id = 0
+            share_ci.responsible_engineer_ids = []
             contract_id = int(share_store.write_contract(share_ci, copy.deepcopy(self.systems), copy.deepcopy(self.deliveries)) or 0)
             share_store.save_contract_tags(
                 str(share_ci.platform or ""),
@@ -8837,7 +8978,7 @@ class ContractWorkWindow(QDialog):
         name = str((tag or {}).get("name") or "").strip()
         color = str((tag or {}).get("color") or "#3B82F6")
         card = QFrame(); card.setObjectName("sideTagCard"); card.setMinimumWidth(0); card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed); card.setFixedHeight(52)
-        card.setStyleSheet("QFrame#sideTagCard{background:#f8fbff; border:1px solid #dbe7f5; border-radius:11px;} QFrame#sideTagCard:hover{background:#eef6ff; border-color:#b8cef0;} QLabel{background:transparent; border:0;} QPushButton#tagRemoveButton{background:#f1f5fb; color:#64748b; border:1.5px solid #c8d8ee; border-radius:8px; font-size:16px; font-weight:900; padding:0;} QPushButton#tagRemoveButton:hover{background:#fee2e2; color:#b91c1c; border-color:#fca5a5;}")
+        card.setStyleSheet("QFrame#sideTagCard{background:#f8fbff; border:1px solid #dbe7f5; border-radius:5px;} QFrame#sideTagCard:hover{background:#eef6ff; border-color:#b8cef0;} QLabel{background:transparent; border:0;} QPushButton#tagRemoveButton{background:#f1f5fb; color:#64748b; border:1.5px solid #c8d8ee; border-radius:4px; font-size:16px; font-weight:700; padding:0;} QPushButton#tagRemoveButton:hover{background:#fee2e2; color:#b91c1c; border-color:#fca5a5;}")
         row = QHBoxLayout(card); row.setContentsMargins(9, 5, 9, 5); row.setSpacing(8)
         dot = QLabel("●"); dot.setFixedWidth(10); dot.setStyleSheet(f"color:{color}; font-size:12px;")
         middle = QWidget(); middle.setMinimumWidth(0); middle.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed); middle.setStyleSheet("background:transparent;"); column = QVBoxLayout(middle); column.setContentsMargins(0, 0, 0, 0); column.setSpacing(1)
