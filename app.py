@@ -12,6 +12,7 @@ import time
 import traceback
 import tempfile
 import zipfile
+import sqlite3
 import unicodedata
 import logging
 from pathlib import Path
@@ -80,7 +81,7 @@ from PySide6.QtWidgets import (
     QTreeWidget, QTreeWidgetItem, QDialog, QLineEdit, QComboBox, QDateEdit, QSpinBox, QDoubleSpinBox,
     QMessageBox, QFileDialog, QFrame, QScrollArea, QCheckBox, QHeaderView,
     QSizePolicy, QProgressBar, QProgressDialog, QStyledItemDelegate, QTextEdit,
-    QToolButton, QMenu, QInputDialog, QWidgetAction, QStackedWidget, QAbstractItemView, QStyle
+    QToolButton, QMenu, QInputDialog, QWidgetAction, QStackedWidget, QAbstractItemView, QStyle, QRadioButton, QButtonGroup
 )
 from shiboken6 import isValid as _qt_is_valid
 
@@ -106,6 +107,41 @@ def normalized_tag_key(value: str) -> str:
     text = unicodedata.normalize("NFKD", text.casefold())
     text = "".join(ch for ch in text if not unicodedata.combining(ch))
     return " ".join(text.split())
+
+
+def _share_metadata_from_path(path: Path | str) -> dict:
+    """Return share metadata for STS share packages; empty dict for normal files."""
+    try:
+        p = Path(path)
+        if not p.exists() or p.suffix.lower() != ".sts":
+            return {}
+        conn = sqlite3.connect(str(p))
+        conn.row_factory = sqlite3.Row
+        try:
+            row = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='share_metadata'").fetchone()
+            if not row:
+                return {}
+            rows = conn.execute("SELECT key,value FROM share_metadata").fetchall()
+            meta = {str(r["key"]): str(r["value"] or "") for r in rows}
+            return meta if str(meta.get("share_mode", "")).lower() == "true" else {}
+        finally:
+            conn.close()
+    except Exception:
+        return {}
+
+
+def _write_share_metadata(path: Path | str, metadata: dict) -> None:
+    conn = sqlite3.connect(str(path))
+    try:
+        conn.execute("CREATE TABLE IF NOT EXISTS share_metadata(key TEXT PRIMARY KEY, value TEXT)")
+        for key, value in dict(metadata or {}).items():
+            conn.execute(
+                "INSERT INTO share_metadata(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (str(key), str(value)),
+            )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 class ContractFileDropButton(QPushButton):
@@ -6621,6 +6657,76 @@ class DeliveryDialog(StyledDialog):
 
 
 
+
+class ContractSharePopover(QFrame):
+    """Compact contract-scoped sharing panel used inside ContractActionTabs popover."""
+
+    def __init__(self, owner: "ContractWorkWindow", parent=None):
+        super().__init__(parent)
+        self.owner = owner
+        self.setObjectName("contractSharePanel")
+        self.setStyleSheet("QFrame#contractSharePanel{background:#f8fbff;border:1px solid #dbeafe;border-radius:12px;} QLabel{background:transparent;border:0;} QRadioButton{background:transparent;color:#334155;font-size:12px;} QPushButton#shareCreateButton{background:#2563eb;color:#fff;border:0;border-radius:9px;padding:7px 12px;font-size:12px;font-weight:800;} QPushButton#shareCreateButton:hover{background:#1d4ed8;} QLabel#sharePreview{background:#ffffff;color:#1e3a8a;border:1px solid #bfdbfe;border-radius:8px;padding:7px 9px;font-family:Consolas,monospace;font-size:11px;}")
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(12, 10, 12, 12)
+        lay.setSpacing(8)
+        title = QLabel("Sözleşme Paylaşımı")
+        title.setStyleSheet("color:#10233d;font-size:14px;font-weight:900;")
+        info = QLabel("Sadece bu sözleşmeyi içeren bağımsız STS dosyası oluştur.")
+        info.setWordWrap(True)
+        info.setStyleSheet("color:#475569;font-size:12px;")
+        lay.addWidget(title)
+        lay.addWidget(info)
+        self.view_radio = QRadioButton("Görüntüleyebilir")
+        self.edit_radio = QRadioButton("Düzenleyebilir")
+        self.view_radio.setChecked(True)
+        self.group = QButtonGroup(self)
+        self.group.addButton(self.view_radio)
+        self.group.addButton(self.edit_radio)
+        row = QHBoxLayout(); row.setSpacing(14)
+        row.addWidget(self.view_radio); row.addWidget(self.edit_radio); row.addStretch(1)
+        lay.addLayout(row)
+        self.preview = QLabel("")
+        self.preview.setObjectName("sharePreview")
+        lay.addWidget(self.preview)
+        btn = QPushButton("Paylaşım Dosyası Oluştur")
+        btn.setObjectName("shareCreateButton")
+        btn.clicked.connect(self.create_share_file)
+        lay.addWidget(btn, 0, Qt.AlignRight)
+        self.view_radio.toggled.connect(self.update_preview)
+        self.edit_radio.toggled.connect(self.update_preview)
+        self.update_preview()
+
+    def share_mode(self) -> str:
+        return "duzenle" if self.edit_radio.isChecked() else "goruntule"
+
+    def filename(self) -> str:
+        no = re.sub(r"[^A-Za-z0-9_.-]+", "-", str(getattr(self.owner.ci, "no", "") or "sozlesme")).strip("-._") or "sozlesme"
+        return f"STS-{no}__paylasim__{self.share_mode()}.sts"
+
+    def update_preview(self):
+        self.preview.setText(self.filename())
+
+    def create_share_file(self):
+        self.owner.create_contract_share_file(self.share_mode(), self.filename())
+
+
+class ContractActionTabs(QFrame):
+    """Contract-level hanging tabs anchored under the header bar."""
+
+    def __init__(self, owner: "ContractWorkWindow", parent=None):
+        super().__init__(parent)
+        self.owner = owner
+        self.setObjectName("contractActionTabs")
+
+    def open_tags(self):
+        self.owner.toggle_side_meta_popover("tags")
+
+    def open_files(self):
+        self.owner.toggle_side_meta_popover("files")
+
+    def open_share(self):
+        self.owner.toggle_side_meta_popover("share")
+
 class ContractWorkWindow(QDialog):
     def __init__(self, store: ExcelStore, ci: ContractInfo, parent=None, systems: Optional[List[SystemInfo]] = None, deliveries: Optional[Dict[str, List[DeliveryInfo]]] = None):
         super().__init__(parent)
@@ -6667,6 +6773,8 @@ class ContractWorkWindow(QDialog):
         self._pending_doc_folders: list = []   # [{id, parent_id, name}]
         self._pending_doc_files: list = []     # [{id, folder_id, filename, content_blob, file_ext, mime_type, size_bytes, note, created_at}]
         self._pending_doc_next_id: int = -1    # Negatif id'ler pending anlamına gelir
+        self.share_mode_enabled = False
+        self.share_permission_mode = "edit"
         self.setWindowTitle(APP_TITLE)
         # QDialog varsayılan olarak ? butonu gösterir — standart pencere butonları ekle
         self.setWindowFlags(
@@ -6689,6 +6797,40 @@ class ContractWorkWindow(QDialog):
         if not self.is_new_contract:
             self._apply_derived_statuses(self.ci, self.systems, self.deliveries)
         self._initial_snapshot = self._make_data_snapshot()
+
+    def set_share_mode(self, permission_mode: str = "view"):
+        self.share_mode_enabled = True
+        self.share_permission_mode = "edit" if str(permission_mode or "").lower() == "edit" else "view"
+        self._apply_share_permissions()
+
+    def _share_is_view_only(self) -> bool:
+        return bool(getattr(self, "share_mode_enabled", False)) and str(getattr(self, "share_permission_mode", "view")) != "edit"
+
+    def _apply_share_permissions(self):
+        if not getattr(self, "share_mode_enabled", False):
+            return
+        view_only = self._share_is_view_only()
+        self.setWindowTitle(f"{APP_TITLE} - Paylaşım ({'Görüntüleme' if view_only else 'Düzenleme'})")
+        for attr in ("save_btn", "edit_system_btn", "add_system_btn", "add_delivery_btn", "auto_accept_btn", "delete_system_btn"):
+            widget = getattr(self, attr, None)
+            if widget is not None:
+                widget.setEnabled(not view_only)
+        if hasattr(self, "delete_contract_btn"):
+            self.delete_contract_btn.setVisible(not view_only)
+            self.delete_contract_btn.setEnabled(not view_only)
+        header_edit = getattr(self, "header_edit_btn", None)
+        if header_edit is not None:
+            header_edit.setEnabled(not view_only)
+        for table_name in ("summary", "del_table"):
+            table = getattr(self, table_name, None)
+            if table is not None:
+                table.setEditTriggers(QAbstractItemView.NoEditTriggers if view_only else QAbstractItemView.DoubleClicked | QAbstractItemView.EditKeyPressed | QAbstractItemView.AnyKeyPressed)
+
+    def _ensure_share_can_edit(self, title: str = "Paylaşım") -> bool:
+        if self._share_is_view_only():
+            QMessageBox.information(self, title, "Bu paylaşım dosyası görüntüleme yetkisiyle açıldı; düzenleme yapılamaz.")
+            return False
+        return True
 
     def has_permission(self, permission_code: str) -> bool:
         db_conn = getattr(getattr(self.store, "db", None), "conn", None)
@@ -6907,6 +7049,7 @@ class ContractWorkWindow(QDialog):
         e.setIcon(QIcon(_pix))
         e.setIconSize(QSize(15, 15))
         e.clicked.connect(self.edit_contract_info)
+        self.header_edit_btn = e
         actions_lay.addWidget(e)
         self.delete_contract_btn = QPushButton("Sözleşmeyi Sil")
         self.delete_contract_btn.setObjectName("danger")
@@ -6949,20 +7092,17 @@ class ContractWorkWindow(QDialog):
         vb.addWidget(self.add_sd_btn, 0)
         left_row.addWidget(version_bar, 0)
 
-        self.side_meta_host = QWidget()
-        self.side_meta_host.setObjectName("sideMetaHost")
-        self.side_meta_host.setFixedWidth(300)
-        self.side_meta_host.installEventFilter(self)
-        left_content_layout = QVBoxLayout(self.side_meta_host)
+        left_content_host = QWidget()
+        left_content_host.setObjectName("sideMetaHost")
+        left_content_host.setFixedWidth(300)
+        left_content_layout = QVBoxLayout(left_content_host)
         left_content_layout.setContentsMargins(0, 0, 0, 0)
         left_content_layout.setSpacing(10)
-        self.build_side_meta_popover_bar(300)
-        left_content_layout.addWidget(self.side_meta_bar, 0)
 
         self.systems_panel = QFrame(); self.systems_panel.setObjectName("sidebar")
         lv = QVBoxLayout(self.systems_panel); lv.setContentsMargins(10, 12, 10, 12); lv.setSpacing(10)
         top = QHBoxLayout(); lbl = QLabel("SİSTEMLER"); lbl.setObjectName("sideTitle"); top.addWidget(lbl); top.addStretch()
-        add = QPushButton("+"); add.clicked.connect(self.add_system); add.setMinimumHeight(30); add.setMaximumWidth(34); top.addWidget(add); lv.addLayout(top)
+        add = QPushButton("+"); add.clicked.connect(self.add_system); add.setMinimumHeight(30); add.setMaximumWidth(34); self.add_system_btn = add; top.addWidget(add); lv.addLayout(top)
         self.system_list = QListWidget(); self.system_list.setObjectName("systemList"); self.system_list.currentRowChanged.connect(self.select_system); lv.addWidget(self.system_list, 1)
         delsys = QPushButton("Seçili Sistemi Sil")
         delsys.setObjectName("secondary")
@@ -6971,11 +7111,23 @@ class ContractWorkWindow(QDialog):
         self.delete_system_btn = delsys
         lv.addWidget(delsys)
         left_content_layout.addWidget(self.systems_panel, 1)
-        left_row.addWidget(self.side_meta_host, 1)
+        left_row.addWidget(left_content_host, 1)
         left_block_lay.addLayout(left_row, 1)
         body.addWidget(left_block, 0)
 
-        right = QFrame(); right.setObjectName("contentPanel"); rv = QVBoxLayout(right); rv.setContentsMargins(16, 12, 16, 12); rv.setSpacing(8); body.addWidget(right, 1)
+        right = QFrame(); right.setObjectName("contentPanel"); rv = QVBoxLayout(right); rv.setContentsMargins(16, 10, 16, 12); rv.setSpacing(8); body.addWidget(right, 1)
+
+        self.side_meta_host = QWidget(right)
+        self.side_meta_host.setObjectName("contractTabsHost")
+        self.side_meta_host.installEventFilter(self)
+        self.side_meta_host.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        tabs_host_lay = QVBoxLayout(self.side_meta_host)
+        tabs_host_lay.setContentsMargins(0, 0, 0, 0)
+        tabs_host_lay.setSpacing(0)
+        self.contract_action_tabs = ContractActionTabs(self, self.side_meta_host)
+        self.build_side_meta_popover_bar(0)
+        tabs_host_lay.addWidget(self.side_meta_bar, 0, Qt.AlignLeft)
+        rv.addWidget(self.side_meta_host, 0)
         self.render_contract_tags()
 
         # ── Üst satır: SİSTEM BİLEŞENLERİ etiketi + Sistemi Düzenle butonu aynı hizada ──
@@ -6997,10 +7149,7 @@ class ContractWorkWindow(QDialog):
             v = QLabel("-")
             v.setObjectName("systemMetricValue")
             v.setWordWrap(True)
-            if key == "days":
-                card.setMinimumWidth(240)
-            else:
-                card.setMinimumWidth(130)
+            card.setMinimumWidth(130)
             self.system_metric_labels[key] = v
             lay.addWidget(t)
             lay.addWidget(v)
@@ -7034,10 +7183,12 @@ class ContractWorkWindow(QDialog):
         dh.addStretch()
 
         ad = QPushButton("+ Teslimat Ekle")
+        self.add_delivery_btn = ad
         ad.clicked.connect(self.add_delivery)
         dh.addWidget(ad)
 
         auto_btn = QPushButton("Otomatik Kabul Oluştur")
+        self.auto_accept_btn = auto_btn
         auto_btn.clicked.connect(lambda: open_auto_accept_dialog(self))
         dh.addWidget(auto_btn)
 
@@ -7061,7 +7212,7 @@ class ContractWorkWindow(QDialog):
         rv.addWidget(self.del_table, 0)
 
         foot = QHBoxLayout(); foot.addStretch()
-        save = QPushButton("Kaydet"); save.clicked.connect(self.save_all)
+        save = QPushButton("Kaydet"); self.save_btn = save; save.clicked.connect(self.save_all)
         close = QPushButton("• Kapat"); close.setObjectName("secondary"); close.clicked.connect(self.reject)
         foot.addWidget(save); foot.addWidget(close); root.addLayout(foot)
 
@@ -7421,6 +7572,8 @@ class ContractWorkWindow(QDialog):
             pass
 
     def edit_contract_info(self):
+        if not self._ensure_share_can_edit("Ana Bilgileri Düzenle"):
+            return
         setattr(self.ci, "platforms", self._linked_contract_platforms())
         dlg = ContractEditDialog(self.store, self.ci, self)
         if not dlg.exec() or not dlg.result:
@@ -7596,6 +7749,8 @@ class ContractWorkWindow(QDialog):
         QMessageBox.critical(self, "Hata", f"Excel işlemi sırasında hata:\n{message}")
 
     def delete_contract(self):
+        if not self._ensure_share_can_edit("Sözleşmeyi Sil"):
+            return
         if not self.require_permission_ui("delete_contracts", "Sözleşmeyi Sil"):
             return
         no = str(self.ci.no or "").strip()
@@ -7632,10 +7787,11 @@ class ContractWorkWindow(QDialog):
         self._side_meta_files: List[dict] = []
         self.side_meta_bar = QFrame()
         self.side_meta_bar.setObjectName("sideMetaBar")
-        self.side_meta_bar.setFixedHeight(40)
+        self.side_meta_bar.setFixedHeight(38)
+        self.side_meta_bar.setMaximumWidth(470)
         self.side_meta_bar.setStyleSheet(
             "QFrame#sideMetaBar{"
-            "  background:#ffffff;"
+            "  background:#f8fbff;"
             "  border:1px solid #d0dcea;"
             "  border-radius:10px;"
             "}"
@@ -7655,6 +7811,7 @@ class ContractWorkWindow(QDialog):
             "QPushButton#sideMetaPill:checked{"
             "  background:#eef4ff;"
             "  color:#1d4ed8;"
+            "  border-bottom:2px solid #2563eb;"
             "}"
             "QLabel#sideMetaBadge{"
             "  background:#dbeafe;"
@@ -7690,10 +7847,19 @@ class ContractWorkWindow(QDialog):
         # Tags pill: icon + label inline, then badge outside
         self.side_btn_tags = QPushButton("🏷  Etiketler")
         self.side_btn_files = QPushButton("📎  Belgeler")
-        for panel, button in (("tags", self.side_btn_tags), ("files", self.side_btn_files)):
+        self.side_btn_share = QPushButton("↗  Paylaşım")
+        for panel, button in (("tags", self.side_btn_tags), ("files", self.side_btn_files), ("share", self.side_btn_share)):
             button.setObjectName("sideMetaPill")
             button.setCheckable(True)
-            button.clicked.connect(lambda _checked=False, name=panel: self.toggle_side_meta_popover(name))
+            tabs_controller = getattr(self, "contract_action_tabs", None)
+            if panel == "tags" and tabs_controller is not None:
+                button.clicked.connect(lambda _checked=False, ctl=tabs_controller: ctl.open_tags())
+            elif panel == "files" and tabs_controller is not None:
+                button.clicked.connect(lambda _checked=False, ctl=tabs_controller: ctl.open_files())
+            elif panel == "share" and tabs_controller is not None:
+                button.clicked.connect(lambda _checked=False, ctl=tabs_controller: ctl.open_share())
+            else:
+                button.clicked.connect(lambda _checked=False, name=panel: self.toggle_side_meta_popover(name))
             bar_layout.addWidget(button, 0)
             badge = QLabel("0")
             badge.setObjectName("sideMetaBadge")
@@ -7707,8 +7873,14 @@ class ContractWorkWindow(QDialog):
                 bar_layout.addSpacing(6)
                 bar_layout.addWidget(div, 0)
                 bar_layout.addSpacing(6)
-            else:
+            elif panel == "files":
                 self.side_badge_files = badge
+                div = QFrame(); div.setObjectName("sideMetaDivider"); div.setFixedHeight(20)
+                bar_layout.addSpacing(6)
+                bar_layout.addWidget(div, 0)
+                bar_layout.addSpacing(6)
+            else:
+                badge.hide()
 
         bar_layout.addStretch(1)
         self.side_chevron = QPushButton("∨")
@@ -7754,8 +7926,12 @@ class ContractWorkWindow(QDialog):
         shadow.setColor(QColor(15, 45, 74, 55))
         self.side_meta_popover.setGraphicsEffect(shadow)
         popover_layout = QVBoxLayout(self.side_meta_popover)
-        popover_layout.setContentsMargins(10, 10, 10, 8)
-        popover_layout.setSpacing(8)
+        popover_layout.setContentsMargins(10, 4, 10, 8)
+        popover_layout.setSpacing(6)
+        self.side_meta_arrow = QLabel("▲")
+        self.side_meta_arrow.setObjectName("sideMetaArrow")
+        self.side_meta_arrow.setStyleSheet("QLabel#sideMetaArrow{background:transparent;color:#ffffff;border:0;font-size:15px;margin:0;padding:0;}")
+        popover_layout.addWidget(self.side_meta_arrow, 0, Qt.AlignLeft)
         self.side_meta_popover_body = QWidget()
         self.side_meta_popover_body.setStyleSheet("background:transparent;")
         self.side_meta_popover_body_layout = QVBoxLayout(self.side_meta_popover_body)
@@ -7814,7 +7990,7 @@ class ContractWorkWindow(QDialog):
         _rh.mouseMoveEvent = _rh_move
         _rh.mouseReleaseEvent = _rh_release
         popover_layout.addWidget(_rh, 0)
-        popover_layout.setContentsMargins(10, 10, 10, 2)
+        popover_layout.setContentsMargins(10, 4, 10, 2)
         # ────────────────────────────────────────────────────────────────────
 
         self.side_meta_popover.hide()
@@ -7824,7 +8000,7 @@ class ContractWorkWindow(QDialog):
     def position_side_meta_popover(self):
         if not hasattr(self, "side_meta_popover") or not hasattr(self, "side_meta_host"):
             return
-        w = max(270, self.side_meta_host.width())
+        w = max(300, min(470, self.side_meta_host.width()))
         self.side_meta_popover.setFixedWidth(w)
         self.side_meta_popover.adjustSize()
         hint_h = self.side_meta_popover.sizeHint().height()
@@ -7848,13 +8024,37 @@ class ContractWorkWindow(QDialog):
                 min_h = max(190, min(manual_h, max_h))
             else:
                 min_h = auto_min_h
+        elif getattr(self, "_side_meta_open_panel", None) == "share":
+            min_h = 190
+            manual_h = None
         else:
-            min_h = 80
+            min_h = 110
             manual_h = None
         h = max(min_h, min(hint_h if manual_h is None else manual_h, max_h))
         self.side_meta_popover.setGeometry(0, top, w, h)
+        self._position_side_meta_arrow()
         if self.side_meta_popover.isVisible():
             self.side_meta_popover.raise_()
+
+    def _position_side_meta_arrow(self):
+        arrow = getattr(self, "side_meta_arrow", None)
+        if arrow is None:
+            return
+        panel = getattr(self, "_side_meta_open_panel", None)
+        button = {
+            "tags": getattr(self, "side_btn_tags", None),
+            "files": getattr(self, "side_btn_files", None),
+            "share": getattr(self, "side_btn_share", None),
+        }.get(panel)
+        if button is None:
+            arrow.setStyleSheet("QLabel#sideMetaArrow{background:transparent;color:#ffffff;border:0;font-size:15px;margin-left:12px;padding:0;}")
+            return
+        try:
+            center = button.mapTo(self.side_meta_host, QPoint(button.width() // 2, 0)).x()
+        except Exception:
+            center = 18
+        left = max(8, min(center - 7, max(8, self.side_meta_popover.width() - 24)))
+        arrow.setStyleSheet(f"QLabel#sideMetaArrow{{background:transparent;color:#ffffff;border:0;font-size:15px;margin-left:{left}px;padding:0;}}")
 
     def _toggle_side_meta_chevron(self):
         if self._side_meta_open_panel:
@@ -7863,7 +8063,7 @@ class ContractWorkWindow(QDialog):
             self.toggle_side_meta_popover(self._side_meta_last_panel or "files")
 
     def toggle_side_meta_popover(self, panel: str):
-        if panel not in {"tags", "files"}:
+        if panel not in {"tags", "files", "share"}:
             return
         if self._side_meta_open_panel == panel and self.side_meta_popover.isVisible():
             self.close_side_meta_popover()
@@ -7886,7 +8086,7 @@ class ContractWorkWindow(QDialog):
 
     def _sync_side_meta_controls(self):
         panel = self._side_meta_open_panel
-        for name, button in (("tags", self.side_btn_tags), ("files", self.side_btn_files)):
+        for name, button in (("tags", self.side_btn_tags), ("files", self.side_btn_files), ("share", self.side_btn_share)):
             button.setChecked(name == panel)
         self.side_chevron.setText("∧" if panel else "∨")
 
@@ -8061,6 +8261,8 @@ class ContractWorkWindow(QDialog):
         self._document_lock_anim = anim
 
     def _toggle_document_lock(self):
+        if not self._ensure_share_can_edit("Belge Kilidi"):
+            return
         state = self._load_document_lock_state()
         if int(state.get("is_locked") or 0) == 0:
             if not self.require_permission_ui("lock_documents", "Belge Kilitleme"):
@@ -8137,11 +8339,14 @@ class ContractWorkWindow(QDialog):
     def render_side_meta_popover_content(self, panel: str):
         self._clear_side_meta_popover_body()
         body = self.side_meta_popover_body_layout
+        if panel == "share":
+            body.addWidget(ContractSharePopover(self, self.side_meta_popover_body), 0)
+            return
         if panel == "tags":
             # + butonu scroll'dan önce değil, kart listesinin en üstünde kompakt satır
             add_row = QHBoxLayout(); add_row.setContentsMargins(0, 0, 0, 2); add_row.addStretch(1)
             add_btn = QPushButton("+ Etiket Ekle"); add_btn.setObjectName("sidePanelAddInline")
-            add_btn.setFixedHeight(26); add_btn.clicked.connect(self.open_tag_assign_dialog)
+            add_btn.setFixedHeight(26); add_btn.setEnabled(not self._share_is_view_only()); add_btn.clicked.connect(self.open_tag_assign_dialog)
             add_row.addWidget(add_btn); body.addLayout(add_row)
             scroll, cards = self._make_card_scroll(); body.addWidget(scroll, 1)
             ordered = self._ordered_contract_tags()
@@ -8179,8 +8384,8 @@ class ContractWorkWindow(QDialog):
                 "QPushButton:hover{background:#edf5ff;border-color:#9ec5f8;}"
             )
             btn_folder.clicked.connect(self.add_contract_file_folder)
-            btn_file.setEnabled(documents_accessible)
-            btn_folder.setEnabled(documents_accessible)
+            btn_file.setEnabled(documents_accessible and not self._share_is_view_only())
+            btn_folder.setEnabled(documents_accessible and not self._share_is_view_only())
 
             lock_btn = QPushButton("🔒" if documents_locked else "🔓")
             lock_btn.setObjectName("documentLockButton")
@@ -8188,6 +8393,7 @@ class ContractWorkWindow(QDialog):
             lock_btn.setFixedSize(30, 30)
             lock_btn.setCursor(Qt.PointingHandCursor)
             lock_btn.setToolTip("Belgeler kilitli" if documents_locked else "Belgeleri kilitle")
+            lock_btn.setEnabled(not self._share_is_view_only())
             lock_btn.clicked.connect(self._toggle_document_lock)
             self.document_lock_btn = lock_btn
 
@@ -8406,6 +8612,48 @@ class ContractWorkWindow(QDialog):
 
             btn_bulk_dl.clicked.connect(lambda: self._bulk_download_files(_get_selected_file_ids()))
             btn_bulk_zip.clicked.connect(lambda: self._bulk_zip_files(_get_selected_file_ids()))
+
+    def create_contract_share_file(self, permission: str, default_filename: str):
+        """Create a real single-contract STS share file with share metadata."""
+        if not self.require_permission_ui("export_data", "Sözleşme Paylaşımı"):
+            return
+        target, _ = QFileDialog.getSaveFileName(self, "Paylaşım Dosyası Oluştur", default_filename, "STS Dosyası (*.sts)")
+        if not target:
+            return
+        if not str(target).lower().endswith(".sts"):
+            target += ".sts"
+        target_path = Path(target)
+        try:
+            if target_path.exists():
+                target_path.unlink()
+            share_store = STSStore(target_path, actor="Sözleşme Paylaşımı")
+            share_ci = copy.deepcopy(self.ci)
+            share_ci.entry_start_row = 0
+            setattr(share_ci, "id", 0)
+            setattr(share_ci, "contract_id", 0)
+            contract_id = int(share_store.write_contract(share_ci, copy.deepcopy(self.systems), copy.deepcopy(self.deliveries)) or 0)
+            share_store.save_contract_tags(
+                str(share_ci.platform or ""),
+                str(share_ci.no or ""),
+                str(share_ci.contract_type or "Ana Sözleşme"),
+                [dict(t or {}) for t in self.contract_tags],
+                actor="Sözleşme Paylaşımı",
+            )
+            try:
+                share_store.db.conn.commit()
+                share_store.db.close()
+            except Exception:
+                pass
+            _write_share_metadata(target_path, {
+                "share_mode": "true",
+                "contract_id": contract_id,
+                "permission_mode": "edit" if permission == "duzenle" else "view",
+                "source_contract_no": str(getattr(self.ci, "no", "") or ""),
+                "created_at": datetime.now().isoformat(timespec="seconds"),
+            })
+            QMessageBox.information(self, "Paylaşım", "Paylaşım STS dosyası oluşturuldu.")
+        except Exception as exc:
+            QMessageBox.warning(self, "Paylaşım", f"Paylaşım dosyası oluşturulamadı:\n{exc}")
 
     def _make_card_scroll(self):
         scroll = QScrollArea(); scroll.setWidgetResizable(True); scroll.setFrameShape(QFrame.NoFrame)
@@ -8717,6 +8965,8 @@ class ContractWorkWindow(QDialog):
         QTimer.singleShot(30, _select_all)
 
     def add_contract_file_folder(self):
+        if not self._ensure_share_can_edit("Belgeler"):
+            return
         if not self._ensure_document_access(interactive=True):
             return
         try:
@@ -8887,6 +9137,8 @@ class ContractWorkWindow(QDialog):
         popover.raise_()
 
     def delete_contract_file_folder(self, folder_id, folder_name):
+        if not self._ensure_share_can_edit("Belgeler"):
+            return
         if not self._ensure_document_access(interactive=True):
             return
         self._begin_side_meta_modal_action()
@@ -9355,6 +9607,8 @@ class ContractWorkWindow(QDialog):
             self.render_side_meta_popover_content("files")
 
     def _pick_contract_files(self):
+        if not self._ensure_share_can_edit("Belgeler"):
+            return
         if not self._ensure_document_access(interactive=True):
             return
         self._file_dialog_open = True
@@ -9669,6 +9923,8 @@ class ContractWorkWindow(QDialog):
             QMessageBox.warning(self, "Belge dışa aktarılamadı", str(exc))
 
     def delete_contract_file(self, file_id: int):
+        if not self._ensure_share_can_edit("Belgeler"):
+            return
         if not self._ensure_document_access(interactive=True):
             return
         self._begin_side_meta_modal_action()
@@ -9698,6 +9954,8 @@ class ContractWorkWindow(QDialog):
         menu.exec(button.mapToGlobal(QPoint(0, button.height())))
 
     def open_tag_assign_dialog(self):
+        if not self._ensure_share_can_edit("Etiketler"):
+            return
         dlg = TagAssignDialog(self.store, self.contract_tags, self)
         if not dlg.exec() or not dlg.result:
             return
@@ -9716,12 +9974,16 @@ class ContractWorkWindow(QDialog):
         self.render_contract_tags()
 
     def remove_contract_tag(self, tag_name: str):
+        if not self._ensure_share_can_edit("Etiketler"):
+            return
         key = self._tag_key(tag_name)
         self.contract_tags = [t for t in self.contract_tags if self._tag_key(str((t or {}).get("name", ""))) != key]
         self._set_dirty()
         self.render_contract_tags()
 
     def add_system(self):
+        if not self._ensure_share_can_edit():
+            return
         dlg = MultiSystemDialog(
             self.store,
             self.ci.platform,
@@ -9743,6 +10005,8 @@ class ContractWorkWindow(QDialog):
             self.refresh()
 
     def edit_system(self):
+        if not self._ensure_share_can_edit():
+            return
         r = self.system_list.currentRow()
         if r < 0 or r >= len(self.systems):
             QMessageBox.warning(self, "Sistem yok", "Düzenlemek için bir sistem seçin.")
@@ -9817,6 +10081,8 @@ class ContractWorkWindow(QDialog):
         self._set_dirty()
 
     def delete_system(self):
+        if not self._ensure_share_can_edit():
+            return
         r = self.system_list.currentRow()
         if r >= 0:
             name = self.systems[r].name
@@ -9827,6 +10093,8 @@ class ContractWorkWindow(QDialog):
             self.refresh()
 
     def add_delivery(self):
+        if not self._ensure_share_can_edit():
+            return
         from src.ui.contract import work_window_deliveries as cw_deliveries
         cw_deliveries.add_delivery(self)
 
@@ -10721,6 +10989,8 @@ class ContractWorkWindow(QDialog):
         super().reject()
 
     def save_all(self):
+        if not self._ensure_share_can_edit("Sözleşme Kaydet"):
+            return
         required_permission = "create_contracts" if self.is_new_contract else "edit_contracts"
         if not self.require_permission_ui(required_permission, "Sözleşme Kaydet"):
             return
@@ -12461,6 +12731,18 @@ class MainWindow(QMainWindow):
         if dlg.exec() and dlg.selected_path:
             sel = Path(dlg.selected_path)
             if sel.suffix.lower() == ".sts":
+                if _share_metadata_from_path(sel):
+                    try:
+                        win = open_share_contract_window(sel)
+                        if win:
+                            if not hasattr(self, "_share_windows"):
+                                self._share_windows = []
+                            self._share_windows.append(win)
+                            win.destroyed.connect(lambda *_args, w=win: self._share_windows.remove(w) if hasattr(self, "_share_windows") and w in self._share_windows else None)
+                            win.show()
+                    except Exception as exc:
+                        QMessageBox.critical(self, "Paylaşım açılamadı", f"Paylaşım dosyası açılamadı.\n\n{exc}")
+                    return
                 if not auth.ensure_system_admin_setup(sel, self):
                     return
                 staff = auth.require_staff_login(sel, self)
@@ -13137,6 +13419,41 @@ class MainWindow(QMainWindow):
         self.contract_index = updated
 
 
+def open_share_contract_window(path: Path | str) -> Optional[ContractWorkWindow]:
+    """Open a share-mode STS directly in ContractWorkWindow without main list/login."""
+    meta = _share_metadata_from_path(path)
+    if not meta:
+        return None
+    store = STSStore(Path(path), actor="Paylaşım")
+    contract_id = int(meta.get("contract_id") or 0)
+    if contract_id <= 0:
+        rows = store.build_contract_index()
+        if not rows:
+            raise ValueError("Paylaşım dosyasında sözleşme bulunamadı.")
+        contract_id = int(rows[0].get("row") or 0)
+    row = store.db.conn.execute("SELECT c.contract_no,c.contract_type,p.name AS platform,c.platform_id FROM contracts c JOIN platforms p ON p.id=c.platform_id WHERE c.id=?", (contract_id,)).fetchone()
+    if not row:
+        raise ValueError("Paylaşım sözleşmesi bulunamadı.")
+    ci, systems, deliveries = store.load_contract_structure(
+        str(row["platform"] or ""),
+        contract_no=str(row["contract_no"] or ""),
+        start_row=contract_id,
+        contract_type=str(row["contract_type"] or ""),
+        platform_id=int(row["platform_id"] or 0),
+    )
+    auth.current_staff = {
+        "id": 0,
+        "full_name": "Paylaşım Kullanıcısı",
+        "username": "share",
+        "is_active": 1,
+        "is_admin": True,
+        "permissions": {"view_contracts", "edit_contracts", "export_data", "manage_labels"},
+    }
+    win = ContractWorkWindow(store, ci, systems=systems, deliveries=deliveries)
+    win.set_share_mode(str(meta.get("permission_mode") or "view"))
+    return win
+
+
 if __name__ == "__main__":
     sys.excepthook = _global_exc_handler
     configure_windows_app_identity()
@@ -13177,11 +13494,38 @@ if __name__ == "__main__":
     # before the real MainWindow event loop starts.
     app.setQuitOnLastWindowClosed(False)
 
+    cli_path = Path(sys.argv[1]).expanduser() if len(sys.argv) > 1 and str(sys.argv[1]).strip() else None
+    if cli_path and _share_metadata_from_path(cli_path):
+        try:
+            win = open_share_contract_window(cli_path)
+            if win is None:
+                raise ValueError("Paylaşım metadata bulunamadı.")
+            app.setQuitOnLastWindowClosed(True)
+            win.show()
+            sys.exit(app.exec())
+        except Exception as exc:
+            _log.exception("Paylaşım STS açılış hatası")
+            QMessageBox.critical(None, "Paylaşım açılamadı", f"Paylaşım dosyası açılamadı.\n\n{exc}")
+            sys.exit(1)
+
     start_dialog = WorkbookStartDialog()
     if not start_dialog.exec() or not start_dialog.selected_path:
         sys.exit(0)
 
     selected_path = Path(start_dialog.selected_path)
+    if _share_metadata_from_path(selected_path):
+        try:
+            win = open_share_contract_window(selected_path)
+            if win is None:
+                raise ValueError("Paylaşım metadata bulunamadı.")
+            app.setQuitOnLastWindowClosed(True)
+            win.show()
+            sys.exit(app.exec())
+        except Exception as exc:
+            _log.exception("Paylaşım STS açılış hatası")
+            QMessageBox.critical(None, "Paylaşım açılamadı", f"Paylaşım dosyası açılamadı.\n\n{exc}")
+            sys.exit(1)
+
     staff = None
     if selected_path.suffix.lower() == ".sts":
         if not auth.ensure_system_admin_setup(selected_path):
