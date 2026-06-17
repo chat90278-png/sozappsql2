@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
     QDialog,
+    QFileDialog,
     QFrame,
     QGridLayout,
     QHBoxLayout,
@@ -670,8 +671,41 @@ class DeliveryScheduleReportDialog(QDialog):
         return rows
 
     def on_export_excel_clicked(self):
-        self.build_report_payload()
-        QMessageBox.information(self, "Excel Oluştur", "Excel üretim modülü sonraki aşamada bağlanacak.")
+        from src.services.delivery_schedule_excel_exporter import (
+            EXCEL_REQUIRED_MESSAGE,
+            ExcelComUnavailableError,
+            export_delivery_schedule_report,
+            load_delivery_schedule_rows,
+            suggested_output_filename,
+        )
+
+        filters = self.collect_filters()
+        if not filters.get("year_range_valid"):
+            QMessageBox.warning(self, "Excel Oluştur", "Yıl / aralık formatı hatalı. Örnek: 2026 veya 2026-2027")
+            return
+        preview_rows = load_delivery_schedule_rows(self.store, filters=filters)
+        suggested_name = suggested_output_filename(preview_rows)
+        output_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Tahmini Teslimat Takvimi Excel Kaydet",
+            suggested_name,
+            "Excel Dosyası (*.xlsx)",
+        )
+        if not output_path:
+            return
+        try:
+            result = export_delivery_schedule_report(self.store, output_path, filters=filters)
+        except ExcelComUnavailableError:
+            QMessageBox.warning(self, "Microsoft Excel gerekli", EXCEL_REQUIRED_MESSAGE)
+            return
+        except Exception as exc:
+            QMessageBox.critical(self, "Excel Oluştur", f"Excel raporu oluşturulamadı:\n{exc}")
+            return
+        QMessageBox.information(
+            self,
+            "Excel Oluştur",
+            f"Excel raporu oluşturuldu.\n\nDosya: {result.get('output_path')}\nSatır sayısı: {result.get('row_count')}",
+        )
 
     def _extra_style(self):
         return f"""
