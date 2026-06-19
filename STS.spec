@@ -1,5 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
 from pathlib import Path
+from PyInstaller.utils.hooks import collect_submodules
 
 ROOT = Path(SPECPATH).resolve()
 ICON = ROOT / "src" / "ui" / "assets" / "sts_icon.ico"
@@ -13,7 +14,7 @@ a = Analysis(
     datas=[
         (str(ROOT / "src" / "ui" / "assets"), "src/ui/assets"),
     ],
-    hiddenimports=[],
+    hiddenimports=collect_submodules("openpyxl"),
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
