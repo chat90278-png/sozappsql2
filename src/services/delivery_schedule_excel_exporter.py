@@ -390,6 +390,9 @@ def _revision_log_to_row(row: dict[str, Any], index: int) -> dict[str, Any]:
     entity_key = "" if _technical_entity_key(row.get("entity_key")) else str(row.get("entity_key") or "")
     return {
         "revision": f"R{index:03d}",
+        "source": "auto",
+        "log_id": int(row.get("id") or 0),
+        "manual_id": None,
         "date": str(row.get("created_at") or ""),
         "user": str(row.get("actor") or "-"),
         "contract": str(row.get("resolved_contract_no") or row.get("contract_no") or "-"),
@@ -547,13 +550,186 @@ def load_meaningful_revision_logs(store: object, limit: int = 200, filters: Opti
     return result
 
 
+
+REV_MANUAL_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS delivery_schedule_revision_rows (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    contract_id INTEGER,
+    delivery_id INTEGER,
+    system_name TEXT,
+    revision_date TEXT,
+    user_name TEXT,
+    contract_no TEXT,
+    delivery_name TEXT,
+    field_name TEXT,
+    old_value TEXT,
+    new_value TEXT,
+    description TEXT,
+    source TEXT DEFAULT 'manual',
+    is_deleted INTEGER DEFAULT 0,
+    created_at TEXT,
+    updated_at TEXT,
+    created_by TEXT,
+    updated_by TEXT
+)
+"""
+REV_HIDDEN_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS delivery_schedule_rev_hidden_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    log_id INTEGER NOT NULL UNIQUE,
+    hidden_by TEXT,
+    hidden_at TEXT,
+    reason TEXT
+)
+"""
+
+
+def ensure_revision_edit_tables(conn: sqlite3.Connection) -> None:
+    conn.execute(REV_MANUAL_TABLE_SQL)
+    conn.execute(REV_HIDDEN_TABLE_SQL)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_delivery_schedule_revision_rows_contract ON delivery_schedule_revision_rows(contract_no)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_delivery_schedule_revision_rows_deleted ON delivery_schedule_revision_rows(is_deleted)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_delivery_schedule_rev_hidden_logs_log ON delivery_schedule_rev_hidden_logs(log_id)")
+    conn.commit()
+
+
+def _hidden_revision_log_ids(conn: sqlite3.Connection) -> set[int]:
+    try:
+        ensure_revision_edit_tables(conn)
+        return {int(row[0]) for row in conn.execute("SELECT log_id FROM delivery_schedule_rev_hidden_logs").fetchall()}
+    except Exception:
+        return set()
+
+
+def _manual_revision_rows(conn: sqlite3.Connection, filters: Optional[dict[str, Any]] = None) -> list[dict[str, Any]]:
+    try:
+        ensure_revision_edit_tables(conn)
+        rows = conn.execute(
+            """
+            SELECT id, contract_id, delivery_id, system_name, revision_date, user_name,
+                   contract_no, delivery_name, field_name, old_value, new_value,
+                   description, source, created_at, updated_at, created_by, updated_by
+            FROM delivery_schedule_revision_rows
+            WHERE COALESCE(is_deleted,0)=0
+            """
+        ).fetchall()
+    except Exception:
+        return []
+    selected_contracts = _selected_contracts_from_filters(filters)
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        data = _as_dict(row)
+        contract_no = str(data.get("contract_no") or "").strip()
+        if selected_contracts and contract_no not in selected_contracts:
+            continue
+        result.append({
+            "revision": "",
+            "source": "manual",
+            "log_id": None,
+            "manual_id": int(data.get("id") or 0),
+            "date": str(data.get("revision_date") or data.get("created_at") or ""),
+            "user": str(data.get("user_name") or data.get("created_by") or "Kullanıcı"),
+            "contract": contract_no or "-",
+            "delivery": str(data.get("delivery_name") or "-"),
+            "field": str(data.get("field_name") or ""),
+            "old_value": str(data.get("old_value") or ""),
+            "new_value": str(data.get("new_value") or ""),
+            "description": str(data.get("description") or ""),
+        })
+    return result
+
+
+def build_delivery_schedule_revision_rows(store: object, limit: int = 200, filters: Optional[dict[str, Any]] = None) -> list[dict[str, Any]]:
+    conn = _conn_from_store(store)
+    if conn is None:
+        return []
+    hidden_ids = _hidden_revision_log_ids(conn)
+    auto_rows = [row for row in load_meaningful_revision_logs(store, limit=limit, filters=filters) if int(row.get("log_id") or 0) not in hidden_ids]
+    manual_rows = _manual_revision_rows(conn, filters=filters)
+    combined = auto_rows + manual_rows
+    combined.sort(key=lambda row: str(row.get("date") or ""), reverse=True)
+    for idx, row in enumerate(combined, start=1):
+        row["revision"] = f"R{idx:03d}"
+    return combined[: int(limit or 200)]
+
+
+def save_manual_revision_row(store: object, values: dict[str, Any], row_id: Optional[int] = None) -> int:
+    conn = _conn_from_store(store)
+    if conn is None:
+        raise RuntimeError("Açık STS veritabanı bulunamadı.")
+    ensure_revision_edit_tables(conn)
+    now = datetime.now().isoformat(timespec="seconds")
+    actor = str(values.get("updated_by") or values.get("created_by") or values.get("user_name") or "Kullanıcı")
+    if row_id:
+        conn.execute(
+            """
+            UPDATE delivery_schedule_revision_rows
+            SET revision_date=?, user_name=?, contract_no=?, delivery_name=?, field_name=?,
+                old_value=?, new_value=?, description=?, updated_at=?, updated_by=?
+            WHERE id=? AND COALESCE(is_deleted,0)=0
+            """,
+            (
+                str(values.get("revision_date") or ""), str(values.get("user_name") or ""),
+                str(values.get("contract_no") or ""), str(values.get("delivery_name") or ""),
+                str(values.get("field_name") or ""), str(values.get("old_value") or ""),
+                str(values.get("new_value") or ""), str(values.get("description") or ""),
+                now, actor, int(row_id),
+            ),
+        )
+        conn.commit()
+        return int(row_id)
+    cur = conn.execute(
+        """
+        INSERT INTO delivery_schedule_revision_rows(
+            contract_id, delivery_id, system_name, revision_date, user_name, contract_no,
+            delivery_name, field_name, old_value, new_value, description, source,
+            is_deleted, created_at, updated_at, created_by, updated_by
+        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """,
+        (
+            values.get("contract_id"), values.get("delivery_id"), str(values.get("system_name") or ""),
+            str(values.get("revision_date") or now), str(values.get("user_name") or actor),
+            str(values.get("contract_no") or ""), str(values.get("delivery_name") or ""),
+            str(values.get("field_name") or ""), str(values.get("old_value") or ""),
+            str(values.get("new_value") or ""), str(values.get("description") or ""),
+            "manual", 0, now, now, actor, actor,
+        ),
+    )
+    conn.commit()
+    return int(cur.lastrowid or 0)
+
+
+def hide_revision_row(store: object, row: dict[str, Any], actor: str = "", reason: str = "") -> None:
+    conn = _conn_from_store(store)
+    if conn is None:
+        raise RuntimeError("Açık STS veritabanı bulunamadı.")
+    ensure_revision_edit_tables(conn)
+    now = datetime.now().isoformat(timespec="seconds")
+    if str(row.get("source") or "") == "manual":
+        manual_id = int(row.get("manual_id") or 0)
+        if manual_id:
+            conn.execute(
+                "UPDATE delivery_schedule_revision_rows SET is_deleted=1, updated_at=?, updated_by=? WHERE id=?",
+                (now, actor or "Kullanıcı", manual_id),
+            )
+    else:
+        log_id = int(row.get("log_id") or 0)
+        if log_id:
+            conn.execute(
+                "INSERT OR IGNORE INTO delivery_schedule_rev_hidden_logs(log_id, hidden_by, hidden_at, reason) VALUES(?,?,?,?)",
+                (log_id, actor or "Kullanıcı", now, reason or "REV Takip raporundan gizlendi"),
+            )
+    conn.commit()
+
 def load_activity_rows(store: object, filters: Optional[dict[str, Any]] = None) -> list[list[Any]]:
+    rows = build_delivery_schedule_revision_rows(store, limit=200, filters=filters)
     return [
         [
             log["revision"], log["date"], log["user"], log["contract"], log["delivery"],
-            log["field"], log["old_value"], log["new_value"], log["description"],
+            log["field"], log["old_value"], log["new_value"],
+            (str(log["description"] or "") + (" (Manuel)" if log.get("source") == "manual" else "")),
         ]
-        for log in load_meaningful_revision_logs(store, limit=200, filters=filters)
+        for log in rows
     ]
 
 
