@@ -7262,7 +7262,7 @@ class ContractWorkWindow(QDialog):
             lay.addWidget(v)
             return card
 
-        top_row.addWidget(system_metric_card("completion", "Termin Tarihi"), 0)
+        top_row.addWidget(system_metric_card("completion", "Yakın Teslimat"), 0)
         top_row.addWidget(system_metric_card("days", "Kalan Gün"), 0)
         top_row.addWidget(system_metric_card("acceptance", "Gerçek Teslimat"), 0)
         top_row.addWidget(system_metric_card("user", "Kullanıcı"), 0)
