@@ -390,6 +390,9 @@ def _revision_log_to_row(row: dict[str, Any], index: int) -> dict[str, Any]:
     entity_key = "" if _technical_entity_key(row.get("entity_key")) else str(row.get("entity_key") or "")
     return {
         "revision": f"R{index:03d}",
+        "source": "auto",
+        "log_id": int(row.get("id") or 0),
+        "manual_id": None,
         "date": str(row.get("created_at") or ""),
         "user": str(row.get("actor") or "-"),
         "contract": str(row.get("resolved_contract_no") or row.get("contract_no") or "-"),
@@ -547,13 +550,186 @@ def load_meaningful_revision_logs(store: object, limit: int = 200, filters: Opti
     return result
 
 
+
+REV_MANUAL_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS delivery_schedule_revision_rows (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    contract_id INTEGER,
+    delivery_id INTEGER,
+    system_name TEXT,
+    revision_date TEXT,
+    user_name TEXT,
+    contract_no TEXT,
+    delivery_name TEXT,
+    field_name TEXT,
+    old_value TEXT,
+    new_value TEXT,
+    description TEXT,
+    source TEXT DEFAULT 'manual',
+    is_deleted INTEGER DEFAULT 0,
+    created_at TEXT,
+    updated_at TEXT,
+    created_by TEXT,
+    updated_by TEXT
+)
+"""
+REV_HIDDEN_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS delivery_schedule_rev_hidden_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    log_id INTEGER NOT NULL UNIQUE,
+    hidden_by TEXT,
+    hidden_at TEXT,
+    reason TEXT
+)
+"""
+
+
+def ensure_revision_edit_tables(conn: sqlite3.Connection) -> None:
+    conn.execute(REV_MANUAL_TABLE_SQL)
+    conn.execute(REV_HIDDEN_TABLE_SQL)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_delivery_schedule_revision_rows_contract ON delivery_schedule_revision_rows(contract_no)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_delivery_schedule_revision_rows_deleted ON delivery_schedule_revision_rows(is_deleted)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_delivery_schedule_rev_hidden_logs_log ON delivery_schedule_rev_hidden_logs(log_id)")
+    conn.commit()
+
+
+def _hidden_revision_log_ids(conn: sqlite3.Connection) -> set[int]:
+    try:
+        ensure_revision_edit_tables(conn)
+        return {int(row[0]) for row in conn.execute("SELECT log_id FROM delivery_schedule_rev_hidden_logs").fetchall()}
+    except Exception:
+        return set()
+
+
+def _manual_revision_rows(conn: sqlite3.Connection, filters: Optional[dict[str, Any]] = None) -> list[dict[str, Any]]:
+    try:
+        ensure_revision_edit_tables(conn)
+        rows = conn.execute(
+            """
+            SELECT id, contract_id, delivery_id, system_name, revision_date, user_name,
+                   contract_no, delivery_name, field_name, old_value, new_value,
+                   description, source, created_at, updated_at, created_by, updated_by
+            FROM delivery_schedule_revision_rows
+            WHERE COALESCE(is_deleted,0)=0
+            """
+        ).fetchall()
+    except Exception:
+        return []
+    selected_contracts = _selected_contracts_from_filters(filters)
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        data = _as_dict(row)
+        contract_no = str(data.get("contract_no") or "").strip()
+        if selected_contracts and contract_no not in selected_contracts:
+            continue
+        result.append({
+            "revision": "",
+            "source": "manual",
+            "log_id": None,
+            "manual_id": int(data.get("id") or 0),
+            "date": str(data.get("revision_date") or data.get("created_at") or ""),
+            "user": str(data.get("user_name") or data.get("created_by") or "Kullanıcı"),
+            "contract": contract_no or "-",
+            "delivery": str(data.get("delivery_name") or "-"),
+            "field": str(data.get("field_name") or ""),
+            "old_value": str(data.get("old_value") or ""),
+            "new_value": str(data.get("new_value") or ""),
+            "description": str(data.get("description") or ""),
+        })
+    return result
+
+
+def build_delivery_schedule_revision_rows(store: object, limit: int = 200, filters: Optional[dict[str, Any]] = None) -> list[dict[str, Any]]:
+    conn = _conn_from_store(store)
+    if conn is None:
+        return []
+    hidden_ids = _hidden_revision_log_ids(conn)
+    auto_rows = [row for row in load_meaningful_revision_logs(store, limit=limit, filters=filters) if int(row.get("log_id") or 0) not in hidden_ids]
+    manual_rows = _manual_revision_rows(conn, filters=filters)
+    combined = auto_rows + manual_rows
+    combined.sort(key=lambda row: str(row.get("date") or ""), reverse=True)
+    for idx, row in enumerate(combined, start=1):
+        row["revision"] = f"R{idx:03d}"
+    return combined[: int(limit or 200)]
+
+
+def save_manual_revision_row(store: object, values: dict[str, Any], row_id: Optional[int] = None) -> int:
+    conn = _conn_from_store(store)
+    if conn is None:
+        raise RuntimeError("Açık STS veritabanı bulunamadı.")
+    ensure_revision_edit_tables(conn)
+    now = datetime.now().isoformat(timespec="seconds")
+    actor = str(values.get("updated_by") or values.get("created_by") or values.get("user_name") or "Kullanıcı")
+    if row_id:
+        conn.execute(
+            """
+            UPDATE delivery_schedule_revision_rows
+            SET revision_date=?, user_name=?, contract_no=?, delivery_name=?, field_name=?,
+                old_value=?, new_value=?, description=?, updated_at=?, updated_by=?
+            WHERE id=? AND COALESCE(is_deleted,0)=0
+            """,
+            (
+                str(values.get("revision_date") or ""), str(values.get("user_name") or ""),
+                str(values.get("contract_no") or ""), str(values.get("delivery_name") or ""),
+                str(values.get("field_name") or ""), str(values.get("old_value") or ""),
+                str(values.get("new_value") or ""), str(values.get("description") or ""),
+                now, actor, int(row_id),
+            ),
+        )
+        conn.commit()
+        return int(row_id)
+    cur = conn.execute(
+        """
+        INSERT INTO delivery_schedule_revision_rows(
+            contract_id, delivery_id, system_name, revision_date, user_name, contract_no,
+            delivery_name, field_name, old_value, new_value, description, source,
+            is_deleted, created_at, updated_at, created_by, updated_by
+        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """,
+        (
+            values.get("contract_id"), values.get("delivery_id"), str(values.get("system_name") or ""),
+            str(values.get("revision_date") or now), str(values.get("user_name") or actor),
+            str(values.get("contract_no") or ""), str(values.get("delivery_name") or ""),
+            str(values.get("field_name") or ""), str(values.get("old_value") or ""),
+            str(values.get("new_value") or ""), str(values.get("description") or ""),
+            "manual", 0, now, now, actor, actor,
+        ),
+    )
+    conn.commit()
+    return int(cur.lastrowid or 0)
+
+
+def hide_revision_row(store: object, row: dict[str, Any], actor: str = "", reason: str = "") -> None:
+    conn = _conn_from_store(store)
+    if conn is None:
+        raise RuntimeError("Açık STS veritabanı bulunamadı.")
+    ensure_revision_edit_tables(conn)
+    now = datetime.now().isoformat(timespec="seconds")
+    if str(row.get("source") or "") == "manual":
+        manual_id = int(row.get("manual_id") or 0)
+        if manual_id:
+            conn.execute(
+                "UPDATE delivery_schedule_revision_rows SET is_deleted=1, updated_at=?, updated_by=? WHERE id=?",
+                (now, actor or "Kullanıcı", manual_id),
+            )
+    else:
+        log_id = int(row.get("log_id") or 0)
+        if log_id:
+            conn.execute(
+                "INSERT OR IGNORE INTO delivery_schedule_rev_hidden_logs(log_id, hidden_by, hidden_at, reason) VALUES(?,?,?,?)",
+                (log_id, actor or "Kullanıcı", now, reason or "REV Takip raporundan gizlendi"),
+            )
+    conn.commit()
+
 def load_activity_rows(store: object, filters: Optional[dict[str, Any]] = None) -> list[list[Any]]:
+    rows = build_delivery_schedule_revision_rows(store, limit=200, filters=filters)
     return [
         [
             log["revision"], log["date"], log["user"], log["contract"], log["delivery"],
-            log["field"], log["old_value"], log["new_value"], log["description"],
+            log["field"], log["old_value"], log["new_value"],
+            (str(log["description"] or "") + (" (Manuel)" if log.get("source") == "manual" else "")),
         ]
-        for log in load_meaningful_revision_logs(store, limit=200, filters=filters)
+        for log in rows
     ]
 
 
@@ -913,58 +1089,128 @@ def _create_small_pivot_chart(wb, cache, dashboard_ws, row_field: str, value_fie
     return pt
 
 
+def _slicer_registry_key(ws, field_name: str) -> tuple[str, str]:
+    try:
+        sheet_name = str(ws.Name)
+    except Exception:
+        sheet_name = "Dashboard"
+    return (sheet_name, str(field_name or "").strip().casefold())
+
+
+def _try_delete_shape_by_name(ws, shape_name: str) -> None:
+    """Best-effort cleanup for stale manual/COM slicer shapes with the same object name."""
+    try:
+        shapes = ws.Shapes
+        for idx in range(shapes.Count, 0, -1):
+            shp = shapes.Item(idx)
+            if str(getattr(shp, "Name", "") or "") == shape_name:
+                shp.Delete()
+    except Exception:
+        pass
+
+
+def add_unique_slicer(
+    wb,
+    ws,
+    pivot_table,
+    field_name: str,
+    slicer_name: str,
+    left: int,
+    top: int,
+    width: int,
+    height: int,
+    created_slicers: set[tuple[str, str]],
+    extra_pivot_tables=None,
+):
+    """Create exactly one slicer per worksheet+field for this export run.
+
+    Excel COM keeps slicer caches and slicer shapes separately.  The previous
+    implementation created the same slicer twice from the same cache, which
+    produced two differently styled boxes for fields such as Durum/Sözleşme.
+    This helper centralizes creation and uses a per-run registry before touching
+    COM, so duplicate cache/shape creation is prevented at the source.
+    """
+    field_name = str(field_name or "").strip()
+    if not field_name:
+        return None
+    key = _slicer_registry_key(ws, field_name)
+    if key in created_slicers:
+        return None
+    created_slicers.add(key)
+    _try_delete_shape_by_name(ws, slicer_name)
+
+    try:
+        cache = wb.SlicerCaches.Add2(pivot_table, field_name)
+    except Exception:
+        try:
+            cache = wb.SlicerCaches.Add(pivot_table, field_name)
+        except Exception:
+            return None
+
+    for pt in list(extra_pivot_tables or []):
+        try:
+            cache.PivotTables.AddPivotTable(pt)
+        except Exception:
+            pass
+
+    try:
+        slicer = cache.Slicers.Add(ws, None, slicer_name, field_name, left, top, width, height)
+    except Exception:
+        try:
+            slicer = cache.Slicers.Add(
+                SlicerDestination=ws,
+                Name=slicer_name,
+                Caption=field_name,
+                Left=left,
+                Top=top,
+                Width=width,
+                Height=height,
+            )
+        except Exception:
+            return None
+
+    try:
+        slicer.NumberOfColumns = 1
+    except Exception:
+        pass
+    try:
+        slicer.Style = "SlicerStyleLight2"
+    except Exception:
+        pass
+    try:
+        cache.CrossFilterType = 1
+    except Exception:
+        pass
+    try:
+        cache.SortItems = 1
+    except Exception:
+        pass
+    return slicer
+
+
 def _add_slicers(wb, ws, pivot_table, extra_pivot_tables=None) -> None:
-    """Add real Excel slicers and connect them to every pivot table built from the same cache."""
+    """Add one real Excel slicer per field and connect it to all dashboard pivots."""
     fields = ["Yİ/YD", "Yıl", "Teslimat", "Platform", "Sözleşme", "Durum"]
     left = 1110
     top = 380
+    created_slicers: set[tuple[str, str]] = set()
     extra_pivot_tables = list(extra_pivot_tables or [])
     for idx, field in enumerate(fields):
-        try:
-            cache = wb.SlicerCaches.Add2(pivot_table, field)
-        except Exception:
-            try:
-                cache = wb.SlicerCaches.Add(pivot_table, field)
-            except Exception:
-                continue
-        for pt in extra_pivot_tables:
-            try:
-                cache.PivotTables.AddPivotTable(pt)
-            except Exception:
-                pass
         height = 125 if field == "Durum" else 75
-        try:
-            slicer = cache.Slicers.Add(ws, None, f"sl_{idx}_{_safe_filename(field)}", field, left, top + idx * 82, 170, height)
-        except Exception:
-            try:
-                slicer = cache.Slicers.Add(SlicerDestination=ws, Name=f"sl_{idx}_{_safe_filename(field)}", Caption=field, Left=left, Top=top + idx * 82, Width=170, Height=height)
-            except Exception:
-                slicer = None
-        if slicer is not None:
-            try:
-                slicer.NumberOfColumns = 1
-            except Exception:
-                pass
-            try:
-                slicer.Style = "SlicerStyleLight2"
-            except Exception:
-                pass
-            try:
-                # Show a more complete status list when possible.
-                cache.CrossFilterType = 1
-            except Exception:
-                pass
-            try:
-                cache.SortItems = 1
-            except Exception:
-                pass
-        try:
-            cache.Slicers.Add(ws, None, f"sl_{idx}_{_safe_filename(field)}", field, left, top + idx * 82, 170, 75)
-        except Exception:
-            try:
-                cache.Slicers.Add(SlicerDestination=ws, Name=f"sl_{idx}_{_safe_filename(field)}", Caption=field, Left=left, Top=top + idx * 82, Width=170, Height=75)
-            except Exception:
-                pass
+        name = f"sl_{idx}_{_safe_filename(field)}"
+        add_unique_slicer(
+            wb,
+            ws,
+            pivot_table,
+            field,
+            name,
+            left,
+            top + idx * 82,
+            170,
+            height,
+            created_slicers,
+            extra_pivot_tables=extra_pivot_tables,
+        )
 
 
 def export_delivery_schedule_report(store, output_path, filters=None, progress_cb=None) -> dict:

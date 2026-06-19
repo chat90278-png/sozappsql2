@@ -592,19 +592,6 @@ CREATE TABLE IF NOT EXISTS activity_logs(id INTEGER PRIMARY KEY AUTOINCREMENT,cr
             migrated.append("components.requires_unit_tracking")
         if self._ensure_column("components", "unit_tracking_label", "TEXT DEFAULT ''"):
             migrated.append("components.unit_tracking_label")
-        # Backfill güvenliği: kolonlar daha önce eklenmiş olsa bile normalize adı
-        # "hava araci" olan pasif tracking kayıtlarını migration sırasında tamamla.
-        # Bu yalnızca geçmiş veri onarımıdır; runtime mantık component flag'lerine bağlı kalır.
-        backfill_cursor = self.conn.execute("""
-            UPDATE components
-            SET requires_unit_tracking=1, unit_tracking_label='Kuyruk No'
-            WHERE COALESCE(requires_unit_tracking, 0)=0
-              AND TRIM(LOWER(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(
-                  name,
-                  '_',' '), '-',' '), 'ı','i'), 'İ','i'), 'ş','s'), 'ğ','g'), 'ü','u'), 'ö','o'), 'ç','c'))) = 'hava araci'
-        """)
-        if getattr(backfill_cursor, "rowcount", 0):
-            migrated.append("components.hava_araci_unit_tracking_backfill")
         self.conn.execute("""
             CREATE TABLE IF NOT EXISTS delivery_component_units (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -626,6 +613,49 @@ CREATE TABLE IF NOT EXISTS activity_logs(id INTEGER PRIMARY KEY AUTOINCREMENT,cr
         self.conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_delivery_component_units_identifier "
             "ON delivery_component_units(identifier)"
+        )
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS delivery_schedule_revision_rows (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                contract_id INTEGER,
+                delivery_id INTEGER,
+                system_name TEXT,
+                revision_date TEXT,
+                user_name TEXT,
+                contract_no TEXT,
+                delivery_name TEXT,
+                field_name TEXT,
+                old_value TEXT,
+                new_value TEXT,
+                description TEXT,
+                source TEXT DEFAULT 'manual',
+                is_deleted INTEGER DEFAULT 0,
+                created_at TEXT,
+                updated_at TEXT,
+                created_by TEXT,
+                updated_by TEXT
+            )
+        """)
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS delivery_schedule_rev_hidden_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                log_id INTEGER NOT NULL UNIQUE,
+                hidden_by TEXT,
+                hidden_at TEXT,
+                reason TEXT
+            )
+        """)
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_delivery_schedule_revision_rows_contract "
+            "ON delivery_schedule_revision_rows(contract_no)"
+        )
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_delivery_schedule_revision_rows_deleted "
+            "ON delivery_schedule_revision_rows(is_deleted)"
+        )
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_delivery_schedule_rev_hidden_logs_log "
+            "ON delivery_schedule_rev_hidden_logs(log_id)"
         )
         self.conn.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version','11')")
         self.conn.commit()

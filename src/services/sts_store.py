@@ -1683,14 +1683,13 @@ class STSStore:
                     for component_id, delivery_component_id in existing_components.items():
                         if component_id not in desired_component_ids:
                             self.db.conn.execute("DELETE FROM delivery_components WHERE id=?", (delivery_component_id,))
-                    # Upsert delivery_component_units for unit-tracking components
+                    # Upsert delivery_component_units for every component that has slot data.
                     component_units = getattr(delivery, "component_units", {}) or {}
                     for cname, slots in component_units.items():
-                        # Get component_id and check if unit tracking is enabled
                         cid_row = self.db.conn.execute(
-                            "SELECT id, requires_unit_tracking FROM components WHERE name=?", (cname,)
+                            "SELECT id FROM components WHERE name=?", (cname,)
                         ).fetchone()
-                        if not cid_row or not int(cid_row[1] or 0):
+                        if not cid_row:
                             continue
                         comp_cid = int(cid_row[0])
                         # Get delivery_component_id
@@ -1701,18 +1700,25 @@ class STSStore:
                         if not dc_row:
                             continue
                         dc_id = int(dc_row[0])
-                        planned_qty = int(float((delivery.planned or {}).get(cname, 0) or 0))
+                        planned_qty = int(max(
+                            float((delivery.planned or {}).get(cname, 0) or 0),
+                            float((delivery.delivered or {}).get(cname, 0) or 0),
+                        ))
                         ts_now = __import__('datetime').datetime.now().isoformat(timespec='seconds')
-                        # Delete slots beyond planned_qty
+                        # Preserve filled extra slots when quantity is reduced; remove only empty extras.
                         if planned_qty >= 0:
                             self.db.conn.execute(
-                                "DELETE FROM delivery_component_units WHERE delivery_component_id=? AND slot_no>?",
+                                "DELETE FROM delivery_component_units "
+                                "WHERE delivery_component_id=? AND slot_no>? "
+                                "AND TRIM(COALESCE(identifier,''))='' "
+                                "AND TRIM(COALESCE(note,''))='' "
+                                "AND COALESCE(is_delivered,0)=0",
                                 (dc_id, planned_qty)
                             )
                         # Upsert each slot
                         for slot in (slots or []):
                             slot_no = int(slot.get("slot_no", 0))
-                            if slot_no < 1 or slot_no > planned_qty:
+                            if slot_no < 1:
                                 continue
                             identifier = str(slot.get("identifier") or "").strip()
                             is_delivered = int(bool(slot.get("is_delivered", 0)))
@@ -1825,21 +1831,21 @@ class STSStore:
             payload=json.loads(d['payload_json'] or "{}")
             rows=self.db.conn.execute("SELECT c.name,dc.planned,dc.delivered,dc.id as dc_id,c.requires_unit_tracking,c.unit_tracking_label FROM delivery_components dc JOIN components c ON c.id=dc.component_id WHERE dc.delivery_id=?",(d['id'],)).fetchall()
             planned={x[0]:float(x[1] or 0) for x in rows}; delivered={x[0]:float(x[2] or 0) for x in rows}
-            # Load component_units for unit-tracking components
+            # Load component_units for all components; older records simply have no rows.
             component_units = {}
             for row in rows:
                 cname = row[0]
-                requires_tracking = int(row[4] or 0) if len(row) > 4 else 0
                 dc_id = int(row[3]) if len(row) > 3 else 0
-                if requires_tracking and dc_id:
+                if dc_id:
                     unit_rows = self.db.conn.execute(
                         "SELECT slot_no, identifier, is_delivered, note FROM delivery_component_units WHERE delivery_component_id=? ORDER BY slot_no",
                         (dc_id,)
                     ).fetchall()
-                    component_units[cname] = [
-                        {"slot_no": int(u[0]), "identifier": str(u[1] or ""), "is_delivered": int(u[2] or 0), "note": str(u[3] or "")}
-                        for u in unit_rows
-                    ]
+                    if unit_rows:
+                        component_units[cname] = [
+                            {"slot_no": int(u[0]), "identifier": str(u[1] or ""), "is_delivered": int(u[2] or 0), "note": str(u[3] or "")}
+                            for u in unit_rows
+                        ]
             di=DeliveryInfo(name=d['name'],status=d['status'] or "",acceptance_date=d['acceptance_date'] or "",note=d['note'] or "",planned_acceptance_date=d['planned_acceptance_date'] or "",planned=planned,delivered=delivered,t0_date=payload.get('t0_date',''),t0_months=int(payload.get('t0_months',0) or 0),completion_date=payload.get('completion_date',''),delivery_user=d['delivery_user'] or "",component_units=component_units)
             deliveries.setdefault(d['delivery_system'],[]).append(di)
         return ci, systems, deliveries
@@ -1855,22 +1861,22 @@ class STSStore:
 
     # ---- Unit tracking helpers ----
     def get_unit_tracking_components(self) -> dict:
-        """Kuyruk no takibi açık bileşenleri {name: label} olarak döner."""
+        """Kuyruk no / seri no takibi için özel etiket tanımlı bileşenleri {name: label} olarak döner."""
         out = {}
         try:
             rows = self.db.conn.execute(
                 "SELECT name, unit_tracking_label FROM components WHERE requires_unit_tracking=1 AND active=1"
             ).fetchall()
             for r in rows:
-                out[str(r[0] or "")] = str(r[1] or "Kuyruk No")
+                out[str(r[0] or "")] = str(r[1] or "Kuyruk No / Seri No")
         except Exception:
             pass
         return out
 
-    def set_component_unit_tracking(self, component_name: str, enabled: bool, label: str = "Kuyruk No") -> None:
+    def set_component_unit_tracking(self, component_name: str, enabled: bool, label: str = "Kuyruk No / Seri No") -> None:
         """Bileşen için unit tracking aç/kapat."""
         self.db.conn.execute(
             "UPDATE components SET requires_unit_tracking=?, unit_tracking_label=? WHERE name=?",
-            (1 if enabled else 0, str(label or "Kuyruk No"), str(component_name or ""))
+            (1 if enabled else 0, str(label or "Kuyruk No / Seri No"), str(component_name or ""))
         )
         self.db.conn.commit()
