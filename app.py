@@ -6981,7 +6981,7 @@ class BadgeTabButton(QFrame):
             }}
             QLabel#badgeTabIcon {{ background:transparent; color:{fg}; border:0; font-size:15px; }}
             QLabel#badgeTabText {{ background:transparent; color:{fg}; border:0; font-size:12px; font-weight:700; }}
-            QFrame#badgeTabButton:hover { background:#F4F8FF; border-color:#93C5FD; }
+            QFrame#badgeTabButton:hover {{ background:#F4F8FF; border-color:#93C5FD; }}
             QLabel#badgeTabCount {{
                 background:#DBEAFE; color:#2563EB; border:1px solid #93C5FD;
                 border-radius:10px; padding:0 5px; font-size:10px; font-weight:900;
