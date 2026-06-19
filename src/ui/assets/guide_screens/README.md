@@ -18,7 +18,7 @@ Uygulama içindeki **📘 Kullanım Kılavuzu** ekranı, bu klasördeki PNG gör
 - `sozlesme_detay.png` — Sözleşme detay ekranı
 - `sd_ekleme.png` — Sözleşme detayından SD/alt sözleşme ekleme akışı
 - `sistem_ekleme_duzenleme.png` — Sistem ekleme ve sistem bilgilerini düzenleme ekranı
-- `kabul_ekleme.png` — Teslimat/kabul kaydı ekleme ekranı
+- `kabul_ekleme.png` — Teslimat kaydı ekleme ekranı
 - `sozlesme_silme.png` — Sözleşme silme/onay akışı
 - `sozlesme_bilgileri_duzenle.png` — Ana sözleşme bilgilerini düzenleme ekranı
 - `etiket_atama.png` — Sözleşmeye etiket atama/kaldırma ekranı

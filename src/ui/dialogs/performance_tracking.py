@@ -84,7 +84,7 @@ QHeaderView::section { background:#edf3ff; border:none; padding:6px; color:#2644
             ("Toplam Kayıt", self.v_total),
             ("Sözleşme", self.v_contract),
             ("Sistem", self.v_system),
-            ("Kabul", self.v_delivery),
+            ("Teslimat", self.v_delivery),
             ("En Büyük Tablo", self.v_big),
         ]
         for i, (k, w) in enumerate(items):

@@ -36,7 +36,7 @@ def _executive_summary(metrics: Dict[str, Any], settings: VisualSettings) -> Das
         _kpi("exec_total_contracts", "Toplam Sözleşme", metrics.get("total_contracts", 0), AnalysisEntity.CONTRACT, screen, 10),
         _kpi("exec_upcoming_deadlines", "Yaklaşan Termin", metrics.get("upcoming_deadline_count", 0), AnalysisEntity.DEADLINE, screen, 20),
         _kpi("exec_past_deadlines", "Geçmiş Termin", metrics.get("past_deadline_count", 0), AnalysisEntity.DEADLINE, screen, 30),
-        _kpi("exec_completed_acceptances", "Tamamlanan Kabul/Teslimat", metrics.get("completed_acceptances", 0), AnalysisEntity.ACCEPTANCE, screen, 40),
+        _kpi("exec_completed_acceptances", "Tamamlanan Teslimat", metrics.get("completed_acceptances", 0), AnalysisEntity.ACCEPTANCE, screen, 40),
         _chart("exec_status_distribution", "Durum Dağılımı", metrics.get("status_distribution", []), AnalysisEntity.CONTRACT, ChartType.DONUT, screen, 50),
         _table("exec_upcoming_table", "Yaklaşan Termin Listesi", ["platform", "contract_no", "entity", "name", "due_date", "days", "status"], _limit(metrics.get("upcoming_deadlines", []), settings), AnalysisEntity.DEADLINE, screen, 60),
     ]
@@ -69,13 +69,13 @@ def _contract_analysis(metrics: Dict[str, Any], settings: VisualSettings) -> Das
 def _acceptance_analysis(metrics: Dict[str, Any], settings: VisualSettings) -> DashboardItem:
     screen = "acceptance_analysis"
     cards = [
-        _kpi("acceptance_total", "Toplam Kabul/Teslimat", metrics.get("total_acceptances", 0), AnalysisEntity.ACCEPTANCE, screen, 10),
-        _kpi("acceptance_completed", "Tamamlanan Kabul/Teslimat", metrics.get("completed_acceptances", 0), AnalysisEntity.ACCEPTANCE, screen, 20),
-        _kpi("acceptance_open", "Açık Kabul/Teslimat", metrics.get("open_acceptances", 0), AnalysisEntity.ACCEPTANCE, screen, 30),
-        _chart("acceptance_status_distribution", "Kabul/Teslimat Durum Dağılımı", metrics.get("acceptance_status_distribution", []), AnalysisEntity.ACCEPTANCE, ChartType.DONUT, screen, 40),
-        _table("acceptance_table", "Kabul/Teslimat Tablosu", ["platform", "contract_no", "system_name", "name", "status", "acceptance_date", "planned_total", "delivered_total", "completed"], _limit(metrics.get("acceptance_table", []), settings), AnalysisEntity.ACCEPTANCE, screen, 50),
+        _kpi("acceptance_total", "Toplam Teslimat", metrics.get("total_acceptances", 0), AnalysisEntity.ACCEPTANCE, screen, 10),
+        _kpi("acceptance_completed", "Tamamlanan Teslimat", metrics.get("completed_acceptances", 0), AnalysisEntity.ACCEPTANCE, screen, 20),
+        _kpi("acceptance_open", "Açık Teslimat", metrics.get("open_acceptances", 0), AnalysisEntity.ACCEPTANCE, screen, 30),
+        _chart("acceptance_status_distribution", "Teslimat Durum Dağılımı", metrics.get("acceptance_status_distribution", []), AnalysisEntity.ACCEPTANCE, ChartType.DONUT, screen, 40),
+        _table("acceptance_table", "Teslimat Tablosu", ["platform", "contract_no", "system_name", "name", "status", "acceptance_date", "planned_total", "delivered_total", "completed"], _limit(metrics.get("acceptance_table", []), settings), AnalysisEntity.ACCEPTANCE, screen, 50),
     ]
-    return DashboardItem(screen, "Kabul / Teslimat Analizi", cards=cards, enabled=True, sort_order=40)
+    return DashboardItem(screen, "Teslimat Analizi", cards=cards, enabled=True, sort_order=40)
 
 
 def _deadline_analysis(metrics: Dict[str, Any], settings: VisualSettings) -> DashboardItem:
