@@ -6749,19 +6749,19 @@ class ContractSharePopover(QFrame):
 
     _CARD_BASE = (
         "QPushButton#sharePermCard{"
-        "background:#ffffff; color:#0b2b54; border:1.5px solid #c5d8ef;"
-        "border-radius:5px; padding:8px 14px; font-size:12px; font-weight:700;"
-        "text-align:left; min-height:52px;"
+        "background:#ffffff; color:#0b2b54; border:1px solid #D8E5F5;"
+        "border-radius:12px; padding:8px 12px; font-size:12px; font-weight:700;"
+        "text-align:left; min-height:54px;"
         "}"
         "QPushButton#sharePermCard:hover{"
-        "background:#f4f8fd; border-color:#9fc4f5;"
+        "background:#F4F8FF; border-color:#93C5FD;"
         "}"
     )
     _CARD_ACTIVE = (
         "QPushButton#sharePermCard{"
-        "background:#eef5ff; color:#1a4fc4; border:2px solid #2563eb;"
-        "border-radius:5px; padding:8px 14px; font-size:12px; font-weight:700;"
-        "text-align:left; min-height:52px;"
+        "background:#EFF6FF; color:#1D4ED8; border:1px solid #60A5FA;"
+        "border-radius:12px; padding:8px 12px; font-size:12px; font-weight:800;"
+        "text-align:left; min-height:54px;"
         "}"
     )
 
@@ -6770,25 +6770,36 @@ class ContractSharePopover(QFrame):
         self.owner = owner
         self._share_mode_value = "goruntule"
         self.setObjectName("contractSharePanel")
+        self.setMinimumWidth(336)
         self.setStyleSheet(
-            "QFrame#contractSharePanel{background:#f8fbff;border:1px solid #d0dff0;border-radius:5px;}"
+            "QFrame#contractSharePanel{background:#F8FBFF;border:1px solid #BFDBFE;border-radius:14px;}"
             "QLabel{background:transparent;border:0;}"
-            "QPushButton#shareCreateButton{background:#2563eb;color:#fff;border:0;border-radius:4px;"
-            "padding:6px 14px;font-size:12px;font-weight:700;min-height:30px;}"
+            "QPushButton#shareCloseButton{background:transparent;color:#64748B;border:0;border-radius:8px;font-size:16px;font-weight:900;min-width:28px;min-height:28px;}"
+            "QPushButton#shareCloseButton:hover{background:#EAF3FF;color:#1D4ED8;}"
+            "QPushButton#shareCreateButton{background:#2563eb;color:#fff;border:0;border-radius:10px;"
+            "padding:7px 16px;font-size:12px;font-weight:800;min-height:34px;}"
             "QPushButton#shareCreateButton:hover{background:#1d4ed8;}"
             "QLabel#sharePreview{background:#ffffff;color:#1e3a8a;border:1px solid #bfdbfe;"
-            "border-radius:4px;padding:6px 9px;font-family:Consolas,monospace;font-size:11px;}"
+            "border-radius:9px;padding:8px 10px;font-family:Consolas,monospace;font-size:11px;}"
         )
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(12, 10, 12, 12)
-        lay.setSpacing(8)
+        lay.setContentsMargins(14, 12, 14, 14)
+        lay.setSpacing(10)
 
+        header = QHBoxLayout()
+        header.setContentsMargins(0, 0, 0, 0)
         title = QLabel("Sözleşme Paylaşımı")
-        title.setStyleSheet("color:#10233d;font-size:13px;font-weight:700;")
+        title.setStyleSheet("color:#10233d;font-size:14px;font-weight:900;")
+        close_btn = QPushButton("×")
+        close_btn.setObjectName("shareCloseButton")
+        close_btn.clicked.connect(self.owner.close_side_meta_popover)
+        header.addWidget(title, 1)
+        header.addWidget(close_btn, 0, Qt.AlignRight | Qt.AlignVCenter)
+        lay.addLayout(header)
+
         info = QLabel("Sadece bu sözleşmeyi içeren bağımsız STS dosyası oluştur.")
         info.setWordWrap(True)
         info.setStyleSheet("color:#475569;font-size:11px;")
-        lay.addWidget(title)
         lay.addWidget(info)
 
         cards_row = QHBoxLayout()
@@ -6846,6 +6857,94 @@ class ContractSharePopover(QFrame):
     def create_share_file(self):
         self.owner.create_contract_share_file(self.share_mode(), self.filename())
 
+
+
+
+class BadgeTabButton(QFrame):
+    """Rounded action tab with icon/text and a layout-managed count badge."""
+
+    clicked = Signal(bool)
+
+    def __init__(self, icon: str, text: str, count: Optional[int] = None, parent=None):
+        super().__init__(parent)
+        self._checked = False
+        self._text = str(text or "")
+        self.setObjectName("badgeTabButton")
+        self.setCursor(Qt.PointingHandCursor)
+        self.setMinimumHeight(42)
+        self.setMinimumWidth(128)
+        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(14, 7, 10, 7)
+        lay.setSpacing(8)
+
+        self.icon_lbl = QLabel(str(icon or ""))
+        self.icon_lbl.setObjectName("badgeTabIcon")
+        self.icon_lbl.setAlignment(Qt.AlignCenter)
+        self.icon_lbl.setFixedWidth(18)
+        lay.addWidget(self.icon_lbl, 0, Qt.AlignVCenter)
+
+        self.text_lbl = QLabel(self._text)
+        self.text_lbl.setObjectName("badgeTabText")
+        self.text_lbl.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
+        self.text_lbl.setSizePolicy(QSizePolicy.MinimumExpanding, QSizePolicy.Preferred)
+        lay.addWidget(self.text_lbl, 1, Qt.AlignVCenter)
+
+        self.badge = QLabel("0" if count is None else str(count))
+        self.badge.setObjectName("badgeTabCount")
+        self.badge.setAlignment(Qt.AlignCenter)
+        self.badge.setMinimumSize(20, 20)
+        self.badge.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        lay.addWidget(self.badge, 0, Qt.AlignVCenter)
+        self._apply_style()
+
+    def setChecked(self, checked: bool):
+        checked = bool(checked)
+        if self._checked == checked:
+            return
+        self._checked = checked
+        self._apply_style()
+
+    def isChecked(self) -> bool:
+        return self._checked
+
+    def setCount(self, count: int):
+        self.badge.setText(str(count))
+        self.badge.adjustSize()
+        self.badge.setMinimumWidth(max(20, self.badge.sizeHint().width() + 8))
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.clicked.emit(False)
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def keyPressEvent(self, event):
+        if event.key() in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_Space):
+            self.clicked.emit(False)
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def _apply_style(self):
+        if self._checked:
+            bg = "#EFF6FF"; border = "#60A5FA"; fg = "#1D4ED8"
+        else:
+            bg = "#FFFFFF"; border = "#D8E5F5"; fg = "#0F2747"
+        self.setStyleSheet(f"""
+            QFrame#badgeTabButton {{
+                background:{bg}; border:1px solid {border}; border-radius:12px;
+            }}
+            QLabel#badgeTabIcon {{ background:transparent; color:{fg}; border:0; font-size:15px; }}
+            QLabel#badgeTabText {{ background:transparent; color:{fg}; border:0; font-size:12px; font-weight:700; }}
+            QFrame#badgeTabButton:hover { background:#F4F8FF; border-color:#93C5FD; }
+            QLabel#badgeTabCount {{
+                background:#DBEAFE; color:#2563EB; border:1px solid #93C5FD;
+                border-radius:10px; padding:0 5px; font-size:10px; font-weight:900;
+            }}
+        """)
 
 class ContractActionTabs(QFrame):
     """Contract-level hanging tabs anchored under the header bar."""
@@ -7939,36 +8038,24 @@ class ContractWorkWindow(QDialog):
         """Build the compact meta bar and its layout-independent floating popover."""
         self._side_meta_open_panel = None
         self._side_meta_last_panel = "files"
-        self._side_meta_manual_height = None   # Kullanıcı ayarlanan panel yüksekliği
+        self._side_meta_manual_height = None
         self._side_meta_files: List[dict] = []
         self.side_meta_bar = QFrame()
         self.side_meta_bar.setObjectName("sideMetaBar")
         self.side_meta_bar.setAutoFillBackground(False)
         self.side_meta_bar.setAttribute(Qt.WA_TranslucentBackground, True)
-        # Genişlik _place_tab_bar tarafından setFixedWidth ile ayarlanır
-        self.side_meta_bar.setStyleSheet(
-            "QFrame#sideMetaBar { background:transparent; border:0; }"
-            "QFrame#sideMetaBar QLabel#sideMetaBadge {"
-            "  background:#dbeafe; color:#1d4ed8;"
-            "  border:1px solid #93c5fd; border-radius:8px;"
-            "  padding:1px 5px; font-size:10px; font-weight:700;"
-            "}"
-        )
+        self.side_meta_bar.setStyleSheet("QFrame#sideMetaBar { background:transparent; border:0; }")
         bar_layout = QHBoxLayout(self.side_meta_bar)
         bar_layout.setContentsMargins(0, 0, 0, 0)
-        bar_layout.setSpacing(0)
+        bar_layout.setSpacing(10)
 
-        # Her sekme: buton içine badge gömer, wrapper kullanmaz
-        # Badge butonun sağ üst köşesine absolute yerleştirilir (overlay)
-        self.side_btn_tags = QPushButton("🏷  Etiketler")
-        self.side_btn_files = QPushButton("📎  Belgeler")
-        self.side_btn_share = QPushButton("↗  Paylaşım")
+        self.side_btn_tags = BadgeTabButton("🏷", "Etiketler", 0)
+        self.side_btn_files = BadgeTabButton("📎", "Belgeler", 0)
+        self.side_btn_share = BadgeTabButton("↗", "Paylaşım", None)
+        self.side_btn_share.badge.hide()
 
         tabs_controller = getattr(self, "contract_action_tabs", None)
         for panel, button in (("tags", self.side_btn_tags), ("files", self.side_btn_files), ("share", self.side_btn_share)):
-            button.setObjectName("sideMetaPill")
-            button.setCheckable(True)
-            button.setAutoFillBackground(False)
             if panel == "tags" and tabs_controller is not None:
                 button.clicked.connect(lambda _checked=False, ctl=tabs_controller: ctl.open_tags())
             elif panel == "files" and tabs_controller is not None:
@@ -7977,118 +8064,54 @@ class ContractWorkWindow(QDialog):
                 button.clicked.connect(lambda _checked=False, ctl=tabs_controller: ctl.open_share())
             else:
                 button.clicked.connect(lambda _checked=False, name=panel: self.toggle_side_meta_popover(name))
+            bar_layout.addWidget(button, 0, Qt.AlignVCenter)
 
-        # Badge'leri butonlardan bağımsız label olarak tut ama görünür yere koy
-        self.side_badge_tags = QLabel("0")
-        self.side_badge_tags.setObjectName("sideMetaBadge")
-        self.side_badge_tags.setAlignment(Qt.AlignCenter)
-        self.side_badge_tags.setMinimumWidth(20)
-
-        self.side_badge_files = QLabel("0")
-        self.side_badge_files.setObjectName("sideMetaBadge")
-        self.side_badge_files.setAlignment(Qt.AlignCenter)
-        self.side_badge_files.setMinimumWidth(20)
-
-        # Layout: [btn_tags][badge_tags]  [btn_files][badge_files]  [btn_share]  stretch  [chevron]
-        bar_layout.addWidget(self.side_btn_tags, 0)
-        bar_layout.addWidget(self.side_badge_tags, 0)
-        bar_layout.addSpacing(20)
-        bar_layout.addWidget(self.side_btn_files, 0)
-        bar_layout.addWidget(self.side_badge_files, 0)
-        bar_layout.addSpacing(20)
-        bar_layout.addWidget(self.side_btn_share, 0)
         bar_layout.addStretch(1)
-
-        # Doğrudan setStyleSheet — global QPushButton stilini tamamen ezer
-        # border-top:0 (none değil), border-radius Qt sırası: TL TR BR BL
-        _pill_base = (
-            "QPushButton {"
-            "  background: #ffffff;"
-            "  color: #0b2b54;"
-            "  border-left:   1.5px solid #b8d0ed;"
-            "  border-right:  1.5px solid #b8d0ed;"
-            "  border-bottom: 1.5px solid #b8d0ed;"
-            "  border-top:    0px;"
-            "  border-radius: 0px 0px 12px 12px;"
-            "  padding: 8px 22px 10px 22px;"
-            "  font-size: 12px;"
-            "  font-weight: 700;"
-            "  min-width: 90px;"
-            "}"
-            "QPushButton:hover {"
-            "  background: #e8f2ff;"
-            "  color: #0b2b54;"
-            "  border-left:   1.5px solid #5a9ff5;"
-            "  border-right:  1.5px solid #5a9ff5;"
-            "  border-bottom: 1.5px solid #5a9ff5;"
-            "  border-top:    0px;"
-            "  border-radius: 0px 0px 12px 12px;"
-            "  padding: 8px 22px 14px 22px;"
-            "}"
-            "QPushButton:checked {"
-            "  background: #dbeafe;"
-            "  color: #1a4fc4;"
-            "  border-left:   2px solid #2563eb;"
-            "  border-right:  2px solid #2563eb;"
-            "  border-bottom: 2px solid #2563eb;"
-            "  border-top:    0px;"
-            "  border-radius: 0px 0px 12px 12px;"
-            "  padding: 8px 22px 10px 22px;"
-            "}"
-        )
-        for _b in (self.side_btn_tags, self.side_btn_files, self.side_btn_share):
-            _b.setStyleSheet(_pill_base)
-            _b.setAutoFillBackground(False)
 
         self.side_chevron = QPushButton("∨")
         self.side_chevron.setObjectName("sideMetaChevron")
-        self.side_chevron.setFixedSize(26, 26)
+        self.side_chevron.setFixedSize(30, 30)
         self.side_chevron.setStyleSheet(
-            "QPushButton { background:transparent; border:0; border-radius:4px;"
-            "color:#5b7fa6; font-weight:700; font-size:13px; }"
-            "QPushButton:hover { background:#e8f3ff; color:#1d4ed8; }"
+            "QPushButton { background:#ffffff; border:1px solid #D8E5F5; border-radius:10px;"
+            "color:#5b7fa6; font-weight:800; font-size:13px; }"
+            "QPushButton:hover { background:#F4F8FF; border-color:#93C5FD; color:#1d4ed8; }"
         )
         self.side_chevron.clicked.connect(self._toggle_side_meta_chevron)
-        bar_layout.addWidget(self.side_chevron, 0)
+        bar_layout.addWidget(self.side_chevron, 0, Qt.AlignVCenter)
 
         self.side_meta_popover = QFrame(self)
         self.side_meta_popover.setObjectName("sideMetaPopover")
         self.side_meta_popover.setStyleSheet(
-            "QFrame#sideMetaPopover{background:#ffffff; border:1px solid #c8d9ed; border-radius:6px;}"
-            "QPushButton#sidePanelAdd{background:#2563eb; color:#ffffff; border:0; border-radius:4px; font-size:20px; font-weight:900; padding:0;}"
+            "QFrame#sideMetaPopover{background:#ffffff; border:1px solid #c8d9ed; border-radius:12px;}"
+            "QPushButton#sidePanelAdd{background:#2563eb; color:#ffffff; border:0; border-radius:8px; font-size:20px; font-weight:900; padding:0;}"
             "QPushButton#sidePanelAdd:hover{background:#1d4ed8;}"
-            # modern document toolbar buttons
-            "QPushButton#documentActionPrimary{background:#2563eb; color:#ffffff; border:1px solid #2563eb; border-radius:4px; padding:0 12px; font-size:11px; font-weight:700; min-height:28px; max-height:32px;}"
+            "QPushButton#documentActionPrimary{background:#2563eb; color:#ffffff; border:1px solid #2563eb; border-radius:9px; padding:0 12px; font-size:11px; font-weight:700; min-height:28px; max-height:32px;}"
             "QPushButton#documentActionPrimary:hover{background:#1d4ed8; border-color:#1d4ed8;}"
-            "QPushButton#documentAction{background:#f8fbff; color:#102a43; border:1px solid #cfe0f3; border-radius:4px; padding:0 12px; font-size:11px; font-weight:700; min-height:28px; max-height:32px;}"
+            "QPushButton#documentAction{background:#f8fbff; color:#102a43; border:1px solid #cfe0f3; border-radius:9px; padding:0 12px; font-size:11px; font-weight:700; min-height:28px; max-height:32px;}"
             "QPushButton#documentAction:hover{background:#edf5ff; border-color:#9ec5f8;}"
-            "QPushButton#documentLockButton{background:#f8fbff; color:#0f172a; border:1px solid #cfe0f3; border-radius:4px; padding:0; font-size:15px; font-weight:700; min-width:30px; max-width:30px; min-height:28px; max-height:30px;}"
+            "QPushButton#documentLockButton{background:#f8fbff; color:#0f172a; border:1px solid #cfe0f3; border-radius:9px; padding:0; font-size:15px; font-weight:700; min-width:30px; max-width:30px; min-height:28px; max-height:30px;}"
             "QPushButton#documentLockButton:hover{background:#edf5ff; border-color:#9ec5f8;}"
             "QPushButton#documentLockButton[locked=\"true\"]{background:#fff7ed; color:#9a3412; border-color:#fed7aa;}"
-            "QLabel#documentLockInfo{background:#fff7ed; color:#9a3412; border:1px solid #fed7aa; border-radius:4px; padding:4px 8px; font-size:10px; font-weight:700;}"
+            "QLabel#documentLockInfo{background:#fff7ed; color:#9a3412; border:1px solid #fed7aa; border-radius:8px; padding:4px 8px; font-size:10px; font-weight:700;}"
             "QLabel#documentHint{background:transparent; color:#94a3b8; border:0; font-size:10px; padding:0;}"
-            # tree drop zone
-            "QFrame#docDropZone{background:#f8fbff; border:1px dashed #c7d7ea; border-radius:5px;}"
+            "QFrame#docDropZone{background:#f8fbff; border:1px dashed #c7d7ea; border-radius:8px;}"
             "QFrame#docDropZone[dragOver=\"true\"]{background:#eef6ff; border-color:#2563eb;}"
-            # empty state
             "QLabel#sidePanelEmpty{background:transparent; color:#7b8da5; border:0; font-size:12px;}"
             "QLabel#sidePanelEmptySub{background:transparent; color:#94a3b8; border:0; font-size:10px;}"
-            # footer
-            "QFrame#docFooterBar{background:#f8fbff; border-top:1px solid #e6eef8; border-bottom-left-radius:5px; border-bottom-right-radius:5px;}"
+            "QFrame#docFooterBar{background:#f8fbff; border-top:1px solid #e6eef8; border-bottom-left-radius:10px; border-bottom-right-radius:10px;}"
             "QLabel#documentsFooterLeft{background:transparent; color:#94a3b8; border:0; font-size:10px;}"
             "QLabel#documentsFooterRight{background:transparent; color:#334155; border:0; font-size:10px; font-weight:700;}"
-            # tag panel
-            "QLabel#sidePanelEmptyTag{background:#f8fbff; color:#64748b; border:1px dashed #c7d6e8; border-radius:5px; padding:13px; font-size:12px;}"
-            "QPushButton#sidePanelAddInline{background:#eef4ff; color:#1d4ed8; border:1px solid #bcd1f2; border-radius:4px; padding:2px 10px; font-size:11px; font-weight:700;}"
+            "QLabel#sidePanelEmptyTag{background:#f8fbff; color:#64748b; border:1px dashed #c7d6e8; border-radius:8px; padding:13px; font-size:12px;}"
+            "QPushButton#sidePanelAddInline{background:#eef4ff; color:#1d4ed8; border:1px solid #bcd1f2; border-radius:8px; padding:2px 10px; font-size:11px; font-weight:700;}"
             "QPushButton#sidePanelAddInline:hover{background:#dbeafe;}"
         )
         shadow = QGraphicsDropShadowEffect(self.side_meta_popover)
-        shadow.setBlurRadius(10)
-        shadow.setOffset(0, 3)
-        shadow.setColor(QColor(15, 45, 74, 38))
+        shadow.setBlurRadius(18)
+        shadow.setOffset(0, 6)
+        shadow.setColor(QColor(15, 45, 74, 45))
         self.side_meta_popover.setGraphicsEffect(shadow)
         popover_layout = QVBoxLayout(self.side_meta_popover)
-        popover_layout.setContentsMargins(10, 4, 10, 8)
+        popover_layout.setContentsMargins(12, 6, 12, 4)
         popover_layout.setSpacing(6)
         self.side_meta_arrow = QLabel("▲")
         self.side_meta_arrow.setObjectName("sideMetaArrow")
@@ -8099,15 +8122,11 @@ class ContractWorkWindow(QDialog):
         self.side_meta_popover_body_layout = QVBoxLayout(self.side_meta_popover_body)
         self.side_meta_popover_body_layout.setContentsMargins(0, 0, 0, 0)
         self.side_meta_popover_body_layout.setSpacing(6)
-        # stretch=1 → body tüm boş alanı doldurur; bu isteniyor
-        # ama tree sabit yükseklikte olunca alt boşluk oluşuyor.
-        # body'nin kendi size policy'sini Minimum yap:
         from PySide6.QtWidgets import QSizePolicy as _QSP
         self.side_meta_popover_body.setSizePolicy(_QSP.Expanding, _QSP.Minimum)
         popover_layout.addWidget(self.side_meta_popover_body, 0)
         popover_layout.addStretch(1)
 
-        # ── Resize handle (yalnızca bir kere oluşturulur) ──────────────────
         _rh = QFrame()
         _rh.setFixedHeight(7)
         _rh.setCursor(Qt.SizeVerCursor)
@@ -8117,7 +8136,7 @@ class ContractWorkWindow(QDialog):
             "QFrame#popoverResizeHandle:hover{background:#e8f0fe;border-top:2px solid #93c5fd;border-radius:3px;}"
         )
         _rh.setToolTip("Paneli yeniden boyutlandır")
-        _rh_drag = [None, None]  # [start_y, start_h]
+        _rh_drag = [None, None]
 
         def _rh_press(event, _s=self):
             if event.button() == Qt.LeftButton:
@@ -8140,9 +8159,7 @@ class ContractWorkWindow(QDialog):
             avail_h = screen.availableGeometry().height() if screen else 900
             new_h = min(new_h, avail_h - 120)
             _s._side_meta_manual_height = new_h
-            top = _s.side_meta_bar.height() + 3
-            w = _s.side_meta_popover.width()
-            _s.side_meta_popover.setGeometry(0, top, w, new_h)
+            _s.position_side_meta_popover()
 
         def _rh_release(event):
             _rh_drag[0] = None
@@ -8152,8 +8169,6 @@ class ContractWorkWindow(QDialog):
         _rh.mouseMoveEvent = _rh_move
         _rh.mouseReleaseEvent = _rh_release
         popover_layout.addWidget(_rh, 0)
-        popover_layout.setContentsMargins(10, 4, 10, 2)
-        # ────────────────────────────────────────────────────────────────────
 
         self.side_meta_popover.hide()
         QApplication.instance().installEventFilter(self)
@@ -8167,7 +8182,7 @@ class ContractWorkWindow(QDialog):
         if not header or not bar or not host:
             return
         try:
-            bar_h = 40
+            bar_h = 46
 
             # Header'ın dialog içindeki kesin konumu
             header_global = header.mapTo(self, QPoint(0, 0))
@@ -8203,14 +8218,17 @@ class ContractWorkWindow(QDialog):
             else:
                 right_edge = self.width() - 16
 
-            host_w = max(280, right_edge - sx)
-            x = sx
+            available_w = max(280, self.width() - 24)
+            desired_w = min(available_w, max(470, right_edge - sx))
+            x = max(12, min(sx, right_edge - desired_w))
+            host_w = desired_w
 
             # Y: header'ın tam altından başlasın — biraz içeri girmez
             y = hy + hh - 2  # 2px header'a yapışık
 
             host.setGeometry(x, y, host_w, bar_h)
             bar.setFixedWidth(host_w)
+            bar.setFixedHeight(bar_h)
             host.raise_()
         except Exception:
             import traceback; traceback.print_exc()
@@ -8228,14 +8246,18 @@ class ContractWorkWindow(QDialog):
         if not hasattr(self, "side_meta_popover") or not hasattr(self, "side_meta_host"):
             return
         host = self.side_meta_host
-        w = max(300, min(470, host.width() if host.width() > 0 else 380))
+        if getattr(self, "_side_meta_open_panel", None) == "share":
+            w = 360
+        else:
+            w = max(320, min(470, host.width() if host.width() > 0 else 380))
         self.side_meta_popover.setFixedWidth(w)
         self.side_meta_popover.adjustSize()
         hint_h = self.side_meta_popover.sizeHint().height()
         # Popover self içinde: host konumundan itibaren bar altına yap
         bar_h = self.side_meta_bar.height() if hasattr(self, "side_meta_bar") else 38
         pop_x = host.x() + host.width() - w
-        pop_y = host.y() + bar_h + 3
+        pop_y = host.y() + bar_h + 8
+        pop_x = max(8, min(pop_x, max(8, self.width() - w - 8)))
         # Ekranın kullanılabilir yüksekliğini hesaba kat
         screen = self.screen()
         if screen:
@@ -8255,7 +8277,7 @@ class ContractWorkWindow(QDialog):
             else:
                 min_h = auto_min_h
         elif getattr(self, "_side_meta_open_panel", None) == "share":
-            min_h = 190
+            min_h = 250
             manual_h = None
         else:
             min_h = 110
@@ -8355,8 +8377,8 @@ class ContractWorkWindow(QDialog):
             return []
 
     def _set_side_meta_badge_counts(self, tag_count: int, file_count: int):
-        self.side_badge_tags.setText(str(tag_count))
-        self.side_badge_files.setText(str(file_count))
+        self.side_btn_tags.setCount(tag_count)
+        self.side_btn_files.setCount(file_count)
 
     def update_side_meta_badges(self):
         self._side_meta_files = self._load_contract_files()
