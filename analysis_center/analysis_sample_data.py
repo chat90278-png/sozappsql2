@@ -38,8 +38,8 @@ def build_sample_data(today: date | None = None) -> NormalizedAnalysisData:
         {"id": 303, "name": "Bileşen C", "version": "", "unit": "Adet", "active": True},
     ]
     acceptances = [
-        {"id": 401, "contract_id": 101, "system_id": 201, "platform": "AKINCI", "contract_no": "STS-2026-001", "system_name": "Görev Bilgisayarı", "name": "Kabul-1", "status": "Devam Ediyor", "acceptance_date": "", "completion_date": upcoming_1, "planned_total": 10.0, "delivered_total": 4.0},
-        {"id": 402, "contract_id": 102, "system_id": 202, "platform": "TB2", "contract_no": "STS-2026-002", "system_name": "Kamera Sistemi", "name": "Kabul-1", "status": "Tamamlandı", "acceptance_date": completed_date, "completion_date": completed_date, "planned_total": 6.0, "delivered_total": 6.0},
+        {"id": 401, "contract_id": 101, "system_id": 201, "platform": "AKINCI", "contract_no": "STS-2026-001", "system_name": "Görev Bilgisayarı", "name": "Teslimat-1", "status": "Devam Ediyor", "acceptance_date": "", "completion_date": upcoming_1, "planned_total": 10.0, "delivered_total": 4.0},
+        {"id": 402, "contract_id": 102, "system_id": 202, "platform": "TB2", "contract_no": "STS-2026-002", "system_name": "Kamera Sistemi", "name": "Teslimat-1", "status": "Tamamlandı", "acceptance_date": completed_date, "completion_date": completed_date, "planned_total": 6.0, "delivered_total": 6.0},
     ]
     tags = [
         {"id": 501, "name": "aviyonik", "color": "#3B82F6", "contract_count": 1},

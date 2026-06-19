@@ -40,8 +40,8 @@ CONTENT_FIELDS = {
     "contract_no", "yi_yd",
 }
 FIELD_LABELS = {
-    "planned_acceptance_date": "Tahmini Teslimat Tarihi",
-    "acceptance_date": "Gerçek Teslim/Gerçek Teslimat",
+    "planned_acceptance_date": "Planlanan Teslimat Tarihi",
+    "acceptance_date": "Gerçek Teslimat Tarihi",
     "delivery_user_id": "Teslim Kullanıcısı",
     "planned": "Sözleşme Adeti",
     "delivered": "Teslim Edilen Miktar",

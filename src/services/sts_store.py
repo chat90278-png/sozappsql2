@@ -1414,9 +1414,9 @@ class STSStore:
         year_to: int,
         platform_filter: str = "",
     ) -> list:
-        """Sistem ve teslim/kabul bazlı takvim olaylarını tek sorguda döndürür.
+        """Sistem ve teslimat bazlı takvim olaylarını tek sorguda döndürür.
 
-        Sistem termini (systems.completion_date) ve teslim/kabul tarihleri
+        Sistem termini (systems.completion_date) ve teslimat tarihleri
         (deliveries.acceptance_date, deliveries.planned_acceptance_date) için
         iki ayrı sorgu çalıştırır, birleştirir.
         Sonuç: list[dict] — bağlantı nesnesi taşınmaz.
@@ -1450,7 +1450,7 @@ class STSStore:
         """
         sys_rows = self.db.conn.execute(sys_sql, sys_params).fetchall()
 
-        # ── Teslim / kabul ────────────────────────────────────────────────
+        # ── Teslimat ────────────────────────────────────────────────
         del_params: list = []
         if platform_filter:
             del_params_acc  = [str(year_from), str(year_to), platform_filter]
@@ -1516,7 +1516,7 @@ class STSStore:
                 "row":              int(r["contract_row"]),
                 "platform":         str(r["platform"] or ""),
                 "no":               no,
-                "type":             "Teslim/Kabul",
+                "type":             "Teslimat",
                 "system_label":     sname,
                 "title":            label,
                 "status":           str(r["status"] or ""),

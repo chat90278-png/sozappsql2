@@ -110,7 +110,7 @@ class CalendarDataWorker(QObject):
                 s_params
             ).fetchall()
 
-            self.progress.emit(65, "Teslim/kabul tarihleri okunuyor...")
+            self.progress.emit(65, "Teslimat tarihleri okunuyor...")
             d_params = [yf, yt, yf, yt]
             if pf:
                 d_params.append(pf)

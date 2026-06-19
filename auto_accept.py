@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Otomatik kabul oluşturma eklentisi.
+Otomatik teslimat oluşturma eklentisi.
 
 app.py içine yalnızca şunlar eklenir:
     from auto_accept import open_auto_accept_dialog
@@ -711,13 +711,13 @@ def open_auto_accept_dialog(work_window):
         if remaining > 0.0001:
             available.append((comp, remaining))
     if not available:
-        QMessageBox.information(work_window, "Tanımlanabilir yok", "Bu sistemde kabullere tanımlanabilecek bileşen miktarı kalmadı.")
+        QMessageBox.information(work_window, "Tanımlanabilir yok", "Bu sistemde teslimatlara tanımlanabilecek bileşen miktarı kalmadı.")
         return
     if existing:
         if not ask_yes_no(
             work_window,
-            "Mevcut kabuller var",
-            "Bu sisteme ait mevcut kabuller var. Otomatik kabuller mevcut listenin sonuna eklensin mi?",
+            "Mevcut teslimatlar var",
+            "Bu sisteme ait mevcut teslimatlar var. Otomatik teslimatlar mevcut listenin sonuna eklensin mi?",
             default_yes=True,
         ):
             return
@@ -756,4 +756,4 @@ def open_auto_accept_dialog(work_window):
         work_window.expanded_delivery_index = None
         work_window.refresh_live_statuses()
         work_window.refresh_right()
-        QMessageBox.information(work_window, "Tamamlandı", f"{len(dlg.result_deliveries)} kabul oluşturuldu.")
+        QMessageBox.information(work_window, "Tamamlandı", f"{len(dlg.result_deliveries)} teslimat oluşturuldu.")

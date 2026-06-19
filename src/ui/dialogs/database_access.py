@@ -6,9 +6,9 @@ from typing import Callable, Optional
 TABLE_INFO = {
     "contracts": "Ana sözleşme ve SD kayıtları",
     "systems": "Sözleşmelere bağlı sistemler",
-    "deliveries": "Kabul / teslimat kayıtları",
+    "deliveries": "Teslimat kayıtları",
     "system_components": "Sistem bileşen adetleri",
-    "delivery_components": "Kabul bazlı plan/teslim",
+    "delivery_components": "Teslimat bazlı plan/teslim",
     "contract_tags": "Sözleşme etiket bağlantıları",
     "contract_file_folders": "Sözleşme belge klasörleri",
     "contract_files": "Sözleşmeye gömülü belgeler",
