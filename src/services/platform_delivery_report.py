@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from math import floor
 from pathlib import Path
 from typing import Any
+import unicodedata
 
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
@@ -103,8 +104,45 @@ def _normalize_user_filter(user_id: int | list[int] | tuple[int, ...] | set[int]
     return result
 
 
+
+
+def _status_key(value: Any) -> str:
+    """Normalize a Turkish status string for safe comparisons."""
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    replacements = {
+        "ı": "i", "İ": "i", "ş": "s", "Ş": "s",
+        "ğ": "g", "Ğ": "g", "ü": "u", "Ü": "u",
+        "ö": "o", "Ö": "o", "ç": "c", "Ç": "c",
+    }
+    for src, dst in replacements.items():
+        text = text.replace(src, dst)
+    text = unicodedata.normalize("NFKD", text.casefold())
+    text = "".join(ch for ch in text if not unicodedata.combining(ch))
+    return " ".join(text.replace("-", " ").replace("_", " ").split())
+
+
+def _is_completed_contract_status(value: Any) -> bool:
+    """Only fully completed/closed contracts are excluded from this report.
+
+    Intermediate statuses such as Başlanmadı, Hazırlıkta/Hazırlanıyor,
+    Süreci Devam Ediyor and Parçalı Teslim are intentionally kept.
+    """
+    key = _status_key(value)
+    return key in {
+        "tamamlandi",
+        "tamamlanmis",
+        "bitmis",
+        "bitti",
+        "kapandi",
+        "kapatildi",
+        "completed",
+        "closed",
+    }
+
 def load_report_data(store, platform_name: str, user_id: int | list[int] | tuple[int, ...] | set[int] | None = None, contract_id: int | None = None) -> ReportData:
-    """Load Platform Teslimat Durumu data.
+    """Load Platform Teslimat Özeti data.
 
     The report's "Kullanıcı / Ülke" filter is intentionally based on the
     contract owner users in contract_users. Delivery users are a different
@@ -166,6 +204,7 @@ def load_report_data(store, platform_name: str, user_id: int | list[int] | tuple
               AND NOT EXISTS (SELECT 1 FROM deliveries d0 WHERE d0.contract_id=c0.id AND d0.delivery_user_id IS NOT NULL)
         )
         SELECT dc.id AS dc_id, d.id AS delivery_id, c.id AS contract_id, c.contract_no,
+               COALESCE(c.status,'') AS contract_status,
                COALESCE(d.planned_acceptance_date,d.acceptance_date,c.acceptance_date,c.completion_date,'') AS delivery_date,
                ru.user_id AS user_id, COALESCE(ru.user_name,'Tanımsız') AS user_name,
                comp.id AS component_id, comp.name AS component_name, dc.planned, dc.delivered,
@@ -181,6 +220,11 @@ def load_report_data(store, platform_name: str, user_id: int | list[int] | tuple
         WHERE {' AND '.join(clauses)}
         ORDER BY ru.user_name COLLATE NOCASE, c.contract_no, COALESCE(d.sort_order,0), d.id, COALESCE(comp.display_order,9999), comp.name COLLATE NOCASE, dc.id
     """, params).fetchall()
+
+    # Completed contracts are out of scope for Platform Teslimat Özeti.
+    # Keep partial/in-progress/not-started contracts visible; only the final
+    # completed/closed contract statuses are removed here.
+    component_rows = [r for r in component_rows if not _is_completed_contract_status(r["contract_status"])]
 
     if not component_rows:
         return ReportData(pid, str(prow["name"]), locations)
@@ -250,7 +294,7 @@ def load_report_data(store, platform_name: str, user_id: int | list[int] | tuple
             legacy_serial_key = ""
             if slot < len(identifiers) and identifiers[slot][0]:
                 identifier, slot_no = identifiers[slot]
-                serial_no = f"{identifier} (S-{slot_no})" if slot_no else identifier
+                serial_no = identifier
                 legacy_serial_key = identifier
                 serial_key = f"DC-{dc_id}:{identifier}"
             else:
@@ -373,9 +417,9 @@ def safe_sheet_title(name: str, used: set[str] | None = None) -> str:
 
 
 def export_report_to_excel(data: ReportData, path: str | Path) -> Path:
-    wb = Workbook(); used_sheet_names: set[str] = set(); ws = wb.active; ws.title = safe_sheet_title(f"{data.platform} Teslimat Durumu", used_sheet_names); ws.sheet_properties.tabColor = "E11D48"
+    wb = Workbook(); used_sheet_names: set[str] = set(); ws = wb.active; ws.title = safe_sheet_title(f"{data.platform} Teslimat Özeti", used_sheet_names); ws.sheet_properties.tabColor = "E11D48"
     thin = Side(style="thin", color=BORDER); border = Border(left=thin,right=thin,top=thin,bottom=thin)
-    main_head = PatternFill("solid", fgColor=NAVY)       # main title band, e.g. "Örnek Platform TESLİMAT DURUMU"
+    main_head = PatternFill("solid", fgColor=NAVY)       # main title band, e.g. "Örnek Platform TESLİMAT ÖZETİ"
     col_head = PatternFill("solid", fgColor=COL_HEAD)     # column header row
     summary_fill = PatternFill("solid", fgColor=SUMMARY_ROW)
     header_font = Font(color="FFFFFF", bold=True)
@@ -383,11 +427,11 @@ def export_report_to_excel(data: ReportData, path: str | Path) -> Path:
     body_font_bold = Font(color=TEXT, bold=True)
 
     ws.merge_cells("A1:E1")
-    ws["A1"] = f"{data.platform} TESLİMAT DURUMU"; ws["A1"].fill=main_head; ws["A1"].font=header_font; ws["A1"].alignment=Alignment(horizontal="center", vertical="center")
+    ws["A1"] = f"{data.platform} TESLİMAT ÖZETİ"; ws["A1"].fill=main_head; ws["A1"].font=header_font; ws["A1"].alignment=Alignment(horizontal="center", vertical="center")
     headers = ["Kullanıcı", "Sözleşme Adı veya Numarası", "Teslimat Tarihi", "Durum", "Açıklama"]
     for c,h in enumerate(headers,1):
         cell=ws.cell(2,c,h); cell.fill=col_head; cell.font=header_font; cell.alignment=Alignment(horizontal="center", vertical="center"); cell.border=border
-    sheet_names = {key: safe_sheet_title(f"{rows[0].user} Teslimat Durumu", used_sheet_names) for key, rows in data.details.items() if rows}
+    sheet_names = {key: safe_sheet_title(f"{rows[0].user} Teslimat Özeti", used_sheet_names) for key, rows in data.details.items() if rows}
     for r_idx, row in enumerate(data.summary,3):
         vals=[f"{row.user} ↗", row.contract, row.delivery_date, row.status, row.description]
         for c,v in enumerate(vals,1):
@@ -401,7 +445,7 @@ def export_report_to_excel(data: ReportData, path: str | Path) -> Path:
         if not lines: continue
         ws = wb.create_sheet(sheet_names[key]); ws.sheet_properties.tabColor = "22C55E"
         user = lines[0].user; date = lines[0].delivery_date
-        ws.merge_cells("A1:E1"); ws["A1"] = f"{user}\nTESLİMAT DURUMU"; ws["A1"].fill=main_head; ws["A1"].font=header_font; ws["A1"].alignment=Alignment(horizontal="center", vertical="center", wrap_text=True)
+        ws.merge_cells("A1:E1"); ws["A1"] = f"{user}\nTESLİMAT ÖZETİ"; ws["A1"].fill=main_head; ws["A1"].font=header_font; ws["A1"].alignment=Alignment(horizontal="center", vertical="center", wrap_text=True)
         ws["F1"] = f"TESLİMAT TARİHİ\n({date or 'TBD'})"; ws["F1"].fill=main_head; ws["F1"].font=header_font; ws["F1"].alignment=Alignment(horizontal="center", vertical="center", wrap_text=True)
         for c,h in enumerate(["ANA SİSTEM","MİKTAR","KUYRUK NO / SERİ NO","LOKASYON","NOT","TESLİM EDİLECEK LOKASYON"],1):
             cell=ws.cell(2,c,h); cell.fill=col_head; cell.font=header_font; cell.border=border; cell.alignment=Alignment(horizontal="center", vertical="center")
