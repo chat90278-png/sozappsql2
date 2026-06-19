@@ -182,6 +182,31 @@ def _fmt_amount(value: object) -> str:
     return str(int(number)) if number.is_integer() else f"{number:.2f}".rstrip("0").rstrip(".")
 
 
+def _normalize_yi_yd(value: object) -> str:
+    text = str(value or "").strip().upper()
+    if not text or text in {"-", "TANIMSIZ", "TANIMSIZ"}:
+        return "-"
+    normalized = (
+        text.replace("İ", "I")
+        .replace("İ", "I")
+        .replace("Ü", "U")
+        .replace("Ş", "S")
+        .replace("Ğ", "G")
+        .replace("Ö", "O")
+        .replace("Ç", "C")
+    )
+    normalized = " ".join(normalized.split())
+    if normalized in {"YI", "Y.I", "YURTICI", "YURT ICI", "YURTICI", "YURT ICI"}:
+        return "Yİ"
+    if normalized in {"YD", "Y.D", "YURTDISI", "YURT DISI", "YURTDISI", "YURT DISI"}:
+        return "YD"
+    return text
+
+
+def _same_text(left: object, right: object) -> bool:
+    return str(left or "").strip().casefold() == str(right or "").strip().casefold()
+
+
 def _payload_value(text: str, *keys: str) -> str:
     if not text:
         return ""
@@ -721,6 +746,8 @@ class DeliveryScheduleReportDialog(QDialog):
         self._export_worker: Optional[ExcelExportWorker] = None
         self._loading_overlay: Optional[ExcelLoadingOverlay] = None
         self._rev_rows: list[dict[str, Any]] = []
+        self._refresh_pending = False
+        self._updating_filters = False
         self.setWindowTitle("Tahmini Teslimat Takvimi")
         self.setWindowFlags(Qt.Window | Qt.WindowMinimizeButtonHint | Qt.WindowMaximizeButtonHint | Qt.WindowCloseButtonHint)
         self.resize(1450, 850); self.setMinimumSize(1180, 720)
@@ -742,13 +769,35 @@ class DeliveryScheduleReportDialog(QDialog):
     def _build_filters(self):
         frame = QFrame(); frame.setObjectName("filterPanel"); frame.setFixedWidth(300); lay = QVBoxLayout(frame)
         h = QLabel("Rapor Ayarları"); h.setObjectName("panelTitle"); lay.addWidget(h)
-        self.platform = self._combo(["Tümü"]); self.year_range = QLineEdit(str(date.today().year)); self.domestic = self._combo(["Tümü", "Yİ", "YD"]); self.owner = self._combo(["Tümü"]); self.contract = self._combo(["Tüm seçili sözleşmeler"]); self.status = self._combo(["Tümü"] + list(STATUS_VALUES))
+        self.platform = self._combo(["Tümü"])
+        self.year_range = QLineEdit(str(date.today().year))
+        self.domestic = self._combo(["Tümü", "Yİ", "YD"])
+        self.owner = self._combo(["Tümü"])
+        self.contract = self._combo(["Tüm seçili sözleşmeler"])
+        self.status = self._combo(["Tümü"] + list(STATUS_VALUES))
+        self.year_range.editingFinished.connect(self._schedule_filter_refresh)
         for label, widget in [("PLATFORM", self.platform), ("YIL / ARALIK", self.year_range), ("Yİ / YD", self.domestic), ("SÖZLEŞME SAHİBİ", self.owner), ("SÖZLEŞME", self.contract), ("DURUM", self.status)]:
             l = QLabel(label); l.setObjectName("fieldLabel"); lay.addWidget(l); lay.addWidget(widget)
-        btn = QPushButton("Önizlemeyi Yenile"); btn.clicked.connect(self.refresh_preview); lay.addWidget(btn); lay.addStretch(); return frame
+        btn = QPushButton("Önizlemeyi Yenile"); btn.setObjectName("reportPrimaryButton"); btn.clicked.connect(self.refresh_preview); lay.addWidget(btn); lay.addStretch(); return frame
 
     def _combo(self, items):
-        c = QComboBox(); c.addItems(items); return c
+        c = QComboBox()
+        c.addItems(items)
+        c.currentIndexChanged.connect(self._schedule_filter_refresh)
+        return c
+
+    def _schedule_filter_refresh(self, *_args) -> None:
+        if self._updating_filters or self._refresh_pending:
+            return
+        self._refresh_pending = True
+        QTimer.singleShot(0, self._run_scheduled_filter_refresh)
+
+    def _run_scheduled_filter_refresh(self) -> None:
+        self._refresh_pending = False
+        if not hasattr(self, "delivery_tree"):
+            return
+        self.refresh_filter_options()
+        self.refresh_preview()
 
     def _dashboard_tab(self):
         w = QScrollArea(); w.setWidgetResizable(True); host = QWidget(); lay = QVBoxLayout(host)
@@ -845,27 +894,83 @@ class DeliveryScheduleReportDialog(QDialog):
         self.conn = _conn_from_store(self.store)
         self.all_rows = self.load_delivery_rows_from_db()
         self.populate_filters_from_rows(self.all_rows)
-        self.clear_preview()
+        self.refresh_filter_options()
+        self.refresh_preview()
 
     def _set_combo_items(self, combo: QComboBox, items: list[str], first: str) -> None:
         current = combo.currentText()
-        combo.blockSignals(True); combo.clear(); combo.addItem(first)
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItem(first)
+        seen = {first.casefold()}
         for item in items:
-            if item and item != first:
-                combo.addItem(item)
+            text = str(item or "").strip()
+            key = text.casefold()
+            if text and key not in seen:
+                combo.addItem(text)
+                seen.add(key)
         index = combo.findText(current)
         combo.setCurrentIndex(index if index >= 0 else 0)
         combo.blockSignals(False)
 
     def populate_filters_from_rows(self, rows: list[DeliveryRow]) -> None:
-        self._set_combo_items(self.platform, sorted({r.platform for r in rows if r.platform}), "Tümü")
-        owners = sorted({owner.strip() for r in rows for owner in str(r.owner or "").split(",") if owner.strip() and owner.strip() != "-"})
-        self._set_combo_items(self.owner, owners, "Tümü")
-        self._set_combo_items(self.contract, sorted({r.contract for r in rows if r.contract}), "Tüm seçili sözleşmeler")
-        self._set_combo_items(self.status, list(STATUS_VALUES), "Tümü")
-        years = sorted({r.year for r in rows if r.year})
-        if years and self.year_range.text().strip() in {"", str(date.today().year)}:
-            self.year_range.setText(str(years[0]) if len(years) == 1 else f"{years[0]}-{years[-1]}")
+        self._updating_filters = True
+        try:
+            self._set_combo_items(self.platform, sorted({r.platform for r in rows if r.platform}), "Tümü")
+            owners = sorted({owner.strip() for r in rows for owner in str(r.owner or "").split(",") if owner.strip() and owner.strip() != "-"})
+            self._set_combo_items(self.owner, owners, "Tümü")
+            self._set_combo_items(self.contract, sorted({r.contract for r in rows if r.contract}), "Tüm seçili sözleşmeler")
+            domestic_values = sorted({_normalize_yi_yd(r.domestic) for r in rows if _normalize_yi_yd(r.domestic) in {"Yİ", "YD"}})
+            self._set_combo_items(self.domestic, domestic_values or ["Yİ", "YD"], "Tümü")
+            statuses = sorted({str(r.status or "").strip() for r in rows if str(r.status or "").strip() and str(r.status or "").strip() != "-"})
+            self._set_combo_items(self.status, statuses or list(STATUS_VALUES), "Tümü")
+            years = sorted({r.year for r in rows if r.year})
+            if years and self.year_range.text().strip() in {"", str(date.today().year)}:
+                self.year_range.setText(str(years[0]) if len(years) == 1 else f"{years[0]}-{years[-1]}")
+        finally:
+            self._updating_filters = False
+
+    def _row_matches_filters(self, row: DeliveryRow, filters: dict[str, Any], exclude: str = "") -> bool:
+        if exclude != "year" and filters.get("year_range_valid"):
+            year = row.year
+            if year is None or not (int(filters["start_year"]) <= year <= int(filters["end_year"])):
+                return False
+        if exclude != "platform" and filters.get("platform") != "Tümü" and not _same_text(row.platform, filters.get("platform")):
+            return False
+        if exclude != "yi_yd" and filters.get("yi_yd") != "Tümü" and _normalize_yi_yd(row.domestic) != _normalize_yi_yd(filters.get("yi_yd")):
+            return False
+        if exclude != "owner" and filters.get("owner") != "Tümü":
+            owners = [owner.strip() for owner in str(row.owner or "").split(",") if owner.strip()]
+            if not any(_same_text(owner, filters.get("owner")) for owner in owners):
+                return False
+        if exclude != "status" and filters.get("status") != "Tümü" and not _same_text(row.status, filters.get("status")):
+            return False
+        if exclude != "contract" and filters.get("contract") != "Tüm seçili sözleşmeler" and not _same_text(row.contract, filters.get("contract")):
+            return False
+        return True
+
+    def refresh_filter_options(self) -> None:
+        if self._updating_filters:
+            return
+        filters = self.collect_filters()
+        self._updating_filters = True
+        try:
+            rows_for_platform = [r for r in self.all_rows if self._row_matches_filters(r, filters, exclude="platform")]
+            rows_for_domestic = [r for r in self.all_rows if self._row_matches_filters(r, filters, exclude="yi_yd")]
+            rows_for_owner = [r for r in self.all_rows if self._row_matches_filters(r, filters, exclude="owner")]
+            rows_for_contract = [r for r in self.all_rows if self._row_matches_filters(r, filters, exclude="contract")]
+            rows_for_status = [r for r in self.all_rows if self._row_matches_filters(r, filters, exclude="status")]
+
+            self._set_combo_items(self.platform, sorted({r.platform for r in rows_for_platform if r.platform}), "Tümü")
+            domestic_values = sorted({_normalize_yi_yd(r.domestic) for r in rows_for_domestic if _normalize_yi_yd(r.domestic) in {"Yİ", "YD"}})
+            self._set_combo_items(self.domestic, domestic_values or ["Yİ", "YD"], "Tümü")
+            owners = sorted({owner.strip() for r in rows_for_owner for owner in str(r.owner or "").split(",") if owner.strip() and owner.strip() != "-"})
+            self._set_combo_items(self.owner, owners, "Tümü")
+            self._set_combo_items(self.contract, sorted({r.contract for r in rows_for_contract if r.contract}), "Tüm seçili sözleşmeler")
+            statuses = sorted({str(r.status or "").strip() for r in rows_for_status if str(r.status or "").strip() and str(r.status or "").strip() != "-"})
+            self._set_combo_items(self.status, statuses or list(STATUS_VALUES), "Tümü")
+        finally:
+            self._updating_filters = False
 
     def collect_filters(self) -> dict[str, Any]:
         text = self.year_range.text().strip()
@@ -900,13 +1005,7 @@ class DeliveryScheduleReportDialog(QDialog):
         if not filters["year_range_valid"]:
             self.info_label.setText("Yıl / aralık formatı hatalı. Örnek: 2026 veya 2026-2027")
             return
-        rows = list(self.all_rows)
-        rows = [r for r in rows if r.year is not None and filters["start_year"] <= r.year <= filters["end_year"]]
-        if filters["platform"] != "Tümü": rows = [r for r in rows if r.platform == filters["platform"]]
-        if filters["yi_yd"] != "Tümü": rows = [r for r in rows if r.domestic == filters["yi_yd"]]
-        if filters["owner"] != "Tümü": rows = [r for r in rows if filters["owner"] in [owner.strip() for owner in str(r.owner or "").split(",")]]
-        if filters["status"] != "Tümü": rows = [r for r in rows if r.status == filters["status"]]
-        if filters["contract"] != "Tüm seçili sözleşmeler": rows = [r for r in rows if r.contract == filters["contract"]]
+        rows = [r for r in self.all_rows if self._row_matches_filters(r, filters)]
         self.filtered_rows = rows
         self.info_label.setText("" if self.conn else "Açık STS veri dosyası bulunamadı; rapor boş gösteriliyor.")
         self._refresh_kpis(rows)
@@ -919,17 +1018,30 @@ class DeliveryScheduleReportDialog(QDialog):
         if not self.conn:
             return []
         try:
+            table_names = {
+                str(row[0])
+                for row in self.conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+            }
+            has_contract_platforms = "contract_platforms" in table_names
+            platform_join = """
+                LEFT JOIN contract_platforms cp ON cp.contract_id = c.id
+                LEFT JOIN platforms p ON p.id = COALESCE(cp.platform_id, c.platform_id)
+            """ if has_contract_platforms else """
+                LEFT JOIN platforms p ON p.id = c.platform_id
+            """
+            primary_expr = "COALESCE(cp.is_primary, 0)" if has_contract_platforms else "0"
             rows = self.conn.execute(
-                """
+                f"""
                 SELECT c.id AS contract_id, c.contract_no, c.yi_yd AS contract_yi_yd, c.status AS contract_status,
                        c.note AS contract_note, c.payload_json AS contract_payload_json, p.name AS platform_name,
+                       {primary_expr} AS platform_is_primary,
                        d.id AS delivery_id, d.name AS delivery_name, d.status AS delivery_status,
                        d.planned_acceptance_date, d.acceptance_date, d.note AS delivery_note, d.payload_json AS delivery_payload_json,
                        du.name AS delivery_user_name, du.yi_yd AS delivery_user_yi_yd, comp.name AS component_name,
                        dc.planned, dc.delivered
                 FROM deliveries d
                 JOIN contracts c ON c.id = d.contract_id
-                LEFT JOIN platforms p ON p.id = c.platform_id
+                {platform_join}
                 LEFT JOIN users du ON du.id = d.delivery_user_id
                 JOIN delivery_components dc ON dc.delivery_id = d.id
                 JOIN components comp ON comp.id = dc.component_id
@@ -941,15 +1053,41 @@ class DeliveryScheduleReportDialog(QDialog):
             return []
         result: list[DeliveryRow] = []
         owner_cache: dict[int, str] = {}
+        seen_keys: set[tuple] = set()
         for row in rows:
             contract_id = int(row["contract_id"] or 0)
+            delivery_id = int(row["delivery_id"] or 0)
+            platform_name = str(row["platform_name"] or "Tanımsız").strip() or "Tanımsız"
+            component_name = str(row["component_name"] or "-").strip() or "-"
+            dedupe_key = (contract_id, delivery_id, platform_name.casefold(), component_name.casefold())
+            if dedupe_key in seen_keys:
+                continue
+            seen_keys.add(dedupe_key)
             if contract_id not in owner_cache:
                 owner_cache[contract_id] = contract_owner_text(self.conn, contract_id)
             delivery_payload = row["delivery_payload_json"] if "delivery_payload_json" in row.keys() else ""
             contract_payload = row["contract_payload_json"] if "contract_payload_json" in row.keys() else ""
             config = _payload_value(delivery_payload, "configuration_type", "config_type", "konfigurasyon_tipi") or _payload_value(contract_payload, "configuration_type", "config_type", "konfigurasyon_tipi")
             date_text = normalize_report_date_display(row["planned_acceptance_date"] or row["acceptance_date"] or "")
-            result.append(DeliveryRow(contract_id=contract_id, delivery_id=int(row["delivery_id"] or 0), platform=str(row["platform_name"] or "Tanımsız"), contract=str(row["contract_no"] or "-"), owner=owner_cache.get(contract_id) or "-", user=str(row["delivery_user_name"] or "Tanımsız"), domestic=str(row["delivery_user_yi_yd"] or row["contract_yi_yd"] or "-"), delivery=str(row["delivery_name"] or "-"), date_text=date_text, level="1", part=str(row["component_name"] or "-"), planned=_safe_float(row["planned"]), delivered=_safe_float(row["delivered"]), config_type=config, note=str(row["delivery_note"] or row["contract_note"] or ""), status=str(row["delivery_status"] or row["contract_status"] or "-")))
+            domestic = _normalize_yi_yd(row["delivery_user_yi_yd"] or row["contract_yi_yd"] or "-")
+            result.append(DeliveryRow(
+                contract_id=contract_id,
+                delivery_id=delivery_id,
+                platform=platform_name,
+                contract=str(row["contract_no"] or "-"),
+                owner=owner_cache.get(contract_id) or "-",
+                user=str(row["delivery_user_name"] or "Tanımsız"),
+                domestic=domestic,
+                delivery=str(row["delivery_name"] or "-"),
+                date_text=date_text,
+                level="1",
+                part=component_name,
+                planned=_safe_float(row["planned"]),
+                delivered=_safe_float(row["delivered"]),
+                config_type=config,
+                note=str(row["delivery_note"] or row["contract_note"] or ""),
+                status=str(row["delivery_status"] or row["contract_status"] or "-"),
+            ))
         return result
 
     def _refresh_delivery_table(self, rows: list[DeliveryRow]) -> None:
@@ -1376,7 +1514,7 @@ class DeliveryScheduleReportDialog(QDialog):
         QLabel#mainTitle {{ color:#002060; font-size:22px; font-weight:900; background:transparent; }}
         QLabel#fieldLabel {{ color:#415a86; font-size:11px; font-weight:900; background:transparent; padding-top:8px; }}
         QLabel#kpiValue {{ color:#075bd8; font-size:28px; font-weight:900; background:transparent; }}
-        QLabel#infoLabel {{ color:#b45309; background:transparent; font-weight:800; }}
+        QLabel#infoLabel {{ color:#415a86; background:transparent; font-weight:800; }}
 
         QPushButton#reportPrimaryButton {{
             background:#0b4aa2;
