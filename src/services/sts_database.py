@@ -657,7 +657,62 @@ CREATE TABLE IF NOT EXISTS activity_logs(id INTEGER PRIMARY KEY AUTOINCREMENT,cr
             "CREATE INDEX IF NOT EXISTS idx_delivery_schedule_rev_hidden_logs_log "
             "ON delivery_schedule_rev_hidden_logs(log_id)"
         )
-        self.conn.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version','11')")
+        # --- Schema v12: Platform Teslimat Durumu Raporu manuel alanları ---
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS platform_delivery_report_summary (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                platform_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                contract_id INTEGER NOT NULL,
+                status TEXT DEFAULT '',
+                description TEXT DEFAULT '',
+                created_at TEXT,
+                updated_at TEXT,
+                UNIQUE(platform_id, user_id, contract_id),
+                FOREIGN KEY(platform_id) REFERENCES platforms(id) ON DELETE CASCADE,
+                FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+                FOREIGN KEY(contract_id) REFERENCES contracts(id) ON DELETE CASCADE
+            )
+        """)
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS platform_delivery_report_lines (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                platform_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                contract_id INTEGER NOT NULL,
+                component_id INTEGER NOT NULL,
+                serial_no TEXT DEFAULT '',
+                internal_location TEXT DEFAULT '',
+                note TEXT DEFAULT '',
+                delivery_location TEXT DEFAULT '',
+                created_at TEXT,
+                updated_at TEXT,
+                UNIQUE(platform_id, user_id, contract_id, component_id, serial_no),
+                FOREIGN KEY(platform_id) REFERENCES platforms(id) ON DELETE CASCADE,
+                FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+                FOREIGN KEY(contract_id) REFERENCES contracts(id) ON DELETE CASCADE,
+                FOREIGN KEY(component_id) REFERENCES components(id) ON DELETE CASCADE
+            )
+        """)
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS internal_locations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT UNIQUE NOT NULL,
+                is_active INTEGER DEFAULT 1,
+                sort_order INTEGER DEFAULT 0,
+                created_at TEXT,
+                updated_at TEXT
+            )
+        """)
+        ts = now_iso()
+        for order, name in enumerate(("Keşan", "Hadımköy", "Çorlu")):
+            self.conn.execute(
+                "INSERT OR IGNORE INTO internal_locations(name,is_active,sort_order,created_at,updated_at) VALUES(?,?,?,?,?)",
+                (name, 1, order, ts, ts),
+            )
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_pdr_summary_scope ON platform_delivery_report_summary(platform_id,user_id,contract_id)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_pdr_lines_scope ON platform_delivery_report_lines(platform_id,user_id,contract_id,component_id,serial_no)")
+        self.conn.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version','12')")
         self.conn.commit()
         return migrated
 
