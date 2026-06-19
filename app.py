@@ -72,6 +72,7 @@ from src.ui.date_picker import build_date_input as _build_date_input
 from src.ui.kullanim_kilavuzu import UsageGuideDialog
 from src.ui.dialogs.platform_component_manager import PlatformComponentManagerDialog
 from src.ui.dialogs.delivery_schedule_report_dialog import DeliveryScheduleReportDialog
+from src.ui.dialogs.platform_delivery_report_dialog import PlatformTeslimatDurumuReportDialog
 from src.ui.message_boxes import ask_yes_no
 
 from PySide6.QtCore import Qt, QDate, QObject, QThread, Signal, QTimer, QPoint, QSize, QRect, QEvent, QPropertyAnimation, QEasingCurve, QUrl
@@ -11824,6 +11825,13 @@ class MainWindow(QMainWindow):
         dlg = DeliveryScheduleReportDialog(self, store=self.store)
         dlg.exec()
 
+    def open_platform_delivery_report(self):
+        if not self.store:
+            QMessageBox.information(self, "Veri dosyası gerekli", "Raporu açmak için önce bir STS veri dosyası açın.")
+            return
+        dlg = PlatformTeslimatDurumuReportDialog(self, store=self.store)
+        dlg.exec()
+
     def open_usage_guide(self):
         try:
             dlg = UsageGuideDialog(self)
@@ -11865,6 +11873,7 @@ class MainWindow(QMainWindow):
         self.top_actions_menu.addAction("Excel’e Aktar", self.export_sts_to_excel)
         reports_menu = self.top_actions_menu.addMenu("Raporlar")
         reports_menu.addAction("Tahmini Teslimat Takvimi", self.open_delivery_schedule_report)
+        reports_menu.addAction("Platform Teslimat Durumu", self.open_platform_delivery_report)
         self.top_actions_menu.addAction("Database Yönetimi", self.open_database_management)
         self.top_actions_menu.addAction("Performans Takip", self.open_performance_tracking)
         self.top_actions_menu.addAction("Platform ve Bileşen Yönetimi", self.manage_platforms)
