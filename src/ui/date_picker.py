@@ -153,6 +153,7 @@ class DatePickerPopup(QDialog):
         if selected_date and max_date and selected_date > max_date:
             selected_date = max_date
         self.selected_date = selected_date
+        self.selected_text: Optional[str] = None
         seed = selected_date or max_date or self.today
         self.current_year = seed.year
         self.current_month = seed.month
@@ -253,8 +254,33 @@ class DatePickerPopup(QDialog):
         }
         QFrame#datePickerDays {
             background: #ffffff;
+            border-bottom-left-radius: 0px;
+            border-bottom-right-radius: 0px;
+        }
+        QFrame#datePickerFlexible {
+            background: #f8fbff;
+            border-top: 1px solid #d8e2ed;
             border-bottom-left-radius: 18px;
             border-bottom-right-radius: 18px;
+        }
+        QPushButton#datePickerFlexibleOption {
+            background: #ffffff;
+            color: #0b2f6b;
+            border: 1px solid #bfdbfe;
+            border-radius: 10px;
+            padding: 8px 10px;
+            text-align: left;
+            font-size: 12px;
+            font-weight: 800;
+            min-height: 42px;
+        }
+        QPushButton#datePickerFlexibleOption:hover {
+            background: #eff6ff;
+            border-color: #60a5fa;
+        }
+        QPushButton#datePickerFlexibleOption:pressed {
+            background: #dbeafe;
+            border-color: #2563eb;
         }
         QLabel#datePickerDay {
             background: transparent;
@@ -294,7 +320,7 @@ class DatePickerPopup(QDialog):
 
         shell = QFrame(self)
         shell.setObjectName("datePickerShell")
-        shell.setFixedWidth(318)
+        shell.setFixedWidth(390)
         shell_lay = QVBoxLayout(shell)
         shell_lay.setContentsMargins(0, 0, 0, 0)
         shell_lay.setSpacing(0)
@@ -355,6 +381,28 @@ class DatePickerPopup(QDialog):
         self.days_lay.setHorizontalSpacing(4)
         self.days_lay.setVerticalSpacing(4)
         shell_lay.addWidget(days, 0)
+
+        flexible = QFrame(shell)
+        flexible.setObjectName("datePickerFlexible")
+        flexible_lay = QGridLayout(flexible)
+        flexible_lay.setContentsMargins(12, 12, 12, 12)
+        flexible_lay.setHorizontalSpacing(8)
+        flexible_lay.setVerticalSpacing(8)
+
+        self.day_unknown_btn = QPushButton(flexible)
+        self.day_unknown_btn.setObjectName("datePickerFlexibleOption")
+        self.day_unknown_btn.clicked.connect(lambda: self._pick_flexible("day_unknown"))
+        self.month_day_unknown_btn = QPushButton(flexible)
+        self.month_day_unknown_btn.setObjectName("datePickerFlexibleOption")
+        self.month_day_unknown_btn.clicked.connect(lambda: self._pick_flexible("month_day_unknown"))
+        self.tbd_btn = QPushButton(flexible)
+        self.tbd_btn.setObjectName("datePickerFlexibleOption")
+        self.tbd_btn.clicked.connect(lambda: self._pick_flexible("unknown"))
+
+        flexible_lay.addWidget(self.day_unknown_btn, 0, 0)
+        flexible_lay.addWidget(self.month_day_unknown_btn, 0, 1)
+        flexible_lay.addWidget(self.tbd_btn, 1, 0, 1, 2)
+        shell_lay.addWidget(flexible, 0)
 
     def _year_bounds(self) -> tuple[int, int]:
         start = min(1990, self.current_year - 20, self.today.year - 20)
@@ -469,10 +517,33 @@ class DatePickerPopup(QDialog):
             self.days_lay.addWidget(btn, idx // 7, idx % 7)
             self.day_buttons.append(btn)
 
+        self._refresh_flexible_options()
         self.adjustSize()
+
+    def _refresh_flexible_options(self):
+        if not hasattr(self, "day_unknown_btn"):
+            return
+        day_unknown = f"{self.current_year:04d}-{self.current_month:02d}-TBD"
+        month_day_unknown = f"{self.current_year:04d}-TBD-TBD"
+        self.day_unknown_btn.setText(f"Gün bilinmiyor\n{day_unknown}")
+        self.month_day_unknown_btn.setText(f"Ay/Gün bilinmiyor\n{month_day_unknown}")
+        self.tbd_btn.setText("Tarih belirlenecek\nTBD")
 
     def _pick(self, picked: date):
         self.selected_date = picked
+        self.selected_text = picked.isoformat()
+        self.accept()
+
+    def _pick_flexible(self, mode: str):
+        if mode == "day_unknown":
+            self.selected_text = f"{self.current_year:04d}-{self.current_month:02d}-TBD"
+        elif mode == "month_day_unknown":
+            self.selected_text = f"{self.current_year:04d}-TBD-TBD"
+        elif mode == "unknown":
+            self.selected_text = "TBD"
+        else:
+            return
+        self.selected_date = None
         self.accept()
 
     def _prev_month(self):
@@ -525,8 +596,12 @@ def build_date_input(
             current = max_date
         popup = DatePickerPopup(parent, current, max_date=max_date, events_provider=events_provider)
         popup.move(btn.mapToGlobal(btn.rect().bottomLeft()))
-        if popup.exec() and popup.selected_date:
-            edit.setText(popup.selected_date.isoformat())
+        if popup.exec():
+            selected_text = str(getattr(popup, "selected_text", "") or "").strip()
+            if selected_text:
+                edit.setText(selected_text)
+            elif popup.selected_date:
+                edit.setText(popup.selected_date.isoformat())
 
     btn.clicked.connect(choose_date)
     return edit, wrap
