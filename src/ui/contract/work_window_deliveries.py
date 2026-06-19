@@ -1,9 +1,15 @@
 from __future__ import annotations
 
+import re
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import QHeaderView, QTableWidgetItem, QWidget, QVBoxLayout, QLabel, QTableWidget, QFrame, QHBoxLayout, QPushButton
 
 from src.ui.contract.delivery_user_display import delivery_user_text
+
+
+def _use_acceptance_terms(owner) -> bool:
+    no = str(getattr(getattr(owner, "ci", None), "no", "") or "")
+    return not bool(re.match(r"^\s*.+?\s*-\s*TBD\s*-\s*\d+\s*$", no, re.IGNORECASE))
 
 
 def refresh_delivery_table(self):
@@ -13,7 +19,10 @@ def refresh_delivery_table(self):
         self.pinned_delivery.clearContents()
         self.del_table.setRowCount(0)
         return
-    headers = ["", "Teslimat Adı", "Durum", "Plan. Teslimat", "Gerçek Teslimat", "Teslim Kullanıcısı", "Not"]
+    if _use_acceptance_terms(self):
+        headers = ["", "Kabul Adı", "Durum", "Plan. Kabul", "Gerçekleşen Kabul", "Teslim Kullanıcısı", "Not"]
+    else:
+        headers = ["", "Teslimat Adı", "Durum", "Plan. Teslimat", "Gerçekleşen Teslimat", "Teslim Kullanıcısı", "Not"]
     self.del_table.clear()
     self.del_table.setColumnCount(len(headers))
     self.del_table.setHorizontalHeaderLabels(headers)
@@ -73,7 +82,7 @@ def delivery_detail_widget(self, d, comps, idx: int):
     footer = QFrame(); footer.setObjectName("detailFooter")
     frow = QHBoxLayout(footer); frow.setContentsMargins(0, 8, 0, 0); frow.setSpacing(8)
     frow.addStretch()
-    edit = QPushButton("✎ Teslimatı Düzenle")
+    edit = QPushButton("✎ Kabulü Düzenle" if _use_acceptance_terms(self) else "✎ Teslimatı Düzenle")
     edit.clicked.connect(lambda _=False, i=idx: self.edit_delivery(i))
     frow.addWidget(edit)
     lay.addWidget(footer, 0)
@@ -108,6 +117,8 @@ def edit_delivery(self, idx: int):
     dlg.status.setCurrentText(current.status or "PLAN")
     dlg.planned_acceptance_date.setText(getattr(current, "planned_acceptance_date", "") or "")
     dlg.acceptance_date.setText(current.acceptance_date or "")
+    if hasattr(dlg, "_sync_actual_date_visibility"):
+        dlg._sync_actual_date_visibility()
     dlg.note.setText(current.note or "")
     delivery_user = str(getattr(current, "delivery_user", "") or "").strip()
     if delivery_user:
@@ -189,7 +200,7 @@ def add_delivery(self):
     planned_assigned = {comp: sum(self._as_number(d.planned.get(comp, 0)) for d in existing_deliveries) for comp in comp_keys}
     dlg = self._DeliveryDialog(
         sys_info,
-        f"Teslimat {len(existing_deliveries) + 1}",
+        f"{'Kabul' if _use_acceptance_terms(self) else 'Teslimat'} {len(existing_deliveries) + 1}",
         self,
         component_keys=comp_keys,
         planned_assigned=planned_assigned,
