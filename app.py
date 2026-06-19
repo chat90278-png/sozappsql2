@@ -64,6 +64,7 @@ from src.config.app_config import (
 from src.models.app_models import ComponentDef, ContractInfo, SystemInfo, DeliveryInfo, TagDef
 from src.domain.contract_timing import contract_timing, is_completed_status
 from src.domain.delivery_coverage import acceptance_coverage_issues
+from src.domain.flexible_date import flexible_or_blank, is_exact_date, parse_flexible_date, validate_flexible_date, format_flexible_date
 from src.ui.widgets import stat_card, set_card_value
 from src.ui.theme import STYLE
 from src.ui.tarih import ContractCalendarWindow
@@ -2981,7 +2982,7 @@ class ContractDialog(StyledDialog):
         self.responsible_engineers = MultiStaffSelectWidget(self)
         self.responsible_engineers.set_staff_options(self.staff_records)
         # Sorumlu mühendis sözleşme seviyesinde ayrı ve opsiyonel bir alandır; varsayılan seçim yapılmaz.
-        self.ctype = QComboBox(); self.ctype.addItems(["Ana Sözleşme"])
+        self.ctype = QComboBox(); self.ctype.addItems(["-", "Ana Sözleşme"])
         self.sd_code = QLineEdit(); self.sd_code.setPlaceholderText("SD-1"); self.sd_code.setEnabled(False)
         self.sig, self.sig_wrap = build_date_input(self, events_provider=self.date_picker_events)
         self.t0, self.t0_wrap = build_date_input(self, events_provider=self.date_picker_events)
@@ -3006,34 +3007,16 @@ class ContractDialog(StyledDialog):
             grid.addWidget(form_label(label), row * 2, col)
             grid.addWidget(widget, row * 2 + 1, col)
 
-        add_field("Sözleşme No", no_container, 0, 0)
-        add_field("Platform", self.platform, 0, 1)
-        add_field("Sözleşmenin Sahibi Kullanıcı", self.user, 1, 0)
-        add_field("Sorumlu Mühendis", self.responsible_engineers, 1, 1)
-        add_field("Sözleşme Tipi", self.ctype, 2, 0)
-        add_field("İmza Tarihi", self.sig_wrap, 2, 1)
+        self.unknown_no_btn = QPushButton("No bilinmiyor")
+        self.unknown_no_btn.setObjectName("secondary")
+        no_lay.addWidget(self.unknown_no_btn, 0)
+        self.unknown_no_btn.clicked.connect(self.fill_unknown_contract_no)
+        add_field("Platform", self.platform, 0, 0)
+        add_field("Sözleşme No", no_container, 1, 0)
+        add_field("Sözleşmenin Sahibi Kullanıcı", self.user, 2, 0)
+        add_field("Sorumlu Mühendis", self.responsible_engineers, 3, 0)
+        add_field("Sözleşme Tipi", self.ctype, 4, 0)
         root.addLayout(grid)
-
-        timeline_card = QFrame()
-        timeline_card.setObjectName("systemFormCard")
-        timeline = QGridLayout(timeline_card)
-        timeline.setContentsMargins(10, 8, 10, 8)
-        timeline.setHorizontalSpacing(8)
-        timeline.setVerticalSpacing(6)
-        timeline.addWidget(form_label("T0 Başlangıç"), 0, 0)
-        timeline.addWidget(form_label("T0+Ay"), 0, 2)
-        timeline.addWidget(form_label("Termin Tarihi"), 0, 4)
-        timeline.addWidget(self.t0_wrap, 1, 0)
-        plus_lbl = QLabel("+"); plus_lbl.setObjectName("muted"); plus_lbl.setAlignment(Qt.AlignCenter)
-        eq_lbl = QLabel("="); eq_lbl.setObjectName("muted"); eq_lbl.setAlignment(Qt.AlignCenter)
-        timeline.addWidget(plus_lbl, 1, 1)
-        timeline.addWidget(self.months, 1, 2)
-        timeline.addWidget(eq_lbl, 1, 3)
-        timeline.addWidget(self.completion, 1, 4)
-        timeline.setColumnStretch(0, 2)
-        timeline.setColumnStretch(2, 1)
-        timeline.setColumnStretch(4, 2)
-        root.addWidget(timeline_card)
 
         root.addWidget(form_label("Not"))
         root.addWidget(self.note)
@@ -3051,6 +3034,24 @@ class ContractDialog(StyledDialog):
         save.clicked.connect(self.save)
         row.addWidget(save)
         root.addLayout(row)
+
+    def fill_unknown_contract_no(self):
+        platform = self.platform.currentText().strip()
+        if not platform:
+            self.no_dup_warn.setText("Geçici sözleşme numarası oluşturmak için önce platform seçin.")
+            self.no_dup_warn.setVisible(True)
+            return
+        pattern = re.compile(rf"^\s*{re.escape(platform)}\s*-\s*TBD\s*-\s*(\d+)\s*$", re.IGNORECASE)
+        max_n = 0
+        try:
+            for ex in self.store.list_main_contracts(platform):
+                m = pattern.match(str(ex.get("no", "") or ""))
+                if m:
+                    max_n = max(max_n, int(m.group(1)))
+        except Exception:
+            pass
+        self.no.setText(f"{platform} - TBD - {max_n + 1}")
+        self.no_dup_warn.setVisible(False)
 
     def _resize_to_safe_default(self):
         layout = self.layout()
@@ -3287,28 +3288,7 @@ class ContractDialog(StyledDialog):
             return
         if not self._confirm_empty_responsible_engineer():
             return
-        # Zorunlu tarih ve ay alanları
-        sig_ok = bool(self.sig.text().strip())
-        t0_ok = bool(self.t0.text().strip())
-        months_ok = self.months.value() > 0
-        self._highlight_required(self.sig, not sig_ok)
-        self._highlight_required(self.t0, not t0_ok)
-        self._highlight_required(self.months, not months_ok)
-        if not sig_ok or not t0_ok or not months_ok:
-            missing = []
-            if not sig_ok:   missing.append("İmza Tarihi")
-            if not t0_ok:    missing.append("T0 Tarihi")
-            if not months_ok: missing.append("T0+Ay (en az 1)")
-            QMessageBox.warning(self, "Zorunlu Alanlar",
-                                "Aşağıdaki alanlar doldurulmadan devam edilemez:\n• " +
-                                "\n• ".join(missing))
-            return
-        if self.sig.text().strip() and not parse_iso_date(self.sig.text()):
-            QMessageBox.warning(self, "Tarih hatası", "İmza tarihi yyyy-aa-gg formatında olmalı. Örn: 2026-05-02")
-            return
-        if self.t0.text().strip() and not parse_iso_date(self.t0.text()):
-            QMessageBox.warning(self, "Tarih hatası", "T0 tarihi yyyy-aa-gg formatında olmalı. Örn: 2026-05-02")
-            return
+        self.sig.clear(); self.t0.clear(); self.months.setValue(0); self.completion.clear()
 
         contract_type = "Ana Sözleşme"
         if self.is_sd_mode():
@@ -3348,10 +3328,10 @@ class ContractDialog(StyledDialog):
             user=user_display,
             yi_yd=self.yi_yd.text().strip() or "Yİ",
             contract_type=contract_type,
-            signature_date=iso_or_blank(self.sig.text()),
-            t0_date=iso_or_blank(self.t0.text()),
-            t0_months=self.months.value(),
-            completion_date=self.completion.text().strip(),
+            signature_date="",
+            t0_date="",
+            t0_months=0,
+            completion_date="",
             status="Başlanmadı",
             note=self.note.text().strip(),
             acceptance_date="",
@@ -3618,6 +3598,24 @@ class ContractEditDialog(StyledDialog):
             self.reject()
             return
         super().keyPressEvent(event)
+
+    def fill_unknown_contract_no(self):
+        platform = self.platform.currentText().strip()
+        if not platform:
+            self.no_dup_warn.setText("Geçici sözleşme numarası oluşturmak için önce platform seçin.")
+            self.no_dup_warn.setVisible(True)
+            return
+        pattern = re.compile(rf"^\s*{re.escape(platform)}\s*-\s*TBD\s*-\s*(\d+)\s*$", re.IGNORECASE)
+        max_n = 0
+        try:
+            for ex in self.store.list_main_contracts(platform):
+                m = pattern.match(str(ex.get("no", "") or ""))
+                if m:
+                    max_n = max(max_n, int(m.group(1)))
+        except Exception:
+            pass
+        self.no.setText(f"{platform} - TBD - {max_n + 1}")
+        self.no_dup_warn.setVisible(False)
 
     def _resize_to_safe_default(self):
         layout = self.layout()
@@ -4554,7 +4552,7 @@ class SystemDialog(StyledDialog):
         self.t0_date.textChanged.connect(self._recalc_completion)
         self.t0_months_spin.valueChanged.connect(self._recalc_completion)
         self._recalc_completion()
-        root.addWidget(date_card)
+        # Tarih alanları artık sistem UI'ında gösterilmez; eski kolonlar güvenli defaultlarla korunur.
 
         # ── Sistem Tipi / Bileşen Paketi: sadece hızlı seçim sağlar ──
         type_card = QFrame()
@@ -4866,9 +4864,9 @@ class SystemDialog(StyledDialog):
         self.result = SystemInfo(
             name=name,
             components=comps,
-            t0_date=iso_or_blank(t0_text),
-            t0_months=self.t0_months_spin.value(),
-            completion_date=self.completion_date.text().strip(),
+            t0_date="",
+            t0_months=0,
+            completion_date="",
             status=getattr(self.existing_system, "status", "Başlanmadı") or "Başlanmadı",
             acceptance_date=getattr(self.existing_system, "acceptance_date", "") or "",
         )
@@ -5004,7 +5002,7 @@ class MultiSystemDialog(StyledDialog):
         date_lay.setColumnStretch(4, 2)
         self.t0_date_edit.textChanged.connect(self.on_t0_changed)
         self.months_spin.valueChanged.connect(self.on_months_changed)
-        mid.addWidget(date_strip)
+        # Tarih şeridi çoklu sistem UI'ından kaldırıldı; draftlar boş/0 kalır.
 
         type_row = QGridLayout()
         type_row.setHorizontalSpacing(10)
@@ -5503,16 +5501,14 @@ class MultiSystemDialog(StyledDialog):
             if not comps:
                 QMessageBox.warning(self, "Bileşen yok", f"{name}: bileşen adedi toplamı 0 olamaz.")
                 return
-            months = int(draft.get("t0_months") or 0)
-            completion = str(draft.get("completion_date") or "")
-            if not completion:
-                completion = add_months(parse_iso_date(t0), months).isoformat()
+            months = 0
+            completion = ""
             out.append(SystemInfo(
                 name=name,
                 components={k: float(v) for k, v in comps.items()},
-                t0_date=iso_or_blank(t0),
-                t0_months=months,
-                completion_date=completion,
+                t0_date="",
+                t0_months=0,
+                completion_date="",
                 status="Başlanmadı",
                 acceptance_date="",
             ))
@@ -5868,7 +5864,7 @@ class UnitTrackingSidePanel(QFrame):
 
 
 class DeliveryDialog(StyledDialog):
-    """Kabul / Teslimat ekleme / düzenleme dialog'u.
+    """Teslimat ekleme / düzenleme dialog'u.
 
     Tüm bileşenlerde kuyruk no / seri no takibi kullanılabilir:
     - Bileşen hücresinde ▶/◀ ok ikonu görünür.
@@ -5879,7 +5875,7 @@ class DeliveryDialog(StyledDialog):
     def __init__(
         self,
         system: SystemInfo,
-        default_name: str = "Kabul 1",
+        default_name: str = "Teslimat 1",
         parent=None,
         component_keys: Optional[List[str]] = None,
         planned_assigned: Optional[Dict[str, float]] = None,
@@ -5888,7 +5884,7 @@ class DeliveryDialog(StyledDialog):
         allow_delete: bool = False,
         existing_delivery: Optional["DeliveryInfo"] = None,
     ):
-        super().__init__("Teslimat / Kabul Ekle", parent)
+        super().__init__("Teslimatı Düzenle" if existing_delivery else "Teslimat Ekle", parent)
         self.system = system
         self.store = getattr(parent, "store", None)
         self.default_name = default_name
@@ -6041,7 +6037,7 @@ class DeliveryDialog(StyledDialog):
         root.setSpacing(12)
         outer.addWidget(right, 1)
 
-        title = QLabel(f"{self.system.name} için Kabul / Teslimat")
+        title = QLabel(f"{self.system.name} için Teslimat")
         title.setObjectName("dialogTitle")
         root.addWidget(title)
 
@@ -6049,7 +6045,7 @@ class DeliveryDialog(StyledDialog):
         grid.setHorizontalSpacing(14)
         grid.setVerticalSpacing(8)
         self.name = QLineEdit()
-        self.name.setPlaceholderText("Örn: Kabul 1")
+        self.name.setPlaceholderText("Örn: Teslimat 1")
         self.name.setText(self.default_name)
         self.name.selectAll()
         self.status = QComboBox()
@@ -6075,13 +6071,13 @@ class DeliveryDialog(StyledDialog):
         self.acceptance_date, self.acceptance_date_wrap = build_date_input(
             self, max_date=date.today(), events_provider=self.events_provider
         )
-        grid.addWidget(form_label("Kabul Adı"), 0, 0)
+        grid.addWidget(form_label("Teslimat Adı"), 0, 0)
         grid.addWidget(self.name, 1, 0)
         grid.addWidget(form_label("Durum"), 0, 1)
         grid.addWidget(self.status, 1, 1)
-        grid.addWidget(form_label("Planlanan Kabul Tarihi"), 2, 0)
+        grid.addWidget(form_label("Planlanan Teslimat Tarihi"), 2, 0)
         grid.addWidget(self.planned_acceptance_date_wrap, 3, 0)
-        grid.addWidget(form_label("Gerçek Kabul Tarihi"), 4, 0)
+        grid.addWidget(form_label("Gerçek Teslimat Tarihi"), 4, 0)
         grid.addWidget(self.acceptance_date_wrap, 5, 0)
         grid.addWidget(form_label("Not"), 2, 1)
         grid.addWidget(self.note, 3, 1)
@@ -6161,7 +6157,7 @@ class DeliveryDialog(StyledDialog):
 
         row = QHBoxLayout()
         if self.allow_delete:
-            delete_btn = QPushButton("Kabul Sil")
+            delete_btn = QPushButton("Teslimat Sil")
             delete_btn.setObjectName("danger")
             delete_btn.clicked.connect(self.request_delete)
             row.addWidget(delete_btn)
@@ -6430,7 +6426,7 @@ class DeliveryDialog(StyledDialog):
     def request_delete(self):
         confirm = QMessageBox(self)
         confirm.setIcon(QMessageBox.Warning)
-        confirm.setWindowTitle("Kabul Sil")
+        confirm.setWindowTitle("Teslimat Sil")
         confirm.setText(
             "Bu kabul silinecek. Bu kabule ait teslim miktarları artık teslim edilmiş sayılmayacak. "
             "Sistem ana bileşen adetleri değişmeyecek. Devam etmek istiyor musunuz?"
@@ -6689,7 +6685,7 @@ class DeliveryDialog(StyledDialog):
     # ------------------------------------------------------------------ save
     def save(self):
         if not self.name.text().strip():
-            QMessageBox.warning(self, "Eksik", "Kabul adı girin.")
+            QMessageBox.warning(self, "Eksik", "Teslimat adı girin.")
             return
 
         self._current_units_from_panel_if_active()
@@ -6738,44 +6734,48 @@ class DeliveryDialog(StyledDialog):
         t0_text = str(getattr(self.system, "t0_date", "") or self.t0_date.text()).strip()
         completion = str(getattr(self.system, "completion_date", "") or self.completion_date_edit.text()).strip()
         plan_acc_text = self.planned_acceptance_date.text().strip()
-        plan_acc_date = parse_iso_date(plan_acc_text) if plan_acc_text else None
-        if plan_acc_text and not plan_acc_date:
-            QMessageBox.warning(self, "Tarih hatası", "Planlanan Kabul Tarihi yyyy-aa-gg formatında olmalı.")
+        ok, message = validate_flexible_date(plan_acc_text, allow_empty=True)
+        if not ok:
+            QMessageBox.warning(self, "Tarih hatası", f"Planlanan Teslimat Tarihi: {message}")
             return
         acc_text = self.acceptance_date.text().strip()
-        acc_date = parse_iso_date(acc_text) if acc_text else None
-        if acc_text and not acc_date:
-            QMessageBox.warning(self, "Tarih hatası", "Kabul Tarihi yyyy-aa-gg formatında olmalı.")
+        ok, message = validate_flexible_date(acc_text, allow_empty=True)
+        if not ok:
+            QMessageBox.warning(self, "Tarih hatası", f"Gerçek Teslimat Tarihi: {message}")
+            return
+        acc_date = parse_flexible_date(acc_text)
+        if acc_text and not acc_date and self._is_delivered_status():
+            QMessageBox.warning(self, "Tarih hatası", "Teslim Edildi durumunda Gerçek Teslimat Tarihi kesin YYYY-MM-DD olmalı.")
             return
         if acc_date and acc_date > date.today():
-            QMessageBox.warning(self, "Tarih hatası", "Kabul Tarihi bugünden ileri olamaz.")
+            QMessageBox.warning(self, "Tarih hatası", "Gerçek Teslimat Tarihi bugünden ileri olamaz.")
             return
 
         all_delivered, remaining_components = self._planned_remaining_state(planned, delivered)
         if self._is_delivered_status():
             if not acc_text:
-                QMessageBox.warning(self, "Kabul Tarihi Gerekli", "Durum 'Teslim Edildi' olduğunda Kabul Tarihi zorunludur.")
+                QMessageBox.warning(self, "Gerçek Teslimat Tarihi Gerekli", "Durum 'Teslim Edildi' olduğunda Gerçek Teslimat Tarihi zorunludur.")
                 return
             if remaining_components:
                 QMessageBox.warning(
                     self, "Teslim Edilen Eksik",
-                    "Durum 'Teslim Edildi' olduğunda bu kabuldeki tüm bileşenlerin kalan değeri 0 olmalıdır.\n\n"
+                    "Durum 'Teslim Edildi' olduğunda bu teslimattaki tüm bileşenlerin kalan değeri 0 olmalıdır.\n\n"
                     "Eksik kalan bileşenler:\n• " + "\n• ".join(remaining_components),
                 )
                 return
         elif all_delivered:
             QMessageBox.warning(
                 self, "Durum Uyumsuz",
-                "Bu kabulde tüm bileşenlerin kalanı 0. Kaydetmeden önce Durum alanını 'Teslim Edildi' yapın.",
+                "Bu teslimatta tüm bileşenlerin kalanı 0. Kaydetmeden önce Durum alanını 'Teslim Edildi' yapın.",
             )
             return
 
         self.result = DeliveryInfo(
             name=self.name.text().strip(),
             status=self.status.currentText(),
-            acceptance_date=iso_or_blank(acc_text),
+            acceptance_date=flexible_or_blank(acc_text),
             note=self.note.text().strip(),
-            planned_acceptance_date=iso_or_blank(plan_acc_text),
+            planned_acceptance_date=flexible_or_blank(plan_acc_text),
             planned=planned,
             delivered=delivered,
             t0_date=iso_or_blank(t0_text),
@@ -7494,9 +7494,9 @@ class ContractWorkWindow(QDialog):
             lay.addWidget(v)
             return card
 
-        top_row.addWidget(system_metric_card("completion", "Termin Tarihi"), 0)
+        top_row.addWidget(system_metric_card("completion", "Yakın Teslimat"), 0)
         top_row.addWidget(system_metric_card("days", "Kalan Gün"), 0)
-        top_row.addWidget(system_metric_card("acceptance", "Kabul Tarihi"), 0)
+        top_row.addWidget(system_metric_card("acceptance", "Gerçek Teslimat"), 0)
         top_row.addWidget(system_metric_card("user", "Kullanıcı"), 0)
         top_row.addStretch(1)
         self.edit_system_btn = QPushButton("✎ Sistemi Düzenle")
@@ -7515,10 +7515,10 @@ class ContractWorkWindow(QDialog):
         self.summary.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         rv.addWidget(self.summary, 1)  # Kalan dikey alanın ana bölümü sistem bileşenlerine ayrılsın
 
-        # ── Boşluk + TESLİMATLAR / KABULLER ──────────────────────────
+        # ── Boşluk + TESLİMATLAR ──────────────────────────
         rv.addSpacing(18)
         dh = QHBoxLayout()
-        dh.addWidget(section_label("TESLİMATLAR / KABULLER"))
+        dh.addWidget(section_label("TESLİMATLAR"))
         dh.addStretch()
 
         ad = QPushButton("+ Teslimat Ekle")
@@ -7526,7 +7526,7 @@ class ContractWorkWindow(QDialog):
         ad.clicked.connect(self.add_delivery)
         dh.addWidget(ad)
 
-        auto_btn = QPushButton("Otomatik Kabul Oluştur")
+        auto_btn = QPushButton("Otomatik Teslimat Oluştur")
         self.auto_accept_btn = auto_btn
         auto_btn.clicked.connect(lambda: open_auto_accept_dialog(self))
         dh.addWidget(auto_btn)
@@ -10857,7 +10857,7 @@ class ContractWorkWindow(QDialog):
         if not planned:
             return None
         return DeliveryInfo(
-            name="Kabul 1",
+            name="Teslimat 1",
             status="Başlanmadı",
             acceptance_date="",
             note="Sistem kaydedilirken otomatik oluşturuldu.",
@@ -10960,7 +10960,7 @@ class ContractWorkWindow(QDialog):
             ctx["systems"] = systems
             ctx["_created_default_systems"] = created_defaults
             return False, (
-                f"{ci.contract_type}: otomatik Kabul 1 ekranda oluşturuldu. "
+                f"{ci.contract_type}: otomatik Teslimat 1 ekranda oluşturuldu. "
                 "Lütfen açılan kabul ekranını kontrol edip onaylayın; ardından tekrar Kaydet'e basın."
             )
         issues = self._acceptance_coverage_issues(systems, deliveries)
@@ -11003,7 +11003,7 @@ class ContractWorkWindow(QDialog):
                 self.refresh()
                 QMessageBox.information(
                     self,
-                    "Kabul oluşturuldu" if created_defaults else (validation_title or "Eksik"),
+                    "Teslimat oluşturuldu" if created_defaults else (validation_title or "Eksik"),
                     msg,
                 )
                 if created_defaults:
@@ -11323,7 +11323,7 @@ class ContractWorkWindow(QDialog):
             intro = "Bazı kabullerde teslim edilen miktar kabul adedini aşıyor. Kaydetmeden önce miktarları düzeltin."
             details = [f"• {issue['system']} / {issue['delivery']} / {issue['component']}: kabul {fmt_num(issue['planned_qty'])}, teslim edilen {fmt_num(issue['delivered_qty'])}" for issue in delivery_over_planned]
         elif over_assigned:
-            title = "Kabul miktarı sistem adedini aşıyor"
+            title = "Teslimat miktarı sistem adedini aşıyor"
             intro = "Bazı bileşenlerde kabullere atanan miktar sistem adedini aşıyor. Kaydetmeden önce miktarları düzeltin."
             details = [f"• {issue['system']} / {issue['component']}: sistem {fmt_num(issue['contract_qty'])}, kabuller {fmt_num(issue['planned_qty'])}" for issue in over_assigned]
         else:
@@ -11383,18 +11383,18 @@ class ContractWorkWindow(QDialog):
         names = "\n".join(f"• {sys_info.name}" for sys_info in missing_systems)
         if not ask_yes_no(
             self,
-            "Kabul eklenmemiş sistem var",
+            "Teslimat eklenmemiş sistem var",
             "Aşağıdaki sistemlere kabul eklemediniz:\n\n"
             f"{names}\n\n"
-            "Onaylarsanız bu sistemlerin içine Kabul 1 otomatik oluşturulacak ve "
-            "sistemdeki tüm bileşen adetleri Kabul 1'e atanacaktır.\n\n"
+            "Onaylarsanız bu sistemlerin içine Teslimat 1 otomatik oluşturulacak ve "
+            "sistemdeki tüm bileşen adetleri Teslimat 1'e atanacaktır.\n\n"
             "Onaylamazsanız kabul eklemeden kaydetmeye izin verilmeyecektir.",
             default_yes=True,
         ):
             QMessageBox.warning(
                 self,
-                "Kabul gerekli",
-                "Kabul eklenmemiş sistemler için kabul oluşturmadan kaydetme yapılamaz.",
+                "Teslimat gerekli",
+                "Teslimat eklenmemiş sistemler için teslimat oluşturmadan kaydetme yapılamaz.",
             )
             return False
 
@@ -11408,8 +11408,8 @@ class ContractWorkWindow(QDialog):
         self.refresh_right()
         QMessageBox.information(
             self,
-            "Kabul oluşturuldu",
-            "Otomatik Kabul 1 kayıtları ekranda oluşturuldu. "
+            "Teslimat oluşturuldu",
+            "Otomatik Teslimat 1 kayıtları ekranda oluşturuldu. "
             "Lütfen açılan kabul ekranını kontrol edip onaylayın; ardından tekrar Kaydet'e basın.",
         )
         QTimer.singleShot(0, lambda name=first_missing_name: self._open_first_delivery_for_system(name))
@@ -12023,8 +12023,8 @@ class MainWindow(QMainWindow):
         self.sort_combo.addItem("Varsayılan", "default")
         self.sort_combo.addItem("Sözleşme No (Artan)", "no_asc")
         self.sort_combo.addItem("Sözleşme No (Azalan)", "no_desc")
-        self.sort_combo.addItem("T. Tarihi (Yakın)", "date_asc")
-        self.sort_combo.addItem("T. Tarihi (Uzak)", "date_desc")
+        self.sort_combo.addItem("Yakın Teslimat (Yakın)", "date_asc")
+        self.sort_combo.addItem("Yakın Teslimat (Uzak)", "date_desc")
         self.sort_combo.addItem("Kalan Gün (Artan)", "days_asc")
         self.sort_combo.addItem("Kalan Gün (Azalan)", "days_desc")
         self.sort_combo.addItem("Kullanıcı (A-Z)", "user_asc")
@@ -12045,7 +12045,7 @@ class MainWindow(QMainWindow):
         self._filter_header = FilterableHeaderView(Qt.Horizontal, self.contract_table)
         self._filter_header.filterChanged.connect(self.schedule_apply_contract_filter)
         self.contract_table.setHorizontalHeader(self._filter_header)
-        self.contract_table.setHorizontalHeaderLabels(["Platform", "Sözleşme Türü", "Sözleşme No", "Kullanıcı", "Durum", "T. Tarihi", "Kalan Gün", "Etiketler", "Özet"])
+        self.contract_table.setHorizontalHeaderLabels(["Platform", "Sözleşme Türü", "Sözleşme No", "Kullanıcı", "Durum", "Yakın Teslimat", "Kalan Gün", "Etiketler", "Özet"])
         self.contract_table._filter_col_keys = ["platform", "type", "no", "user", "status", "date", "days", "tags", "summary"]
         self.contract_table._sort_mode = 'default'  # siralama modu
         # Tüm sütunlar Stretch — her zaman ekranı doldurur, yatay kaymaz.
@@ -12409,15 +12409,14 @@ class MainWindow(QMainWindow):
         cls = renk siniflandirmasi icin.
         """
         status_txt = str(it.get("status", "") or "").strip()
-        completion_txt = str(it.get("completion_date", "") or "")
-        acceptance_txt = str(it.get("acceptance_date", "") or "")
+        date_txt = str(it.get("_near_delivery_txt") or "-")
+        days_text = str(it.get("_near_delivery_days") or "-")
         today_iso = date.today().isoformat()
-        cache_key = (status_txt, completion_txt, acceptance_txt, today_iso)
+        cache_key = (status_txt, date_txt, days_text, today_iso)
         if it.get("_health_cache_key") == cache_key and "_health_cache_value" in it:
             return it["_health_cache_value"]
-        d = parse_iso_date(completion_txt)
-        date_txt = d.strftime("%d.%m.%Y") if d else "-"
-        days_text, day_num, timing_kind = contract_timing(completion_txt, acceptance_txt, status_txt)
+        day_num = it.get("_day_num")
+        timing_kind = ""
         # Siniflandirma (renk ve uyari listeleri icin). Tamamlanmis gec
         # teslimatlar kirmizi gorunur ancak aktif gecikme uyarilarina girmez.
         if timing_kind == "gecikmeli_teslim":
@@ -13473,19 +13472,42 @@ class MainWindow(QMainWindow):
             return (0, int(day_num))
         return (1, 99999999)
 
+    def _contract_delivery_dates(self, it: dict) -> tuple[str, str, Optional[int]]:
+        exact_plans = []
+        has_flexible = False
+        try:
+            _ci, _systems, deliveries = self.store.load_contract_structure(
+                it.get("platform", ""), it.get("no", ""), it.get("row", None) or it.get("entry_start_row", None), it.get("type", None)
+            )
+            for items in (deliveries or {}).values():
+                for delivery in items or []:
+                    raw = str(getattr(delivery, "planned_acceptance_date", "") or "").strip()
+                    if not raw:
+                        continue
+                    parsed = parse_flexible_date(raw)
+                    if parsed:
+                        exact_plans.append(parsed)
+                    else:
+                        has_flexible = True
+        except Exception:
+            return "-", "-", None
+        if exact_plans:
+            near = min(exact_plans)
+            diff = (near - date.today()).days
+            return near.isoformat(), (f"{diff} gün" if diff >= 0 else f"{abs(diff)} gün gecikti"), diff
+        if has_flexible:
+            return "Belirsiz", "-", None
+        return "-", "-", None
+
     def _prepare_contract_row_cache(self, rows: List[dict]):
         today = date.today()
         for it in rows:
-            completion_txt = str(it.get("completion_date", "") or "")
-            completion = parse_iso_date(completion_txt)
+            delivery_txt, delivery_days, day_num = self._contract_delivery_dates(it)
+            completion = parse_flexible_date(delivery_txt)
             it["_completion_obj"] = completion
             it["_completion_ord"] = completion.toordinal() if completion else None
-            _days_text, day_num, _timing_kind = contract_timing(
-                completion_txt,
-                str(it.get("acceptance_date", "") or ""),
-                str(it.get("status", "") or ""),
-                today=today,
-            )
+            it["_near_delivery_txt"] = delivery_txt
+            it["_near_delivery_days"] = delivery_days
             it["_day_num"] = day_num
             tags_list = list(it.get("tags", []) or [])
             it["_tags_str"] = ", ".join(tags_list) if tags_list else ""

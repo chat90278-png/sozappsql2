@@ -5,7 +5,7 @@ Otomatik kabul oluşturma eklentisi.
 app.py içine yalnızca şunlar eklenir:
     from auto_accept import open_auto_accept_dialog
 
-    auto_btn = QPushButton("Otomatik Kabul Oluştur")
+    auto_btn = QPushButton("Otomatik Teslimat Oluştur")
     auto_btn.clicked.connect(lambda: open_auto_accept_dialog(self))
     dh.addWidget(auto_btn)
 """
@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
 )
 from src.ui.date_picker import build_date_input
 from src.ui.message_boxes import ask_yes_no
+from src.domain.flexible_date import flexible_or_blank, parse_flexible_date, validate_flexible_date
 
 try:
     from src.models.app_models import DeliveryInfo
@@ -117,7 +118,7 @@ class AutoAcceptDialog(QDialog):
             self.divisible[comp] = divisible
             self.unassigned_total[comp] = available
 
-        self.setWindowTitle("Otomatik Kabul Oluştur")
+        self.setWindowTitle("Otomatik Teslimat Oluştur")
         self.resize(1280, 720)
         try:
             self.setStyleSheet(work_window.styleSheet())
@@ -186,7 +187,7 @@ class AutoAcceptDialog(QDialog):
         cancel = QPushButton("İptal")
         cancel.setObjectName("secondary")
         cancel.clicked.connect(self.reject)
-        save = QPushButton("Kabulleri Oluştur")
+        save = QPushButton("Teslimatları Oluştur")
         save.clicked.connect(self.save)
         footer.addWidget(self.progress_label)
         footer.addWidget(self.prev_btn)
@@ -313,7 +314,7 @@ class AutoAcceptDialog(QDialog):
         root.setContentsMargins(24, 20, 24, 18)
         root.setSpacing(12)
 
-        title = QLabel(f"{self.system.name} için Kabul / Teslimat")
+        title = QLabel(f"{self.system.name} için Teslimat")
         title.setObjectName("dialogTitle")
         title.setStyleSheet("font-weight:900; font-size:18px;")
         root.addWidget(title)
@@ -321,7 +322,7 @@ class AutoAcceptDialog(QDialog):
         grid = QGridLayout()
         grid.setHorizontalSpacing(14)
         grid.setVerticalSpacing(8)
-        name = QLineEdit(f"Kabul {idx + 1}")
+        name = QLineEdit(f"Teslimat {idx + 1}")
         status = QComboBox(); status.addItems(list(STATUS_VALUES))
         status.currentTextChanged.connect(lambda _text, i=idx: self.on_status_changed(i))
         t0 = QLineEdit(str(getattr(self.system, "t0_date", "") or getattr(self.work.ci, "t0_date", "") or ""))
@@ -332,13 +333,13 @@ class AutoAcceptDialog(QDialog):
         self.name_edits.append(name); self.status_boxes.append(status); self.t0_edits.append(t0)
         self.month_spins.append(months); self.term_edits.append(term); self.note_edits.append(note); self.acc_date_edits.append(acc)
 
-        grid.addWidget(self._form_label("Kabul Adı"), 0, 0)
+        grid.addWidget(self._form_label("Teslimat Adı"), 0, 0)
         grid.addWidget(name, 1, 0)
         grid.addWidget(self._form_label("Durum"), 0, 1)
         grid.addWidget(status, 1, 1)
         delivery_user_combo = self._build_delivery_user_combo()
 
-        grid.addWidget(self._form_label("Kabul Tarihi"), 2, 0)
+        grid.addWidget(self._form_label("Gerçek Teslimat Tarihi"), 2, 0)
         grid.addWidget(acc_wrap, 3, 0)
         grid.addWidget(self._form_label("Not"), 2, 1)
         grid.addWidget(note, 3, 1)
@@ -403,7 +404,7 @@ class AutoAcceptDialog(QDialog):
 
     def update_nav_state(self):
         self.stack.setCurrentIndex(self.current_index)
-        self.progress_label.setText(f"Kabul {self.current_index + 1} / {self.accept_count}")
+        self.progress_label.setText(f"Teslimat {self.current_index + 1} / {self.accept_count}")
         self.prev_btn.setEnabled(self.current_index > 0)
         self.next_btn.setEnabled(self.current_index < self.accept_count - 1)
 
@@ -439,15 +440,20 @@ class AutoAcceptDialog(QDialog):
 
     def validate_accept(self, i: int) -> bool:
         if not self.name_edits[i].text().strip():
-            QMessageBox.warning(self, "Eksik", "Kabul adı girin.")
+            QMessageBox.warning(self, "Eksik", "Teslimat adı girin.")
             return False
         acc_text = self.acc_date_edits[i].text().strip()
-        acc_date = parse_iso_date(acc_text) if acc_text else None
-        if acc_text and not acc_date:
-            QMessageBox.warning(self, "Tarih hatası", "Kabul Tarihi yyyy-aa-gg formatında olmalı.")
+        ok, message = validate_flexible_date(acc_text, allow_empty=True)
+        if not ok:
+            QMessageBox.warning(self, "Tarih hatası", f"Gerçek Teslimat Tarihi: {message}")
+            return False
+        acc_date = parse_flexible_date(acc_text)
+        delivered_status = self._is_delivered_status(self.status_boxes[i].currentText())
+        if delivered_status and acc_text and not acc_date:
+            QMessageBox.warning(self, "Tarih hatası", "Teslim Edildi durumunda Gerçek Teslimat Tarihi kesin YYYY-MM-DD olmalı.")
             return False
         if acc_date and acc_date > date.today():
-            QMessageBox.warning(self, "Tarih hatası", "Kabul Tarihi bugünden ileri olamaz.")
+            QMessageBox.warning(self, "Tarih hatası", "Gerçek Teslimat Tarihi bugünden ileri olamaz.")
             return False
         tbl = self.tables[i]
         active_planned = False
@@ -459,16 +465,15 @@ class AutoAcceptDialog(QDialog):
                 QMessageBox.warning(self, "Hata", f"{comp}: teslim edilen teslim edilecekten büyük olamaz.")
                 return False
         remaining_components = self._accept_remaining_components(i)
-        delivered_status = self._is_delivered_status(self.status_boxes[i].currentText())
         if delivered_status:
             if not acc_text:
-                QMessageBox.warning(self, "Kabul Tarihi Gerekli", "Durum 'Teslim Edildi' olduğunda Kabul Tarihi zorunludur.")
+                QMessageBox.warning(self, "Gerçek Teslimat Tarihi Gerekli", "Durum 'Teslim Edildi' olduğunda Gerçek Teslimat Tarihi zorunludur.")
                 return False
             if remaining_components:
                 QMessageBox.warning(
                     self,
                     "Teslim Edilen Eksik",
-                    "Durum 'Teslim Edildi' olduğunda bu kabuldeki tüm bileşenlerin kalan değeri 0 olmalıdır.\n\n"
+                    "Durum 'Teslim Edildi' olduğunda bu teslimattaki tüm bileşenlerin kalan değeri 0 olmalıdır.\n\n"
                     "Eksik kalan bileşenler:\n• " + "\n• ".join(remaining_components),
                 )
                 return False
@@ -476,7 +481,7 @@ class AutoAcceptDialog(QDialog):
             QMessageBox.warning(
                 self,
                 "Durum Uyumsuz",
-                "Bu kabulde tüm bileşenlerin kalanı 0. Kaydetmeden önce Durum alanını 'Teslim Edildi' yapın.",
+                "Bu teslimatta tüm bileşenlerin kalanı 0. Kaydetmeden önce Durum alanını 'Teslim Edildi' yapın.",
             )
             return False
         return True
@@ -653,7 +658,7 @@ class AutoAcceptDialog(QDialog):
             QMessageBox.warning(
                 self,
                 "Atanmayan bileşen var",
-                "Kabulleri oluşturmadan önce aşağıdaki bileşenleri kabullere dağıtın:\n\n" + "\n".join(missing),
+                "Teslimatları oluşturmadan önce aşağıdaki bileşenleri teslimatlara dağıtın:\n\n" + "\n".join(missing),
             )
             self.refresh_unassigned_panel()
             return
@@ -673,7 +678,7 @@ class AutoAcceptDialog(QDialog):
             self.result_deliveries.append(DeliveryInfo(
                 name=self.name_edits[i].text().strip(),
                 status=self.status_boxes[i].currentText(),
-                acceptance_date=iso_or_blank(self.acc_date_edits[i].text().strip()),
+                acceptance_date=flexible_or_blank(self.acc_date_edits[i].text().strip()),
                 note=self.note_edits[i].text().strip(),
                 planned=planned,
                 delivered=delivered,
@@ -695,7 +700,7 @@ def open_auto_accept_dialog(work_window):
     if not any(as_number(v) > 0 for v in sys_info.components.values()):
         QMessageBox.warning(work_window, "Adet yok", "Önce Bileşen Özeti tablosunda sözleşme adetlerini girin.")
         return
-    count, ok = QInputDialog.getInt(work_window, "Otomatik Kabul", "Kaç kabule bölmek istersiniz?", 2, 1, 100, 1)
+    count, ok = QInputDialog.getInt(work_window, "Otomatik Teslimat", "Kaç teslimata bölmek istersiniz?", 2, 1, 100, 1)
     if not ok:
         return
     existing = work_window.deliveries.get(sys_info.name, [])

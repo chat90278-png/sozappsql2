@@ -159,7 +159,7 @@ class CalendarDataWorker(QObject):
                 system_events.append({
                     "row": int(r["contract_row"]),
                     "platform": str(r["platform"] or ""),
-                    "no": no, "type": "Teslim/Kabul",
+                    "no": no, "type": "Teslimat",
                     "system_label": sname,
                     "title": label,
                     "status": str(r["status"] or ""),
@@ -250,7 +250,7 @@ def _parse_date(text: str) -> Optional[date]:
 def _effective_date(item: dict) -> Optional[date]:
     """
     Sistem kaydı  → completion_date (termin)
-    Kabul kaydı   → acceptance_date > planned_acceptance_date > None
+    Teslimat kaydı   → acceptance_date > planned_acceptance_date > None
     """
     ctype = str(item.get("type") or "").lower()
     if "sistem" in ctype:
@@ -263,7 +263,7 @@ def _effective_date(item: dict) -> Optional[date]:
 
 def _classify(item: dict, eff: date, today: date) -> str:
     s = str(item.get("status") or "").lower()
-    # Gerçek kabul tarihi varsa → tamamlandı
+    # Gerçek teslimat tarihi varsa → tamamlandı
     if item.get("acceptance_date") or "tamam" in s or "teslim" in s:
         return "tamamlandi"
     # planned_acceptance_date kullanılıyorsa normal sınıflandırma
@@ -322,7 +322,7 @@ def _worst_cls(classes):
 def _date_label(ev: dict) -> str:
     """Tarihin ne olduğunu etiketle."""
     if ev.get("acceptance_date"):
-        return "Kabul"
+        return "Teslimat"
     if ev.get("planned_acceptance_date") and "sistem" not in str(ev.get("type","")).lower():
         return "Planlanan"
     return "Termin"
@@ -348,10 +348,10 @@ def _date_display(ev: dict) -> tuple:
             if pd:
                 diff = (d - pd).days
                 if diff < 0:
-                    return ("Kabul ✓", f"{ds} ({abs(diff)}g erken)", "#047857")
+                    return ("Teslimat ✓", f"{ds} ({abs(diff)}g erken)", "#047857")
                 elif diff > 0:
-                    return ("Kabul ⚠", f"{ds} ({diff}g geç)", "#854f0b")
-        return ("Kabul", ds, "#047857")
+                    return ("Teslimat ⚠", f"{ds} ({diff}g geç)", "#854f0b")
+        return ("Teslimat", ds, "#047857")
     if plan:
         d = _parse_date(plan)
         return ("Planlanan", d.strftime("%d.%m.%Y") if d else plan, "#185fa5")
@@ -1532,7 +1532,7 @@ class ContractCalendarWindow(QDialog):
         yr_title = QVBoxLayout()
         yr_title.setSpacing(0)
         yr_title.setContentsMargins(0, 0, 0, 0)
-        kicker = QLabel("KY-STS / TERMİN & KABUL TAKVİMİ")
+        kicker = QLabel("KY-STS / TESLİMAT TAKVİMİ")
         kicker.setStyleSheet(
             "color:#6b7280; background:transparent; font-size:10px; font-weight:900;"
             "letter-spacing:.13em;"

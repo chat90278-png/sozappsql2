@@ -13,7 +13,7 @@ def refresh_delivery_table(self):
         self.pinned_delivery.clearContents()
         self.del_table.setRowCount(0)
         return
-    headers = ["", "Kabul Adı", "Durum", "Plan. Kabul", "Gerçek Kabul", "Teslim Kullanıcısı", "Not"]
+    headers = ["", "Teslimat Adı", "Durum", "Plan. Teslimat", "Gerçek Teslimat", "Teslim Kullanıcısı", "Not"]
     self.del_table.clear()
     self.del_table.setColumnCount(len(headers))
     self.del_table.setHorizontalHeaderLabels(headers)
@@ -73,7 +73,7 @@ def delivery_detail_widget(self, d, comps, idx: int):
     footer = QFrame(); footer.setObjectName("detailFooter")
     frow = QHBoxLayout(footer); frow.setContentsMargins(0, 8, 0, 0); frow.setSpacing(8)
     frow.addStretch()
-    edit = QPushButton("✎ Kabulü Düzenle")
+    edit = QPushButton("✎ Teslimatı Düzenle")
     edit.clicked.connect(lambda _=False, i=idx: self.edit_delivery(i))
     frow.addWidget(edit)
     lay.addWidget(footer, 0)
@@ -189,7 +189,7 @@ def add_delivery(self):
     planned_assigned = {comp: sum(self._as_number(d.planned.get(comp, 0)) for d in existing_deliveries) for comp in comp_keys}
     dlg = self._DeliveryDialog(
         sys_info,
-        f"Kabul {len(existing_deliveries) + 1}",
+        f"Teslimat {len(existing_deliveries) + 1}",
         self,
         component_keys=comp_keys,
         planned_assigned=planned_assigned,

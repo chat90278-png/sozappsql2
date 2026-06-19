@@ -17,7 +17,7 @@ SOURCE_HEADERS = [
     "Seviye", "Parça No", "Parça", "Sözleşme Adeti", "Teslim Edilen", "Kalan", "Konfigürasyon Tipi", "Opsiyon / Not", "Durum",
 ]
 
-APP_STATUS_VALUES = ["Eksik", "Gecikti", "Kabul Edildi", "Planlandı", "Teslim Edildi"]
+APP_STATUS_VALUES = ["Eksik", "Gecikti", "Teslim Edildi", "Planlandı", "Teslim Edildi"]
 
 ALLOWED_ENTITY_TYPES = {"contract", "contracts", "delivery", "deliveries", "acceptance", "term", "calendar"}
 ALLOWED_ACTION_KEYWORDS = {"create", "created", "update", "updated", "delete", "deleted", "delivery", "contract", "acceptance", "teslim", "sözleşme", "sozlesme", "termin", "takvim"}
@@ -41,7 +41,7 @@ CONTENT_FIELDS = {
 }
 FIELD_LABELS = {
     "planned_acceptance_date": "Tahmini Teslimat Tarihi",
-    "acceptance_date": "Gerçek Teslim/Kabul Tarihi",
+    "acceptance_date": "Gerçek Teslim/Gerçek Teslimat",
     "delivery_user_id": "Teslim Kullanıcısı",
     "planned": "Sözleşme Adeti",
     "delivered": "Teslim Edilen Miktar",

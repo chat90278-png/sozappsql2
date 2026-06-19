@@ -8,7 +8,7 @@ BASE_HEADERS = [
     "Sözleşme No",
     "Sözleşme Türü",
     "Sistem Adı",
-    "Kabul Adı",
+    "Teslimat Adı",
     "Kullanıcı",
     "Yİ/YD",
     "Durum",
@@ -16,7 +16,7 @@ BASE_HEADERS = [
     "T0 Tarihi",
     "T0 Ay",
     "Termin Tarihi",
-    "Kabul Tarihi",
+    "Gerçek Teslimat",
     "Etiketler",
     "Not",
 ]
@@ -135,7 +135,7 @@ def _write_summary_sheet(wb, conn, db, platforms: list[str], all_platforms: list
     summary.append(['Platform sayısı', len(platforms) if platforms else len(all_platforms)])
     summary.append(['Sözleşme sayısı', c_count])
     summary.append(['Sistem sayısı', s_count])
-    summary.append(['Kabul/Teslimat sayısı', d_count])
+    summary.append(['Teslimat sayısı', d_count])
     summary.append(['Bileşen sayısı', comp_count])
     summary.append(['Log sayısı', l_count])
     summary.append([])
