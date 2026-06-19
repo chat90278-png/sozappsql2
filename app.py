@@ -2579,15 +2579,15 @@ class PlatformTabsWidget(QWidget):
 
     activePlatformChanged = Signal(int)
 
-    DEFAULT_RAIL_HEIGHT = 30
+    DEFAULT_RAIL_HEIGHT = 38
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._platforms: List[dict] = []
         self._active = 0
         self._content_width = 76
-        self._min_scroll_width = 260
-        self._max_width = 340
+        self._min_scroll_width = 300
+        self._max_width = 420
         self._buttons: Dict[int, QPushButton] = {}
         self._rail_height = self.DEFAULT_RAIL_HEIGHT
         self.setFixedHeight(self._rail_height)
@@ -2602,7 +2602,7 @@ class PlatformTabsWidget(QWidget):
         self._rail.setFixedHeight(self._rail_height)
         self._rail.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         rail_lay = QHBoxLayout(self._rail)
-        rail_lay.setContentsMargins(3, 1, 3, 1)
+        rail_lay.setContentsMargins(5, 4, 5, 4)
         rail_lay.setSpacing(0)
 
         self._scroll = QScrollArea(self._rail)
@@ -2623,8 +2623,8 @@ class PlatformTabsWidget(QWidget):
         self._host.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         self._host.setFixedHeight(self._rail_height)
         self._lay = QHBoxLayout(self._host)
-        self._lay.setContentsMargins(2, 1, 2, 1)
-        self._lay.setSpacing(6)
+        self._lay.setContentsMargins(3, 2, 3, 2)
+        self._lay.setSpacing(8)
         self._lay.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         self._scroll.setWidget(self._host)
         self._apply_rail_style()
@@ -2632,9 +2632,9 @@ class PlatformTabsWidget(QWidget):
     def _apply_rail_style(self):
         self._rail.setStyleSheet("""
             QFrame#PlatformTabRail {
-                background: rgba(7, 28, 58, 0.45);
-                border: 1px solid rgba(80, 140, 210, 0.38);
-                border-radius: 14px;
+                background: rgba(5, 18, 43, 0.62);
+                border: 1px solid rgba(96, 165, 250, 0.34);
+                border-radius: 19px;
                 padding: 0px;
                 margin: 0px;
             }
@@ -2685,9 +2685,9 @@ class PlatformTabsWidget(QWidget):
         metrics = QFontMetrics(self.font())
         total_width = 0
         single = len(self._platforms) <= 1
-        margins = (2, 1, 2, 1)
+        margins = (3, 2, 3, 2)
         self._lay.setContentsMargins(*margins)
-        self._lay.setSpacing(6)
+        self._lay.setSpacing(8)
         for platform in self._platforms:
             name = str(platform.get("platform_name") or "")
             pid = int(platform.get("platform_id") or 0)
@@ -2697,41 +2697,48 @@ class PlatformTabsWidget(QWidget):
             btn.setCheckable(True)
             btn.setCursor(Qt.PointingHandCursor)
             # Height is derived from the polished button sizeHint; do not force it here.
-            chip_width = min(150, max(74 if single else 70, metrics.horizontalAdvance(name) + (32 if single else 30)))
+            chip_width = min(168, max(92 if single else 86, metrics.horizontalAdvance(name) + (44 if single else 40)))
             btn.setFixedWidth(chip_width)
+            btn.setMinimumHeight(28)
             btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
             btn.setToolTip(name)
             btn.setGraphicsEffect(None)
             btn.setStyleSheet("""
                 QPushButton#PlatformTabButton {
-                    background: transparent;
-                    border: 1px solid transparent;
-                    color: rgba(235, 245, 255, 0.88);
+                    background: rgba(9, 31, 68, 0.72);
+                    border: 1px solid rgba(96, 165, 250, 0.30);
+                    color: rgba(226, 239, 255, 0.88);
                     font-weight: 900;
                     font-size: 11px;
-                    letter-spacing: 0.35px;
-                    padding: 2px 12px;
-                    border-radius: 12px;
+                    letter-spacing: 0.45px;
+                    padding: 4px 16px;
+                    border-radius: 14px;
                     text-align: center;
                 }
                 QPushButton#PlatformTabButton[active="true"] {
-                    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                        stop:0 #1d58ca, stop:0.55 #2f7dff, stop:1 #0b48a8);
-                    border: 1px solid rgba(150, 211, 255, 0.90);
-                    color: white;
+                    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                        stop:0 rgba(37, 99, 235, 235),
+                        stop:0.55 rgba(59, 130, 246, 245),
+                        stop:1 rgba(14, 74, 160, 238));
+                    border: 1px solid rgba(191, 226, 255, 0.98);
+                    color: #FFFFFF;
                 }
                 QPushButton#PlatformTabButton[active="false"] {
-                    background: transparent;
-                    border: 1px solid transparent;
-                    color: rgba(235, 245, 255, 0.86);
+                    background: rgba(8, 30, 64, 0.62);
+                    border: 1px solid rgba(96, 165, 250, 0.26);
+                    color: rgba(219, 234, 254, 0.88);
                 }
                 QPushButton#PlatformTabButton[active="false"]:hover {
-                    background: rgba(45, 123, 255, 0.16);
-                    border-color: rgba(125, 190, 255, 0.38);
-                    color: white;
+                    background: rgba(30, 83, 170, 0.42);
+                    border-color: rgba(147, 197, 253, 0.60);
+                    color: #FFFFFF;
                 }
                 QPushButton#PlatformTabButton[active="true"]:hover {
-                    border-color: rgba(174, 218, 255, 0.92);
+                    border-color: rgba(224, 242, 254, 1.0);
+                    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                        stop:0 rgba(37, 99, 235, 245),
+                        stop:0.55 rgba(59, 130, 246, 255),
+                        stop:1 rgba(14, 74, 160, 245));
                 }
             """)
             btn.clicked.connect(lambda _=False, platform_id=pid: self._set_active(platform_id))
@@ -2768,6 +2775,14 @@ class PlatformTabsWidget(QWidget):
             active = bool(pid) and int(pid) == active_id
             btn.setProperty("active", "true" if active else "false")
             btn.setChecked(active)
+            if active:
+                glow = QGraphicsDropShadowEffect(btn)
+                glow.setBlurRadius(18)
+                glow.setOffset(0, 0)
+                glow.setColor(QColor(56, 189, 248, 120))
+                btn.setGraphicsEffect(glow)
+            else:
+                btn.setGraphicsEffect(None)
             btn.style().unpolish(btn)
             btn.style().polish(btn)
             btn.update()
@@ -6102,7 +6117,34 @@ class DeliveryDialog(StyledDialog):
         self.qty_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Fixed)
         self.qty_table.setColumnWidth(3, 110)
         self.qty_table.setMinimumHeight(200)
-        self.qty_table.setStyleSheet(UnitTrackingSidePanel._modern_scrollbar_qss("QTableWidget"))
+        self.qty_table.setStyleSheet(
+            UnitTrackingSidePanel._modern_scrollbar_qss("QTableWidget")
+            + """
+            QTableWidget#qtyTable {
+                background:#ffffff;
+                alternate-background-color:#ffffff;
+                gridline-color:#d8e2ed;
+                selection-background-color:#dbeafe;
+                selection-color:#0f172a;
+            }
+            QTableWidget#qtyTable::item {
+                background:#ffffff;
+                color:#0f172a;
+                padding:4px 6px;
+            }
+            QTableWidget#qtyTable::item:hover {
+                background:#f8fbff;
+            }
+            QTableWidget#qtyTable::item:selected {
+                background:#dbeafe;
+                color:#0f172a;
+            }
+            QTableWidget#qtyTable QWidget {
+                background:#ffffff;
+            }
+            """
+        )
+        self.qty_table.viewport().setStyleSheet("background:#ffffff;")
         self.qty_table.setItemDelegateForColumn(1, CompactNumberDelegate(self.qty_table))
         self.qty_table.setItemDelegateForColumn(2, CompactNumberDelegate(self.qty_table))
         self.component_search = QLineEdit()
