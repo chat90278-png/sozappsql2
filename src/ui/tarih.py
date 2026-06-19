@@ -1408,6 +1408,9 @@ class _MonthCard(_ClickFrame):
 # Ana Pencere
 # ─────────────────────────────────────────────────────────────────────────────
 class ContractCalendarWindow(QDialog):
+    _data_loaded_main = Signal(list, list, int)
+    _data_failed_main = Signal(str)
+
     def resizeEvent(self, event):
         super().resizeEvent(event)
         if hasattr(self, '_active_detail') and self._active_detail:
@@ -1479,6 +1482,8 @@ class ContractCalendarWindow(QDialog):
         self._cal_worker = None
         # year -> (contract_events, system_events) cache
         self._event_cache: Dict[int, Tuple[list, list]] = {}
+        self._data_loaded_main.connect(self._on_data_loaded)
+        self._data_failed_main.connect(self._on_data_failed)
         self._build()
         self.refresh_data(rebuild_index=False)
 
@@ -1716,8 +1721,13 @@ class ContractCalendarWindow(QDialog):
         worker.moveToThread(thread)
 
         thread.started.connect(worker.run)
-        worker.finished.connect(lambda c, s, y=year: self._on_data_loaded(c, s, y))
-        worker.failed.connect(self._on_data_failed)
+        # Do not connect the worker signal directly to UI rendering code via a
+        # Python lambda. In PySide, a bare callable has no QObject receiver
+        # affinity, so it can run in the worker thread and then create/parent
+        # widgets from there. Relay through signals owned by this dialog; their
+        # slots are delivered on the dialog/main GUI thread.
+        worker.finished.connect(lambda c, s, y=year: self._data_loaded_main.emit(c, s, y))
+        worker.failed.connect(lambda err: self._data_failed_main.emit(err))
         worker.finished.connect(thread.quit)
         worker.failed.connect(thread.quit)
         thread.finished.connect(worker.deleteLater)
@@ -1732,17 +1742,30 @@ class ContractCalendarWindow(QDialog):
         self._cal_thread = None
         self._cal_worker = None
 
+    def _is_gui_thread(self) -> bool:
+        app = QApplication.instance()
+        return bool(app and QThread.currentThread() == app.thread())
+
     def _on_data_loaded(self, contract_events: list, system_events: list, year: int):
+        if not self._is_gui_thread():
+            self._data_loaded_main.emit(contract_events, system_events, year)
+            return
         self._event_cache[year] = (list(contract_events), list(system_events))
         self._apply_events(contract_events, system_events)
 
     def _on_data_failed(self, error_text: str):
+        if not self._is_gui_thread():
+            self._data_failed_main.emit(error_text)
+            return
         _log.error("Takvim veri yuklenemedi: %s", error_text)
         self._btn_prev.setEnabled(True)
         self._btn_next.setEnabled(True)
         self._clear_cal_refs()
 
     def _apply_events(self, contract_events: list, system_events: list):
+        if not self._is_gui_thread():
+            self._data_loaded_main.emit(contract_events, system_events, self.current_year)
+            return
         self._all_events = (
             self._annotate_events(contract_events)
             + self._annotate_events(system_events)
@@ -1767,6 +1790,9 @@ class ContractCalendarWindow(QDialog):
 
     # ── Render ────────────────────────────────────────────────────────────
     def _render_year(self):
+        if not self._is_gui_thread():
+            _log.error("Takvim render isteği GUI thread dışında engellendi.")
+            return
         while self._year_grid.count():
             item = self._year_grid.takeAt(0)
             if item.widget():
