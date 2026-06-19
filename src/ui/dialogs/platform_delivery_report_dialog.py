@@ -4,7 +4,7 @@ from collections import OrderedDict
 from pathlib import Path
 from typing import Optional
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QEvent
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QComboBox, QDialog, QFileDialog, QFrame, QHBoxLayout, QLabel,
@@ -169,7 +169,7 @@ class _UserFilterDropdown(QFrame):
                 font-size: 11px;
                 font-weight: 800;
             }
-            QPushButton#userFilterClear {
+            QPushButton#userFilterClear, QPushButton#userFilterSelectAll {
                 background: transparent;
                 border: none;
                 color: #2563eb;
@@ -177,7 +177,7 @@ class _UserFilterDropdown(QFrame):
                 font-size: 11px;
                 font-weight: 900;
             }
-            QPushButton#userFilterClear:hover { color: #1d4ed8; }
+            QPushButton#userFilterClear:hover, QPushButton#userFilterSelectAll:hover { color: #1d4ed8; }
         """)
 
         root = QVBoxLayout(self)
@@ -222,6 +222,11 @@ class _UserFilterDropdown(QFrame):
         self._count.setObjectName("userFilterFooter")
         fr.addWidget(self._count)
         fr.addStretch(1)
+        select_all = QPushButton("Tümünü Seç")
+        select_all.setObjectName("userFilterSelectAll")
+        select_all.setCursor(Qt.PointingHandCursor)
+        select_all.clicked.connect(self._select_all)
+        fr.addWidget(select_all)
         clear = QPushButton("Temizle")
         clear.setObjectName("userFilterClear")
         clear.setCursor(Qt.PointingHandCursor)
@@ -255,6 +260,14 @@ class _UserFilterDropdown(QFrame):
             self._selected.append(uid)
         elif not checked:
             self._selected = [x for x in self._selected if x != uid]
+        self._update_count()
+        self.selectionChanged.emit(list(self._selected))
+
+    def _select_all(self):
+        self._selected = [uid for _label, uid in self._items]
+        selected_set = set(self._selected)
+        for row in self._rows:
+            row.set_checked(getattr(row, "_user_id", 0) in selected_set)
         self._update_count()
         self.selectionChanged.emit(list(self._selected))
 
@@ -368,6 +381,10 @@ class UserMultiSelectWidget(QWidget):
             text = self._placeholder
             self.setProperty("placeholder", True)
             self._text.setProperty("placeholder", True)
+        elif len(labels) == len(self._items) and len(self._items) > 1:
+            text = "Tümü"
+            self.setProperty("placeholder", False)
+            self._text.setProperty("placeholder", False)
         elif len(labels) == 1:
             text = labels[0]
             self.setProperty("placeholder", False)
@@ -416,7 +433,7 @@ class PlatformTeslimatDurumuReportDialog(QDialog):
         self.summary_table = None
         self._dirty = False
         self._refreshing = False
-        self.setWindowTitle("Platform Teslimat Durumu")
+        self.setWindowTitle("Platform Teslimat Özeti")
 
         # Give the window normal min/max/close controls and let it actually
         # be resized by the user instead of behaving like a fixed dialog.
@@ -452,17 +469,13 @@ class PlatformTeslimatDurumuReportDialog(QDialog):
 
         top = QHBoxLayout()
         top.setContentsMargins(18, 12, 18, 12)
-        self.title_label = QLabel("Platform Teslimat Durumu")
+        self.title_label = QLabel("Platform Teslimat Özeti")
         self.title_label.setObjectName("mainTitle")
         top.addWidget(self.title_label)
         self.badge = QLabel("Sayfa 1 / 1")
         self.badge.setObjectName("badge")
         top.addWidget(self.badge)
         top.addStretch()
-        b = QPushButton("Önizlemeyi Yenile")
-        b.setObjectName("reportSecondaryButton")
-        b.clicked.connect(self.refresh_preview)
-        top.addWidget(b)
         e = QPushButton("Excel Oluştur")
         e.setObjectName("reportSecondaryButton")
         e.clicked.connect(self.export_excel)
@@ -703,7 +716,7 @@ class PlatformTeslimatDurumuReportDialog(QDialog):
         self._clear_tabs()
         self.summary_table = None
         self.data = None
-        self.title_label.setText("Platform Teslimat Durumu")
+        self.title_label.setText("Platform Teslimat Özeti")
         self.badge.setText("Sayfa 0 / 0")
         self._update_stats(0, 0, 0)
 
@@ -751,13 +764,13 @@ class PlatformTeslimatDurumuReportDialog(QDialog):
         self._clear_stack()
         self.detail_tables.clear()
         self._clear_tabs()
-        self.title_label.setText(f"{self.data.platform} Teslimat Durumu")
+        self.title_label.setText(f"{self.data.platform} Teslimat Özeti")
         self.summary_table = self._summary_table()
-        self._add_page(self.summary_table, f"{self.data.platform} Teslimat Durumu")
+        self._add_page(self.summary_table, f"{self.data.platform} Teslimat Özeti")
         for key, lines in self.data.details.items():
             if lines:
                 self.detail_tables[key] = self._detail_table(lines)
-                self._add_page(self.detail_tables[key], f"{lines[0].user} Teslimat Durumu")
+                self._add_page(self.detail_tables[key], f"{lines[0].user} Teslimat Özeti")
 
         self._update_stats(
             self.stack.count(),
@@ -777,14 +790,21 @@ class PlatformTeslimatDurumuReportDialog(QDialog):
         t.setShowGrid(True)
         t.setGridStyle(Qt.SolidLine)
         t.verticalHeader().setDefaultSectionSize(SUMMARY_ROW_HEIGHT)
+        t._editable_columns = [3, 4]
         for i, r in enumerate(self.data.summary):
-            item = QTableWidgetItem(f"{r.user} ↗")
-            item.setData(Qt.UserRole, (r.user_id, r.contract_id))
-            item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
-            item.setBackground(QColor(COLOR_SUMMARY_ROW))
-            item.setForeground(QColor(COLOR_TEXT))
-            item.setTextAlignment(Qt.AlignCenter)
-            t.setItem(i, 0, item)
+            # Keep real QTableWidgetItem objects for selection/data, but paint
+            # the visible content with cell widgets so the summary row is
+            # consistently light-blue on every Qt/platform style.
+            nav_item = QTableWidgetItem(f"{r.user} ↗")
+            nav_item.setData(Qt.UserRole, (r.user_id, r.contract_id))
+            nav_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+            nav_item.setBackground(QColor(COLOR_SUMMARY_ROW))
+            t.setItem(i, 0, nav_item)
+            t.setCellWidget(i, 0, self._summary_display_cell(
+                f"{r.user} ↗", COLOR_SUMMARY_ROW,
+                on_click=lambda _event=None, row=i: self._set_page(row + 1) if row + 1 < self.stack.count() else None,
+            ))
+
             for c, v in [(1, r.contract), (2, r.delivery_date)]:
                 it = QTableWidgetItem(v)
                 it.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
@@ -792,18 +812,121 @@ class PlatformTeslimatDurumuReportDialog(QDialog):
                 it.setForeground(QColor(COLOR_TEXT))
                 it.setTextAlignment(Qt.AlignCenter)
                 t.setItem(i, c, it)
+                t.setCellWidget(i, c, self._summary_display_cell(str(v), COLOR_SUMMARY_ROW))
+
             cb = QComboBox()
             cb.addItems(STATUSES)
             cb.setCurrentText(r.status if r.status in STATUSES else r.status)
             cb.currentTextChanged.connect(self._mark_dirty)
-            t.setCellWidget(i, 3, self._inset_input(cb, COLOR_SUMMARY_ROW))
+            self._attach_cell_navigation(cb, t, i, 3)
+            t.setCellWidget(i, 3, self._inset_input(cb, COLOR_SUMMARY_ROW, compact=False))
+
             txt = QTextEdit(r.description)
             txt.setFixedHeight(52)
             txt.textChanged.connect(self._mark_dirty)
-            t.setCellWidget(i, 4, self._inset_input(txt, COLOR_SUMMARY_ROW))
+            self._attach_cell_navigation(txt, t, i, 4)
+            t.setCellWidget(i, 4, self._inset_input(txt, COLOR_SUMMARY_ROW, compact=False))
             t.setRowHeight(i, SUMMARY_ROW_HEIGHT)
         t.cellClicked.connect(lambda row, col: self._set_page(row + 1) if col == 0 and row + 1 < self.stack.count() else None)
         return t
+
+    @staticmethod
+    def _summary_display_cell(text: str, bg_hex: str, on_click=None) -> QWidget:
+        """Readonly summary cell with guaranteed light-blue row background."""
+        cell = QFrame()
+        cell.setObjectName("summaryDisplayCell")
+        cell.setStyleSheet(f"""
+            QFrame#summaryDisplayCell {{
+                background: {bg_hex};
+                border: none;
+                margin: 0px;
+                padding: 0px;
+            }}
+            QFrame#summaryDisplayCell QLabel {{
+                background: transparent;
+                border: none;
+                color: {COLOR_TEXT};
+                font-weight: 700;
+            }}
+        """)
+        lay = QVBoxLayout(cell)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+        label = QLabel(str(text or ""))
+        label.setAlignment(Qt.AlignCenter)
+        lay.addWidget(label, 1)
+        if on_click is not None:
+            cell.setCursor(Qt.PointingHandCursor)
+            label.setCursor(Qt.PointingHandCursor)
+            cell.mousePressEvent = on_click
+            label.mousePressEvent = on_click
+        return cell
+
+    def _attach_cell_navigation(self, widget: QWidget, table: QTableWidget, row: int, col: int) -> None:
+        """Allow spreadsheet-like arrow-key movement between editable cells."""
+        try:
+            widget._report_nav_table = table
+            widget._report_nav_row = int(row)
+            widget._report_nav_col = int(col)
+            widget.installEventFilter(self)
+            # QTextEdit may deliver key events through its viewport on some styles.
+            viewport = widget.viewport() if hasattr(widget, "viewport") else None
+            if viewport is not None:
+                viewport._report_nav_table = table
+                viewport._report_nav_row = int(row)
+                viewport._report_nav_col = int(col)
+                viewport._report_nav_owner = widget
+                viewport.installEventFilter(self)
+        except Exception:
+            pass
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.KeyPress and hasattr(obj, "_report_nav_table"):
+            key = event.key()
+            if key in (Qt.Key_Up, Qt.Key_Down, Qt.Key_Left, Qt.Key_Right):
+                owner = getattr(obj, "_report_nav_owner", obj)
+                if isinstance(owner, QComboBox):
+                    try:
+                        if owner.view().isVisible():
+                            return False
+                    except Exception:
+                        pass
+                table = getattr(obj, "_report_nav_table", None)
+                row = int(getattr(obj, "_report_nav_row", 0))
+                col = int(getattr(obj, "_report_nav_col", 0))
+                if table is not None and self._move_to_editable_cell(table, row, col, key):
+                    event.accept()
+                    return True
+        return super().eventFilter(obj, event)
+
+    def _move_to_editable_cell(self, table: QTableWidget, row: int, col: int, key: int) -> bool:
+        editable_cols = list(getattr(table, "_editable_columns", []) or [])
+        if not editable_cols:
+            editable_cols = [c for c in range(table.columnCount()) if table.cellWidget(row, c) is not None]
+        if col not in editable_cols:
+            editable_cols.append(col)
+            editable_cols = sorted(set(editable_cols))
+        target_row, target_col = int(row), int(col)
+        if key == Qt.Key_Up:
+            target_row = max(0, row - 1)
+        elif key == Qt.Key_Down:
+            target_row = min(table.rowCount() - 1, row + 1)
+        elif key in (Qt.Key_Left, Qt.Key_Right):
+            idx = editable_cols.index(col)
+            if key == Qt.Key_Left:
+                target_col = editable_cols[max(0, idx - 1)]
+            else:
+                target_col = editable_cols[min(len(editable_cols) - 1, idx + 1)]
+        if target_row == row and target_col == col:
+            return False
+        target = self._unwrap_input(table.cellWidget(target_row, target_col))
+        if target is None:
+            return False
+        table.setCurrentCell(target_row, target_col)
+        target.setFocus(Qt.TabFocusReason)
+        if isinstance(target, QLineEdit):
+            target.selectAll()
+        return True
 
     def _detail_table(self, lines):
         """Build the detail page table.
@@ -824,6 +947,7 @@ class PlatformTeslimatDurumuReportDialog(QDialog):
         t.setShowGrid(True)
         t.setGridStyle(Qt.SolidLine)
         t.verticalHeader().setDefaultSectionSize(DETAIL_ROW_HEIGHT)
+        t._editable_columns = [3, 4, 5]
 
         comp_colors: dict[str, str] = {}
 
@@ -873,26 +997,24 @@ class PlatformTeslimatDurumuReportDialog(QDialog):
                     it.setBackground(QColor(bg))
                     t.setItem(i, c, it)
 
-            serial_item = QTableWidgetItem(line.serial_no)
-            serial_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
-            serial_item.setBackground(QColor(bg))
-            serial_item.setForeground(QColor(COLOR_TEXT))
-            serial_item.setTextAlignment(Qt.AlignCenter)
-            t.setItem(i, 2, serial_item)
+            t.setCellWidget(i, 2, self._readonly_display_cell(line.serial_no, bg, bold=False, wrap=False))
 
             location_combo = QComboBox()
             location_combo.addItems([""] + self.data.locations)
             location_combo.setCurrentText(line.internal_location)
             location_combo.currentTextChanged.connect(self._mark_dirty)
-            t.setCellWidget(i, 3, self._inset_input(location_combo, bg))
+            self._attach_cell_navigation(location_combo, t, i, 3)
+            t.setCellWidget(i, 3, self._inset_input(location_combo, bg, compact=True))
 
             note_edit = QLineEdit(line.note)
             note_edit.textChanged.connect(self._mark_dirty)
-            t.setCellWidget(i, 4, self._inset_input(note_edit, bg))
+            self._attach_cell_navigation(note_edit, t, i, 4)
+            t.setCellWidget(i, 4, self._inset_input(note_edit, bg, compact=True))
 
             delivery_loc_edit = QLineEdit(line.delivery_location)
             delivery_loc_edit.textChanged.connect(self._mark_dirty)
-            t.setCellWidget(i, 5, self._inset_input(delivery_loc_edit, bg))
+            self._attach_cell_navigation(delivery_loc_edit, t, i, 5)
+            t.setCellWidget(i, 5, self._inset_input(delivery_loc_edit, bg, compact=True))
 
             t.setRowHeight(i, DETAIL_ROW_HEIGHT)
 
@@ -901,30 +1023,37 @@ class PlatformTeslimatDurumuReportDialog(QDialog):
 
     @staticmethod
     def _merged_display_cell(text: str, bg_hex: str) -> QWidget:
+        return PlatformTeslimatDurumuReportDialog._readonly_display_cell(text, bg_hex, bold=True, wrap=True)
+
+    @staticmethod
+    def _readonly_display_cell(text: str, bg_hex: str, bold: bool = False, wrap: bool = False) -> QWidget:
         cell = QFrame()
-        cell.setObjectName("mergedDetailCell")
+        cell.setObjectName("readonlyDetailCell")
         cell.setStyleSheet(f"""
-            QFrame#mergedDetailCell {{
+            QFrame#readonlyDetailCell {{
                 background: {bg_hex};
-                border: 1px solid {COLOR_GRID_BORDER};
+                border: none;
+                margin: 0px;
+                padding: 0px;
             }}
-            QFrame#mergedDetailCell QLabel {{
+            QFrame#readonlyDetailCell QLabel {{
                 background: transparent;
                 border: none;
                 color: {COLOR_TEXT};
-                font-weight: 900;
+                font-weight: {'900' if bold else '700'};
             }}
         """)
         lay = QVBoxLayout(cell)
-        lay.setContentsMargins(6, 6, 6, 6)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
         label = QLabel(str(text or ""))
         label.setAlignment(Qt.AlignCenter)
-        label.setWordWrap(True)
+        label.setWordWrap(bool(wrap))
         lay.addWidget(label, 1)
         return cell
 
     @staticmethod
-    def _inset_input(input_widget: QWidget, bg_hex: str) -> QWidget:
+    def _inset_input(input_widget: QWidget, bg_hex: str, compact: bool = True) -> QWidget:
         """Wrap an input widget in a small colored-margin container.
 
         The container itself carries the row's group color and is set as
@@ -937,9 +1066,13 @@ class PlatformTeslimatDurumuReportDialog(QDialog):
         container = QWidget()
         container.setStyleSheet(f"background: {bg_hex}; border: none;")
         layout = QHBoxLayout(container)
-        layout.setContentsMargins(12, 8, 12, 8)
+        if compact:
+            layout.setContentsMargins(12, 7, 12, 7)
+            height_rule = "" if is_text_edit else "min-height: 26px; max-height: 26px;"
+        else:
+            layout.setContentsMargins(12, 8, 12, 8)
+            height_rule = "" if is_text_edit else "min-height: 30px; max-height: 30px;"
         layout.setSpacing(0)
-        height_rule = "" if is_text_edit else "min-height: 28px; max-height: 28px;"
         input_widget.setStyleSheet(f"""
             QComboBox, QLineEdit, QTextEdit {{
                 background: #ffffff;
@@ -1093,19 +1226,19 @@ class PlatformTeslimatDurumuReportDialog(QDialog):
         if show_message:
             if unassigned_count:
                 QMessageBox.information(
-                    self, "Platform Teslimat Durumu",
+                    self, "Platform Teslimat Özeti",
                     "Rapor kaydedildi.\n\n"
                     f"Not: Kullanıcısı tanımsız olan {unassigned_count} sayfadaki değişiklikler "
                     "kaydedilmedi (önizlemede görünmeye devam edecek). Bu satırların kaydedilebilmesi "
                     "için ilgili teslimata bir kullanıcı atanmalı.",
                 )
             else:
-                QMessageBox.information(self, "Platform Teslimat Durumu", "Rapor kaydedildi.")
+                QMessageBox.information(self, "Platform Teslimat Özeti", "Rapor kaydedildi.")
         self.refresh_preview()
 
     def save_report(self):
         if not self.data:
-            QMessageBox.warning(self, "Platform Teslimat Durumu", "Önce raporu önizleyin.")
+            QMessageBox.warning(self, "Platform Teslimat Özeti", "Önce raporu önizleyin.")
             return
         self._save_current(show_message=True)
 
@@ -1116,8 +1249,8 @@ class PlatformTeslimatDurumuReportDialog(QDialog):
         if self._dirty:
             self._save_current(show_message=False)
         path, _ = QFileDialog.getSaveFileName(
-            self, "Platform Teslimat Durumu Excel Kaydet",
-            f"{self.data.platform}_teslimat_durumu.xlsx", "Excel (*.xlsx)",
+            self, "Platform Teslimat Özeti Excel Kaydet",
+            f"{self.data.platform}_teslimat_ozeti.xlsx", "Excel (*.xlsx)",
         )
         if path:
             export_report_to_excel(
@@ -1130,7 +1263,7 @@ class PlatformTeslimatDurumuReportDialog(QDialog):
         if self._dirty:
             result = QMessageBox.question(
                 self, "Kaydedilmemiş değişiklikler",
-                "Platform Teslimat Durumu raporunda kaydedilmemiş değişiklikler var. Kaydetmeden çıkmak istiyor musunuz?",
+                "Platform Teslimat Özeti raporunda kaydedilmemiş değişiklikler var. Kaydetmeden çıkmak istiyor musunuz?",
                 QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
             )
             if result != QMessageBox.Yes:
@@ -1360,7 +1493,7 @@ QScrollArea#tabsScroll QScrollBar::handle:horizontal:hover {{
 }}
 QScrollArea#tabsScroll QScrollBar::add-line:horizontal,
 QScrollArea#tabsScroll QScrollBar::sub-line:horizontal {{
-    width: 0;
+    width: 1px;
     border: none;
     background: transparent;
 }}
@@ -1381,7 +1514,58 @@ QTableWidget {{
 }}
 QTableWidget::item {{
     border: 0;
-    padding: 4px;
+    padding: 0px;
+}}
+
+QScrollBar:vertical {{
+    background: #eef4fb;
+    border: none;
+    width: 10px;
+    margin: 2px;
+    border-radius: 5px;
+}}
+QScrollBar::handle:vertical {{
+    background: #9fb6d4;
+    min-height: 34px;
+    border-radius: 5px;
+}}
+QScrollBar::handle:vertical:hover {{
+    background: #6f8fb8;
+}}
+QScrollBar::add-line:vertical,
+QScrollBar::sub-line:vertical {{
+    height: 1px;
+    border: none;
+    background: transparent;
+}}
+QScrollBar::add-page:vertical,
+QScrollBar::sub-page:vertical {{
+    background: transparent;
+}}
+QScrollBar:horizontal {{
+    background: #eef4fb;
+    border: none;
+    height: 10px;
+    margin: 2px;
+    border-radius: 5px;
+}}
+QScrollBar::handle:horizontal {{
+    background: #9fb6d4;
+    min-width: 34px;
+    border-radius: 5px;
+}}
+QScrollBar::handle:horizontal:hover {{
+    background: #6f8fb8;
+}}
+QScrollBar::add-line:horizontal,
+QScrollBar::sub-line:horizontal {{
+    width: 1px;
+    border: none;
+    background: transparent;
+}}
+QScrollBar::add-page:horizontal,
+QScrollBar::sub-page:horizontal {{
+    background: transparent;
 }}
 QLabel#emptyState {{
     background: transparent;
