@@ -1664,6 +1664,19 @@ class DeliveryScheduleReportDialog(QDialog):
             border-radius:16px;
         }}
         QFrame#filterPanel {{ padding:4px; }}
+        QFrame#filterRow {{
+            background: transparent;
+            border: none;
+            margin: 0px;
+            padding: 0px;
+        }}
+        QFrame#filterRow QLabel,
+        QFrame#filterRow QLabel#fieldLabel {{
+            background: transparent;
+            background-color: transparent;
+            border: none;
+            margin: 0px;
+        }}
         QLabel#panelTitle {{ color:#002060; font-size:18px; font-weight:900; background:transparent; }}
         QLabel#mainTitle {{ color:#002060; font-size:22px; font-weight:900; background:transparent; }}
         QLabel#fieldLabel {{ color:#415a86; font-size:11px; font-weight:900; background:transparent; padding-top:8px; }}
