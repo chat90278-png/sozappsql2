@@ -682,12 +682,13 @@ CREATE TABLE IF NOT EXISTS activity_logs(id INTEGER PRIMARY KEY AUTOINCREMENT,cr
                 contract_id INTEGER NOT NULL,
                 component_id INTEGER NOT NULL,
                 serial_no TEXT DEFAULT '',
+                serial_key TEXT NOT NULL DEFAULT '',
                 internal_location TEXT DEFAULT '',
                 note TEXT DEFAULT '',
                 delivery_location TEXT DEFAULT '',
                 created_at TEXT,
                 updated_at TEXT,
-                UNIQUE(platform_id, user_id, contract_id, component_id, serial_no),
+                UNIQUE(platform_id, user_id, contract_id, component_id, serial_key),
                 FOREIGN KEY(platform_id) REFERENCES platforms(id) ON DELETE CASCADE,
                 FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
                 FOREIGN KEY(contract_id) REFERENCES contracts(id) ON DELETE CASCADE,
@@ -710,8 +711,26 @@ CREATE TABLE IF NOT EXISTS activity_logs(id INTEGER PRIMARY KEY AUTOINCREMENT,cr
                 "INSERT OR IGNORE INTO internal_locations(name,is_active,sort_order,created_at,updated_at) VALUES(?,?,?,?,?)",
                 (name, 1, order, ts, ts),
             )
+        if self._ensure_column("platform_delivery_report_lines", "serial_key", "TEXT NOT NULL DEFAULT ''"):
+            migrated.append("platform_delivery_report_lines.serial_key")
+        self.conn.execute("UPDATE platform_delivery_report_lines SET serial_key=COALESCE(NULLIF(TRIM(serial_key), ''), NULLIF(TRIM(serial_no), ''), 'TBD') WHERE serial_key IS NULL OR TRIM(serial_key)=''")
+        duplicate_groups = self.conn.execute("""
+            SELECT platform_id,user_id,contract_id,component_id,serial_key,COUNT(*) AS n
+            FROM platform_delivery_report_lines
+            GROUP BY platform_id,user_id,contract_id,component_id,serial_key
+            HAVING n > 1
+        """).fetchall()
+        for group in duplicate_groups:
+            rows = self.conn.execute("""
+                SELECT id FROM platform_delivery_report_lines
+                WHERE platform_id=? AND user_id=? AND contract_id=? AND component_id=? AND serial_key=?
+                ORDER BY id
+            """, (group[0], group[1], group[2], group[3], group[4])).fetchall()
+            for row in rows[1:]:
+                self.conn.execute("UPDATE platform_delivery_report_lines SET serial_key=? WHERE id=?", (f"{group[4]}#ROW-{row[0]}", row[0]))
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_pdr_summary_scope ON platform_delivery_report_summary(platform_id,user_id,contract_id)")
-        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_pdr_lines_scope ON platform_delivery_report_lines(platform_id,user_id,contract_id,component_id,serial_no)")
+        self.conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_pdr_lines_serial_key ON platform_delivery_report_lines(platform_id,user_id,contract_id,component_id,serial_key)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_pdr_lines_scope ON platform_delivery_report_lines(platform_id,user_id,contract_id,component_id,serial_key)")
         self.conn.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version','12')")
         self.conn.commit()
         return migrated

@@ -18,6 +18,8 @@ class PlatformTeslimatDurumuReportDialog(QDialog):
         self.data = None
         self.detail_tables = OrderedDict()
         self.summary_table = None
+        self._dirty = False
+        self._refreshing = False
         self.setWindowTitle("Platform Teslimat Durumu")
         self.resize(1500, 820)
         self._build_ui(); self._load_filters(); self.refresh_preview()
@@ -61,6 +63,11 @@ class PlatformTeslimatDurumuReportDialog(QDialog):
 
     def refresh_preview(self):
         if not self.store or self.platform_cb.count()==0: return
+        if self._dirty:
+            result = QMessageBox.question(self, "Kaydedilmemiş değişiklikler", "Önizleme yenilenirse kaydedilmemiş değişiklikler kaybolur. Devam edilsin mi?", QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if result != QMessageBox.Yes:
+                return
+        self._refreshing = True
         platform=self.platform_cb.currentText(); uid=self.user_cb.currentData(); cid=self.contract_cb.currentData()
         self.data=load_report_data(self.store, platform, uid, cid)
         self._clear_stack(); self.detail_tables.clear(); self._clear_tabs()
@@ -70,14 +77,16 @@ class PlatformTeslimatDurumuReportDialog(QDialog):
             if lines: self.detail_tables[key]=self._detail_table(lines); self._add_page(self.detail_tables[key], f"{lines[0].user} Teslimat Durumu")
         self.stats.setText(f"TOPLAM SAYFA\n{self.stack.count()}\n\nKULLANICI\n{len(self.data.details)}\n\nSÖZLEŞME\n{len({r.contract_id for r in self.data.summary})}")
         self._set_page(0)
+        self._dirty = False
+        self._refreshing = False
 
     def _summary_table(self):
         t=QTableWidget(len(self.data.summary),5); t.setHorizontalHeaderLabels(["Kullanıcı","Sözleşme Adı veya Numarası","Teslimat Tarihi","Durum","Açıklama"]); t.verticalHeader().hide(); t.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         for i,r in enumerate(self.data.summary):
             item=QTableWidgetItem(f"{r.user} ↗"); item.setData(Qt.UserRole,(r.user_id,r.contract_id)); item.setFlags(Qt.ItemIsEnabled|Qt.ItemIsSelectable); t.setItem(i,0,item)
             for c,v in [(1,r.contract),(2,r.delivery_date)]: it=QTableWidgetItem(v); it.setFlags(Qt.ItemIsEnabled|Qt.ItemIsSelectable); t.setItem(i,c,it)
-            cb=QComboBox(); cb.addItems(STATUSES); cb.setCurrentText(r.status if r.status in STATUSES else r.status); t.setCellWidget(i,3,cb)
-            txt=QTextEdit(r.description); txt.setFixedHeight(52); t.setCellWidget(i,4,txt); t.setRowHeight(i,64)
+            cb=QComboBox(); cb.addItems(STATUSES); cb.setCurrentText(r.status if r.status in STATUSES else r.status); cb.currentTextChanged.connect(self._mark_dirty); t.setCellWidget(i,3,cb)
+            txt=QTextEdit(r.description); txt.setFixedHeight(52); txt.textChanged.connect(self._mark_dirty); t.setCellWidget(i,4,txt); t.setRowHeight(i,64)
         t.cellClicked.connect(lambda row,col: self._set_page(row+1) if col==0 and row+1<self.stack.count() else None); return t
 
     def _detail_table(self, lines):
@@ -87,8 +96,8 @@ class PlatformTeslimatDurumuReportDialog(QDialog):
             comp_colors.setdefault(line.component, colors[len(comp_colors)%len(colors)]); bg=comp_colors[line.component]
             for c,v in [(0,line.component),(1,str(int(line.quantity) if line.quantity.is_integer() else line.quantity)),(2,line.serial_no)]:
                 it=QTableWidgetItem(v); it.setFlags(Qt.ItemIsEnabled|Qt.ItemIsSelectable); it.setBackground(QColor(bg)); t.setItem(i,c,it)
-            cb=QComboBox(); cb.addItems([""]+self.data.locations); cb.setCurrentText(line.internal_location); t.setCellWidget(i,3,cb)
-            for c,v in [(4,line.note),(5,line.delivery_location)]: le=QLineEdit(v); t.setCellWidget(i,c,le)
+            cb=QComboBox(); cb.addItems([""]+self.data.locations); cb.setCurrentText(line.internal_location); cb.currentTextChanged.connect(self._mark_dirty); t.setCellWidget(i,3,cb)
+            for c,v in [(4,line.note),(5,line.delivery_location)]: le=QLineEdit(v); le.textChanged.connect(self._mark_dirty); t.setCellWidget(i,c,le)
             t.setRowHeight(i,42)
         t.setProperty("lines", lines); return t
 
@@ -113,15 +122,33 @@ class PlatformTeslimatDurumuReportDialog(QDialog):
         for i,r in enumerate(self.data.summary): summary.append({"user_id":r.user_id,"contract_id":r.contract_id,"status":self.summary_table.cellWidget(i,3).currentText(),"description":self.summary_table.cellWidget(i,4).toPlainText()})
         for key,t in self.detail_tables.items():
             for i,line in enumerate(t.property("lines")):
-                lines.append({"user_id":line.user_id,"contract_id":line.contract_id,"component_id":line.component_id,"serial_no":line.serial_no,"internal_location":t.cellWidget(i,3).currentText(),"note":t.cellWidget(i,4).text(),"delivery_location":t.cellWidget(i,5).text()})
+                lines.append({"user_id":line.user_id,"contract_id":line.contract_id,"component_id":line.component_id,"serial_no":line.serial_no,"serial_key":line.serial_key,"internal_location":t.cellWidget(i,3).currentText(),"note":t.cellWidget(i,4).text(),"delivery_location":t.cellWidget(i,5).text()})
         return summary, lines
 
+    def _mark_dirty(self, *args):
+        if not self._refreshing:
+            self._dirty = True
+
+    def _save_current(self, show_message: bool = True):
+        s,l=self._collect(); save_report_data(self.store,self.data,s,l); self._dirty = False
+        if show_message: QMessageBox.information(self,"Platform Teslimat Durumu","Rapor kaydedildi.")
+        self.refresh_preview()
+
     def save_report(self):
-        s,l=self._collect(); save_report_data(self.store,self.data,s,l); QMessageBox.information(self,"Platform Teslimat Durumu","Rapor kaydedildi."); self.refresh_preview()
+        self._save_current(show_message=True)
 
     def export_excel(self):
-        self.save_report(); path,_=QFileDialog.getSaveFileName(self,"Platform Teslimat Durumu Excel Kaydet",f"{self.data.platform}_teslimat_durumu.xlsx","Excel (*.xlsx)")
+        if self._dirty:
+            self._save_current(show_message=False)
+        path,_=QFileDialog.getSaveFileName(self,"Platform Teslimat Durumu Excel Kaydet",f"{self.data.platform}_teslimat_durumu.xlsx","Excel (*.xlsx)")
         if path: export_report_to_excel(load_report_data(self.store,self.data.platform,self.user_cb.currentData(),self.contract_cb.currentData()), Path(path)); QMessageBox.information(self,"Excel",f"Excel oluşturuldu:\n{path}")
+
+    def closeEvent(self, event):
+        if self._dirty:
+            result = QMessageBox.question(self, "Kaydedilmemiş değişiklikler", "Platform Teslimat Durumu raporunda kaydedilmemiş değişiklikler var. Kaydetmeden çıkmak istiyor musunuz?", QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if result != QMessageBox.Yes:
+                event.ignore(); return
+        super().closeEvent(event)
 
 STYLE='''
 QDialog{background:#eaf2fb;color:#002b68;font-weight:600} QFrame#filterPanel,QFrame#reportCard{background:#fbfdff;border:1px solid #c7dcf4;border-radius:16px} QLabel#panelTitle,QLabel#mainTitle{font-size:16px;font-weight:800;color:#002b68} QLabel#filterLabel{font-size:11px;color:#3b5f96} QLabel#badge{background:#dff3e8;color:#087a2f;border-radius:11px;padding:5px 10px} QLabel#statBox{border:1px solid #c7dcf4;border-radius:12px;padding:12px;background:#fff} QComboBox,QLineEdit{border:1px solid #bed5ef;border-radius:8px;padding:7px;background:white} QPushButton{border:1px solid #bdd5f2;border-radius:9px;padding:8px 14px;background:#f7fbff;color:#002b68;font-weight:800} QPushButton#reportPrimaryButton{background:#075bcc;color:white;border-color:#075bcc} QPushButton:checked{background:#e9fff0;color:#18803b;border-color:#57c784} QHeaderView::section{background:#123e7c;color:white;font-weight:800;padding:8px;border:1px solid #18305d} QTableWidget{gridline-color:#111;background:#dceaf8;border:1px solid #123e7c} QTextEdit{border:1px solid #bed5ef;border-radius:8px;background:white}
