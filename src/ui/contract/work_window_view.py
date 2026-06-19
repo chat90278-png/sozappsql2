@@ -6,13 +6,17 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QTableWidgetItem
 
 from src.domain.contract_timing import contract_timing
-from src.domain.flexible_date import parse_flexible_date
+from src.domain.flexible_date import is_tbd_contract_no, parse_flexible_date
 from src.ui.contract.delivery_user_display import delivery_users_text
 
 
 def update_system_metric_cards(self, sys_info):
     if not hasattr(self, "system_metric_labels"):
         return
+    contract_no = getattr(getattr(self, "ci", None), "no", "")
+    hide_date_cards = is_tbd_contract_no(contract_no)
+    for key, card in getattr(self, "system_metric_cards", {}).items():
+        card.setVisible(not (hide_date_cards and key in {"completion", "days", "acceptance"}))
     deliveries = self.deliveries.get(sys_info.name, []) if sys_info else []
     exact_plans = [parse_flexible_date(getattr(d, "planned_acceptance_date", "")) for d in deliveries]
     exact_plans = [d for d in exact_plans if d]

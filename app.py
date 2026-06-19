@@ -7244,6 +7244,7 @@ class ContractWorkWindow(QDialog):
         top_row.setContentsMargins(0, 0, 0, 0)
         top_row.setSpacing(10)
         self.system_metric_labels: Dict[str, QLabel] = {}
+        self.system_metric_cards: Dict[str, QFrame] = {}
 
         def system_metric_card(key: str, title: str) -> QFrame:
             card = QFrame()
@@ -7258,6 +7259,7 @@ class ContractWorkWindow(QDialog):
             v.setWordWrap(True)
             card.setMinimumWidth(130)
             self.system_metric_labels[key] = v
+            self.system_metric_cards[key] = card
             lay.addWidget(t)
             lay.addWidget(v)
             return card
@@ -11791,8 +11793,8 @@ class MainWindow(QMainWindow):
         self.sort_combo.addItem("Varsayılan", "default")
         self.sort_combo.addItem("Sözleşme No (Artan)", "no_asc")
         self.sort_combo.addItem("Sözleşme No (Azalan)", "no_desc")
-        self.sort_combo.addItem("Termin Tarihi (Yakın)", "date_asc")
-        self.sort_combo.addItem("Termin Tarihi (Uzak)", "date_desc")
+        self.sort_combo.addItem("Termin Tarihi (Erken)", "date_asc")
+        self.sort_combo.addItem("Termin Tarihi (Geç)", "date_desc")
         self.sort_combo.addItem("Kalan Gün (Artan)", "days_asc")
         self.sort_combo.addItem("Kalan Gün (Azalan)", "days_desc")
         self.sort_combo.addItem("Kullanıcı (A-Z)", "user_asc")

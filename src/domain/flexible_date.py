@@ -9,6 +9,13 @@ _DAY_TBD_RE = re.compile(r"^\d{4}-\d{2}-TBD$", re.IGNORECASE)
 _MONTH_DAY_TBD_RE = re.compile(r"^\d{4}-TBD-TBD$", re.IGNORECASE)
 _SPECIALS = {"TBD", "-"}
 
+_TBD_CONTRACT_NO_RE = re.compile(r"^.+\s*-\s*TBD\s*-\s*\d+\s*$", re.IGNORECASE)
+
+
+def is_tbd_contract_no(contract_no: object) -> bool:
+    value = _clean(contract_no)
+    return bool(_TBD_CONTRACT_NO_RE.fullmatch(value))
+
 
 def _clean(text: object) -> str:
     return str(text or "").strip()
