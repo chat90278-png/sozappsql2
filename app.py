@@ -3022,6 +3022,7 @@ class ContractDialog(StyledDialog):
         self.unknown_no_btn = QPushButton("Sözleşme Yok")
         self.unknown_no_btn.setObjectName("secondary")
         self.unknown_no_btn.setCheckable(True)
+        self.unknown_no_btn.setCursor(Qt.PointingHandCursor)
         self.unknown_no_btn.setMinimumHeight(34)
         self.unknown_no_btn.setToolTip("Sözleşme numarası bilinmiyorsa geçici TBD numarası üretir.")
         no_lay.addWidget(self.unknown_no_btn, 0)
@@ -3075,6 +3076,8 @@ class ContractDialog(StyledDialog):
         self.t0.textChanged.connect(self.update_completion_date)
         self.months.valueChanged.connect(self.update_completion_date)
         self.unknown_no_btn.toggled.connect(self.on_unknown_no_toggled)
+        self.unknown_no_btn.toggled.connect(self._refresh_unknown_contract_button_style)
+        QTimer.singleShot(0, self._refresh_unknown_contract_button_style)
 
         def add_field(label: str, widget, row: int, col: int):
             grid.addWidget(form_label(label), row * 2, col)
@@ -3155,16 +3158,63 @@ class ContractDialog(StyledDialog):
             self._set_date_inputs_visible(True)
             self.update_completion_date()
         QTimer.singleShot(0, self._resize_to_safe_default)
+        self._refresh_unknown_contract_button_style()
 
     def _set_date_inputs_visible(self, visible: bool):
-        for widget in (getattr(self, "sig_wrap", None), getattr(self, "timeline_card", None)):
+        """Sözleşme Yok modunda tarih ve sözleşme tipi satırını tamamen sakla.
+
+        Normal modda eski ana sözleşme formu görünür:
+        - Sözleşme Tipi = Ana Sözleşme
+        - İmza Tarihi / T0 / T0+Ay / Termin Tarihi görünür
+
+        Sözleşme Yok modunda:
+        - Sözleşme Tipi alanı gizlenir ve kayıt değeri '-' olur
+        - İmza Tarihi label/input kalıntısı görünmez
+        - T0 kartı görünmez
+        """
+        # Alan değerini moda göre sabitle.
+        ctype = getattr(self, "ctype", None)
+        try:
+            if ctype is not None:
+                if hasattr(ctype, "setText"):
+                    ctype.setText("Ana Sözleşme" if visible else "-")
+                elif hasattr(ctype, "setCurrentText"):
+                    ctype.setCurrentText("Ana Sözleşme" if visible else "-")
+        except Exception:
+            pass
+
+        # Widgetları göster/gizle. Silme yok; PySide deleted-object hatası oluşmasın.
+        for widget in (
+            getattr(self, "sig_wrap", None),
+            getattr(self, "timeline_card", None),
+            getattr(self, "ctype", None),
+        ):
             if widget is not None:
-                widget.setVisible(visible)
-        # İmza tarihi label'ını bulmak için griddeki labelı ayrıca saklamadığımızdan,
-        # parent layout yeniden boyutlandırılır; wrapper gizlendiğinde alan pasif kalır.
-        # Form bütünlüğünü korumak için sadece widget gizleme kullanılır, deleteLater yapılmaz.
+                try:
+                    widget.setVisible(visible)
+                except Exception:
+                    pass
 
+        # add_field ile oluşturulan label referansları eski kodda tutulmuyor olabilir.
+        # Bu yüzden sadece bu dialog altındaki label metinlerine göre güvenli gizleme yapıyoruz.
+        hide_labels_when_unknown = {"İmza Tarihi", "Sözleşme Tipi"}
+        for label in self.findChildren(QLabel):
+            try:
+                text = str(label.text() or "").strip()
+            except Exception:
+                continue
+            if text in hide_labels_when_unknown:
+                label.setVisible(visible)
 
+        # Gizleme sonrası layoutu sıkıştır.
+        try:
+            layout = self.layout()
+            if layout is not None:
+                layout.invalidate()
+                layout.activate()
+            self.adjustSize()
+        except Exception:
+            pass
     def _refresh_unknown_contract_button_style(self, *_args):
         btn = getattr(self, "unknown_no_btn", None)
         if btn is None:
@@ -3181,7 +3231,12 @@ class ContractDialog(StyledDialog):
                 "QPushButton:pressed{background:#1e40af;}"
             )
         else:
-            btn.setStyleSheet("")
+            btn.setStyleSheet(
+                "QPushButton{background:#f8fafc;color:#0f172a;border:1px solid #cbd5e1;"
+                "border-radius:8px;padding:6px 14px;font-weight:900;}"
+                "QPushButton:hover{background:#eef2f7;border-color:#93c5fd;}"
+                "QPushButton:pressed{background:#dbeafe;}"
+            )
 
     def fill_unknown_contract_no(self) -> bool:
         platform = self.platform.currentText().strip()
@@ -3203,7 +3258,6 @@ class ContractDialog(StyledDialog):
         self.no_dup_warn.setVisible(False)
         self._refresh_unknown_contract_button_style()
         return True
-
 
     def _is_unknown_contract_no_mode(self) -> bool:
         btn = getattr(self, "unknown_no_btn", None)
@@ -3234,15 +3288,19 @@ class ContractDialog(StyledDialog):
             layout.activate()
         hint = self.minimumSizeHint()
         size_hint = self.sizeHint()
+        if self._is_unknown_no_mode():
+            base_h = 460
+        else:
+            base_h = self._default_size.height()
         target = QSize(
             max(self._default_size.width(), hint.width(), size_hint.width()),
-            max(self._default_size.height(), hint.height(), size_hint.height()),
+            max(base_h, hint.height(), size_hint.height()),
         )
         screen = QApplication.screenAt(self.pos()) or QApplication.primaryScreen()
         if screen:
             available = screen.availableGeometry().size()
             target.setWidth(min(target.width(), max(720, available.width() - 80)))
-            target.setHeight(min(target.height(), max(560, available.height() - 100)))
+            target.setHeight(min(target.height(), max(460, available.height() - 100)))
         self.resize(target)
 
     def _on_user_selection_changed(self):
@@ -3265,7 +3323,10 @@ class ContractDialog(StyledDialog):
         self.resize(max(self.width(), self._default_size.width(), hint.width()), preferred_height)
 
     def is_sd_mode(self) -> bool:
-        return self.ctype.currentText().strip() == "Sözleşme Değişikliği"
+        try:
+            return self.ctype.currentText().strip() == "Sözleşme Değişikliği"
+        except Exception:
+            return False
 
     def on_sd_ref_changed(self):
         self._sd_verified_info = None
@@ -3308,6 +3369,7 @@ class ContractDialog(StyledDialog):
             self._sd_anchor_no = ""
             self.user.setEnabled(True)
             self.update_user_yi_yd()
+        self._sync_contract_type_display()
 
     def _set_user_from_main_contract(self, info: dict):
         target_user = str(info.get("user", "") or "").strip()
@@ -3501,7 +3563,6 @@ class ContractDialog(StyledDialog):
             t0_date = t0.isoformat()
             completion_date = comp.isoformat()
 
-        # Aynı platform + sözleşme no + tip kombinasyonuna izin verme
         platform_check = self.platform.currentText()
         no_check = self.no.text().strip()
         try:
@@ -10744,6 +10805,25 @@ class ContractWorkWindow(QDialog):
         current_key = self._context_key()
         current_row = int(getattr(self.ci, "entry_start_row", 0) or 0)
         current_type = str(getattr(self.ci, "contract_type", "") or "").strip()
+
+        # Sözleşme Yok / geçici TBD sözleşmelerde sol SD/Ana sözleşme barı boş kalır.
+        # Bu kayıtların gerçek ana sözleşme/SD ailesi yoktur; bu yüzden
+        # "SÖZ\nANA", "-" veya alttaki "+" butonu kullanıcıya gösterilmez.
+        try:
+            is_unknown_contract = is_tbd_contract_no(str(getattr(self.ci, "no", "") or current_key[1] or ""))
+        except Exception:
+            is_unknown_contract = False
+        if is_unknown_contract:
+            self.sd_list.blockSignals(True)
+            self.sd_list.clear()
+            self.sd_list.blockSignals(False)
+            if hasattr(self, "add_sd_btn"):
+                self.add_sd_btn.setEnabled(False)
+                self.add_sd_btn.setVisible(False)
+            return
+
+        if hasattr(self, "add_sd_btn"):
+            self.add_sd_btn.setVisible(True)
         self.sd_list.blockSignals(True)
         self.sd_list.clear()
         family = self._family_context_rows()
@@ -10774,7 +10854,9 @@ class ContractWorkWindow(QDialog):
             sd_key = tuple(sd.get("_cache_key") or (sd.get("platform"), sd.get("no"), sd.get("type")))
             add_item(label, sd, sd_key == current_key or (current_row and int(sd.get("row") or 0) == current_row))
         self.sd_list.blockSignals(False)
-        self.add_sd_btn.setEnabled(bool(current_key[0] and current_key[1]))
+        if hasattr(self, "add_sd_btn"):
+            self.add_sd_btn.setVisible(True)
+            self.add_sd_btn.setEnabled(bool(current_key[0] and current_key[1]))
 
     def on_sd_nav_changed(self, row: int):
         if getattr(self, "_refreshing_contract_context", False):
@@ -10827,6 +10909,11 @@ class ContractWorkWindow(QDialog):
             self._refreshing_contract_context = False
 
     def add_sd_contract(self):
+        try:
+            if is_tbd_contract_no(str(getattr(self.ci, "no", "") or "")):
+                return
+        except Exception:
+            pass
         self._cache_current_context()
         platform = str(self.ci.platform or "").strip()
         no = str(self.ci.no or "").strip()
