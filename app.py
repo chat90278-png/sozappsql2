@@ -2592,7 +2592,7 @@ class PlatformTabsWidget(QWidget):
         self._buttons: Dict[int, QPushButton] = {}
         self._rail_height = self.DEFAULT_RAIL_HEIGHT
         self.setFixedHeight(self._rail_height)
-        self.setSizePolicy(QSizePolicy.MinimumExpanding, QSizePolicy.Fixed)
+        self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
 
         outer = QHBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -2601,9 +2601,9 @@ class PlatformTabsWidget(QWidget):
         self._rail = QFrame(self)
         self._rail.setObjectName("PlatformTabRail")
         self._rail.setFixedHeight(self._rail_height)
-        self._rail.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self._rail.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         rail_lay = QHBoxLayout(self._rail)
-        rail_lay.setContentsMargins(5, 4, 5, 4)
+        rail_lay.setContentsMargins(2, 2, 2, 2)
         rail_lay.setSpacing(0)
 
         self._scroll = QScrollArea(self._rail)
@@ -2613,7 +2613,7 @@ class PlatformTabsWidget(QWidget):
         self._scroll.setFixedHeight(self._rail_height)
         self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self._scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self._scroll.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         self._scroll.viewport().setStyleSheet("background:transparent;border:0;")
         rail_lay.addWidget(self._scroll, 1, Qt.AlignVCenter)
         outer.addWidget(self._rail, 1, Qt.AlignVCenter)
@@ -2624,8 +2624,8 @@ class PlatformTabsWidget(QWidget):
         self._host.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         self._host.setFixedHeight(self._rail_height)
         self._lay = QHBoxLayout(self._host)
-        self._lay.setContentsMargins(3, 2, 3, 2)
-        self._lay.setSpacing(8)
+        self._lay.setContentsMargins(0, 0, 0, 0)
+        self._lay.setSpacing(2)
         self._lay.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         self._scroll.setWidget(self._host)
         self._apply_rail_style()
@@ -2635,7 +2635,7 @@ class PlatformTabsWidget(QWidget):
             QFrame#PlatformTabRail {
                 background: rgba(5, 18, 43, 0.62);
                 border: 1px solid rgba(96, 165, 250, 0.34);
-                border-radius: 19px;
+                border-radius: 17px;
                 padding: 0px;
                 margin: 0px;
             }
@@ -2686,9 +2686,9 @@ class PlatformTabsWidget(QWidget):
         metrics = QFontMetrics(self.font())
         total_width = 0
         single = len(self._platforms) <= 1
-        margins = (3, 2, 3, 2)
+        margins = (0, 0, 0, 0)
         self._lay.setContentsMargins(*margins)
-        self._lay.setSpacing(8)
+        self._lay.setSpacing(2)
         for platform in self._platforms:
             name = str(platform.get("platform_name") or "")
             pid = int(platform.get("platform_id") or 0)
@@ -2700,7 +2700,7 @@ class PlatformTabsWidget(QWidget):
             # Height is derived from the polished button sizeHint; do not force it here.
             chip_width = min(168, max(92 if single else 86, metrics.horizontalAdvance(name) + (44 if single else 40)))
             btn.setFixedWidth(chip_width)
-            btn.setMinimumHeight(28)
+            btn.setFixedHeight(30)
             btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
             btn.setToolTip(name)
             btn.setGraphicsEffect(None)
@@ -2712,7 +2712,7 @@ class PlatformTabsWidget(QWidget):
                     font-weight: 900;
                     font-size: 11px;
                     letter-spacing: 0.45px;
-                    padding: 4px 16px;
+                    padding: 4px 13px;
                     border-radius: 14px;
                     text-align: center;
                 }
@@ -2761,6 +2761,8 @@ class PlatformTabsWidget(QWidget):
         self.setMinimumWidth(min(fixed_width, self._min_scroll_width if len(self._platforms) >= 4 else fixed_width))
         self.setMaximumWidth(self._max_width)
         self.setFixedWidth(fixed_width)
+        self._rail.setFixedWidth(fixed_width)
+        self._scroll.setFixedWidth(max(1, fixed_width - 4))
         self.updateGeometry()
         self._ensure_active_visible()
         self.setToolTip(", ".join(str(p.get("platform_name") or "") for p in self._platforms))
@@ -6904,14 +6906,23 @@ class ContractSharePopover(QFrame):
 
 
 class BadgeTabButton(QFrame):
-    """Rounded action tab with icon/text and a layout-managed count badge."""
+    """Contract meta tab with a fixed top-right badge anchor.
+
+    Badge geometry is intentionally independent from the text layout.  Only the
+    text changes when the count changes, so active/passive state and 0/1/9/10/99
+    counts cannot push the badge or the button content around.
+    """
 
     clicked = Signal(bool)
+
+    BADGE_W = 28
+    BADGE_H = 20
 
     def __init__(self, icon: str, text: str, count: Optional[int] = None, parent=None):
         super().__init__(parent)
         self._checked = False
         self._text = str(text or "")
+        self._has_badge = count is not None
         self.setObjectName("badgeTabButton")
         self.setCursor(Qt.PointingHandCursor)
         self.setMinimumHeight(42)
@@ -6919,28 +6930,30 @@ class BadgeTabButton(QFrame):
         self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
 
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(14, 7, 10, 7)
+        # Reserve a stable right-side anchor area for the absolute badge.
+        lay.setContentsMargins(14, 7, 38 if self._has_badge else 14, 7)
         lay.setSpacing(8)
 
-        self.icon_lbl = QLabel(str(icon or ""))
+        self.icon_lbl = QLabel(str(icon or ""), self)
         self.icon_lbl.setObjectName("badgeTabIcon")
         self.icon_lbl.setAlignment(Qt.AlignCenter)
         self.icon_lbl.setFixedWidth(18)
         lay.addWidget(self.icon_lbl, 0, Qt.AlignVCenter)
 
-        self.text_lbl = QLabel(self._text)
+        self.text_lbl = QLabel(self._text, self)
         self.text_lbl.setObjectName("badgeTabText")
         self.text_lbl.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
         self.text_lbl.setSizePolicy(QSizePolicy.MinimumExpanding, QSizePolicy.Preferred)
         lay.addWidget(self.text_lbl, 1, Qt.AlignVCenter)
 
-        self.badge = QLabel("0" if count is None else str(count))
+        self.badge = QLabel("0" if count is None else str(count), self)
         self.badge.setObjectName("badgeTabCount")
         self.badge.setAlignment(Qt.AlignCenter)
-        self.badge.setMinimumSize(20, 20)
-        self.badge.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-        lay.addWidget(self.badge, 0, Qt.AlignVCenter)
+        self.badge.setFixedSize(self.BADGE_W, self.BADGE_H)
+        self.badge.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self.badge.setVisible(self._has_badge)
         self._apply_style()
+        self._position_badge()
 
     def setChecked(self, checked: bool):
         checked = bool(checked)
@@ -6948,14 +6961,29 @@ class BadgeTabButton(QFrame):
             return
         self._checked = checked
         self._apply_style()
+        self._position_badge()
 
     def isChecked(self) -> bool:
         return self._checked
 
     def setCount(self, count: int):
+        self._has_badge = True
+        self.badge.setVisible(True)
         self.badge.setText(str(count))
-        self.badge.adjustSize()
-        self.badge.setMinimumWidth(max(20, self.badge.sizeHint().width() + 8))
+        # Fixed badge width keeps 0/1/9/10/99 visually anchored.
+        self._position_badge()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._position_badge()
+
+    def _position_badge(self):
+        if not hasattr(self, "badge"):
+            return
+        x = max(4, self.width() - self.BADGE_W - 8)
+        y = 5
+        self.badge.setGeometry(x, y, self.BADGE_W, self.BADGE_H)
+        self.badge.raise_()
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
@@ -6978,14 +7006,24 @@ class BadgeTabButton(QFrame):
             bg = "#FFFFFF"; border = "#D8E5F5"; fg = "#0F2747"
         self.setStyleSheet(f"""
             QFrame#badgeTabButton {{
-                background:{bg}; border:1px solid {border}; border-radius:12px;
+                background:{bg};
+                border:1px solid {border};
+                border-top-left-radius:0px;
+                border-top-right-radius:0px;
+                border-bottom-left-radius:12px;
+                border-bottom-right-radius:12px;
             }}
+            QFrame#badgeTabButton:hover {{ background:#F4F8FF; border-color:#93C5FD; }}
             QLabel#badgeTabIcon {{ background:transparent; color:{fg}; border:0; font-size:15px; }}
             QLabel#badgeTabText {{ background:transparent; color:{fg}; border:0; font-size:12px; font-weight:700; }}
-            QFrame#badgeTabButton:hover {{ background:#F4F8FF; border-color:#93C5FD; }}
             QLabel#badgeTabCount {{
-                background:#DBEAFE; color:#2563EB; border:1px solid #93C5FD;
-                border-radius:10px; padding:0 5px; font-size:10px; font-weight:900;
+                background:#DBEAFE;
+                color:#2563EB;
+                border:1px solid #93C5FD;
+                border-radius:10px;
+                padding:0px;
+                font-size:10px;
+                font-weight:900;
             }}
         """)
 
@@ -8111,16 +8149,10 @@ class ContractWorkWindow(QDialog):
 
         bar_layout.addStretch(1)
 
-        self.side_chevron = QPushButton("∨")
-        self.side_chevron.setObjectName("sideMetaChevron")
-        self.side_chevron.setFixedSize(30, 30)
-        self.side_chevron.setStyleSheet(
-            "QPushButton { background:#ffffff; border:1px solid #D8E5F5; border-radius:10px;"
-            "color:#5b7fa6; font-weight:800; font-size:13px; }"
-            "QPushButton:hover { background:#F4F8FF; border-color:#93C5FD; color:#1d4ed8; }"
-        )
-        self.side_chevron.clicked.connect(self._toggle_side_meta_chevron)
-        bar_layout.addWidget(self.side_chevron, 0, Qt.AlignVCenter)
+        # Eski sağdaki küçük chevron hücresi görsel olarak boş/işlevsiz bir kutu gibi
+        # duruyordu. Popover aç/kapatma zaten sekme butonlarından yapıldığı için layout'a
+        # ekstra buton eklemiyoruz.
+        self.side_chevron = None
 
         self.side_meta_popover = QFrame(self)
         self.side_meta_popover.setObjectName("sideMetaPopover")
@@ -8392,7 +8424,9 @@ class ContractWorkWindow(QDialog):
         panel = self._side_meta_open_panel
         for name, button in (("tags", self.side_btn_tags), ("files", self.side_btn_files), ("share", self.side_btn_share)):
             button.setChecked(name == panel)
-        self.side_chevron.setText("∧" if panel else "∨")
+        chevron = getattr(self, "side_chevron", None)
+        if chevron is not None:
+            chevron.setText("∧" if panel else "∨")
 
     def _load_contract_files(self) -> List[dict]:
         if self.is_new_contract:
