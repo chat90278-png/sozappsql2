@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 import json
 import re
@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMessageBox,
+    QMenu,
     QProgressBar,
     QPushButton,
     QScrollArea,
@@ -634,6 +635,79 @@ class ExcelLoadingOverlay(QWidget):
         self.deleteLater()
 
 
+
+class RevisionRowDialog(QDialog):
+    def __init__(self, parent=None, defaults: Optional[dict[str, Any]] = None, title: str = "REV Kaydı Ekle"):
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.result: Optional[dict[str, Any]] = None
+        defaults = dict(defaults or {})
+        self.setMinimumWidth(520)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(16, 16, 16, 16)
+        root.setSpacing(10)
+        header = QLabel(title)
+        header.setObjectName("mainTitle")
+        root.addWidget(header)
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(10)
+        grid.setVerticalSpacing(8)
+        self.date_edit = QLineEdit(str(defaults.get("revision_date") or datetime.now().isoformat(timespec="seconds")))
+        self.user_edit = QLineEdit(str(defaults.get("user_name") or "Kullanıcı"))
+        self.contract_edit = QLineEdit(str(defaults.get("contract_no") or ""))
+        self.delivery_edit = QLineEdit(str(defaults.get("delivery_name") or ""))
+        self.field_edit = QLineEdit(str(defaults.get("field_name") or ""))
+        self.old_edit = QLineEdit(str(defaults.get("old_value") or ""))
+        self.new_edit = QLineEdit(str(defaults.get("new_value") or ""))
+        self.desc_edit = QLineEdit(str(defaults.get("description") or ""))
+        self.desc_edit.setPlaceholderText("Açıklama zorunlu")
+        fields = [
+            ("Tarih / Saat", self.date_edit), ("Kullanıcı", self.user_edit),
+            ("Sözleşme", self.contract_edit), ("Teslimat", self.delivery_edit),
+            ("Alan", self.field_edit), ("Eski Değer", self.old_edit),
+            ("Yeni Değer", self.new_edit), ("Açıklama", self.desc_edit),
+        ]
+        for row, (label, widget) in enumerate(fields):
+            lab = QLabel(label)
+            lab.setObjectName("fieldLabel")
+            grid.addWidget(lab, row, 0)
+            grid.addWidget(widget, row, 1)
+        root.addLayout(grid)
+        actions = QHBoxLayout()
+        actions.addStretch(1)
+        cancel = QPushButton("İptal")
+        cancel.setObjectName("reportSecondaryButton")
+        cancel.clicked.connect(self.reject)
+        save = QPushButton("Kaydet")
+        save.setObjectName("reportPrimaryButton")
+        save.clicked.connect(self._accept)
+        actions.addWidget(cancel)
+        actions.addWidget(save)
+        root.addLayout(actions)
+
+    def _accept(self):
+        if not self.desc_edit.text().strip():
+            QMessageBox.warning(self, "Eksik", "Açıklama boş olamaz.")
+            return
+        date_text = self.date_edit.text().strip()
+        if date_text:
+            try:
+                datetime.fromisoformat(date_text.replace("Z", "+00:00"))
+            except Exception:
+                QMessageBox.warning(self, "Tarih hatası", "Tarih / Saat ISO formatında olmalı. Örnek: 2026-06-19T14:30:00")
+                return
+        self.result = {
+            "revision_date": date_text,
+            "user_name": self.user_edit.text().strip() or "Kullanıcı",
+            "contract_no": self.contract_edit.text().strip(),
+            "delivery_name": self.delivery_edit.text().strip(),
+            "field_name": self.field_edit.text().strip(),
+            "old_value": self.old_edit.text().strip(),
+            "new_value": self.new_edit.text().strip(),
+            "description": self.desc_edit.text().strip(),
+        }
+        self.accept()
+
 # ─── Main Dialog ─────────────────────────────────────────────────────────────
 
 class DeliveryScheduleReportDialog(QDialog):
@@ -646,6 +720,7 @@ class DeliveryScheduleReportDialog(QDialog):
         self._export_thread: Optional[QThread] = None
         self._export_worker: Optional[ExcelExportWorker] = None
         self._loading_overlay: Optional[ExcelLoadingOverlay] = None
+        self._rev_rows: list[dict[str, Any]] = []
         self.setWindowTitle("Tahmini Teslimat Takvimi")
         self.setWindowFlags(Qt.Window | Qt.WindowMinimizeButtonHint | Qt.WindowMaximizeButtonHint | Qt.WindowCloseButtonHint)
         self.resize(1450, 850); self.setMinimumSize(1180, 720)
@@ -744,7 +819,11 @@ class DeliveryScheduleReportDialog(QDialog):
         return self.delivery_tree
 
     def _matrix_tab(self): self.matrix_view = self._table(); return self.matrix_view
-    def _rev_tab(self): self.rev_view = self._table(); return self.rev_view
+    def _rev_tab(self):
+        self.rev_view = self._table()
+        self.rev_view.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.rev_view.customContextMenuRequested.connect(self._show_rev_context_menu)
+        return self.rev_view
 
     def _table(self):
         v = QTableView()
@@ -811,6 +890,7 @@ class DeliveryScheduleReportDialog(QDialog):
         self._refresh_dashboard_charts([])
         self._refresh_delivery_table([])
         self._refresh_matrix_table([])
+        self._rev_rows = []
         self.rev_view.setModel(SimpleTableModel(["Tarih", "Kullanıcı", "Sözleşme", "Teslimat", "Alan", "Eski Değer", "Yeni Değer", "Açıklama"], [], self))
 
     def refresh_preview(self, *_args):
@@ -833,7 +913,7 @@ class DeliveryScheduleReportDialog(QDialog):
         self._refresh_dashboard_charts(rows)
         self._refresh_delivery_table(rows)
         self._refresh_matrix_table(rows)
-        self.rev_view.setModel(SimpleTableModel(["Tarih", "Kullanıcı", "Sözleşme", "Teslimat", "Alan", "Eski Değer", "Yeni Değer", "Açıklama"], self.load_activity_log_preview(filters), self))
+        self._refresh_rev_table(filters)
 
     def load_delivery_rows_from_db(self) -> list[DeliveryRow]:
         if not self.conn:
@@ -1002,23 +1082,33 @@ class DeliveryScheduleReportDialog(QDialog):
         values = {part: [user_part[user].get(part, 0) for user in users] for part in parts}
         self.chart.set_data(users, parts, values)
 
-    def load_activity_log_preview(self, filters: dict[str, Any]) -> list[list[str]]:
-        from src.services.delivery_schedule_excel_exporter import load_meaningful_revision_logs
+    def _current_actor_name(self) -> str:
+        try:
+            actor = self.store.current_actor() if hasattr(self.store, "current_actor") else None
+        except Exception:
+            actor = None
+        if isinstance(actor, dict):
+            return str(actor.get("full_name") or actor.get("name") or actor.get("username") or "Kullanıcı")
+        return str(actor or "Kullanıcı")
 
-        log_filters = dict(filters or {})
-        # REV Takip sekmesi, ekrandaki aktif filtre sonucunda kalan sözleşmelerle sınırlı kalır.
+    def _selected_contracts_for_rev(self, filters: dict[str, Any]) -> list[str]:
         selected_contracts = sorted({str(row.contract) for row in self.filtered_rows if str(row.contract or "").strip()})
         if selected_contracts:
-            log_filters["_selected_contracts"] = selected_contracts
-        elif log_filters.get("contract") and log_filters.get("contract") != "Tüm seçili sözleşmeler":
-            log_filters["_selected_contracts"] = [str(log_filters.get("contract"))]
-        else:
-            log_filters["_selected_contracts"] = []
+            return selected_contracts
+        if filters.get("contract") and filters.get("contract") != "Tüm seçili sözleşmeler":
+            return [str(filters.get("contract"))]
+        return ["__NO_MATCH__"] if not self.filtered_rows else []
 
-        logs = load_meaningful_revision_logs(self.store, limit=200, filters=log_filters)
-        if not logs:
-            return [["", "", "", "", "", "", "", "Seçili sözleşme filtrelerine uygun anlamlı revizyon kaydı bulunmuyor."]]
-        return [
+    def _rev_filters(self, filters: dict[str, Any]) -> dict[str, Any]:
+        log_filters = dict(filters or {})
+        log_filters["_selected_contracts"] = self._selected_contracts_for_rev(filters)
+        return log_filters
+
+    def _refresh_rev_table(self, filters: dict[str, Any]) -> None:
+        from src.services.delivery_schedule_excel_exporter import build_delivery_schedule_revision_rows
+
+        self._rev_rows = build_delivery_schedule_revision_rows(self.store, limit=200, filters=self._rev_filters(filters))
+        rows = [
             [
                 str(log.get("date") or ""),
                 str(log.get("user") or "-"),
@@ -1027,10 +1117,99 @@ class DeliveryScheduleReportDialog(QDialog):
                 str(log.get("field") or ""),
                 str(log.get("old_value") or ""),
                 str(log.get("new_value") or ""),
-                str(log.get("description") or ""),
+                str(log.get("description") or "") + (" (Manuel)" if log.get("source") == "manual" else ""),
             ]
-            for log in logs
+            for log in self._rev_rows
         ]
+        if not rows:
+            rows = [["", "", "", "", "", "", "", "Seçili sözleşme filtrelerine uygun anlamlı revizyon kaydı bulunmuyor."]]
+        self.rev_view.setModel(SimpleTableModel(["Tarih", "Kullanıcı", "Sözleşme", "Teslimat", "Alan", "Eski Değer", "Yeni Değer", "Açıklama"], rows, self))
+
+    def load_activity_log_preview(self, filters: dict[str, Any]) -> list[list[str]]:
+        self._refresh_rev_table(filters)
+        model = self.rev_view.model()
+        return [list(getattr(model, "rows", [])[i]) for i in range(len(getattr(model, "rows", [])))]
+
+    def _show_rev_context_menu(self, pos):
+        index = self.rev_view.indexAt(pos)
+        if index.isValid() and not self.rev_view.selectionModel().isRowSelected(index.row(), QModelIndex()):
+            self.rev_view.selectRow(index.row())
+        selected_rows = sorted({idx.row() for idx in self.rev_view.selectionModel().selectedRows()}) if self.rev_view.selectionModel() else []
+        has_real_selection = any(0 <= row < len(self._rev_rows) for row in selected_rows)
+        single_row = selected_rows[0] if len(selected_rows) == 1 else -1
+        single_data = self._rev_rows[single_row] if 0 <= single_row < len(self._rev_rows) else None
+        menu = QMenu(self)
+        add_action = menu.addAction("Satır Ekle")
+        edit_action = menu.addAction("Satırı Düzenle")
+        delete_action = menu.addAction("Seçili Satırı Sil")
+        menu.addSeparator()
+        refresh_action = menu.addAction("Yenile")
+        edit_action.setEnabled(bool(single_data and single_data.get("source") == "manual"))
+        delete_action.setEnabled(has_real_selection)
+        action = menu.exec(self.rev_view.viewport().mapToGlobal(pos))
+        if action == add_action:
+            self._add_rev_row()
+        elif action == edit_action and single_data:
+            self._edit_rev_row(single_data)
+        elif action == delete_action:
+            self._delete_selected_rev_rows(selected_rows)
+        elif action == refresh_action:
+            self.refresh_preview()
+
+    def _default_rev_values(self) -> dict[str, Any]:
+        filters = self.collect_filters()
+        contracts = self._selected_contracts_for_rev(filters)
+        return {
+            "revision_date": datetime.now().isoformat(timespec="seconds"),
+            "user_name": self._current_actor_name(),
+            "contract_no": contracts[0] if len(contracts) == 1 else (str(filters.get("contract") or "") if filters.get("contract") != "Tüm seçili sözleşmeler" else ""),
+            "description": "",
+        }
+
+    def _add_rev_row(self):
+        from src.services.delivery_schedule_excel_exporter import save_manual_revision_row
+
+        dlg = RevisionRowDialog(self, self._default_rev_values(), "REV Kaydı Ekle")
+        if dlg.exec() and dlg.result:
+            values = dict(dlg.result)
+            values["created_by"] = self._current_actor_name()
+            save_manual_revision_row(self.store, values)
+            self.refresh_preview()
+
+    def _edit_rev_row(self, row: dict[str, Any]):
+        from src.services.delivery_schedule_excel_exporter import save_manual_revision_row
+
+        if row.get("source") != "manual":
+            QMessageBox.information(self, "Otomatik kayıt", "Bu kayıt otomatik logdan gelmiştir. Genel log değiştirilemez. Dilerseniz bu kaydı gizleyip manuel bir REV kaydı ekleyebilirsiniz.")
+            return
+        defaults = {
+            "revision_date": row.get("date"), "user_name": row.get("user"),
+            "contract_no": row.get("contract"), "delivery_name": row.get("delivery"),
+            "field_name": row.get("field"), "old_value": row.get("old_value"),
+            "new_value": row.get("new_value"), "description": row.get("description"),
+        }
+        dlg = RevisionRowDialog(self, defaults, "REV Kaydını Düzenle")
+        if dlg.exec() and dlg.result:
+            values = dict(dlg.result)
+            values["updated_by"] = self._current_actor_name()
+            save_manual_revision_row(self.store, values, row_id=int(row.get("manual_id") or 0))
+            self.refresh_preview()
+
+    def _delete_selected_rev_rows(self, selected_rows: list[int]):
+        from src.services.delivery_schedule_excel_exporter import hide_revision_row
+
+        rows = [self._rev_rows[i] for i in selected_rows if 0 <= i < len(self._rev_rows)]
+        if not rows:
+            return
+        msg = "Bu REV kaydı rapordan kaldırılacak. Genel log kaydı silinmeyecek. Devam edilsin mi?"
+        if len(rows) > 1:
+            msg = f"{len(rows)} REV kaydı rapordan kaldırılacak. Genel log kayıtları silinmeyecek. Devam edilsin mi?"
+        if QMessageBox.question(self, "REV kaydı sil", msg, QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
+            return
+        actor = self._current_actor_name()
+        for row in rows:
+            hide_revision_row(self.store, row, actor=actor)
+        self.refresh_preview()
 
     # ── Export with threading & loading overlay ──────────────────────────────
 
