@@ -371,7 +371,7 @@ class ContractSummaryDialog(QDialog):
         date_row.setSpacing(8)
         self.termin_value = self.alt3_date_tile(date_row, "TERMİN", "Red")
         self.days_value = self.alt3_date_tile(date_row, "KALAN GÜN", "Orange")
-        self.acceptance_value = self.alt3_date_tile(date_row, "KABUL TARİHİ", "Green")
+        self.acceptance_value = self.alt3_date_tile(date_row, "GERÇEK TESLİMAT", "Green")
         middle_lay.addLayout(date_row)
 
         alert_row = QHBoxLayout()
@@ -391,7 +391,7 @@ class ContractSummaryDialog(QDialog):
         )
         middle_lay.addLayout(alert_row)
 
-        accepts_card = self.alt3_side_card("KABULLER")
+        accepts_card = self.alt3_side_card("TESLİMATLAR")
         self.accept_total_val = self.alt3_stack_metric(accepts_card._body_lay, "Toplam", "Blue")
         self.accept_new_val = self.alt3_stack_metric(accepts_card._body_lay, "Başlanmadı", "Red")
         self.accept_progress_val = self.alt3_stack_metric(accepts_card._body_lay, "Devam", "Orange")
@@ -703,7 +703,7 @@ class ContractSummaryDialog(QDialog):
         self.system_count_label.setObjectName("scopeChip")
         f._head.addWidget(self.system_count_label)
         self.system_info_table = QTableWidget(0, 5)
-        self.setup_table(self.system_info_table, ["SİSTEM", "DURUM", "TERMİN TARİHİ", "KABUL TARİHİ", "KABUL SAYISI"])
+        self.setup_table(self.system_info_table, ["SİSTEM", "DURUM", "TERMİN TARİHİ", "GERÇEK TESLİMAT", "TESLİMAT SAYISI"])
         self.system_info_table.setMinimumHeight(430)
         self.system_info_table.setMinimumWidth(620)
         self.system_info_table.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -753,7 +753,7 @@ class ContractSummaryDialog(QDialog):
         return f
 
     def build_deliveries_card(self) -> QFrame:
-        f = self.card("TESLİMATLAR / KABULLER")
+        f = self.card("TESLİMATLAR / TESLİMATLAR")
         self.delivery_scope_label = QLabel("—")
         self.delivery_scope_label.setObjectName("smallMuted")
         f._head.addWidget(self.delivery_scope_label)
@@ -958,7 +958,7 @@ class ContractSummaryDialog(QDialog):
         row.setObjectName("systemRowFrame")
         row.setProperty("selected", key == self.selected_system_key)
         row.setCursor(Qt.PointingHandCursor)
-        row.setToolTip("Tüm sistemlerin toplam bileşen ve kabul durumu" if key == ("__all__", "__all__") else f"{status_label(status)} | Termin: {deadline or '—'} | Kabul: {acceptance or '—'}")
+        row.setToolTip("Tüm sistemlerin toplam bileşen ve teslimat durumu" if key == ("__all__", "__all__") else f"{status_label(status)} | Termin: {deadline or '—'} | Teslimat: {acceptance or '—'}")
         lay = QVBoxLayout(row)
         lay.setContentsMargins(10, 7, 10, 7)
         lay.setSpacing(5)
@@ -982,7 +982,7 @@ class ContractSummaryDialog(QDialog):
         if deadline:
             chips.addWidget(self._system_chip(f"Termin: {deadline}", "systemChipDate"), 0)
         if acceptance:
-            chips.addWidget(self._system_chip(f"Kabul: {acceptance}", "systemChipDate"), 0)
+            chips.addWidget(self._system_chip(f"Teslimat: {acceptance}", "systemChipDate"), 0)
         chips.addStretch(1)
         lay.addLayout(chips)
         row.mousePressEvent = lambda event, k=key: self.select_system(k)
@@ -1011,7 +1011,7 @@ class ContractSummaryDialog(QDialog):
                     accept_counts[status_kind(delivery.status)] += 1
                     accept_total += 1
             else:
-                # Kabul kaydı yoksa sistemin genel durumunu kabul özetinde temsili göster.
+                # Teslimat kaydı yoksa sistemin genel durumunu teslimat özetinde temsili göster.
                 accept_counts[kind] += 1
                 accept_total += 1
 
@@ -1031,7 +1031,7 @@ class ContractSummaryDialog(QDialog):
             self.system_card_title.setText("SÖZLEŞMELER")
             self.system_count_label.setText(f"{len(self.contexts)} sözleşme")
             self.system_info_table.setColumnCount(5)
-            self.system_info_table.setHorizontalHeaderLabels(["TÜR", "DURUM", "TERMİN TARİHİ", "KABUL TARİHİ", "SİSTEM"])
+            self.system_info_table.setHorizontalHeaderLabels(["TÜR", "DURUM", "TERMİN TARİHİ", "GERÇEK TESLİMAT", "SİSTEM"])
             self._apply_info_table_widths(contract_view=True)
             rows = []
             for ctx in self.contexts:
@@ -1049,7 +1049,7 @@ class ContractSummaryDialog(QDialog):
         self.system_card_title.setText("SİSTEM BİLGİSİ")
         self.system_count_label.setText(f"{len(entries)} sistem")
         self.system_info_table.setColumnCount(5)
-        self.system_info_table.setHorizontalHeaderLabels(["SİSTEM", "DURUM", "TERMİN TARİHİ", "KABUL TARİHİ", "KABUL SAYISI"])
+        self.system_info_table.setHorizontalHeaderLabels(["SİSTEM", "DURUM", "TERMİN TARİHİ", "GERÇEK TESLİMAT", "TESLİMAT SAYISI"])
         self._apply_info_table_widths(contract_view=False)
         rows = []
         for ctx, sys in entries:
@@ -1192,7 +1192,7 @@ class ContractSummaryDialog(QDialog):
         dot = QLabel("●")
         kind = status_kind(delivery.status)
         dot.setStyleSheet(f"color:{'#16a34a' if kind == 'done' else ('#0891b2' if kind == 'progress' else '#ea580c')};")
-        name = QLabel(str(delivery.name or "Kabul"))
+        name = QLabel(str(delivery.name or "Teslimat"))
         name.setStyleSheet("font-size:12px;color:#0f172a;")
         pill = QLabel(status_label(delivery.status))
         if kind == "done":

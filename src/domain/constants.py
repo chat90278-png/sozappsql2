@@ -22,14 +22,14 @@ MAIN_COLUMN_HEADERS = [
     "Yİ/YD",
     "Sözleşme Tipi",
     "Faaliyetler",
-    "Teslimat / Kabul",
+    "Teslimat",
     "Sözleşme İçeriği",
     "Sözleşmenin İmzalandığı Tarih",
     "T0 Başlangıç Tarihi",
     "T0+Ay",
     "Termin Tarihi",
     "Durum",
-    "Kabul Tarihi",
+    "Gerçek Teslimat",
     "Not",
 ]
 

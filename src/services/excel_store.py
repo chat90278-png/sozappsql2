@@ -438,7 +438,7 @@ class ExcelStore:
             od = old_delivs.get(key, {})
             nd = new_delivs.get(key, {})
             dname = str(nd.get("name") or od.get("name") or "")
-            for field_key, label in [("status", "Durum"), ("acceptance_date", "Kabul Tarihi"), ("note", "Not")]:
+            for field_key, label in [("status", "Durum"), ("acceptance_date", "Gerçek Teslimat Tarihi"), ("note", "Not")]:
                 ov = self._textify(od.get(field_key, ""))
                 nv = self._textify(nd.get(field_key, ""))
                 if ov != nv:

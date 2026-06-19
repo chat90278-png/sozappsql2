@@ -157,7 +157,7 @@ class ExcelExportWorker(QObject):
             if system_count is not None:
                 label_to_value["sistem sayisi"] = system_count
             if delivery_count is not None:
-                label_to_value["kabul/teslimat sayisi"] = delivery_count
+                label_to_value["teslimat sayisi"] = delivery_count
 
             for r in range(1, ws.max_row + 1):
                 key = self._norm(ws.cell(r, 1).value)
