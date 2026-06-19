@@ -1089,58 +1089,128 @@ def _create_small_pivot_chart(wb, cache, dashboard_ws, row_field: str, value_fie
     return pt
 
 
+def _slicer_registry_key(ws, field_name: str) -> tuple[str, str]:
+    try:
+        sheet_name = str(ws.Name)
+    except Exception:
+        sheet_name = "Dashboard"
+    return (sheet_name, str(field_name or "").strip().casefold())
+
+
+def _try_delete_shape_by_name(ws, shape_name: str) -> None:
+    """Best-effort cleanup for stale manual/COM slicer shapes with the same object name."""
+    try:
+        shapes = ws.Shapes
+        for idx in range(shapes.Count, 0, -1):
+            shp = shapes.Item(idx)
+            if str(getattr(shp, "Name", "") or "") == shape_name:
+                shp.Delete()
+    except Exception:
+        pass
+
+
+def add_unique_slicer(
+    wb,
+    ws,
+    pivot_table,
+    field_name: str,
+    slicer_name: str,
+    left: int,
+    top: int,
+    width: int,
+    height: int,
+    created_slicers: set[tuple[str, str]],
+    extra_pivot_tables=None,
+):
+    """Create exactly one slicer per worksheet+field for this export run.
+
+    Excel COM keeps slicer caches and slicer shapes separately.  The previous
+    implementation created the same slicer twice from the same cache, which
+    produced two differently styled boxes for fields such as Durum/Sözleşme.
+    This helper centralizes creation and uses a per-run registry before touching
+    COM, so duplicate cache/shape creation is prevented at the source.
+    """
+    field_name = str(field_name or "").strip()
+    if not field_name:
+        return None
+    key = _slicer_registry_key(ws, field_name)
+    if key in created_slicers:
+        return None
+    created_slicers.add(key)
+    _try_delete_shape_by_name(ws, slicer_name)
+
+    try:
+        cache = wb.SlicerCaches.Add2(pivot_table, field_name)
+    except Exception:
+        try:
+            cache = wb.SlicerCaches.Add(pivot_table, field_name)
+        except Exception:
+            return None
+
+    for pt in list(extra_pivot_tables or []):
+        try:
+            cache.PivotTables.AddPivotTable(pt)
+        except Exception:
+            pass
+
+    try:
+        slicer = cache.Slicers.Add(ws, None, slicer_name, field_name, left, top, width, height)
+    except Exception:
+        try:
+            slicer = cache.Slicers.Add(
+                SlicerDestination=ws,
+                Name=slicer_name,
+                Caption=field_name,
+                Left=left,
+                Top=top,
+                Width=width,
+                Height=height,
+            )
+        except Exception:
+            return None
+
+    try:
+        slicer.NumberOfColumns = 1
+    except Exception:
+        pass
+    try:
+        slicer.Style = "SlicerStyleLight2"
+    except Exception:
+        pass
+    try:
+        cache.CrossFilterType = 1
+    except Exception:
+        pass
+    try:
+        cache.SortItems = 1
+    except Exception:
+        pass
+    return slicer
+
+
 def _add_slicers(wb, ws, pivot_table, extra_pivot_tables=None) -> None:
-    """Add real Excel slicers and connect them to every pivot table built from the same cache."""
+    """Add one real Excel slicer per field and connect it to all dashboard pivots."""
     fields = ["Yİ/YD", "Yıl", "Teslimat", "Platform", "Sözleşme", "Durum"]
     left = 1110
     top = 380
+    created_slicers: set[tuple[str, str]] = set()
     extra_pivot_tables = list(extra_pivot_tables or [])
     for idx, field in enumerate(fields):
-        try:
-            cache = wb.SlicerCaches.Add2(pivot_table, field)
-        except Exception:
-            try:
-                cache = wb.SlicerCaches.Add(pivot_table, field)
-            except Exception:
-                continue
-        for pt in extra_pivot_tables:
-            try:
-                cache.PivotTables.AddPivotTable(pt)
-            except Exception:
-                pass
         height = 125 if field == "Durum" else 75
-        try:
-            slicer = cache.Slicers.Add(ws, None, f"sl_{idx}_{_safe_filename(field)}", field, left, top + idx * 82, 170, height)
-        except Exception:
-            try:
-                slicer = cache.Slicers.Add(SlicerDestination=ws, Name=f"sl_{idx}_{_safe_filename(field)}", Caption=field, Left=left, Top=top + idx * 82, Width=170, Height=height)
-            except Exception:
-                slicer = None
-        if slicer is not None:
-            try:
-                slicer.NumberOfColumns = 1
-            except Exception:
-                pass
-            try:
-                slicer.Style = "SlicerStyleLight2"
-            except Exception:
-                pass
-            try:
-                # Show a more complete status list when possible.
-                cache.CrossFilterType = 1
-            except Exception:
-                pass
-            try:
-                cache.SortItems = 1
-            except Exception:
-                pass
-        try:
-            cache.Slicers.Add(ws, None, f"sl_{idx}_{_safe_filename(field)}", field, left, top + idx * 82, 170, 75)
-        except Exception:
-            try:
-                cache.Slicers.Add(SlicerDestination=ws, Name=f"sl_{idx}_{_safe_filename(field)}", Caption=field, Left=left, Top=top + idx * 82, Width=170, Height=75)
-            except Exception:
-                pass
+        name = f"sl_{idx}_{_safe_filename(field)}"
+        add_unique_slicer(
+            wb,
+            ws,
+            pivot_table,
+            field,
+            name,
+            left,
+            top + idx * 82,
+            170,
+            height,
+            created_slicers,
+            extra_pivot_tables=extra_pivot_tables,
+        )
 
 
 def export_delivery_schedule_report(store, output_path, filters=None, progress_cb=None) -> dict:
