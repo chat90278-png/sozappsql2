@@ -592,19 +592,6 @@ CREATE TABLE IF NOT EXISTS activity_logs(id INTEGER PRIMARY KEY AUTOINCREMENT,cr
             migrated.append("components.requires_unit_tracking")
         if self._ensure_column("components", "unit_tracking_label", "TEXT DEFAULT ''"):
             migrated.append("components.unit_tracking_label")
-        # Backfill güvenliği: kolonlar daha önce eklenmiş olsa bile normalize adı
-        # "hava araci" olan pasif tracking kayıtlarını migration sırasında tamamla.
-        # Bu yalnızca geçmiş veri onarımıdır; runtime mantık component flag'lerine bağlı kalır.
-        backfill_cursor = self.conn.execute("""
-            UPDATE components
-            SET requires_unit_tracking=1, unit_tracking_label='Kuyruk No'
-            WHERE COALESCE(requires_unit_tracking, 0)=0
-              AND TRIM(LOWER(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(
-                  name,
-                  '_',' '), '-',' '), 'ı','i'), 'İ','i'), 'ş','s'), 'ğ','g'), 'ü','u'), 'ö','o'), 'ç','c'))) = 'hava araci'
-        """)
-        if getattr(backfill_cursor, "rowcount", 0):
-            migrated.append("components.hava_araci_unit_tracking_backfill")
         self.conn.execute("""
             CREATE TABLE IF NOT EXISTS delivery_component_units (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
