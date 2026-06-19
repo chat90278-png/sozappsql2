@@ -5512,11 +5512,11 @@ class UnitTrackingSlotCard(QFrame):
 
     changed = Signal()
 
-    def __init__(self, slot_no: int, comp_name: str, label: str = "Kuyruk No", identifier: str = "", parent=None):
+    def __init__(self, slot_no: int, comp_name: str, label: str = "Kuyruk No / Seri No", identifier: str = "", parent=None):
         super().__init__(parent)
         self._slot_no = int(slot_no or 0)
         self._comp_name = str(comp_name or "")
-        self._label = str(label or "Kuyruk No")
+        self._label = str(label or "Kuyruk No / Seri No")
         self._is_duplicate = False
         self.setObjectName("unitSlotCard")
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
@@ -5629,7 +5629,7 @@ class UnitTrackingSidePanel(QFrame):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._comp_name = ""
-        self._label = "Kuyruk No"
+        self._label = "Kuyruk No / Seri No"
         self._filter = "all"
         self._cards: List[UnitTrackingSlotCard] = []
         self._build()
@@ -5673,7 +5673,7 @@ class UnitTrackingSidePanel(QFrame):
         outer.addWidget(self._progress)
 
         self._search = QLineEdit()
-        self._search.setPlaceholderText("Kuyruk no veya slot ara...")
+        self._search.setPlaceholderText("Kuyruk No / Seri No veya slot ara...")
         self._search.textChanged.connect(self._apply_visibility)
         outer.addWidget(self._search)
 
@@ -5776,7 +5776,7 @@ class UnitTrackingSidePanel(QFrame):
 
     def set_component(self, comp_name: str, label: str, units: list):
         self._comp_name = str(comp_name or "")
-        self._label = str(label or "Kuyruk No")
+        self._label = str(label or "Kuyruk No / Seri No")
         self._title.setText(f"{self._comp_name} {self._label} Listesi")
         self._search.setPlaceholderText(f"{self._label} veya slot ara...")
         self._rebuild_cards(units or [])
@@ -5852,7 +5852,7 @@ class UnitTrackingSidePanel(QFrame):
 class DeliveryDialog(StyledDialog):
     """Kabul / Teslimat ekleme / düzenleme dialog'u.
 
-    Unit tracking açık bileşenlerde (requires_unit_tracking=1):
+    Tüm bileşenlerde kuyruk no / seri no takibi kullanılabilir:
     - Bileşen hücresinde ▶/◀ ok ikonu görünür.
     - Satır/ok seçilince sol panel kuyruk no / seri no listesine dönüşür.
     - Ana tablo 4 sütun kalır; inline detail row oluşturulmaz.
@@ -5913,14 +5913,18 @@ class DeliveryDialog(StyledDialog):
         self.build()
 
     def _load_unit_tracking_map(self):
+        self._unit_tracking_map = {comp: "Kuyruk No / Seri No" for comp in self.component_keys}
         if self.store is not None:
             try:
-                self._unit_tracking_map = self.store.get_unit_tracking_components()
+                stored_labels = self.store.get_unit_tracking_components()
             except Exception:
-                self._unit_tracking_map = {}
+                stored_labels = {}
+            for comp, label in (stored_labels or {}).items():
+                if comp in self._unit_tracking_map and str(label or "").strip():
+                    self._unit_tracking_map[comp] = str(label).strip()
 
     def _is_unit_tracking(self, comp: str) -> bool:
-        return comp in self._unit_tracking_map
+        return bool(comp)
 
     def _safe_system_components(self) -> Dict[str, float]:
         raw = getattr(self.system, "components", {}) or {}
@@ -6257,7 +6261,16 @@ class DeliveryDialog(StyledDialog):
                     "note": str(unit.get("note") or ""),
                 }
         normalized = []
-        for slot_no in range(1, planned_qty + 1):
+        keep_slots = set(range(1, planned_qty + 1))
+        for slot_no, unit in by_slot.items():
+            has_data = bool(
+                str(unit.get("identifier") or "").strip()
+                or str(unit.get("note") or "").strip()
+                or int(unit.get("is_delivered", 0) or 0)
+            )
+            if slot_no > planned_qty and has_data:
+                keep_slots.add(slot_no)
+        for slot_no in sorted(keep_slots):
             unit = dict(by_slot.get(slot_no, {}))
             unit["slot_no"] = slot_no
             unit["identifier"] = str(unit.get("identifier") or "").strip()
@@ -6276,11 +6289,12 @@ class DeliveryDialog(StyledDialog):
         if not self._is_unit_tracking(comp):
             return
         self._current_units_from_panel_if_active()
-        planned_qty = int(as_number(self.inputs.get(comp, (None, None, None))[0].text())) if comp in self.inputs else 0
+        planned_item, delivered_item, _ = self.inputs.get(comp, (None, None, None))
+        planned_qty = int(max(as_number(planned_item.text()) if planned_item else 0, as_number(delivered_item.text()) if delivered_item else 0))
         units = self._ensure_component_units(comp, planned_qty)
         self.left_panel_mode = "unit_tracking"
         self.active_unit_component = comp
-        self.unit_side_panel.set_component(comp, self._unit_tracking_map.get(comp, "Kuyruk No"), units)
+        self.unit_side_panel.set_component(comp, self._unit_tracking_map.get(comp, "Kuyruk No / Seri No"), units)
         self.left_stack.setCurrentWidget(self.unit_side_panel)
         self._refresh_unit_row_selection()
 
@@ -6330,7 +6344,7 @@ class DeliveryDialog(StyledDialog):
             self._component_units_state[comp] = self.unit_side_panel.get_units()
         units = self._ensure_component_units(comp, int(new_qty or 0))
         if comp == self.active_unit_component and self.left_panel_mode == "unit_tracking":
-            self.unit_side_panel.set_component(comp, self._unit_tracking_map.get(comp, "Kuyruk No"), units)
+            self.unit_side_panel.set_component(comp, self._unit_tracking_map.get(comp, "Kuyruk No / Seri No"), units)
         self._refresh_unit_row_selection()
 
     def _refresh_unit_row_selection(self):
@@ -6607,12 +6621,19 @@ class DeliveryDialog(StyledDialog):
                         item.setText("0")
                         self._update_remaining_row(row)
                         return
-                    self._update_panel_slot_count(comp, int(new_qty))
+                    delivered_item = self.qty_table.item(row, 2)
+                    delivered_qty = as_number(delivered_item.text()) if delivered_item else 0
+                    self._update_panel_slot_count(comp, int(max(new_qty, delivered_qty)))
                 else:
                     if self._is_delivered_status():
                         delivered_item = self.qty_table.item(row, 2)
                         if delivered_item:
                             delivered_item.setText(fmt_num(new_qty))
+            elif col == 2 and self._is_unit_tracking(comp):
+                planned_item = self.qty_table.item(row, 1)
+                planned_qty = as_number(planned_item.text()) if planned_item else 0
+                delivered_qty = as_number(item.text())
+                self._update_panel_slot_count(comp, int(max(planned_qty, delivered_qty)))
             self._update_remaining_row(row)
         finally:
             self.qty_table.blockSignals(was_blocked)
@@ -6655,7 +6676,7 @@ class DeliveryDialog(StyledDialog):
                     return
                 if comp == self.active_unit_component and self.left_panel_mode == "unit_tracking":
                     self._component_units_state[comp] = self.unit_side_panel.get_units()
-                units = self._ensure_component_units(comp, int(pv))
+                units = self._ensure_component_units(comp, int(max(pv, dv)))
                 counts: Dict[str, int] = {}
                 for unit in units:
                     ident = normalize_sheet_name(unit.get("identifier", ""))
@@ -6664,14 +6685,7 @@ class DeliveryDialog(StyledDialog):
                 if any(v > 1 for v in counts.values()):
                     QMessageBox.warning(
                         self, "Tekrar Var",
-                        f"{comp}: Aynı kuyruk no iki kez girilemez. Lütfen düzeltin."
-                    )
-                    return
-                if self._is_delivered_status() and any(not str(unit.get("identifier") or "").strip() for unit in units):
-                    label = self._unit_tracking_map.get(comp, "Kuyruk No")
-                    QMessageBox.warning(
-                        self, f"Eksik {label}",
-                        f"Teslim Edildi durumunda {comp} için tüm kuyruk no alanları doldurulmalıdır."
+                        f"{comp}: Aynı kuyruk no / seri no iki kez girilemez. Lütfen düzeltin."
                     )
                     return
                 component_units[comp] = units
