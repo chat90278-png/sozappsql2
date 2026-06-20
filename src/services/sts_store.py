@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from src.config.app_config import MAX_CONTRACT_FILE_SIZE_BYTES
 from src.models.app_models import ComponentDef, ContractInfo, DeliveryInfo, SystemInfo, TagDef
+from src.domain.flexible_date import is_tbd_contract_no
 from src.services.sts_database import STSDatabase, now_iso
 from src import auth
 
@@ -1591,6 +1592,11 @@ class STSStore:
             row_name = self.db.conn.execute("SELECT full_name FROM staff WHERE id=?", (responsible_engineer_id,)).fetchone()
             responsible_engineer_name = str(row_name[0] or "").strip() if row_name else ""
         search_text = " ".join([str(ci.platform or ""), str(ci.no or ""), str(ctype or ""), str(ci.note or ""), user_display, " ".join(users), responsible_engineer_name]).strip()
+        if is_tbd_contract_no(getattr(ci, "no", "")):
+            ci.signature_date = "TBD"
+            ci.t0_date = "TBD"
+            ci.t0_months = 0
+            ci.completion_date = "TBD"
         ci.user = user_display; ci.users = users
         ci.responsible_engineer_id = responsible_engineer_id
         ci.responsible_engineer_name = responsible_engineer_name
@@ -1809,7 +1815,16 @@ class STSStore:
         if responsible_engineer_id:
             staff_row = self.db.conn.execute("SELECT full_name FROM staff WHERE id=?", (responsible_engineer_id,)).fetchone()
             responsible_engineer_name = str(staff_row[0] or "").strip() if staff_row else ""
-        ci=ContractInfo(no=r['contract_no'],platform=active_platform_name,user=user_display,yi_yd=r['yi_yd'] or "Yİ",contract_type=r['contract_type'] or "",signature_date=r['signed_date'] or "",t0_date=r['t0_date'] or "",t0_months=int(r['t0_months'] or 0),completion_date=r['completion_date'] or "",status=r['status'] or "PLAN",note=r['note'] or "",acceptance_date=r['acceptance_date'] or "",entry_start_row=int(r['id']),id=int(r['id']),contract_id=int(r['id']),users=users, platform_id=active_platform_id or int(r['platform_id'] or 0), primary_platform_id=int(r['platform_id'] or 0), primary_platform=r['platform'] or '', platforms=platform_rows, platform_names=[x['platform_name'] for x in platform_rows], platform_ids=[int(x['platform_id']) for x in platform_rows], responsible_engineer_id=responsible_engineer_id, responsible_engineer_name=responsible_engineer_name)
+        signature_date = r['signed_date'] or ""
+        t0_date = r['t0_date'] or ""
+        t0_months = int(r['t0_months'] or 0)
+        completion_date = r['completion_date'] or ""
+        if is_tbd_contract_no(r['contract_no']):
+            signature_date = signature_date or "TBD"
+            t0_date = t0_date or "TBD"
+            t0_months = 0
+            completion_date = completion_date or "TBD"
+        ci=ContractInfo(no=r['contract_no'],platform=active_platform_name,user=user_display,yi_yd=r['yi_yd'] or "Yİ",contract_type=r['contract_type'] or "",signature_date=signature_date,t0_date=t0_date,t0_months=t0_months,completion_date=completion_date,status=r['status'] or "PLAN",note=r['note'] or "",acceptance_date=r['acceptance_date'] or "",entry_start_row=int(r['id']),id=int(r['id']),contract_id=int(r['id']),users=users, platform_id=active_platform_id or int(r['platform_id'] or 0), primary_platform_id=int(r['platform_id'] or 0), primary_platform=r['platform'] or '', platforms=platform_rows, platform_names=[x['platform_name'] for x in platform_rows], platform_ids=[int(x['platform_id']) for x in platform_rows], responsible_engineer_id=responsible_engineer_id, responsible_engineer_name=responsible_engineer_name)
         responsible_engineers = ([{"staff_id": responsible_engineer_id, "id": responsible_engineer_id, "full_name": responsible_engineer_name}] if responsible_engineer_id else self.get_contract_responsible_engineers(contract_id=int(r['id'])))
         if responsible_engineers and not responsible_engineer_id:
             responsible_engineer_id = int(responsible_engineers[0]["staff_id"])
