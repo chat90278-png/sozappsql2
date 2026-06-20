@@ -11894,9 +11894,11 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Database Yönetimi", "Database yönetimi yalnızca STS veri dosyalarında desteklenir.")
             return
         from src.ui.dialogs.database_management import DatabaseManagementDialog
-        dlg = DatabaseManagementDialog(self.store, self, current_staff=self.current_staff)
-        dlg.exec()
-
+        self.open_or_raise_tool_window(
+            "manager:database",
+            "Veri Yönetimi",
+            lambda: DatabaseManagementDialog(self.store, self, current_staff=self.current_staff),
+        )
 
     def open_performance_tracking(self):
         if not self.store:
@@ -11995,18 +11997,50 @@ class MainWindow(QMainWindow):
         if not self.require_permission_ui(required_permission, "Personel ve Yetki Yönetimi"):
             return
         from src.ui.dialogs.staff_permissions import StaffPermissionsDialog
-        dlg = StaffPermissionsDialog(self._permission_db(), self.current_staff, self, initial_tab=initial_tab)
-        dlg.permissions_saved.connect(self._refresh_permission_actions)
-        dlg.exec()
+
+        def factory():
+            dlg = StaffPermissionsDialog(self._permission_db(), self.current_staff, self, initial_tab=initial_tab)
+            try:
+                dlg.permissions_saved.connect(self._refresh_permission_actions)
+            except Exception:
+                pass
+            return dlg
+
+        self.open_or_raise_tool_window(
+            "manager:staff_permissions",
+            "Personel / Yetki Yönetimi",
+            factory,
+        )
 
     def open_user_management(self):
         if not self.store:
             QMessageBox.information(self, "Excel gerekli", "Önce bir Excel veya STS veri dosyası bağlayın.")
             return
-        dlg = UserManagerDialog(self.store, self)
-        dlg.exec()
-        if dlg.changed:
-            self.request_refresh(scope="users")
+
+        def factory():
+            dlg = UserManagerDialog(self.store, self)
+
+            def refresh_if_changed(*_args, d=dlg):
+                try:
+                    if getattr(d, "changed", False):
+                        self.request_refresh(scope="users")
+                except Exception:
+                    pass
+
+            try:
+                dlg.finished.connect(refresh_if_changed)
+            except Exception:
+                try:
+                    dlg.destroyed.connect(refresh_if_changed)
+                except Exception:
+                    pass
+            return dlg
+
+        self.open_or_raise_tool_window(
+            "manager:users",
+            "Kullanıcı Yönetimi",
+            factory,
+        )
 
     def open_staff_management(self):
         self.open_staff_permissions_dialog("staffRoles")
@@ -12047,7 +12081,6 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             traceback.print_exc()
             QMessageBox.warning(self, "Kullanım Kılavuzu", f"Kullanım kılavuzu açılamadı:\n{exc}")
-
 
     def build(self):
         root=QWidget(); self.setCentralWidget(root); main=QVBoxLayout(root)
@@ -12102,72 +12135,109 @@ class MainWindow(QMainWindow):
         self._active_tool_window_key = ""
         self.open_windows_strip = QFrame()
         self.open_windows_strip.setObjectName("openWindowsStrip")
+        self.open_windows_strip.setFixedHeight(34)
+        self.open_windows_strip.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.open_windows_strip.setStyleSheet("""
             QFrame#openWindowsStrip {
-                background: #edf4fb;
-                border: 1px solid #c9d8ec;
-                border-radius: 12px;
+                background: #f3f7fc;
+                border: 1px solid #d9e5f2;
+                border-radius: 8px;
+                padding: 0px;
+                margin: 0px;
             }
             QLabel#openWindowsLabel {
-                color: #35506f;
-                font-weight: 900;
-                font-size: 11px;
+                color: #51677f;
+                font-weight: 800;
+                font-size: 10px;
+                background: transparent;
+                padding: 0px 2px;
+            }
+            QScrollArea#openWindowsScroll {
+                background: transparent;
+                border: none;
+                padding: 0px;
+                margin: 0px;
+            }
+            QScrollArea#openWindowsScroll > QWidget > QWidget {
                 background: transparent;
             }
             QFrame[toolChip="true"] {
-                background: #f8fbff;
-                border: 1px solid #c9d8ec;
-                border-radius: 12px;
+                background: #ffffff;
+                border: 1px solid #cddbeb;
+                border-radius: 10px;
+                padding: 0px;
+                margin: 0px;
             }
             QFrame[toolChip="true"][active="true"] {
-                background: #dbeafe;
-                border-color: #185fa5;
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #1d4ed8, stop:1 #2563eb);
+                border: 1px solid #1e40af;
+            }
+            QFrame[toolChip="true"]:hover {
+                border-color: #93c5fd;
+                background: #f8fbff;
+            }
+            QFrame[toolChip="true"][active="true"]:hover {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #1e40af, stop:1 #1d4ed8);
+                border-color: #bfdbfe;
             }
             QFrame[toolChip="true"] QPushButton {
                 background: transparent;
                 border: 0;
-                color: #23466f;
+                color: #27445f;
                 font-weight: 800;
-                padding: 4px 6px;
+                font-size: 11px;
+                padding: 2px 6px;
+                margin: 0px;
             }
             QFrame[toolChip="true"][active="true"] QPushButton {
-                color: #002060;
-            }
-            QFrame[toolChip="true"] QPushButton:hover {
-                color: #003b83;
+                color: #ffffff;
             }
             QPushButton#toolChipClose {
                 color: #64748b;
                 font-weight: 900;
-                padding: 3px 6px;
+                font-size: 13px;
+                padding: 0px 4px;
+                margin: 0px;
                 border-radius: 8px;
             }
             QPushButton#toolChipClose:hover {
-                background: #cfe0f5;
-                color: #b91c1c;
+                background: rgba(248, 113, 113, 0.18);
+                color: #dc2626;
+            }
+            QFrame[toolChip="true"][active="true"] QPushButton#toolChipClose {
+                color: #dbeafe;
+            }
+            QFrame[toolChip="true"][active="true"] QPushButton#toolChipClose:hover {
+                background: rgba(255, 255, 255, 0.18);
+                color: #ffffff;
             }
         """)
         open_strip_lay = QHBoxLayout(self.open_windows_strip)
-        open_strip_lay.setContentsMargins(10, 5, 10, 5)
+        open_strip_lay.setContentsMargins(8, 3, 8, 3)
         open_strip_lay.setSpacing(6)
-        label = QLabel("Açık Pencereler:")
+        label = QLabel("▣ Pencereler:")
         label.setObjectName("openWindowsLabel")
-        open_strip_lay.addWidget(label, 0)
+        label.setFixedHeight(24)
+        open_strip_lay.addWidget(label, 0, Qt.AlignVCenter)
         self.open_windows_scroll = QScrollArea()
         self.open_windows_scroll.setObjectName("openWindowsScroll")
         self.open_windows_scroll.setWidgetResizable(True)
         self.open_windows_scroll.setFrameShape(QFrame.NoFrame)
         self.open_windows_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.open_windows_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.open_windows_scroll.setFixedHeight(38)
+        self.open_windows_scroll.setFixedHeight(26)
+        self.open_windows_scroll.viewport().setStyleSheet("background:transparent;border:0;")
         self.open_windows_host = QWidget()
         self.open_windows_host.setObjectName("openWindowsHost")
+        self.open_windows_host.setStyleSheet("QWidget#openWindowsHost{background:transparent;border:0;}")
         self.open_windows_layout = QHBoxLayout(self.open_windows_host)
         self.open_windows_layout.setContentsMargins(0, 0, 0, 0)
         self.open_windows_layout.setSpacing(6)
         self.open_windows_layout.addStretch(1)
         self.open_windows_scroll.setWidget(self.open_windows_host)
-        open_strip_lay.addWidget(self.open_windows_scroll, 1)
+        open_strip_lay.addWidget(self.open_windows_scroll, 1, Qt.AlignVCenter)
         self.open_windows_strip.hide()
         main.addWidget(self.open_windows_strip, 0)
 
@@ -12363,18 +12433,54 @@ class MainWindow(QMainWindow):
             if not qt_obj_alive(chip):
                 continue
             chip.setProperty("active", "true" if item_key == self._active_tool_window_key else "false")
-            style = chip.style()
-            style.unpolish(chip)
-            style.polish(chip)
+            try:
+                style = chip.style()
+                style.unpolish(chip)
+                style.polish(chip)
+            except Exception:
+                pass
             chip.update()
 
     def _prepare_tool_window(self, widget: QWidget) -> QWidget:
+        """Tool-window manager'a alınan büyük ekranları gerçek ayrı pencere yapar.
+
+        Küçük modal formlar bu helper'a gelmez; bu yüzden burada minimize/maximize
+        butonlarını güvenle açabiliriz.
+        """
         try:
             if isinstance(widget, QDialog):
                 widget.setModal(False)
                 widget.setWindowModality(Qt.NonModal)
-            widget.setWindowFlag(Qt.Window, True)
+                try:
+                    widget.setSizeGripEnabled(True)
+                except Exception:
+                    pass
+
+            flags = widget.windowFlags()
+            flags |= Qt.Window
+            flags |= Qt.WindowTitleHint
+            flags |= Qt.WindowSystemMenuHint
+            flags |= Qt.WindowMinimizeButtonHint
+            flags |= Qt.WindowMaximizeButtonHint
+            flags |= Qt.WindowCloseButtonHint
+            widget.setWindowFlags(flags)
             widget.setAttribute(Qt.WA_DeleteOnClose, True)
+            widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+
+            try:
+                min_size = widget.minimumSize()
+                if min_size.width() < 640 or min_size.height() < 420:
+                    widget.setMinimumSize(max(640, min_size.width()), max(420, min_size.height()))
+            except Exception:
+                pass
+
+            try:
+                icon_path = app_icon_path()
+                if icon_path and Path(icon_path).exists():
+                    widget.setWindowIcon(QIcon(str(icon_path)))
+            except Exception:
+                pass
+
             widget.installEventFilter(self)
         except Exception:
             pass
@@ -12385,26 +12491,30 @@ class MainWindow(QMainWindow):
         chip.setProperty("toolChip", "true")
         chip.setProperty("active", "false")
         chip.setToolTip(title)
+        chip.setFixedHeight(24)
         lay = QHBoxLayout(chip)
-        lay.setContentsMargins(8, 1, 4, 1)
+        lay.setContentsMargins(8, 0, 4, 0)
         lay.setSpacing(2)
 
         title_btn = QPushButton(title)
         title_btn.setToolTip(title)
-        title_btn.setMinimumWidth(90)
-        title_btn.setMaximumWidth(240)
+        title_btn.setCursor(Qt.PointingHandCursor)
+        title_btn.setMinimumHeight(22)
+        title_btn.setMinimumWidth(88)
+        title_btn.setMaximumWidth(230)
         title_btn.clicked.connect(lambda _checked=False, k=key: self.raise_tool_window(k))
-        lay.addWidget(title_btn, 0)
+        lay.addWidget(title_btn, 0, Qt.AlignVCenter)
 
         close_btn = QPushButton("×")
         close_btn.setObjectName("toolChipClose")
-        close_btn.setFixedWidth(24)
+        close_btn.setCursor(Qt.PointingHandCursor)
+        close_btn.setFixedSize(20, 20)
         close_btn.setToolTip(f"{title} penceresini kapat")
         close_btn.clicked.connect(lambda _checked=False, k=key: self.close_tool_window(k))
-        lay.addWidget(close_btn, 0)
+        lay.addWidget(close_btn, 0, Qt.AlignVCenter)
 
         insert_at = max(0, self.open_windows_layout.count() - 1)
-        self.open_windows_layout.insertWidget(insert_at, chip, 0)
+        self.open_windows_layout.insertWidget(insert_at, chip, 0, Qt.AlignVCenter)
         self._tool_window_chip_by_key[key] = chip
         self._refresh_tool_window_strip_visibility()
         return chip
@@ -13656,20 +13766,39 @@ class MainWindow(QMainWindow):
         if not self.store:
             QMessageBox.information(self, "Excel gerekli", "Önce bir Excel dosyası bağlayın.")
             return
-        dlg = PlatformComponentManagerDialog(self.store, self, initial_tab=0)
-        saved_via_signal = False
 
-        def refresh_after_platform_save():
-            nonlocal saved_via_signal
-            saved_via_signal = True
-            current = self.platform_list.currentItem() if hasattr(self, "platform_list") else None
-            current_platform = str(current.data(Qt.UserRole) or "") if current else None
-            self.request_refresh(select_platform=current_platform, scope="all")
+        def factory():
+            dlg = PlatformComponentManagerDialog(self.store, self, initial_tab=0)
+            saved_state = {"via_signal": False}
 
-        dlg.settings_saved.connect(refresh_after_platform_save)
-        dlg.exec()
-        if dlg.changed and not saved_via_signal:
-            refresh_after_platform_save()
+            def refresh_after_platform_save(*_args):
+                saved_state["via_signal"] = True
+                current = self.platform_list.currentItem() if hasattr(self, "platform_list") else None
+                current_platform = str(current.data(Qt.UserRole) or "") if current else None
+                self.request_refresh(select_platform=current_platform, scope="all")
+
+            def refresh_on_close(*_args, d=dlg):
+                try:
+                    if getattr(d, "changed", False) and not saved_state.get("via_signal"):
+                        refresh_after_platform_save()
+                except Exception:
+                    pass
+
+            try:
+                dlg.settings_saved.connect(refresh_after_platform_save)
+            except Exception:
+                pass
+            try:
+                dlg.finished.connect(refresh_on_close)
+            except Exception:
+                pass
+            return dlg
+
+        self.open_or_raise_tool_window(
+            "manager:platform_components",
+            "Platform / Bileşen Yönetimi",
+            factory,
+        )
 
     def create_platform(self):
         """Eski uyumluluk - manage_platforms'u cagirir."""
@@ -13684,15 +13813,33 @@ class MainWindow(QMainWindow):
         if not self.store:
             QMessageBox.information(self, "Excel gerekli", "Önce bir Excel dosyası bağlayın.")
             return
-        dlg = TagManagerDialog(self.store, self.contract_index, self)
-        dlg.exec()
-        if dlg.changed:
-            self._tag_color_map_cache = None
-            current_platform = ""
-            cur = self.platform_list.currentItem()
-            if cur:
-                current_platform = str(cur.data(Qt.UserRole) or "")
-            self.request_refresh(select_platform=current_platform, scope="tags")
+
+        def factory():
+            dlg = TagManagerDialog(self.store, self.contract_index, self)
+
+            def refresh_if_changed(*_args, d=dlg):
+                try:
+                    if getattr(d, "changed", False):
+                        self._tag_color_map_cache = None
+                        current_platform = ""
+                        cur = self.platform_list.currentItem() if hasattr(self, "platform_list") else None
+                        if cur:
+                            current_platform = str(cur.data(Qt.UserRole) or "")
+                        self.request_refresh(select_platform=current_platform, scope="tags")
+                except Exception:
+                    pass
+
+            try:
+                dlg.finished.connect(refresh_if_changed)
+            except Exception:
+                pass
+            return dlg
+
+        self.open_or_raise_tool_window(
+            "manager:tags",
+            "Etiket Yönetimi",
+            factory,
+        )
 
     def manage_components(self):
         if not self.require_permission_ui("manage_components", "Bileşen Yönetimi"):
@@ -13700,27 +13847,62 @@ class MainWindow(QMainWindow):
         if not self.store:
             QMessageBox.information(self, "Excel gerekli", "Önce bir Excel dosyası bağlayın.")
             return
-        dlg = PlatformComponentManagerDialog(self.store, self, initial_tab=1)
-        if dlg.exec():
-            self.request_refresh(scope="ui")
 
+        def factory():
+            dlg = PlatformComponentManagerDialog(self.store, self, initial_tab=1)
+
+            def refresh_if_changed(*_args, d=dlg):
+                try:
+                    if getattr(d, "changed", False):
+                        self.request_refresh(scope="ui")
+                except Exception:
+                    pass
+
+            try:
+                dlg.settings_saved.connect(lambda *_args: self.request_refresh(scope="ui"))
+            except Exception:
+                pass
+            try:
+                dlg.finished.connect(refresh_if_changed)
+            except Exception:
+                pass
+            return dlg
+
+        self.open_or_raise_tool_window(
+            "manager:platform_components",
+            "Platform / Bileşen Yönetimi",
+            factory,
+        )
 
     def open_calendar_tracking(self):
         if not self.store:
             QMessageBox.information(self, "Excel gerekli", "Önce bir Excel dosyası bağlayın.")
             return
-        self.set_busy_overlay(True, "Takvim hazırlanıyor...")
-        try:
-            self.calendar_window = ContractCalendarWindow(
-                self.store, self.contract_index, self, detail_handler=self.open_calendar_event_detail
-            )
-        finally:
-            self.set_busy_overlay(False)
-        self.calendar_window.showMaximized()
-        self.calendar_window.show()
-        self.calendar_window.raise_()
-        self.calendar_window.activateWindow()
 
+        def factory():
+            self.set_busy_overlay(True, "Takvim hazırlanıyor...")
+            try:
+                win = ContractCalendarWindow(
+                    self.store, self.contract_index, self, detail_handler=self.open_calendar_event_detail
+                )
+                try:
+                    self.calendar_window = win
+                    win.destroyed.connect(lambda *_args: setattr(self, "calendar_window", None))
+                except Exception:
+                    pass
+                try:
+                    win.setWindowState(win.windowState() | Qt.WindowMaximized)
+                except Exception:
+                    pass
+                return win
+            finally:
+                self.set_busy_overlay(False)
+
+        self.open_or_raise_tool_window(
+            "report:calendar",
+            "Takvim Görünümü",
+            factory,
+        )
 
     def open_calendar_event_detail(self, ev: dict) -> bool:
         platform = str(ev.get("platform", "") or "")
