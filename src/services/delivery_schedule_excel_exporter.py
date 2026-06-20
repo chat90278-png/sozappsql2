@@ -12,6 +12,11 @@ EXCEL_REQUIRED_MESSAGE = "Bu raporun PivotTable / PivotChart / Dilimleyici özel
 REVISION = "R006"
 VISIBLE_SHEETS = ["Dashboard", "Teslimat Veri Girişi", "Tahmini Teslimat Takvimi", "REV Takip"]
 HIDDEN_SHEETS = ["Pivot Kaynak", "Pivot Ozet", "Grafik Kaynak", "Parametreler"]
+# Excel slicer COM calls are the most fragile part of the export. On some
+# Office/Windows installations they kill the Excel automation server and the
+# app receives: (-2147023174, 'RPC sunucusu kullanılamıyor'). Keep slicers
+# disabled by default so the report file is still generated reliably.
+DASHBOARD_SLICERS_ENABLED = False
 SOURCE_HEADERS = [
     "Platform", "Sözleşme", "Sistem / Paket", "Sözleşme Sahibi", "Teslim Kullanıcısı", "Yİ/YD",
     "Teslimat", "Tarih", "Yıl", "Seviye", "Parça No", "Parça", "Sözleşme Adeti",
@@ -764,11 +769,35 @@ def _ensure_excel():
     except Exception as exc:
         raise ExcelComUnavailableError(EXCEL_REQUIRED_MESSAGE) from exc
     try:
+        # Export worker runs on a background thread, so COM must be initialized
+        # inside that same thread. Retry once because Office may need a moment
+        # to clean up after a previous failed automation run.
         pythoncom.CoInitialize()
-        excel = win32.DispatchEx("Excel.Application")
+        try:
+            excel = win32.DispatchEx("Excel.Application")
+        except Exception:
+            import time
+            time.sleep(1.0)
+            excel = win32.DispatchEx("Excel.Application")
+        try:
+            excel.Visible = False
+            excel.DisplayAlerts = False
+            excel.EnableEvents = False
+            excel.ScreenUpdating = False
+            excel.AskToUpdateLinks = False
+        except Exception:
+            pass
     except Exception as exc:
         raise ExcelComUnavailableError(EXCEL_REQUIRED_MESSAGE) from exc
     return excel
+
+
+def _uninitialize_excel_com() -> None:
+    try:
+        import pythoncom  # type: ignore
+        pythoncom.CoUninitialize()
+    except Exception:
+        pass
 
 
 def _safe_autofit_columns(ws) -> None:
@@ -1218,7 +1247,14 @@ def _build_dashboard(wb, ws, source_range: str, rows: list[dict[str, Any]], plat
     except Exception:
         pass
 
-    _add_slicers(wb, ws, pt, [pt_part, pt_yiyd, pt_year])
+    # Slicers are useful but highly fragile through Excel COM. If Excel kills
+    # the automation server during slicer creation, the whole export fails with
+    # an RPC error. Keep this optional and fully isolated.
+    if DASHBOARD_SLICERS_ENABLED:
+        try:
+            _add_slicers(wb, ws, pt, [pt_part, pt_yiyd, pt_year])
+        except Exception:
+            pass
     _safe_autofit_columns(ws)
 
 def _create_small_pivot_chart(wb, cache, dashboard_ws, row_field: str, value_field: str, title: str, chart_type: int, left: int, top: int, width: int, height: int, table_name: str):
@@ -1375,7 +1411,6 @@ def export_delivery_schedule_report(store, output_path, filters=None, progress_c
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     excel = _ensure_excel()
-    excel.DisplayAlerts = False
     wb = None
     try:
         _progress(progress_cb, 10, "Excel çalışma kitabı hazırlanıyor")
@@ -1420,3 +1455,4 @@ def export_delivery_schedule_report(store, output_path, filters=None, progress_c
             excel.Quit()
         except Exception:
             pass
+        _uninitialize_excel_com()
