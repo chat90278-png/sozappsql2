@@ -108,28 +108,63 @@ def extract_year_from_date_text(value: object) -> Optional[int]:
 
 
 def normalize_report_date_display(value: object) -> str:
-    text = str(value or "").strip()
-    if not text:
-        return ""
-    text = text.replace("/", "-").replace(".", "-").upper()
-    parts = [p.strip() for p in text.split("-") if p.strip()]
-    if len(parts) != 3:
-        year = extract_year_from_date_text(text)
-        return f"TBD-TBD-{year}" if year else text
+    """Return a visible report date, preserving uncertain/TBD dates.
+
+    Supported examples:
+    - empty / None / TBD       -> TBD-TBD-TBD
+    - 2026                    -> TBD-TBD-2026
+    - 06-2026 / 2026-06       -> TBD-06-2026
+    - TBD-06-2026             -> TBD-06-2026
+    - 2026-TBD-TBD            -> TBD-TBD-2026
+    - 15-06-2026 / 2026-06-15 -> 15-06-2026
+    """
+    raw = str(value or "").strip()
+    if not raw:
+        return "TBD-TBD-TBD"
+
+    text = raw.replace("/", "-").replace(".", "-").strip().upper()
+    compact_unknown = re.sub(r"[^A-Z0-9]+", "", text)
+    if compact_unknown in {"", "TBD", "TBDBELIRLENECEK", "BELIRSIZ", "BILINMIYOR", "UNKNOWN", "N/A", "NA", "NONE", "NULL"}:
+        return "TBD-TBD-TBD"
 
     def is_year(part: str) -> bool:
-        return bool(re.fullmatch(r"(19\d{2}|20\d{2}|21\d{2})", part))
+        return bool(re.fullmatch(r"(19\d{2}|20\d{2}|21\d{2})", str(part or "").strip()))
+
+    def is_unknown(part: str) -> bool:
+        token = re.sub(r"[^A-Z0-9]+", "", str(part or "").strip().upper())
+        return token in {"", "0", "00", "TBD", "BELIRSIZ", "BILINMIYOR", "UNKNOWN", "NA", "NONE", "NULL"}
 
     def two_digit(part: str) -> str:
+        part = str(part or "").strip().upper()
+        if is_unknown(part):
+            return "TBD"
         return part.zfill(2) if part.isdigit() and len(part) <= 2 else part
 
+    parts = [p.strip() for p in text.split("-") if p.strip()]
+
+    year = next((p for p in parts if is_year(p)), None)
+    if year is None:
+        extracted = extract_year_from_date_text(text)
+        if extracted:
+            return f"TBD-TBD-{extracted}"
+        return "TBD-TBD-TBD" if any(is_unknown(p) for p in parts) else text
+
+    if len(parts) == 1:
+        return f"TBD-TBD-{year}"
+
+    if len(parts) == 2:
+        other = parts[1] if is_year(parts[0]) else parts[0]
+        # With two-part dates, treat the non-year token as month.
+        return f"TBD-{two_digit(other)}-{year}"
+
     if is_year(parts[0]):
-        year, month, day = parts
-        return f"{'TBD' if day == 'TBD' else two_digit(day)}-{'TBD' if month == 'TBD' else two_digit(month)}-{year}"
+        year, month, day = parts[0], parts[1], parts[2]
+        return f"{two_digit(day)}-{two_digit(month)}-{year}"
     if is_year(parts[2]):
-        day, month, year = parts
-        return f"{'TBD' if day == 'TBD' else two_digit(day)}-{'TBD' if month == 'TBD' else two_digit(month)}-{year}"
-    return text
+        day, month, year = parts[0], parts[1], parts[2]
+        return f"{two_digit(day)}-{two_digit(month)}-{year}"
+
+    return f"TBD-TBD-{year}"
 
 
 def _safe_float(value: object) -> float:
@@ -198,6 +233,27 @@ def contract_owner_text(conn: sqlite3.Connection, contract_id: int) -> str:
     return ", ".join(str(row[0] or "").strip() for row in rows if str(row[0] or "").strip())
 
 
+def _filter_text_key(value: Any) -> str:
+    text = str(value or "").strip().casefold()
+    repl = {"ı": "i", "İ": "i", "ş": "s", "ğ": "g", "ü": "u", "ö": "o", "ç": "c"}
+    for src, dst in repl.items():
+        text = text.replace(src, dst)
+    return " ".join(text.split())
+
+
+def _is_all_filter_value(value: Any, all_text: str = "Tümü") -> bool:
+    return _filter_text_key(value) == _filter_text_key(all_text)
+
+
+def _normalize_yi_yd_value(value: Any) -> str:
+    key = _filter_text_key(value).replace(" ", "")
+    if key in {"yi", "yici", "yurtici", "yurtiçi"} or "yurtici" in key:
+        return "Yİ"
+    if key in {"yd", "yddisi", "yurtdisi", "yurtdışı"} or "yurtdisi" in key:
+        return "YD"
+    return str(value or "").strip().upper()
+
+
 def _matches_filters(row: dict[str, Any], filters: Optional[dict[str, Any]]) -> bool:
     if not filters:
         return True
@@ -205,8 +261,16 @@ def _matches_filters(row: dict[str, Any], filters: Optional[dict[str, Any]]) -> 
     end_year = filters.get("end_year")
     if start_year and end_year:
         year = row.get("Yıl")
-        if not year or not (int(start_year) <= int(year) <= int(end_year)):
-            return False
+        # Unknown/TBD dates must stay visible in the report/export. Known
+        # years continue to obey the selected year range.
+        if year in (None, "", "TBD"):
+            pass
+        else:
+            try:
+                if not (int(start_year) <= int(year) <= int(end_year)):
+                    return False
+            except (TypeError, ValueError):
+                pass
     checks = [
         ("platform", "Platform", "Tümü"),
         ("yi_yd", "Yİ/YD", "Tümü"),
@@ -216,10 +280,15 @@ def _matches_filters(row: dict[str, Any], filters: Optional[dict[str, Any]]) -> 
     ]
     for filter_key, row_key, all_value in checks:
         value = filters.get(filter_key)
-        if value and value != all_value and str(row.get(row_key) or "") != str(value):
+        if not value or _is_all_filter_value(value, all_value):
+            continue
+        if filter_key == "yi_yd":
+            if _normalize_yi_yd_value(row.get(row_key)) != _normalize_yi_yd_value(value):
+                return False
+        elif str(row.get(row_key) or "") != str(value):
             return False
     owner = filters.get("owner")
-    if owner and owner != "Tümü":
+    if owner and not _is_all_filter_value(owner, "Tümü"):
         owners = [part.strip() for part in str(row.get("Sözleşme Sahibi") or "").split(",")]
         if str(owner) not in owners:
             return False
@@ -272,7 +341,7 @@ def load_delivery_schedule_rows(store: object, filters: Optional[dict[str, Any]]
             "Yİ/YD": str(item["delivery_user_yi_yd"] or item["contract_yi_yd"] or "-"),
             "Teslimat": str(item["delivery_name"] or "-"),
             "Tarih": date_text,
-            "Yıl": year or "",
+            "Yıl": year or "TBD",
             "Seviye": "1",
             "Parça No": "",
             "Parça": str(item["component_name"] or "-"),
@@ -602,38 +671,38 @@ def _hidden_revision_log_ids(conn: sqlite3.Connection) -> set[int]:
 
 
 def _manual_revision_rows(conn: sqlite3.Connection, filters: Optional[dict[str, Any]] = None) -> list[dict[str, Any]]:
+    """Return only user-entered REV rows.
+
+    Activity/application logs are intentionally not included in REV Takip for now.
+    The existing table schema is reused: field_name stores the visible
+    "Revizyon Bilgisi" value, revision_date stores the visible "Tarih" value.
+    """
     try:
         ensure_revision_edit_tables(conn)
         rows = conn.execute(
             """
-            SELECT id, contract_id, delivery_id, system_name, revision_date, user_name,
-                   contract_no, delivery_name, field_name, old_value, new_value,
-                   description, source, created_at, updated_at, created_by, updated_by
+            SELECT id, revision_date, field_name, description, source,
+                   created_at, updated_at, created_by, updated_by
             FROM delivery_schedule_revision_rows
             WHERE COALESCE(is_deleted,0)=0
+            ORDER BY id ASC
             """
         ).fetchall()
     except Exception:
         return []
-    selected_contracts = _selected_contracts_from_filters(filters)
+
     result: list[dict[str, Any]] = []
     for row in rows:
         data = _as_dict(row)
-        contract_no = str(data.get("contract_no") or "").strip()
-        if selected_contracts and contract_no not in selected_contracts:
-            continue
+        revision_info = str(data.get("field_name") or "").strip()
         result.append({
-            "revision": "",
+            "revision": revision_info,
+            "revision_info": revision_info,
             "source": "manual",
             "log_id": None,
             "manual_id": int(data.get("id") or 0),
-            "date": str(data.get("revision_date") or data.get("created_at") or ""),
-            "user": str(data.get("user_name") or data.get("created_by") or "Kullanıcı"),
-            "contract": contract_no or "-",
-            "delivery": str(data.get("delivery_name") or "-"),
-            "field": str(data.get("field_name") or ""),
-            "old_value": str(data.get("old_value") or ""),
-            "new_value": str(data.get("new_value") or ""),
+            "date": str(data.get("revision_date") or ""),
+            "field": revision_info,
             "description": str(data.get("description") or ""),
         })
     return result
@@ -643,14 +712,8 @@ def build_delivery_schedule_revision_rows(store: object, limit: int = 200, filte
     conn = _conn_from_store(store)
     if conn is None:
         return []
-    hidden_ids = _hidden_revision_log_ids(conn)
-    auto_rows = [row for row in load_meaningful_revision_logs(store, limit=limit, filters=filters) if int(row.get("log_id") or 0) not in hidden_ids]
-    manual_rows = _manual_revision_rows(conn, filters=filters)
-    combined = auto_rows + manual_rows
-    combined.sort(key=lambda row: str(row.get("date") or ""), reverse=True)
-    for idx, row in enumerate(combined, start=1):
-        row["revision"] = f"R{idx:03d}"
-    return combined[: int(limit or 200)]
+    # Only manual rows are shown/exported. Do not merge activity_logs into REV Takip.
+    return _manual_revision_rows(conn, filters=None)[: int(limit or 200)]
 
 
 def save_manual_revision_row(store: object, values: dict[str, Any], row_id: Optional[int] = None) -> int:
@@ -660,24 +723,22 @@ def save_manual_revision_row(store: object, values: dict[str, Any], row_id: Opti
     ensure_revision_edit_tables(conn)
     now = datetime.now().isoformat(timespec="seconds")
     actor = str(values.get("updated_by") or values.get("created_by") or values.get("user_name") or "Kullanıcı")
+    revision_info = str(values.get("revision_info") or values.get("field_name") or values.get("revision") or "").strip()
+    revision_date = str(values.get("revision_date") or values.get("date") or "").strip()
+    description = str(values.get("description") or "").strip()
+
     if row_id:
         conn.execute(
             """
             UPDATE delivery_schedule_revision_rows
-            SET revision_date=?, user_name=?, contract_no=?, delivery_name=?, field_name=?,
-                old_value=?, new_value=?, description=?, updated_at=?, updated_by=?
+            SET revision_date=?, field_name=?, description=?, updated_at=?, updated_by=?
             WHERE id=? AND COALESCE(is_deleted,0)=0
             """,
-            (
-                str(values.get("revision_date") or ""), str(values.get("user_name") or ""),
-                str(values.get("contract_no") or ""), str(values.get("delivery_name") or ""),
-                str(values.get("field_name") or ""), str(values.get("old_value") or ""),
-                str(values.get("new_value") or ""), str(values.get("description") or ""),
-                now, actor, int(row_id),
-            ),
+            (revision_date, revision_info, description, now, actor, int(row_id)),
         )
         conn.commit()
         return int(row_id)
+
     cur = conn.execute(
         """
         INSERT INTO delivery_schedule_revision_rows(
@@ -688,10 +749,8 @@ def save_manual_revision_row(store: object, values: dict[str, Any], row_id: Opti
         """,
         (
             values.get("contract_id"), values.get("delivery_id"), str(values.get("system_name") or ""),
-            str(values.get("revision_date") or now), str(values.get("user_name") or actor),
-            str(values.get("contract_no") or ""), str(values.get("delivery_name") or ""),
-            str(values.get("field_name") or ""), str(values.get("old_value") or ""),
-            str(values.get("new_value") or ""), str(values.get("description") or ""),
+            revision_date, actor, str(values.get("contract_no") or ""),
+            str(values.get("delivery_name") or ""), revision_info, "", "", description,
             "manual", 0, now, now, actor, actor,
         ),
     )
@@ -705,29 +764,22 @@ def hide_revision_row(store: object, row: dict[str, Any], actor: str = "", reaso
         raise RuntimeError("Açık STS veritabanı bulunamadı.")
     ensure_revision_edit_tables(conn)
     now = datetime.now().isoformat(timespec="seconds")
-    if str(row.get("source") or "") == "manual":
-        manual_id = int(row.get("manual_id") or 0)
-        if manual_id:
-            conn.execute(
-                "UPDATE delivery_schedule_revision_rows SET is_deleted=1, updated_at=?, updated_by=? WHERE id=?",
-                (now, actor or "Kullanıcı", manual_id),
-            )
-    else:
-        log_id = int(row.get("log_id") or 0)
-        if log_id:
-            conn.execute(
-                "INSERT OR IGNORE INTO delivery_schedule_rev_hidden_logs(log_id, hidden_by, hidden_at, reason) VALUES(?,?,?,?)",
-                (log_id, actor or "Kullanıcı", now, reason or "REV Takip raporundan gizlendi"),
-            )
-    conn.commit()
+    manual_id = int(row.get("manual_id") or 0)
+    if manual_id:
+        conn.execute(
+            "UPDATE delivery_schedule_revision_rows SET is_deleted=1, updated_at=?, updated_by=? WHERE id=?",
+            (now, actor or "Kullanıcı", manual_id),
+        )
+        conn.commit()
+
 
 def load_activity_rows(store: object, filters: Optional[dict[str, Any]] = None) -> list[list[Any]]:
-    rows = build_delivery_schedule_revision_rows(store, limit=200, filters=filters)
+    rows = build_delivery_schedule_revision_rows(store, limit=200, filters=None)
     return [
         [
-            log["revision"], log["date"], log["user"], log["contract"], log["delivery"],
-            log["field"], log["old_value"], log["new_value"],
-            (str(log["description"] or "") + (" (Manuel)" if log.get("source") == "manual" else "")),
+            str(log.get("revision_info") or log.get("field") or log.get("revision") or ""),
+            str(log.get("date") or ""),
+            str(log.get("description") or ""),
         ]
         for log in rows
     ]
@@ -970,11 +1022,11 @@ def _write_source_sheet(ws, rows: list[dict[str, Any]]) -> None:
 
 
 def _write_rev_sheet(ws, activity_rows: list[list[Any]]) -> None:
-    headers = ["Revizyon Bilgisi", "Tarih", "Kullanıcı", "Sözleşme", "Teslimat", "Alan", "Eski Değer", "Yeni Değer", "Açıklama"]
+    headers = ["Revizyon Bilgisi", "Tarih", "Açıklama"]
     for col, header in enumerate(headers, start=1):
         ws.Cells(1, col).Value = header
     for r, row in enumerate(activity_rows, start=2):
-        for c, value in enumerate(row, start=1):
+        for c, value in enumerate(row[:len(headers)], start=1):
             cell = ws.Cells(r, c)
             if c == 2:
                 cell.NumberFormat = "@"
@@ -982,6 +1034,7 @@ def _write_rev_sheet(ws, activity_rows: list[list[Any]]) -> None:
             else:
                 cell.Value = value
     _format_table(ws, 1, 1, max(len(activity_rows) + 1, 1), len(headers))
+
 
 
 def _build_dashboard(wb, ws, source_range: str, rows: list[dict[str, Any]], platform_title: str, report_date: str):
