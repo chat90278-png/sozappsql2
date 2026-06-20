@@ -64,7 +64,7 @@ from src.config.app_config import (
 from src.models.app_models import ComponentDef, ContractInfo, SystemInfo, DeliveryInfo, TagDef
 from src.domain.contract_timing import contract_timing, is_completed_status
 from src.domain.delivery_coverage import acceptance_coverage_issues
-from src.domain.flexible_date import flexible_or_blank, is_exact_date, parse_flexible_date, validate_flexible_date, format_flexible_date
+from src.domain.flexible_date import flexible_or_blank, is_exact_date, is_tbd_contract_no, parse_flexible_date, validate_flexible_date, format_flexible_date
 from src.ui.widgets import stat_card, set_card_value
 from src.ui.theme import STYLE
 from src.ui.tarih import ContractCalendarWindow
@@ -3562,10 +3562,10 @@ class ContractDialog(StyledDialog):
             self.sd_code.setText(sd_code)
             contract_type = sd_code
 
-        signature_date = ""
-        t0_date = ""
+        signature_date = "TBD" if unknown_mode else ""
+        t0_date = "TBD" if unknown_mode else ""
         t0_months = 0
-        completion_date = ""
+        completion_date = "TBD" if unknown_mode else ""
         if not unknown_mode:
             sig = parse_iso_date(self.sig.text().strip())
             if not sig:
@@ -4103,10 +4103,16 @@ class ContractEditDialog(StyledDialog):
         new_ci.users           = selected_users
         new_ci.user            = ", ".join(selected_users)
         new_ci.yi_yd           = self.yi_yd.text().strip() or "Yİ"
-        new_ci.signature_date  = str(getattr(self.ci, "signature_date", "") or "")
-        new_ci.t0_date         = str(getattr(self.ci, "t0_date", "") or "")
-        new_ci.t0_months       = int(getattr(self.ci, "t0_months", 0) or 0)
-        new_ci.completion_date = str(getattr(self.ci, "completion_date", "") or "")
+        if is_tbd_contract_no(new_no_text) or is_tbd_contract_no(getattr(self.ci, "no", "")):
+            new_ci.signature_date = "TBD"
+            new_ci.t0_date = "TBD"
+            new_ci.t0_months = 0
+            new_ci.completion_date = "TBD"
+        else:
+            new_ci.signature_date  = str(getattr(self.ci, "signature_date", "") or "")
+            new_ci.t0_date         = str(getattr(self.ci, "t0_date", "") or "")
+            new_ci.t0_months       = int(getattr(self.ci, "t0_months", 0) or 0)
+            new_ci.completion_date = str(getattr(self.ci, "completion_date", "") or "")
         new_ci.status          = str(self.ci.status or "Başlanmadı")
         new_ci.note            = self.note.text().strip()
         selected_platform_ids = self._platform_select.selected_platform_ids() if hasattr(self._platform_select, "selected_platform_ids") else []
@@ -11906,8 +11912,11 @@ class MainWindow(QMainWindow):
             return
 
         from src.ui.dialogs.performance_tracking import PerformanceTrackingDialog
-        dlg = PerformanceTrackingDialog(self.store, self)
-        dlg.exec()
+        self.open_or_raise_tool_window(
+            "report:performance",
+            "Performans Takip",
+            lambda: PerformanceTrackingDialog(self.store, self),
+        )
 
     def open_activity_logs(self):
         if not self.require_permission_ui("view_action_history", "İşlem Geçmişi"):
@@ -11919,8 +11928,11 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "İşlem Geçmişi", "İşlem geçmişi yalnızca STS veri dosyalarında desteklenir.")
             return
         from src.ui.dialogs.activity_logs import ActivityLogDialog
-        dlg = ActivityLogDialog(self.store, self)
-        dlg.exec()
+        self.open_or_raise_tool_window(
+            "report:activity_logs",
+            "İşlem Geçmişi",
+            lambda: ActivityLogDialog(self.store, self),
+        )
 
     def _permission_db(self):
         if self.store is not None and getattr(self.store, "db", None) is not None:
@@ -12009,20 +12021,29 @@ class MainWindow(QMainWindow):
     def open_delivery_schedule_report(self):
         from src.ui.dialogs.delivery_schedule_report_dialog import DeliveryScheduleReportDialog
 
-        dlg = DeliveryScheduleReportDialog(self, store=self.store)
-        dlg.exec()
+        self.open_or_raise_tool_window(
+            "report:delivery_schedule",
+            "Tahmini Teslimat Takvimi",
+            lambda: DeliveryScheduleReportDialog(self, store=self.store),
+        )
 
     def open_platform_delivery_report(self):
         if not self.store:
             QMessageBox.information(self, "Veri dosyası gerekli", "Raporu açmak için önce bir STS veri dosyası açın.")
             return
-        dlg = PlatformTeslimatDurumuReportDialog(self, store=self.store)
-        dlg.exec()
+        self.open_or_raise_tool_window(
+            "report:platform_delivery",
+            "Platform Teslimat Özeti",
+            lambda: PlatformTeslimatDurumuReportDialog(self, store=self.store),
+        )
 
     def open_usage_guide(self):
         try:
-            dlg = UsageGuideDialog(self)
-            dlg.exec()
+            self.open_or_raise_tool_window(
+                "help:usage_guide",
+                "Kullanım Kılavuzu",
+                lambda: UsageGuideDialog(self),
+            )
         except Exception as exc:
             traceback.print_exc()
             QMessageBox.warning(self, "Kullanım Kılavuzu", f"Kullanım kılavuzu açılamadı:\n{exc}")
@@ -12076,6 +12097,80 @@ class MainWindow(QMainWindow):
         tl.addWidget(self.top_actions_btn)
         main.addWidget(top, 0)
 
+        self._tool_windows_by_key: Dict[str, QWidget] = {}
+        self._tool_window_chip_by_key: Dict[str, QWidget] = {}
+        self._active_tool_window_key = ""
+        self.open_windows_strip = QFrame()
+        self.open_windows_strip.setObjectName("openWindowsStrip")
+        self.open_windows_strip.setStyleSheet("""
+            QFrame#openWindowsStrip {
+                background: #edf4fb;
+                border: 1px solid #c9d8ec;
+                border-radius: 12px;
+            }
+            QLabel#openWindowsLabel {
+                color: #35506f;
+                font-weight: 900;
+                font-size: 11px;
+                background: transparent;
+            }
+            QFrame[toolChip="true"] {
+                background: #f8fbff;
+                border: 1px solid #c9d8ec;
+                border-radius: 12px;
+            }
+            QFrame[toolChip="true"][active="true"] {
+                background: #dbeafe;
+                border-color: #185fa5;
+            }
+            QFrame[toolChip="true"] QPushButton {
+                background: transparent;
+                border: 0;
+                color: #23466f;
+                font-weight: 800;
+                padding: 4px 6px;
+            }
+            QFrame[toolChip="true"][active="true"] QPushButton {
+                color: #002060;
+            }
+            QFrame[toolChip="true"] QPushButton:hover {
+                color: #003b83;
+            }
+            QPushButton#toolChipClose {
+                color: #64748b;
+                font-weight: 900;
+                padding: 3px 6px;
+                border-radius: 8px;
+            }
+            QPushButton#toolChipClose:hover {
+                background: #cfe0f5;
+                color: #b91c1c;
+            }
+        """)
+        open_strip_lay = QHBoxLayout(self.open_windows_strip)
+        open_strip_lay.setContentsMargins(10, 5, 10, 5)
+        open_strip_lay.setSpacing(6)
+        label = QLabel("Açık Pencereler:")
+        label.setObjectName("openWindowsLabel")
+        open_strip_lay.addWidget(label, 0)
+        self.open_windows_scroll = QScrollArea()
+        self.open_windows_scroll.setObjectName("openWindowsScroll")
+        self.open_windows_scroll.setWidgetResizable(True)
+        self.open_windows_scroll.setFrameShape(QFrame.NoFrame)
+        self.open_windows_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.open_windows_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.open_windows_scroll.setFixedHeight(38)
+        self.open_windows_host = QWidget()
+        self.open_windows_host.setObjectName("openWindowsHost")
+        self.open_windows_layout = QHBoxLayout(self.open_windows_host)
+        self.open_windows_layout.setContentsMargins(0, 0, 0, 0)
+        self.open_windows_layout.setSpacing(6)
+        self.open_windows_layout.addStretch(1)
+        self.open_windows_scroll.setWidget(self.open_windows_host)
+        open_strip_lay.addWidget(self.open_windows_scroll, 1)
+        self.open_windows_strip.hide()
+        main.addWidget(self.open_windows_strip, 0)
+
         strip=QFrame(); strip.setObjectName("alertStrip"); sl=QHBoxLayout(strip); sl.setContentsMargins(12, 10, 12, 10); sl.setSpacing(10)
         today_box = QFrame(); today_box.setObjectName("todayBadge")
         today_l = QVBoxLayout(today_box); today_l.setContentsMargins(12, 8, 12, 8); today_l.setSpacing(1)
@@ -12120,6 +12215,7 @@ class MainWindow(QMainWindow):
         sl.addWidget(self.upcoming_scroll, 1)
 
         calb=QPushButton("🗓 Takvim Görünümü"); calb.clicked.connect(self.open_calendar_tracking); sl.addWidget(calb, 0)
+        # The alert strip belongs to the real main layout; there is no embedded workspace container here.
         main.addWidget(strip, 0)
 
         body=QHBoxLayout(); body.setSpacing(8); main.addLayout(body,1)
@@ -12253,6 +12349,144 @@ class MainWindow(QMainWindow):
         st.polish(self.connection_label)
         self.connection_label.update()
 
+    def _tool_window_alive(self, widget: Optional[QWidget]) -> bool:
+        return bool(widget is not None and qt_obj_alive(widget))
+
+    def _refresh_tool_window_strip_visibility(self) -> None:
+        if hasattr(self, "open_windows_strip"):
+            self.open_windows_strip.setVisible(bool(getattr(self, "_tool_windows_by_key", {})))
+
+    def _set_active_tool_window(self, key: str) -> None:
+        self._active_tool_window_key = str(key or "")
+        for item_key, chip in list(getattr(self, "_tool_window_chip_by_key", {}).items()):
+            if not qt_obj_alive(chip):
+                continue
+            chip.setProperty("active", "true" if item_key == self._active_tool_window_key else "false")
+            style = chip.style()
+            style.unpolish(chip)
+            style.polish(chip)
+            chip.update()
+
+    def _prepare_tool_window(self, widget: QWidget) -> QWidget:
+        try:
+            if isinstance(widget, QDialog):
+                widget.setModal(False)
+                widget.setWindowModality(Qt.NonModal)
+            widget.setWindowFlag(Qt.Window, True)
+            widget.setAttribute(Qt.WA_DeleteOnClose, True)
+            widget.installEventFilter(self)
+        except Exception:
+            pass
+        return widget
+
+    def _create_tool_window_chip(self, key: str, title: str) -> QWidget:
+        chip = QFrame(self.open_windows_host)
+        chip.setProperty("toolChip", "true")
+        chip.setProperty("active", "false")
+        chip.setToolTip(title)
+        lay = QHBoxLayout(chip)
+        lay.setContentsMargins(8, 1, 4, 1)
+        lay.setSpacing(2)
+
+        title_btn = QPushButton(title)
+        title_btn.setToolTip(title)
+        title_btn.setMinimumWidth(90)
+        title_btn.setMaximumWidth(240)
+        title_btn.clicked.connect(lambda _checked=False, k=key: self.raise_tool_window(k))
+        lay.addWidget(title_btn, 0)
+
+        close_btn = QPushButton("×")
+        close_btn.setObjectName("toolChipClose")
+        close_btn.setFixedWidth(24)
+        close_btn.setToolTip(f"{title} penceresini kapat")
+        close_btn.clicked.connect(lambda _checked=False, k=key: self.close_tool_window(k))
+        lay.addWidget(close_btn, 0)
+
+        insert_at = max(0, self.open_windows_layout.count() - 1)
+        self.open_windows_layout.insertWidget(insert_at, chip, 0)
+        self._tool_window_chip_by_key[key] = chip
+        self._refresh_tool_window_strip_visibility()
+        return chip
+
+    def _unregister_tool_window(self, key: str) -> None:
+        widget = getattr(self, "_tool_windows_by_key", {}).pop(key, None)
+        chip = getattr(self, "_tool_window_chip_by_key", {}).pop(key, None)
+        if self._active_tool_window_key == key:
+            self._active_tool_window_key = ""
+        if self._tool_window_alive(widget):
+            try:
+                widget.removeEventFilter(self)
+            except Exception:
+                pass
+        if qt_obj_alive(chip):
+            try:
+                self.open_windows_layout.removeWidget(chip)
+                chip.deleteLater()
+            except Exception:
+                pass
+        self._refresh_tool_window_strip_visibility()
+        if self._active_tool_window_key:
+            self._set_active_tool_window(self._active_tool_window_key)
+
+    def raise_tool_window(self, key: str) -> Optional[QWidget]:
+        widget = getattr(self, "_tool_windows_by_key", {}).get(key)
+        if not self._tool_window_alive(widget):
+            self._unregister_tool_window(key)
+            return None
+        try:
+            if widget.isMinimized():
+                widget.showNormal()
+            elif not widget.isVisible():
+                widget.show()
+            widget.raise_()
+            widget.activateWindow()
+        except Exception:
+            pass
+        self._set_active_tool_window(key)
+        return widget
+
+    def open_or_raise_tool_window(self, key: str, title: str, factory: Callable[[], QWidget]) -> QWidget:
+        existing = getattr(self, "_tool_windows_by_key", {}).get(key)
+        if self._tool_window_alive(existing):
+            return self.raise_tool_window(key) or existing
+        if existing is not None:
+            self._unregister_tool_window(key)
+
+        widget = self._prepare_tool_window(factory())
+        self._tool_windows_by_key[key] = widget
+        self._create_tool_window_chip(key, title)
+        try:
+            widget.destroyed.connect(lambda *_args, k=key: self._unregister_tool_window(k))
+        except Exception:
+            pass
+        try:
+            widget.show()
+            widget.raise_()
+            widget.activateWindow()
+        except Exception:
+            pass
+        self._set_active_tool_window(key)
+        return widget
+
+    def close_tool_window(self, key: str) -> bool:
+        widget = getattr(self, "_tool_windows_by_key", {}).get(key)
+        if not self._tool_window_alive(widget):
+            self._unregister_tool_window(key)
+            return True
+        try:
+            closed = bool(widget.close())
+        except Exception:
+            return False
+        if closed:
+            self._unregister_tool_window(key)
+        return closed
+
+    def close_all_tool_windows(self) -> bool:
+        for key in list(getattr(self, "_tool_windows_by_key", {}).keys()):
+            if not self.close_tool_window(key):
+                return False
+        return True
+
     def _apply_version_to_ui(self):
         try:
             from src.services.version_manager import read_version
@@ -12290,6 +12524,9 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event: QCloseEvent) -> None:
         """Kapanışta değişiklik varsa dosya adını standart versiyon formatına taşır."""
+        if hasattr(self, "open_windows_strip") and not self.close_all_tool_windows():
+            event.ignore()
+            return
         if getattr(self, "store", None) and self._workbook_changed_since_load():
             try:
                 # STS dosyalarında tek aktif dosya korunur: mevcut dosya yeniden adlandırılır.
@@ -12500,6 +12737,12 @@ class MainWindow(QMainWindow):
                 etype = event.type()
             except Exception:
                 return False
+
+            if etype == QEvent.WindowActivate:
+                for key, widget in list(getattr(self, "_tool_windows_by_key", {}).items()):
+                    if obj is widget:
+                        self._set_active_tool_window(key)
+                        break
 
             contract_viewport = None
             try:
@@ -13346,6 +13589,8 @@ class MainWindow(QMainWindow):
         dlg = WorkbookStartDialog(self)
         if dlg.exec() and dlg.selected_path:
             sel = Path(dlg.selected_path)
+            if not self.close_all_tool_windows():
+                return
             if sel.suffix.lower() == ".sts":
                 if _share_metadata_from_path(sel):
                     try:
