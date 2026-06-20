@@ -11912,10 +11912,10 @@ class MainWindow(QMainWindow):
             return
 
         from src.ui.dialogs.performance_tracking import PerformanceTrackingDialog
-        self.open_tab_or_raise(
+        self.open_or_raise_tool_window(
             "report:performance",
             "Performans Takip",
-            lambda: PerformanceTrackingDialog(self.store, self.tab_workspace),
+            lambda: PerformanceTrackingDialog(self.store, self),
         )
 
     def open_activity_logs(self):
@@ -11928,10 +11928,10 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "İşlem Geçmişi", "İşlem geçmişi yalnızca STS veri dosyalarında desteklenir.")
             return
         from src.ui.dialogs.activity_logs import ActivityLogDialog
-        self.open_tab_or_raise(
+        self.open_or_raise_tool_window(
             "report:activity_logs",
             "İşlem Geçmişi",
-            lambda: ActivityLogDialog(self.store, self.tab_workspace),
+            lambda: ActivityLogDialog(self.store, self),
         )
 
     def _permission_db(self):
@@ -12021,25 +12021,28 @@ class MainWindow(QMainWindow):
     def open_delivery_schedule_report(self):
         from src.ui.dialogs.delivery_schedule_report_dialog import DeliveryScheduleReportDialog
 
-        dlg = DeliveryScheduleReportDialog(self, store=self.store)
-        dlg.exec()
+        self.open_or_raise_tool_window(
+            "report:delivery_schedule",
+            "Tahmini Teslimat Takvimi",
+            lambda: DeliveryScheduleReportDialog(self, store=self.store),
+        )
 
     def open_platform_delivery_report(self):
         if not self.store:
             QMessageBox.information(self, "Veri dosyası gerekli", "Raporu açmak için önce bir STS veri dosyası açın.")
             return
-        self.open_tab_or_raise(
+        self.open_or_raise_tool_window(
             "report:platform_delivery",
             "Platform Teslimat Özeti",
-            lambda: PlatformTeslimatDurumuReportDialog(self.tab_workspace, store=self.store),
+            lambda: PlatformTeslimatDurumuReportDialog(self, store=self.store),
         )
 
     def open_usage_guide(self):
         try:
-            self.open_tab_or_raise(
+            self.open_or_raise_tool_window(
                 "help:usage_guide",
                 "Kullanım Kılavuzu",
-                lambda: UsageGuideDialog(self.tab_workspace, embedded=True),
+                lambda: UsageGuideDialog(self),
             )
         except Exception as exc:
             traceback.print_exc()
@@ -12094,64 +12097,79 @@ class MainWindow(QMainWindow):
         tl.addWidget(self.top_actions_btn)
         main.addWidget(top, 0)
 
-        self.tab_workspace = QTabWidget()
-        self.tab_workspace.setObjectName("mainTabWorkspace")
-        self.tab_workspace.setTabsClosable(True)
-        self.tab_workspace.setMovable(True)
-        self.tab_workspace.setDocumentMode(True)
-        self.tab_workspace.setElideMode(Qt.ElideRight)
-        self.tab_workspace.setStyleSheet("""
-            QTabWidget#mainTabWorkspace::pane {
+        self._tool_windows_by_key: Dict[str, QWidget] = {}
+        self._tool_window_chip_by_key: Dict[str, QWidget] = {}
+        self._active_tool_window_key = ""
+        self.open_windows_strip = QFrame()
+        self.open_windows_strip.setObjectName("openWindowsStrip")
+        self.open_windows_strip.setStyleSheet("""
+            QFrame#openWindowsStrip {
+                background: #edf4fb;
                 border: 1px solid #c9d8ec;
                 border-radius: 12px;
-                background: #eef3f8;
-                top: -1px;
             }
-            QTabWidget#mainTabWorkspace > QTabBar::tab {
-                background: #eaf2fb;
-                color: #23466f;
+            QLabel#openWindowsLabel {
+                color: #35506f;
+                font-weight: 900;
+                font-size: 11px;
+                background: transparent;
+            }
+            QFrame[toolChip="true"] {
+                background: #f8fbff;
                 border: 1px solid #c9d8ec;
-                border-bottom: 0;
-                border-top-left-radius: 12px;
-                border-top-right-radius: 12px;
-                padding: 9px 18px;
-                margin-right: 3px;
-                min-width: 120px;
-                max-width: 240px;
-                font-weight: 800;
+                border-radius: 12px;
             }
-            QTabWidget#mainTabWorkspace > QTabBar::tab:hover {
-                background: #f5faff;
+            QFrame[toolChip="true"][active="true"] {
+                background: #dbeafe;
+                border-color: #185fa5;
+            }
+            QFrame[toolChip="true"] QPushButton {
+                background: transparent;
+                border: 0;
+                color: #23466f;
+                font-weight: 800;
+                padding: 4px 6px;
+            }
+            QFrame[toolChip="true"][active="true"] QPushButton {
+                color: #002060;
+            }
+            QFrame[toolChip="true"] QPushButton:hover {
                 color: #003b83;
             }
-            QTabWidget#mainTabWorkspace > QTabBar::tab:selected {
-                background: #ffffff;
-                color: #002060;
-                border-color: #9fb8d8;
-            }
-            QTabWidget#mainTabWorkspace > QTabBar::close-button:hover {
-                background: #dbeafe;
+            QPushButton#toolChipClose {
+                color: #64748b;
+                font-weight: 900;
+                padding: 3px 6px;
                 border-radius: 8px;
             }
+            QPushButton#toolChipClose:hover {
+                background: #cfe0f5;
+                color: #b91c1c;
+            }
         """)
-        self.tab_workspace.tabCloseRequested.connect(self._on_tab_close_requested)
-        self._tabs_by_key: Dict[str, QWidget] = {}
-        self._tab_key_by_widget: Dict[QWidget, str] = {}
-        self._tab_titles: Dict[str, str] = {}
-        self._tab_dirty: Dict[str, bool] = {}
-        main.addWidget(self.tab_workspace, 1)
-
-        self.home_tab = QWidget()
-        self.home_tab.setObjectName("contractsHomeTab")
-        home_lay = QVBoxLayout(self.home_tab)
-        home_lay.setContentsMargins(0, 0, 0, 0)
-        home_lay.setSpacing(8)
-        self.tab_workspace.addTab(self.home_tab, "Sözleşme Sorgulama")
-        self.tab_workspace.setTabToolTip(0, "Sözleşme Sorgulama")
-        self.tab_workspace.tabBar().setTabButton(0, QTabBar.RightSide, None)
-        self._tabs_by_key["home:contracts"] = self.home_tab
-        self._tab_key_by_widget[self.home_tab] = "home:contracts"
-        self._tab_titles["home:contracts"] = "Sözleşme Sorgulama"
+        open_strip_lay = QHBoxLayout(self.open_windows_strip)
+        open_strip_lay.setContentsMargins(10, 5, 10, 5)
+        open_strip_lay.setSpacing(6)
+        label = QLabel("Açık Pencereler:")
+        label.setObjectName("openWindowsLabel")
+        open_strip_lay.addWidget(label, 0)
+        self.open_windows_scroll = QScrollArea()
+        self.open_windows_scroll.setObjectName("openWindowsScroll")
+        self.open_windows_scroll.setWidgetResizable(True)
+        self.open_windows_scroll.setFrameShape(QFrame.NoFrame)
+        self.open_windows_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.open_windows_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.open_windows_scroll.setFixedHeight(38)
+        self.open_windows_host = QWidget()
+        self.open_windows_host.setObjectName("openWindowsHost")
+        self.open_windows_layout = QHBoxLayout(self.open_windows_host)
+        self.open_windows_layout.setContentsMargins(0, 0, 0, 0)
+        self.open_windows_layout.setSpacing(6)
+        self.open_windows_layout.addStretch(1)
+        self.open_windows_scroll.setWidget(self.open_windows_host)
+        open_strip_lay.addWidget(self.open_windows_scroll, 1)
+        self.open_windows_strip.hide()
+        main.addWidget(self.open_windows_strip, 0)
 
         strip=QFrame(); strip.setObjectName("alertStrip"); sl=QHBoxLayout(strip); sl.setContentsMargins(12, 10, 12, 10); sl.setSpacing(10)
         today_box = QFrame(); today_box.setObjectName("todayBadge")
@@ -12330,107 +12348,141 @@ class MainWindow(QMainWindow):
         st.polish(self.connection_label)
         self.connection_label.update()
 
-    def _prepare_tab_widget(self, widget: QWidget) -> QWidget:
-        """Make a dialog-like screen safe to host inside the main tab workspace."""
+    def _tool_window_alive(self, widget: Optional[QWidget]) -> bool:
+        return bool(widget is not None and qt_obj_alive(widget))
+
+    def _refresh_tool_window_strip_visibility(self) -> None:
+        if hasattr(self, "open_windows_strip"):
+            self.open_windows_strip.setVisible(bool(getattr(self, "_tool_windows_by_key", {})))
+
+    def _set_active_tool_window(self, key: str) -> None:
+        self._active_tool_window_key = str(key or "")
+        for item_key, chip in list(getattr(self, "_tool_window_chip_by_key", {}).items()):
+            if not qt_obj_alive(chip):
+                continue
+            chip.setProperty("active", "true" if item_key == self._active_tool_window_key else "false")
+            style = chip.style()
+            style.unpolish(chip)
+            style.polish(chip)
+            chip.update()
+
+    def _prepare_tool_window(self, widget: QWidget) -> QWidget:
         try:
             if isinstance(widget, QDialog):
                 widget.setModal(False)
-                widget.setWindowFlags(Qt.Widget)
-            widget.setParent(self.tab_workspace)
-            widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+                widget.setWindowModality(Qt.NonModal)
+            widget.setWindowFlag(Qt.Window, True)
+            widget.setAttribute(Qt.WA_DeleteOnClose, True)
+            widget.installEventFilter(self)
         except Exception:
             pass
         return widget
 
-    def activate_tab(self, key: str) -> bool:
-        widget = getattr(self, "_tabs_by_key", {}).get(key)
-        if widget is None:
-            return False
-        idx = self.tab_workspace.indexOf(widget)
-        if idx < 0:
-            return False
-        self.tab_workspace.setCurrentIndex(idx)
-        return True
+    def _create_tool_window_chip(self, key: str, title: str) -> QWidget:
+        chip = QFrame(self.open_windows_host)
+        chip.setProperty("toolChip", "true")
+        chip.setProperty("active", "false")
+        chip.setToolTip(title)
+        lay = QHBoxLayout(chip)
+        lay.setContentsMargins(8, 1, 4, 1)
+        lay.setSpacing(2)
 
-    def current_tab_key(self) -> str:
-        widget = self.tab_workspace.currentWidget() if hasattr(self, "tab_workspace") else None
-        return getattr(self, "_tab_key_by_widget", {}).get(widget, "")
+        title_btn = QPushButton(title)
+        title_btn.setToolTip(title)
+        title_btn.setMinimumWidth(90)
+        title_btn.setMaximumWidth(240)
+        title_btn.clicked.connect(lambda _checked=False, k=key: self.raise_tool_window(k))
+        lay.addWidget(title_btn, 0)
 
-    def mark_tab_dirty(self, key: str, dirty: bool = True):
-        if key not in getattr(self, "_tabs_by_key", {}):
-            return
-        self._tab_dirty[key] = bool(dirty)
-        widget = self._tabs_by_key[key]
-        idx = self.tab_workspace.indexOf(widget)
-        if idx < 0:
-            return
-        title = self._tab_titles.get(key, self.tab_workspace.tabText(idx).lstrip("• "))
-        self.tab_workspace.setTabText(idx, f"• {title}" if dirty else title)
+        close_btn = QPushButton("×")
+        close_btn.setObjectName("toolChipClose")
+        close_btn.setFixedWidth(24)
+        close_btn.setToolTip(f"{title} penceresini kapat")
+        close_btn.clicked.connect(lambda _checked=False, k=key: self.close_tool_window(k))
+        lay.addWidget(close_btn, 0)
 
-    def open_tab_or_raise(self, key: str, title: str, factory: Callable[[], QWidget], closable: bool = True) -> QWidget:
-        if self.activate_tab(key):
-            return self._tabs_by_key[key]
+        insert_at = max(0, self.open_windows_layout.count() - 1)
+        self.open_windows_layout.insertWidget(insert_at, chip, 0)
+        self._tool_window_chip_by_key[key] = chip
+        self._refresh_tool_window_strip_visibility()
+        return chip
 
-        widget = self._prepare_tab_widget(factory())
-        idx = self.tab_workspace.addTab(widget, title)
-        self.tab_workspace.setTabToolTip(idx, title)
-        self.tab_workspace.setCurrentIndex(idx)
-        self._tabs_by_key[key] = widget
-        self._tab_key_by_widget[widget] = key
-        self._tab_titles[key] = title
-        self._tab_dirty[key] = False
-        if not closable:
-            self.tab_workspace.tabBar().setTabButton(idx, QTabBar.RightSide, None)
+    def _unregister_tool_window(self, key: str) -> None:
+        widget = getattr(self, "_tool_windows_by_key", {}).pop(key, None)
+        chip = getattr(self, "_tool_window_chip_by_key", {}).pop(key, None)
+        if self._active_tool_window_key == key:
+            self._active_tool_window_key = ""
+        if self._tool_window_alive(widget):
+            try:
+                widget.removeEventFilter(self)
+            except Exception:
+                pass
+        if qt_obj_alive(chip):
+            try:
+                self.open_windows_layout.removeWidget(chip)
+                chip.deleteLater()
+            except Exception:
+                pass
+        self._refresh_tool_window_strip_visibility()
+        if self._active_tool_window_key:
+            self._set_active_tool_window(self._active_tool_window_key)
+
+    def raise_tool_window(self, key: str) -> Optional[QWidget]:
+        widget = getattr(self, "_tool_windows_by_key", {}).get(key)
+        if not self._tool_window_alive(widget):
+            self._unregister_tool_window(key)
+            return None
+        try:
+            if widget.isMinimized():
+                widget.showNormal()
+            elif not widget.isVisible():
+                widget.show()
+            widget.raise_()
+            widget.activateWindow()
+        except Exception:
+            pass
+        self._set_active_tool_window(key)
         return widget
 
-    def close_tab_by_key(self, key: str) -> bool:
-        if key == "home:contracts":
+    def open_or_raise_tool_window(self, key: str, title: str, factory: Callable[[], QWidget]) -> QWidget:
+        existing = getattr(self, "_tool_windows_by_key", {}).get(key)
+        if self._tool_window_alive(existing):
+            return self.raise_tool_window(key) or existing
+        if existing is not None:
+            self._unregister_tool_window(key)
+
+        widget = self._prepare_tool_window(factory())
+        self._tool_windows_by_key[key] = widget
+        self._create_tool_window_chip(key, title)
+        try:
+            widget.destroyed.connect(lambda *_args, k=key: self._unregister_tool_window(k))
+        except Exception:
+            pass
+        try:
+            widget.show()
+            widget.raise_()
+            widget.activateWindow()
+        except Exception:
+            pass
+        self._set_active_tool_window(key)
+        return widget
+
+    def close_tool_window(self, key: str) -> bool:
+        widget = getattr(self, "_tool_windows_by_key", {}).get(key)
+        if not self._tool_window_alive(widget):
+            self._unregister_tool_window(key)
+            return True
+        try:
+            closed = bool(widget.close())
+        except Exception:
             return False
-        widget = getattr(self, "_tabs_by_key", {}).get(key)
-        if widget is None:
-            return True
-        idx = self.tab_workspace.indexOf(widget)
-        if idx < 0:
-            self._tabs_by_key.pop(key, None)
-            self._tab_key_by_widget.pop(widget, None)
-            self._tab_titles.pop(key, None)
-            self._tab_dirty.pop(key, None)
-            return True
+        if closed:
+            self._unregister_tool_window(key)
+        return closed
 
-        can_close = getattr(widget, "can_close", None)
-        if callable(can_close):
-            try:
-                if can_close() is False:
-                    return False
-            except Exception:
-                return False
-
-        cleanup = getattr(widget, "cleanup", None)
-        if callable(cleanup):
-            try:
-                cleanup()
-            except Exception:
-                traceback.print_exc()
-
-        self.tab_workspace.removeTab(idx)
-        self._tabs_by_key.pop(key, None)
-        self._tab_key_by_widget.pop(widget, None)
-        self._tab_titles.pop(key, None)
-        self._tab_dirty.pop(key, None)
-        widget.deleteLater()
-        return True
-
-    def _on_tab_close_requested(self, index: int):
-        widget = self.tab_workspace.widget(index)
-        key = getattr(self, "_tab_key_by_widget", {}).get(widget, "")
-        if key:
-            self.close_tab_by_key(key)
-
-    def close_non_home_tabs(self) -> bool:
-        for key in list(getattr(self, "_tabs_by_key", {}).keys()):
-            if key == "home:contracts":
-                continue
-            if not self.close_tab_by_key(key):
+    def close_all_tool_windows(self) -> bool:
+        for key in list(getattr(self, "_tool_windows_by_key", {}).keys()):
+            if not self.close_tool_window(key):
                 return False
         return True
 
@@ -12471,7 +12523,7 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event: QCloseEvent) -> None:
         """Kapanışta değişiklik varsa dosya adını standart versiyon formatına taşır."""
-        if hasattr(self, "tab_workspace") and not self.close_non_home_tabs():
+        if hasattr(self, "open_windows_strip") and not self.close_all_tool_windows():
             event.ignore()
             return
         if getattr(self, "store", None) and self._workbook_changed_since_load():
@@ -12684,6 +12736,12 @@ class MainWindow(QMainWindow):
                 etype = event.type()
             except Exception:
                 return False
+
+            if etype == QEvent.WindowActivate:
+                for key, widget in list(getattr(self, "_tool_windows_by_key", {}).items()):
+                    if obj is widget:
+                        self._set_active_tool_window(key)
+                        break
 
             contract_viewport = None
             try:
@@ -13530,7 +13588,7 @@ class MainWindow(QMainWindow):
         dlg = WorkbookStartDialog(self)
         if dlg.exec() and dlg.selected_path:
             sel = Path(dlg.selected_path)
-            if not self.close_non_home_tabs():
+            if not self.close_all_tool_windows():
                 return
             if sel.suffix.lower() == ".sts":
                 if _share_metadata_from_path(sel):
