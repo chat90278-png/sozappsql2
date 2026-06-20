@@ -347,8 +347,9 @@ class GuideImage(QLabel):
 
 
 class UsageGuideDialog(QDialog):
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, embedded: bool = False):
         super().__init__(parent)
+        self.embedded = bool(embedded)
         self.setWindowTitle("Kullanım Kılavuzu")
         self.resize(1620, 920)
         self.setMinimumSize(1180, 760)
@@ -387,6 +388,7 @@ class UsageGuideDialog(QDialog):
         close_btn = QPushButton("Kapat")
         close_btn.setObjectName("primaryButton")
         close_btn.clicked.connect(self.accept)
+        close_btn.setVisible(not self.embedded)
         foot.addWidget(close_btn, 0, Qt.AlignRight)
         root.addLayout(foot)
 
