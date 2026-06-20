@@ -13,8 +13,9 @@ REVISION = "R006"
 VISIBLE_SHEETS = ["Dashboard", "Teslimat Veri Girişi", "Tahmini Teslimat Takvimi", "REV Takip"]
 HIDDEN_SHEETS = ["Pivot Kaynak", "Pivot Ozet", "Grafik Kaynak", "Parametreler"]
 SOURCE_HEADERS = [
-    "Platform", "Sözleşme", "Sistem / Paket", "Sözleşme Sahibi", "Teslim Kullanıcısı", "Yİ/YD", "Teslimat", "Tarih", "Yıl",
-    "Seviye", "Parça No", "Parça", "Sözleşme Adeti", "Teslim Edilen", "Kalan", "Konfigürasyon Tipi", "Opsiyon / Not", "Durum",
+    "Platform", "Sözleşme", "Sistem / Paket", "Sözleşme Sahibi", "Teslim Kullanıcısı", "Yİ/YD",
+    "Teslimat", "Tarih", "Yıl", "Seviye", "Parça No", "Parça", "Sözleşme Adeti",
+    "Teslim Edilen", "Kalan", "Konfigürasyon Tipi", "Opsiyon / Not", "Durum",
 ]
 
 APP_STATUS_VALUES = ["Eksik", "Gecikti", "Teslim Edildi", "Planlandı", "Teslim Edildi"]
@@ -108,63 +109,28 @@ def extract_year_from_date_text(value: object) -> Optional[int]:
 
 
 def normalize_report_date_display(value: object) -> str:
-    """Return a visible report date, preserving uncertain/TBD dates.
-
-    Supported examples:
-    - empty / None / TBD       -> TBD-TBD-TBD
-    - 2026                    -> TBD-TBD-2026
-    - 06-2026 / 2026-06       -> TBD-06-2026
-    - TBD-06-2026             -> TBD-06-2026
-    - 2026-TBD-TBD            -> TBD-TBD-2026
-    - 15-06-2026 / 2026-06-15 -> 15-06-2026
-    """
-    raw = str(value or "").strip()
-    if not raw:
-        return "TBD-TBD-TBD"
-
-    text = raw.replace("/", "-").replace(".", "-").strip().upper()
-    compact_unknown = re.sub(r"[^A-Z0-9]+", "", text)
-    if compact_unknown in {"", "TBD", "TBDBELIRLENECEK", "BELIRSIZ", "BILINMIYOR", "UNKNOWN", "N/A", "NA", "NONE", "NULL"}:
-        return "TBD-TBD-TBD"
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    text = text.replace("/", "-").replace(".", "-").upper()
+    parts = [p.strip() for p in text.split("-") if p.strip()]
+    if len(parts) != 3:
+        year = extract_year_from_date_text(text)
+        return f"TBD-TBD-{year}" if year else text
 
     def is_year(part: str) -> bool:
-        return bool(re.fullmatch(r"(19\d{2}|20\d{2}|21\d{2})", str(part or "").strip()))
-
-    def is_unknown(part: str) -> bool:
-        token = re.sub(r"[^A-Z0-9]+", "", str(part or "").strip().upper())
-        return token in {"", "0", "00", "TBD", "BELIRSIZ", "BILINMIYOR", "UNKNOWN", "NA", "NONE", "NULL"}
+        return bool(re.fullmatch(r"(19\d{2}|20\d{2}|21\d{2})", part))
 
     def two_digit(part: str) -> str:
-        part = str(part or "").strip().upper()
-        if is_unknown(part):
-            return "TBD"
         return part.zfill(2) if part.isdigit() and len(part) <= 2 else part
 
-    parts = [p.strip() for p in text.split("-") if p.strip()]
-
-    year = next((p for p in parts if is_year(p)), None)
-    if year is None:
-        extracted = extract_year_from_date_text(text)
-        if extracted:
-            return f"TBD-TBD-{extracted}"
-        return "TBD-TBD-TBD" if any(is_unknown(p) for p in parts) else text
-
-    if len(parts) == 1:
-        return f"TBD-TBD-{year}"
-
-    if len(parts) == 2:
-        other = parts[1] if is_year(parts[0]) else parts[0]
-        # With two-part dates, treat the non-year token as month.
-        return f"TBD-{two_digit(other)}-{year}"
-
     if is_year(parts[0]):
-        year, month, day = parts[0], parts[1], parts[2]
-        return f"{two_digit(day)}-{two_digit(month)}-{year}"
+        year, month, day = parts
+        return f"{'TBD' if day == 'TBD' else two_digit(day)}-{'TBD' if month == 'TBD' else two_digit(month)}-{year}"
     if is_year(parts[2]):
-        day, month, year = parts[0], parts[1], parts[2]
-        return f"{two_digit(day)}-{two_digit(month)}-{year}"
-
-    return f"TBD-TBD-{year}"
+        day, month, year = parts
+        return f"{'TBD' if day == 'TBD' else two_digit(day)}-{'TBD' if month == 'TBD' else two_digit(month)}-{year}"
+    return text
 
 
 def _safe_float(value: object) -> float:
@@ -177,50 +143,6 @@ def _safe_float(value: object) -> float:
 def _fmt_amount(value: object) -> int | float:
     number = _safe_float(value)
     return int(number) if number.is_integer() else round(number, 2)
-
-
-
-def _norm_text(value: object) -> str:
-    text = str(value or "").strip().casefold()
-    repl = {"ı": "i", "İ": "i", "ş": "s", "ğ": "g", "ü": "u", "ö": "o", "ç": "c"}
-    for src, dst in repl.items():
-        text = text.replace(src, dst)
-    return " ".join(text.split())
-
-
-def normalize_yi_yd(value: object) -> str:
-    raw = str(value or "").strip()
-    if _norm_text(raw) in {"tumu", "tümü", "tum", "tüm", "hepsi"}:
-        return "Tümü"
-    key = _norm_text(raw).replace(" ", "")
-    if key in {"yi", "yici", "yurtici", "yurtiçi"} or "yurtici" in key:
-        return "Yİ"
-    if key in {"yd", "yddisi", "yurtdisi", "yurtdışı"} or "yurtdisi" in key:
-        return "YD"
-    return raw.upper() or "-"
-
-
-def is_completed_status(value: object) -> bool:
-    key = _norm_text(value)
-    if not key:
-        return False
-    completed_keys = {
-        "tamamlandi", "tamamlandı", "tamam", "bitti", "kapandi", "kapandı",
-        "completed", "complete", "closed", "teslim edildi", "teslimedildi",
-    }
-    return key in completed_keys or key.startswith("tamamlan") or key.startswith("completed")
-
-
-def _short_join(values, limit: int = 2, empty: str = "") -> str:
-    seen = []
-    for value in values:
-        text = str(value or "").strip()
-        if text and text not in seen:
-            seen.append(text)
-    if not seen:
-        return empty
-    suffix = f" +{len(seen) - limit}" if len(seen) > limit else ""
-    return ", ".join(seen[:limit]) + suffix
 
 
 def _payload_value(text: str, *keys: str) -> str:
@@ -277,27 +199,6 @@ def contract_owner_text(conn: sqlite3.Connection, contract_id: int) -> str:
     return ", ".join(str(row[0] or "").strip() for row in rows if str(row[0] or "").strip())
 
 
-def _filter_text_key(value: Any) -> str:
-    text = str(value or "").strip().casefold()
-    repl = {"ı": "i", "İ": "i", "ş": "s", "ğ": "g", "ü": "u", "ö": "o", "ç": "c"}
-    for src, dst in repl.items():
-        text = text.replace(src, dst)
-    return " ".join(text.split())
-
-
-def _is_all_filter_value(value: Any, all_text: str = "Tümü") -> bool:
-    return _filter_text_key(value) == _filter_text_key(all_text)
-
-
-def _normalize_yi_yd_value(value: Any) -> str:
-    key = _filter_text_key(value).replace(" ", "")
-    if key in {"yi", "yici", "yurtici", "yurtiçi"} or "yurtici" in key:
-        return "Yİ"
-    if key in {"yd", "yddisi", "yurtdisi", "yurtdışı"} or "yurtdisi" in key:
-        return "YD"
-    return str(value or "").strip().upper()
-
-
 def _matches_filters(row: dict[str, Any], filters: Optional[dict[str, Any]]) -> bool:
     if not filters:
         return True
@@ -305,16 +206,8 @@ def _matches_filters(row: dict[str, Any], filters: Optional[dict[str, Any]]) -> 
     end_year = filters.get("end_year")
     if start_year and end_year:
         year = row.get("Yıl")
-        # Unknown/TBD dates must stay visible in the report/export. Known
-        # years continue to obey the selected year range.
-        if year in (None, "", "TBD"):
-            pass
-        else:
-            try:
-                if not (int(start_year) <= int(year) <= int(end_year)):
-                    return False
-            except (TypeError, ValueError):
-                pass
+        if not year or not (int(start_year) <= int(year) <= int(end_year)):
+            return False
     checks = [
         ("platform", "Platform", "Tümü"),
         ("yi_yd", "Yİ/YD", "Tümü"),
@@ -324,15 +217,10 @@ def _matches_filters(row: dict[str, Any], filters: Optional[dict[str, Any]]) -> 
     ]
     for filter_key, row_key, all_value in checks:
         value = filters.get(filter_key)
-        if not value or _is_all_filter_value(value, all_value):
-            continue
-        if filter_key == "yi_yd":
-            if _normalize_yi_yd_value(row.get(row_key)) != _normalize_yi_yd_value(value):
-                return False
-        elif str(row.get(row_key) or "") != str(value):
+        if value and value != all_value and str(row.get(row_key) or "") != str(value):
             return False
     owner = filters.get("owner")
-    if owner and not _is_all_filter_value(owner, "Tümü"):
+    if owner and owner != "Tümü":
         owners = [part.strip() for part in str(row.get("Sözleşme Sahibi") or "").split(",")]
         if str(owner) not in owners:
             return False
@@ -370,13 +258,9 @@ def load_delivery_schedule_rows(store: object, filters: Optional[dict[str, Any]]
         contract_id = int(item["contract_id"] or 0)
         if contract_id not in owner_cache:
             owner_cache[contract_id] = contract_owner_text(conn, contract_id)
-        if is_completed_status(item["contract_status"]):
-            continue
         planned = _safe_float(item["planned"])
         delivered = _safe_float(item["delivered"])
         remaining = max(planned - delivered, 0.0)
-        if remaining <= 0:
-            continue
         date_text = normalize_report_date_display(item["planned_acceptance_date"] or item["acceptance_date"] or "")
         year = extract_year_from_date_text(date_text)
         delivery_payload = item["delivery_payload_json"] if "delivery_payload_json" in item.keys() else ""
@@ -384,10 +268,10 @@ def load_delivery_schedule_rows(store: object, filters: Optional[dict[str, Any]]
         row = {
             "Platform": str(item["platform_name"] or "Tanımsız"),
             "Sözleşme": str(item["contract_no"] or "-"),
-            "Sistem / Paket": str(item["system_name"] or "Tanımsız Sistem"),
+            "Sistem / Paket": str(item["system_name"] or "Sistem 1"),
             "Sözleşme Sahibi": owner_cache.get(contract_id) or "-",
             "Teslim Kullanıcısı": str(item["delivery_user_name"] or "Tanımsız"),
-            "Yİ/YD": normalize_yi_yd(item["delivery_user_yi_yd"] or item["contract_yi_yd"] or "-"),
+            "Yİ/YD": str(item["delivery_user_yi_yd"] or item["contract_yi_yd"] or "-"),
             "Teslimat": str(item["delivery_name"] or "-"),
             "Tarih": date_text,
             "Yıl": year or "",
@@ -756,14 +640,12 @@ def _manual_revision_rows(conn: sqlite3.Connection, filters: Optional[dict[str, 
         })
     return result
 
-
 def build_delivery_schedule_revision_rows(store: object, limit: int = 200, filters: Optional[dict[str, Any]] = None) -> list[dict[str, Any]]:
     conn = _conn_from_store(store)
     if conn is None:
         return []
     # Only manual rows are shown/exported. Do not merge activity_logs into REV Takip.
     return _manual_revision_rows(conn, filters=None)[: int(limit or 200)]
-
 
 def save_manual_revision_row(store: object, values: dict[str, Any], row_id: Optional[int] = None) -> int:
     conn = _conn_from_store(store)
@@ -806,21 +688,27 @@ def save_manual_revision_row(store: object, values: dict[str, Any], row_id: Opti
     conn.commit()
     return int(cur.lastrowid or 0)
 
-
 def hide_revision_row(store: object, row: dict[str, Any], actor: str = "", reason: str = "") -> None:
     conn = _conn_from_store(store)
     if conn is None:
         raise RuntimeError("Açık STS veritabanı bulunamadı.")
     ensure_revision_edit_tables(conn)
     now = datetime.now().isoformat(timespec="seconds")
-    manual_id = int(row.get("manual_id") or 0)
-    if manual_id:
-        conn.execute(
-            "UPDATE delivery_schedule_revision_rows SET is_deleted=1, updated_at=?, updated_by=? WHERE id=?",
-            (now, actor or "Kullanıcı", manual_id),
-        )
-        conn.commit()
-
+    if str(row.get("source") or "") == "manual":
+        manual_id = int(row.get("manual_id") or 0)
+        if manual_id:
+            conn.execute(
+                "UPDATE delivery_schedule_revision_rows SET is_deleted=1, updated_at=?, updated_by=? WHERE id=?",
+                (now, actor or "Kullanıcı", manual_id),
+            )
+    else:
+        log_id = int(row.get("log_id") or 0)
+        if log_id:
+            conn.execute(
+                "INSERT OR IGNORE INTO delivery_schedule_rev_hidden_logs(log_id, hidden_by, hidden_at, reason) VALUES(?,?,?,?)",
+                (log_id, actor or "Kullanıcı", now, reason or "REV Takip raporundan gizlendi"),
+            )
+    conn.commit()
 
 def load_activity_rows(store: object, filters: Optional[dict[str, Any]] = None) -> list[list[Any]]:
     rows = build_delivery_schedule_revision_rows(store, limit=200, filters=None)
@@ -832,7 +720,6 @@ def load_activity_rows(store: object, filters: Optional[dict[str, Any]] = None) 
         ]
         for log in rows
     ]
-
 
 def _build_pivot_source_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Add zero-value seed rows so the Durum slicer always matches app statuses.
@@ -885,17 +772,54 @@ def _ensure_excel():
 
 
 def _write_matrix(ws, rows: list[dict[str, Any]], report_date: str) -> None:
-    """Write the schedule matrix with Contract + System/Paket separation."""
-    users = sorted({str(row["Teslim Kullanıcısı"]) for row in rows})
-    user_dates = {
-        user: sorted({str(row["Tarih"]) for row in rows if row["Teslim Kullanıcısı"] == user and row["Tarih"]})
-        for user in users
-    }
-    fixed_headers = ["Sözleşme No", "Sistem / Paket", "Seviye", "Parça Numarası", "Parça", "Teslimat Zamanı"]
-    user_start_col = len(fixed_headers) + 1
-    total_col = user_start_col + len(users)
-    last_col = total_col
+    """Write the matrix with one separate value column per user/date pair.
 
+    Dynamic columns are NOT merged. If one user has three delivery dates,
+    that user gets three separate columns, each with its own date header.
+    """
+    fixed_headers = ["Sözleşme No", "Sistem / Paket", "Seviye", "Parça Numarası", "Parça", "Teslimat Zamanı"]
+
+    def _date_sort_key(value: Any) -> tuple:
+        text = str(value or "").strip()
+        match = re.search(r"(?<!\d)(19\d{2}|20\d{2}|21\d{2})(?!\d)", text)
+        year = int(match.group(1)) if match else 9999
+        parts = [p.strip() for p in text.split("-") if p.strip()]
+        day = month = 99
+        if len(parts) >= 3:
+            if re.fullmatch(r"\d{4}", parts[0]):
+                month = int(parts[1]) if parts[1].isdigit() else 99
+                day = int(parts[2]) if parts[2].isdigit() else 99
+            else:
+                day = int(parts[0]) if parts[0].isdigit() else 99
+                month = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 99
+        elif len(parts) == 2:
+            other = parts[1] if parts[0].isdigit() and len(parts[0]) == 4 else parts[0]
+            month = int(other) if str(other).isdigit() else 99
+        unknown_rank = 1 if "TBD" in text.upper() else 0
+        return (year, unknown_rank, month, day, text)
+
+    def _compact(values: list[str] | set[str], limit: int = 2) -> str:
+        items = [str(v or "").strip() for v in values if str(v or "").strip()]
+        items = sorted(dict.fromkeys(items), key=_date_sort_key)
+        if not items:
+            return ""
+        suffix = f" +{len(items) - limit}" if len(items) > limit else ""
+        return ", ".join(items[:limit]) + suffix
+
+    users = sorted({str(row.get("Teslim Kullanıcısı") or "Tanımsız") for row in rows})
+    date_columns: list[tuple[str, str]] = []
+    for user in users:
+        dates = sorted(
+            {str(row.get("Tarih") or "TBD-TBD-TBD") for row in rows if str(row.get("Teslim Kullanıcısı") or "Tanımsız") == user},
+            key=_date_sort_key,
+        )
+        for dt in dates:
+            date_columns.append((user, dt))
+
+    last_col = len(fixed_headers) + len(date_columns) + 1
+    total_col = last_col
+
+    # Title area: only fixed title band is merged. Dynamic user/date columns are separate.
     ws.Range(ws.Cells(1, 1), ws.Cells(1, len(fixed_headers))).Merge()
     ws.Cells(1, 1).Value = f"{report_date}    REV:{REVISION[-3:]}    Tahmini Teslimat Takvimi"
     ws.Range(ws.Cells(1, 1), ws.Cells(1, len(fixed_headers))).Interior.Color = 0x79360B
@@ -907,94 +831,112 @@ def _write_matrix(ws, rows: list[dict[str, Any]], report_date: str) -> None:
     for col, header in enumerate(fixed_headers, start=1):
         ws.Cells(2, col).Value = header
 
-    for idx, user in enumerate(users, start=user_start_col):
-        ws.Cells(1, idx).Value = user
-        ws.Cells(1, idx).Interior.Color = 0x79360B
-        ws.Cells(1, idx).Font.Color = 0xFFFFFF
-        ws.Cells(1, idx).Font.Bold = True
-        ws.Cells(1, idx).HorizontalAlignment = -4108
-        ws.Cells(2, idx).Value = _short_join(user_dates.get(user, []), limit=2)
-        ws.Cells(2, idx).Font.Bold = True
-        ws.Cells(2, idx).HorizontalAlignment = -4108
+    start_dynamic_col = len(fixed_headers) + 1
+    for offset, (user, dt) in enumerate(date_columns, start=start_dynamic_col):
+        ws.Cells(1, offset).Value = user
+        ws.Cells(2, offset).NumberFormat = "@"
+        ws.Cells(2, offset).Value = str(dt or "")
 
-    ws.Range(ws.Cells(1, total_col), ws.Cells(2, total_col)).Merge()
     ws.Cells(1, total_col).Value = "TOPLAM"
-    ws.Range(ws.Cells(1, total_col), ws.Cells(2, total_col)).Interior.Color = 0x79360B
-    ws.Range(ws.Cells(1, total_col), ws.Cells(2, total_col)).Font.Color = 0xFFFFFF
-    ws.Range(ws.Cells(1, total_col), ws.Cells(2, total_col)).Font.Bold = True
-    ws.Range(ws.Cells(1, total_col), ws.Cells(2, total_col)).HorizontalAlignment = -4108
-    ws.Range(ws.Cells(1, total_col), ws.Cells(2, total_col)).VerticalAlignment = -4108
+    ws.Cells(2, total_col).Value = ""
 
-    by_system_part: dict[tuple[str, str, str], dict[str, float]] = defaultdict(lambda: defaultdict(float))
-    system_totals: dict[tuple[str, str], dict[str, float]] = defaultdict(lambda: defaultdict(float))
-    system_dates: dict[tuple[str, str], list[str]] = defaultdict(list)
-    part_dates: dict[tuple[str, str, str], list[str]] = defaultdict(list)
+    for col in range(start_dynamic_col, total_col + 1):
+        top = ws.Cells(1, col)
+        bottom = ws.Cells(2, col)
+        for cell in (top, bottom):
+            cell.Interior.Color = 0x79360B
+            cell.Font.Color = 0xFFFFFF
+            cell.Font.Bold = True
+            cell.HorizontalAlignment = -4108
+            cell.VerticalAlignment = -4108
+            try:
+                cell.WrapText = True
+            except Exception:
+                pass
 
+    grouped: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
         contract = str(row.get("Sözleşme") or "-")
-        system = str(row.get("Sistem / Paket") or "Tanımsız Sistem")
-        part = str(row.get("Parça") or "-")
-        user = str(row.get("Teslim Kullanıcısı") or "Tanımsız")
-        value = _safe_float(row.get("Sözleşme Adeti"))
-        system_key = (contract, system)
-        part_key = (contract, system, part)
-        system_totals[system_key][user] += value
-        by_system_part[part_key][user] += value
-        date_text = str(row.get("Tarih") or "").strip()
-        if date_text:
-            system_dates[system_key].append(date_text)
-            part_dates[part_key].append(date_text)
+        system = str(row.get("Sistem / Paket") or "Sistem 1")
+        grouped[(contract, system)].append(row)
+
+    def _group_sort_key(key: tuple[str, str]) -> tuple[str, str]:
+        return (str(key[0]).casefold(), str(key[1]).casefold())
 
     r = 3
-    system_total_rows: list[int] = []
-    for contract, system in sorted(system_totals.keys(), key=lambda item: (item[0], item[1])):
-        totals_by_user = system_totals[(contract, system)]
+    group_rows: list[int] = []
+    for contract, system in sorted(grouped.keys(), key=_group_sort_key):
+        group_rows_data = grouped[(contract, system)]
+        parts = sorted({str(row.get("Parça") or "-") for row in group_rows_data})
+        group_dates = {str(row.get("Tarih") or "") for row in group_rows_data if str(row.get("Tarih") or "").strip()}
+
+        def _sum_for(part: str | None, user: str, dt: str) -> float:
+            total = 0.0
+            for item in group_rows_data:
+                if part is not None and str(item.get("Parça") or "-") != part:
+                    continue
+                if str(item.get("Teslim Kullanıcısı") or "Tanımsız") != user:
+                    continue
+                if str(item.get("Tarih") or "TBD-TBD-TBD") != dt:
+                    continue
+                total += _safe_float(item.get("Sözleşme Adeti"))
+            return total
+
+        group_rows.append(r)
         ws.Cells(r, 1).Value = contract
         ws.Cells(r, 2).Value = system
         ws.Cells(r, 3).Value = ""
         ws.Cells(r, 4).Value = ""
         ws.Cells(r, 5).Value = "Sistem Toplamı"
         ws.Cells(r, 6).NumberFormat = "@"
-        ws.Cells(r, 6).Value = _short_join(system_dates[(contract, system)], limit=3)
+        ws.Cells(r, 6).Value = _compact(group_dates)
         row_total = 0.0
-        for idx, user in enumerate(users, start=user_start_col):
-            value = totals_by_user.get(user, 0.0)
+        for col, (user, dt) in enumerate(date_columns, start=start_dynamic_col):
+            value = _sum_for(None, user, dt)
             row_total += value
-            ws.Cells(r, idx).Value = _fmt_amount(value)
+            ws.Cells(r, col).Value = _fmt_amount(value)
         ws.Cells(r, total_col).Value = _fmt_amount(row_total)
-        system_total_rows.append(r)
         r += 1
 
-        part_keys = sorted(k for k in by_system_part if k[0] == contract and k[1] == system)
-        for _contract, _system, part in part_keys:
-            values_by_user = by_system_part[(contract, system, part)]
+        for part in parts:
+            part_dates = {str(row.get("Tarih") or "") for row in group_rows_data if str(row.get("Parça") or "-") == part and str(row.get("Tarih") or "").strip()}
             ws.Cells(r, 1).Value = ""
             ws.Cells(r, 2).Value = ""
             ws.Cells(r, 3).Value = "1"
             ws.Cells(r, 4).Value = ""
             ws.Cells(r, 5).Value = part
             ws.Cells(r, 6).NumberFormat = "@"
-            ws.Cells(r, 6).Value = _short_join(part_dates[(contract, system, part)], limit=3)
+            ws.Cells(r, 6).Value = _compact(part_dates)
             row_total = 0.0
-            for idx, user in enumerate(users, start=user_start_col):
-                value = values_by_user.get(user, 0.0)
+            for col, (user, dt) in enumerate(date_columns, start=start_dynamic_col):
+                value = _sum_for(part, user, dt)
                 row_total += value
-                ws.Cells(r, idx).Value = _fmt_amount(value)
+                ws.Cells(r, col).Value = _fmt_amount(value)
             ws.Cells(r, total_col).Value = _fmt_amount(row_total)
             r += 1
 
     last_row = max(r - 1, 3)
-    _format_table(ws, 1, 1, last_row, last_col, header_rows=2)
-    for row_idx in system_total_rows:
-        rng = ws.Range(ws.Cells(row_idx, 1), ws.Cells(row_idx, last_col))
-        rng.Interior.Color = 0xDBE8F6
+    _format_table(ws, 1, 1, last_row, total_col, header_rows=2)
+
+    for row_idx in group_rows:
+        rng = ws.Range(ws.Cells(row_idx, 1), ws.Cells(row_idx, total_col))
+        rng.Interior.Color = 0xFFF4E8
         rng.Font.Bold = True
-        rng.Font.Color = 0x001F54
-    ws.Range(ws.Cells(2, 1), ws.Cells(2, last_col)).HorizontalAlignment = -4108
-    closing = ws.Range(ws.Cells(last_row, 1), ws.Cells(last_row, last_col))
+        rng.Font.Color = 0x79360B
+        rng.HorizontalAlignment = -4108
+        rng.VerticalAlignment = -4108
+
+    closing = ws.Range(ws.Cells(last_row, 1), ws.Cells(last_row, total_col))
     closing.Borders(9).LineStyle = 1
     closing.Borders(9).Weight = 3
     closing.Borders(9).Color = 0x000000
+
+    try:
+        ws.Activate()
+        ws.Range("G3").Select()
+        ws.Application.ActiveWindow.FreezePanes = True
+    except Exception:
+        pass
     ws.Columns.AutoFit()
 
 def _format_table(ws, first_row: int, first_col: int, last_row: int, last_col: int, header_rows: int = 1) -> None:
@@ -1016,16 +958,10 @@ def _format_table(ws, first_row: int, first_col: int, last_row: int, last_col: i
 
 
 def _write_delivery_entry(ws, rows: list[dict[str, Any]], report_date: str, platform_title: str) -> None:
-    """Write the input sheet as Contract + System/Paket blocks.
-
-    Excel supports real vertical cell merges, so repeated block fields are
-    merged for readability: Sözleşme, Sistem, Teslimat, Tarih, Kullanıcı and
-    Yİ/YD. Parça/miktar fields stay row-level.
-    """
     headers = [
         "SÖZLEŞME NO", "SİSTEM / PAKET", "TESLİMAT ADI", "TESLİMAT ZAMANI",
-        "KULLANICI ADI", "Yİ/YD", "PARÇA NUMARASI", "PARÇA ADI", "MİKTAR",
-        "TESLİM EDİLEN", "KALAN", "Konfigürasyon Tipi", "Opsiyon / Not", "Durum",
+        "KULLANICI ADI", "Yİ/YD", "PARÇA NUMARASI", "PARÇA ADI",
+        "MİKTAR", "TESLİM EDİLEN", "KALAN", "Konfigürasyon Tipi", "Opsiyon / Not", "Durum",
     ]
     last_col = len(headers)
 
@@ -1063,44 +999,36 @@ def _write_delivery_entry(ws, rows: list[dict[str, Any]], report_date: str, plat
         ),
     )
 
-    block_start: int | None = None
-    block_key: tuple[str, str, str, str, str, str] | None = None
-    block_ranges: list[tuple[int, int]] = []
-
     r = 5
+    last_key = None
+    block_start = 5
+    merge_ranges: list[tuple[int, int]] = []
+
     for row in sorted_rows:
-        current_key = (
+        key = (
             str(row.get("Sözleşme") or "-"),
-            str(row.get("Sistem / Paket") or "Tanımsız Sistem"),
+            str(row.get("Sistem / Paket") or "Sistem 1"),
             str(row.get("Teslimat") or "-"),
             str(row.get("Tarih") or ""),
             str(row.get("Teslim Kullanıcısı") or "Tanımsız"),
-            normalize_yi_yd(row.get("Yİ/YD")),
+            str(row.get("Yİ/YD") or "-"),
         )
-        if block_key is None:
-            block_key = current_key
+        is_first = key != last_key
+        if is_first and last_key is not None:
+            merge_ranges.append((block_start, r - 1))
             block_start = r
-        elif current_key != block_key:
-            if block_start is not None and r - 1 > block_start:
-                block_ranges.append((block_start, r - 1))
-            block_key = current_key
-            block_start = r
+        last_key = key
 
-        values = [
-            row.get("Sözleşme", ""),
-            row.get("Sistem / Paket", ""),
-            row.get("Teslimat", ""),
-            str(row.get("Tarih") or ""),
-            row.get("Teslim Kullanıcısı", ""),
-            normalize_yi_yd(row.get("Yİ/YD")),
-            row.get("Parça No", ""),
-            row.get("Parça", ""),
-            row.get("Sözleşme Adeti", ""),
-            row.get("Teslim Edilen", ""),
-            row.get("Kalan", ""),
-            row.get("Konfigürasyon Tipi", ""),
-            row.get("Opsiyon / Not", ""),
-            row.get("Durum", ""),
+        repeated_values = [key[0], key[1], key[2], key[3], key[4], key[5]] if is_first else ["", "", "", "", "", ""]
+        values = repeated_values + [
+            str(row.get("Parça No") or ""),
+            row.get("Parça"),
+            row.get("Sözleşme Adeti"),
+            row.get("Teslim Edilen"),
+            row.get("Kalan"),
+            row.get("Konfigürasyon Tipi"),
+            row.get("Opsiyon / Not"),
+            row.get("Durum"),
         ]
         for col, value in enumerate(values, start=1):
             cell = ws.Cells(r, col)
@@ -1109,31 +1037,27 @@ def _write_delivery_entry(ws, rows: list[dict[str, Any]], report_date: str, plat
                 cell.Value = str(value or "")
             else:
                 cell.Value = value
-            cell.HorizontalAlignment = -4108 if col not in (12, 13, 14) else -4131
+            cell.HorizontalAlignment = -4108
             cell.VerticalAlignment = -4108
         r += 1
 
-    if block_start is not None and r - 1 > block_start:
-        block_ranges.append((block_start, r - 1))
+    if last_key is not None:
+        merge_ranges.append((block_start, r - 1))
 
     last_row = max(r - 1, 4)
     _format_table(ws, 4, 1, last_row, last_col)
 
-    # Merge repeated block fields after formatting so Excel keeps clean borders.
-    for start_row, end_row in block_ranges:
+    for start, end in merge_ranges:
+        if end <= start:
+            continue
         for col in range(1, 7):
+            rng = ws.Range(ws.Cells(start, col), ws.Cells(end, col))
             try:
-                ws.Range(ws.Cells(start_row, col), ws.Cells(end_row, col)).Merge()
-                ws.Range(ws.Cells(start_row, col), ws.Cells(end_row, col)).VerticalAlignment = -4108
-                ws.Range(ws.Cells(start_row, col), ws.Cells(end_row, col)).HorizontalAlignment = -4108
+                rng.Merge()
+                rng.HorizontalAlignment = -4108
+                rng.VerticalAlignment = -4108
             except Exception:
                 pass
-
-    # Alternating soft band per Contract + System block, without overwriting headers.
-    for idx, (start_row, end_row) in enumerate(block_ranges):
-        if idx % 2 == 0:
-            ws.Range(ws.Cells(start_row, 1), ws.Cells(end_row, last_col)).Interior.Color = 0xF4F9FF
-        ws.Range(ws.Cells(start_row, 1), ws.Cells(end_row, 6)).Font.Bold = True
 
     used = ws.Range(ws.Cells(1, 1), ws.Cells(last_row, last_col))
     used.HorizontalAlignment = -4108
@@ -1173,8 +1097,6 @@ def _write_rev_sheet(ws, activity_rows: list[list[Any]]) -> None:
                 cell.Value = value
     _format_table(ws, 1, 1, max(len(activity_rows) + 1, 1), len(headers))
 
-
-
 def _build_dashboard(wb, ws, source_range: str, rows: list[dict[str, Any]], platform_title: str, report_date: str):
     xl_database = 1
     xl_row_field = 1
@@ -1202,13 +1124,13 @@ def _build_dashboard(wb, ws, source_range: str, rows: list[dict[str, Any]], plat
     total = sum(_safe_float(row["Sözleşme Adeti"]) for row in rows)
     users = len({row["Teslim Kullanıcısı"] for row in rows})
     contracts = len({row["Sözleşme"] for row in rows})
-    systems = len({(row.get("Sözleşme"), row.get("Sistem / Paket")) for row in rows})
+    risk = sum(1 for row in rows if _safe_float(row["Kalan"]) > 0 and "tamam" not in str(row["Durum"]).lower())
 
     kpi_specs = [
         ("SÖZLEŞME ADETİ", total, 1),
         ("TESLİM KULLANICISI", users, 4),
         ("SÖZLEŞME", contracts, 7),
-        ("SİSTEM / PAKET", systems, 10),
+        ("RİSKLİ SATIR", risk, 10),
     ]
     for label, value, col in kpi_specs:
         outer = ws.Range(ws.Cells(4, col), ws.Cells(6, col + 2))
@@ -1241,7 +1163,7 @@ def _build_dashboard(wb, ws, source_range: str, rows: list[dict[str, Any]], plat
     data_field = pt.AddDataField(pt.PivotFields("Sözleşme Adeti"), "Sum of Sözleşme Adeti", xl_sum)
     data_field.NumberFormat = "#,##0"
 
-    pt_system = _create_small_pivot_chart(wb, cache, ws, "Sistem / Paket", "Sözleşme Adeti", "Sistem / Paket Bazlı Sözleşme Adeti", xl_bar_clustered, 30, 170, 360, 210, "ptSistem")
+    pt_part = _create_small_pivot_chart(wb, cache, ws, "Parça", "Sözleşme Adeti", "Parça Bazlı Sözleşme Adeti", xl_bar_clustered, 30, 170, 360, 210, "ptParca")
     pt_yiyd = _create_small_pivot_chart(wb, cache, ws, "Yİ/YD", "Sözleşme Adeti", "Yİ / YD Dağılımı", xl_doughnut, 410, 170, 300, 210, "ptYiyd")
     pt_year = _create_small_pivot_chart(wb, cache, ws, "Yıl", "Sözleşme Adeti", "Yıllara Göre Sözleşme Adeti", xl_line, 730, 170, 340, 210, "ptYil")
 
@@ -1250,7 +1172,7 @@ def _build_dashboard(wb, ws, source_range: str, rows: list[dict[str, Any]], plat
     chart.SetSourceData(pt.TableRange2)
     chart.ChartType = xl_column_clustered
     chart.HasTitle = True
-    chart.ChartTitle.Text = "KULLANICI ve SİSTEM / PAKETLERE GÖRE SİPARİŞ DURUMU"
+    chart.ChartTitle.Text = "YURTİÇİ/YURTDIŞI ve YILLARA GÖRE SİPARİŞ DURUMU"
     chart.HasDataTable = True
     chart.DataTable.ShowLegendKey = True
     chart.HasLegend = True
@@ -1259,14 +1181,14 @@ def _build_dashboard(wb, ws, source_range: str, rows: list[dict[str, Any]], plat
     except Exception:
         pass
 
-    _add_slicers(wb, ws, pt, [pt_system, pt_yiyd, pt_year])
+    _add_slicers(wb, ws, pt, [pt_part, pt_yiyd, pt_year])
     ws.Columns.AutoFit()
 
 def _create_small_pivot_chart(wb, cache, dashboard_ws, row_field: str, value_field: str, title: str, chart_type: int, left: int, top: int, width: int, height: int, table_name: str):
     xl_row_field = 1
     xl_sum = -4157
     pivot_ws = wb.Worksheets("Grafik Kaynak")
-    destination_cols = {"ptSistem": 1, "ptParca": 1, "ptYiyd": 6, "ptYil": 11}
+    destination_cols = {"ptParca": 1, "ptYiyd": 6, "ptYil": 11}
     destination = pivot_ws.Cells(3, destination_cols.get(table_name, 16))
     pt = cache.CreatePivotTable(TableDestination=destination, TableName=table_name)
     pt.PivotFields(row_field).Orientation = xl_row_field
