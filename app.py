@@ -64,7 +64,7 @@ from src.config.app_config import (
 from src.models.app_models import ComponentDef, ContractInfo, SystemInfo, DeliveryInfo, TagDef
 from src.domain.contract_timing import contract_timing, is_completed_status
 from src.domain.delivery_coverage import acceptance_coverage_issues
-from src.domain.flexible_date import flexible_or_blank, is_exact_date, parse_flexible_date, validate_flexible_date, format_flexible_date
+from src.domain.flexible_date import flexible_or_blank, is_exact_date, is_tbd_contract_no, parse_flexible_date, validate_flexible_date, format_flexible_date
 from src.ui.widgets import stat_card, set_card_value
 from src.ui.theme import STYLE
 from src.ui.tarih import ContractCalendarWindow
@@ -3562,10 +3562,10 @@ class ContractDialog(StyledDialog):
             self.sd_code.setText(sd_code)
             contract_type = sd_code
 
-        signature_date = ""
-        t0_date = ""
+        signature_date = "TBD" if unknown_mode else ""
+        t0_date = "TBD" if unknown_mode else ""
         t0_months = 0
-        completion_date = ""
+        completion_date = "TBD" if unknown_mode else ""
         if not unknown_mode:
             sig = parse_iso_date(self.sig.text().strip())
             if not sig:
@@ -4103,10 +4103,16 @@ class ContractEditDialog(StyledDialog):
         new_ci.users           = selected_users
         new_ci.user            = ", ".join(selected_users)
         new_ci.yi_yd           = self.yi_yd.text().strip() or "Yİ"
-        new_ci.signature_date  = str(getattr(self.ci, "signature_date", "") or "")
-        new_ci.t0_date         = str(getattr(self.ci, "t0_date", "") or "")
-        new_ci.t0_months       = int(getattr(self.ci, "t0_months", 0) or 0)
-        new_ci.completion_date = str(getattr(self.ci, "completion_date", "") or "")
+        if is_tbd_contract_no(new_no_text) or is_tbd_contract_no(getattr(self.ci, "no", "")):
+            new_ci.signature_date = "TBD"
+            new_ci.t0_date = "TBD"
+            new_ci.t0_months = 0
+            new_ci.completion_date = "TBD"
+        else:
+            new_ci.signature_date  = str(getattr(self.ci, "signature_date", "") or "")
+            new_ci.t0_date         = str(getattr(self.ci, "t0_date", "") or "")
+            new_ci.t0_months       = int(getattr(self.ci, "t0_months", 0) or 0)
+            new_ci.completion_date = str(getattr(self.ci, "completion_date", "") or "")
         new_ci.status          = str(self.ci.status or "Başlanmadı")
         new_ci.note            = self.note.text().strip()
         selected_platform_ids = self._platform_select.selected_platform_ids() if hasattr(self._platform_select, "selected_platform_ids") else []
