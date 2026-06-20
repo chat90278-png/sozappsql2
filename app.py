@@ -84,7 +84,7 @@ from PySide6.QtWidgets import (
     QTreeWidget, QTreeWidgetItem, QDialog, QLineEdit, QComboBox, QDateEdit, QSpinBox, QDoubleSpinBox,
     QMessageBox, QFileDialog, QFrame, QScrollArea, QCheckBox, QHeaderView,
     QSizePolicy, QProgressBar, QProgressDialog, QStyledItemDelegate, QTextEdit,
-    QToolButton, QMenu, QInputDialog, QWidgetAction, QStackedWidget, QAbstractItemView, QStyle, QRadioButton, QButtonGroup
+    QToolButton, QMenu, QInputDialog, QWidgetAction, QStackedWidget, QAbstractItemView, QStyle, QRadioButton, QButtonGroup, QTabWidget, QTabBar
 )
 from shiboken6 import isValid as _qt_is_valid
 
@@ -11912,8 +11912,11 @@ class MainWindow(QMainWindow):
             return
 
         from src.ui.dialogs.performance_tracking import PerformanceTrackingDialog
-        dlg = PerformanceTrackingDialog(self.store, self)
-        dlg.exec()
+        self.open_tab_or_raise(
+            "report:performance",
+            "Performans Takip",
+            lambda: PerformanceTrackingDialog(self.store, self.tab_workspace),
+        )
 
     def open_activity_logs(self):
         if not self.require_permission_ui("view_action_history", "İşlem Geçmişi"):
@@ -11925,8 +11928,11 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "İşlem Geçmişi", "İşlem geçmişi yalnızca STS veri dosyalarında desteklenir.")
             return
         from src.ui.dialogs.activity_logs import ActivityLogDialog
-        dlg = ActivityLogDialog(self.store, self)
-        dlg.exec()
+        self.open_tab_or_raise(
+            "report:activity_logs",
+            "İşlem Geçmişi",
+            lambda: ActivityLogDialog(self.store, self.tab_workspace),
+        )
 
     def _permission_db(self):
         if self.store is not None and getattr(self.store, "db", None) is not None:
@@ -12022,13 +12028,19 @@ class MainWindow(QMainWindow):
         if not self.store:
             QMessageBox.information(self, "Veri dosyası gerekli", "Raporu açmak için önce bir STS veri dosyası açın.")
             return
-        dlg = PlatformTeslimatDurumuReportDialog(self, store=self.store)
-        dlg.exec()
+        self.open_tab_or_raise(
+            "report:platform_delivery",
+            "Platform Teslimat Özeti",
+            lambda: PlatformTeslimatDurumuReportDialog(self.tab_workspace, store=self.store),
+        )
 
     def open_usage_guide(self):
         try:
-            dlg = UsageGuideDialog(self)
-            dlg.exec()
+            self.open_tab_or_raise(
+                "help:usage_guide",
+                "Kullanım Kılavuzu",
+                lambda: UsageGuideDialog(self.tab_workspace, embedded=True),
+            )
         except Exception as exc:
             traceback.print_exc()
             QMessageBox.warning(self, "Kullanım Kılavuzu", f"Kullanım kılavuzu açılamadı:\n{exc}")
@@ -12082,6 +12094,65 @@ class MainWindow(QMainWindow):
         tl.addWidget(self.top_actions_btn)
         main.addWidget(top, 0)
 
+        self.tab_workspace = QTabWidget()
+        self.tab_workspace.setObjectName("mainTabWorkspace")
+        self.tab_workspace.setTabsClosable(True)
+        self.tab_workspace.setMovable(True)
+        self.tab_workspace.setDocumentMode(True)
+        self.tab_workspace.setElideMode(Qt.ElideRight)
+        self.tab_workspace.setStyleSheet("""
+            QTabWidget#mainTabWorkspace::pane {
+                border: 1px solid #c9d8ec;
+                border-radius: 12px;
+                background: #eef3f8;
+                top: -1px;
+            }
+            QTabWidget#mainTabWorkspace > QTabBar::tab {
+                background: #eaf2fb;
+                color: #23466f;
+                border: 1px solid #c9d8ec;
+                border-bottom: 0;
+                border-top-left-radius: 12px;
+                border-top-right-radius: 12px;
+                padding: 9px 18px;
+                margin-right: 3px;
+                min-width: 120px;
+                max-width: 240px;
+                font-weight: 800;
+            }
+            QTabWidget#mainTabWorkspace > QTabBar::tab:hover {
+                background: #f5faff;
+                color: #003b83;
+            }
+            QTabWidget#mainTabWorkspace > QTabBar::tab:selected {
+                background: #ffffff;
+                color: #002060;
+                border-color: #9fb8d8;
+            }
+            QTabWidget#mainTabWorkspace > QTabBar::close-button:hover {
+                background: #dbeafe;
+                border-radius: 8px;
+            }
+        """)
+        self.tab_workspace.tabCloseRequested.connect(self._on_tab_close_requested)
+        self._tabs_by_key: Dict[str, QWidget] = {}
+        self._tab_key_by_widget: Dict[QWidget, str] = {}
+        self._tab_titles: Dict[str, str] = {}
+        self._tab_dirty: Dict[str, bool] = {}
+        main.addWidget(self.tab_workspace, 1)
+
+        self.home_tab = QWidget()
+        self.home_tab.setObjectName("contractsHomeTab")
+        home_lay = QVBoxLayout(self.home_tab)
+        home_lay.setContentsMargins(0, 0, 0, 0)
+        home_lay.setSpacing(8)
+        self.tab_workspace.addTab(self.home_tab, "Sözleşme Sorgulama")
+        self.tab_workspace.setTabToolTip(0, "Sözleşme Sorgulama")
+        self.tab_workspace.tabBar().setTabButton(0, QTabBar.RightSide, None)
+        self._tabs_by_key["home:contracts"] = self.home_tab
+        self._tab_key_by_widget[self.home_tab] = "home:contracts"
+        self._tab_titles["home:contracts"] = "Sözleşme Sorgulama"
+
         strip=QFrame(); strip.setObjectName("alertStrip"); sl=QHBoxLayout(strip); sl.setContentsMargins(12, 10, 12, 10); sl.setSpacing(10)
         today_box = QFrame(); today_box.setObjectName("todayBadge")
         today_l = QVBoxLayout(today_box); today_l.setContentsMargins(12, 8, 12, 8); today_l.setSpacing(1)
@@ -12126,9 +12197,9 @@ class MainWindow(QMainWindow):
         sl.addWidget(self.upcoming_scroll, 1)
 
         calb=QPushButton("🗓 Takvim Görünümü"); calb.clicked.connect(self.open_calendar_tracking); sl.addWidget(calb, 0)
-        main.addWidget(strip, 0)
+        home_lay.addWidget(strip, 0)
 
-        body=QHBoxLayout(); body.setSpacing(8); main.addLayout(body,1)
+        body=QHBoxLayout(); body.setSpacing(8); home_lay.addLayout(body,1)
         left=QFrame(); left.setObjectName("panel"); left.setFixedWidth(350); lv=QVBoxLayout(left); lv.setContentsMargins(0, 0, 0, 0); lv.setSpacing(0)
         platform_head = QWidget(); ph = QHBoxLayout(platform_head); ph.setContentsMargins(12, 8, 12, 8); ph.setSpacing(6)
         h=QLabel("Platformlar"); h.setObjectName("panelTitle"); ph.addWidget(h); ph.addStretch(1)
@@ -12259,6 +12330,110 @@ class MainWindow(QMainWindow):
         st.polish(self.connection_label)
         self.connection_label.update()
 
+    def _prepare_tab_widget(self, widget: QWidget) -> QWidget:
+        """Make a dialog-like screen safe to host inside the main tab workspace."""
+        try:
+            if isinstance(widget, QDialog):
+                widget.setModal(False)
+                widget.setWindowFlags(Qt.Widget)
+            widget.setParent(self.tab_workspace)
+            widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        except Exception:
+            pass
+        return widget
+
+    def activate_tab(self, key: str) -> bool:
+        widget = getattr(self, "_tabs_by_key", {}).get(key)
+        if widget is None:
+            return False
+        idx = self.tab_workspace.indexOf(widget)
+        if idx < 0:
+            return False
+        self.tab_workspace.setCurrentIndex(idx)
+        return True
+
+    def current_tab_key(self) -> str:
+        widget = self.tab_workspace.currentWidget() if hasattr(self, "tab_workspace") else None
+        return getattr(self, "_tab_key_by_widget", {}).get(widget, "")
+
+    def mark_tab_dirty(self, key: str, dirty: bool = True):
+        if key not in getattr(self, "_tabs_by_key", {}):
+            return
+        self._tab_dirty[key] = bool(dirty)
+        widget = self._tabs_by_key[key]
+        idx = self.tab_workspace.indexOf(widget)
+        if idx < 0:
+            return
+        title = self._tab_titles.get(key, self.tab_workspace.tabText(idx).lstrip("• "))
+        self.tab_workspace.setTabText(idx, f"• {title}" if dirty else title)
+
+    def open_tab_or_raise(self, key: str, title: str, factory: Callable[[], QWidget], closable: bool = True) -> QWidget:
+        if self.activate_tab(key):
+            return self._tabs_by_key[key]
+
+        widget = self._prepare_tab_widget(factory())
+        idx = self.tab_workspace.addTab(widget, title)
+        self.tab_workspace.setTabToolTip(idx, title)
+        self.tab_workspace.setCurrentIndex(idx)
+        self._tabs_by_key[key] = widget
+        self._tab_key_by_widget[widget] = key
+        self._tab_titles[key] = title
+        self._tab_dirty[key] = False
+        if not closable:
+            self.tab_workspace.tabBar().setTabButton(idx, QTabBar.RightSide, None)
+        return widget
+
+    def close_tab_by_key(self, key: str) -> bool:
+        if key == "home:contracts":
+            return False
+        widget = getattr(self, "_tabs_by_key", {}).get(key)
+        if widget is None:
+            return True
+        idx = self.tab_workspace.indexOf(widget)
+        if idx < 0:
+            self._tabs_by_key.pop(key, None)
+            self._tab_key_by_widget.pop(widget, None)
+            self._tab_titles.pop(key, None)
+            self._tab_dirty.pop(key, None)
+            return True
+
+        can_close = getattr(widget, "can_close", None)
+        if callable(can_close):
+            try:
+                if can_close() is False:
+                    return False
+            except Exception:
+                return False
+
+        cleanup = getattr(widget, "cleanup", None)
+        if callable(cleanup):
+            try:
+                cleanup()
+            except Exception:
+                traceback.print_exc()
+
+        self.tab_workspace.removeTab(idx)
+        self._tabs_by_key.pop(key, None)
+        self._tab_key_by_widget.pop(widget, None)
+        self._tab_titles.pop(key, None)
+        self._tab_dirty.pop(key, None)
+        widget.deleteLater()
+        return True
+
+    def _on_tab_close_requested(self, index: int):
+        widget = self.tab_workspace.widget(index)
+        key = getattr(self, "_tab_key_by_widget", {}).get(widget, "")
+        if key:
+            self.close_tab_by_key(key)
+
+    def close_non_home_tabs(self) -> bool:
+        for key in list(getattr(self, "_tabs_by_key", {}).keys()):
+            if key == "home:contracts":
+                continue
+            if not self.close_tab_by_key(key):
+                return False
+        return True
+
     def _apply_version_to_ui(self):
         try:
             from src.services.version_manager import read_version
@@ -12296,6 +12471,9 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event: QCloseEvent) -> None:
         """Kapanışta değişiklik varsa dosya adını standart versiyon formatına taşır."""
+        if hasattr(self, "tab_workspace") and not self.close_non_home_tabs():
+            event.ignore()
+            return
         if getattr(self, "store", None) and self._workbook_changed_since_load():
             try:
                 # STS dosyalarında tek aktif dosya korunur: mevcut dosya yeniden adlandırılır.
@@ -13352,6 +13530,8 @@ class MainWindow(QMainWindow):
         dlg = WorkbookStartDialog(self)
         if dlg.exec() and dlg.selected_path:
             sel = Path(dlg.selected_path)
+            if not self.close_non_home_tabs():
+                return
             if sel.suffix.lower() == ".sts":
                 if _share_metadata_from_path(sel):
                     try:
