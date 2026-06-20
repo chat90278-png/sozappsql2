@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QTabWidget,
     QTableView,
+    QTextEdit,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
@@ -133,6 +134,17 @@ def normalize_yi_yd(value: object) -> str:
     return text or "-"
 
 
+def _is_all_filter_value(value: object, all_text: str = "Tümü") -> bool:
+    return _norm_text(value) == _norm_text(all_text)
+
+
+def normalize_yi_yd_filter(value: object) -> str:
+    # Filter placeholder/meaning must stay as "Tümü". If we run it through
+    # normalize_yi_yd(), it becomes "TÜMÜ" and the later comparison
+    # filters every row out because it no longer equals the canonical "Tümü".
+    return "Tümü" if _is_all_filter_value(value, "Tümü") else normalize_yi_yd(value)
+
+
 def is_completed_status(value: object) -> bool:
     key = _norm_text(value)
     if not key:
@@ -181,32 +193,63 @@ def parse_year_range(value: object) -> tuple[Optional[int], Optional[int]]:
 
 
 def normalize_report_date_display(value: object) -> str:
-    text = str(value or "").strip()
-    if not text:
-        return ""
-    text = text.replace("/", "-").replace(".", "-").upper()
-    parts = [p.strip() for p in text.split("-") if p.strip()]
-    if len(parts) != 3:
-        year = extract_year_from_date_text(text)
-        return f"TBD-TBD-{year}" if year else text
+    """Return a visible report date, preserving uncertain/TBD dates.
+
+    Supported examples:
+    - empty / None / TBD       -> TBD-TBD-TBD
+    - 2026                    -> TBD-TBD-2026
+    - 06-2026 / 2026-06       -> TBD-06-2026
+    - TBD-06-2026             -> TBD-06-2026
+    - 2026-TBD-TBD            -> TBD-TBD-2026
+    - 15-06-2026 / 2026-06-15 -> 15-06-2026
+    """
+    raw = str(value or "").strip()
+    if not raw:
+        return "TBD-TBD-TBD"
+
+    text = raw.replace("/", "-").replace(".", "-").strip().upper()
+    compact_unknown = re.sub(r"[^A-Z0-9]+", "", text)
+    if compact_unknown in {"", "TBD", "TBDBELIRLENECEK", "BELIRSIZ", "BILINMIYOR", "UNKNOWN", "N/A", "NA", "NONE", "NULL"}:
+        return "TBD-TBD-TBD"
 
     def is_year(part: str) -> bool:
-        return bool(re.fullmatch(r"(19\d{2}|20\d{2}|21\d{2})", part))
+        return bool(re.fullmatch(r"(19\d{2}|20\d{2}|21\d{2})", str(part or "").strip()))
+
+    def is_unknown(part: str) -> bool:
+        token = re.sub(r"[^A-Z0-9]+", "", str(part or "").strip().upper())
+        return token in {"", "0", "00", "TBD", "BELIRSIZ", "BILINMIYOR", "UNKNOWN", "NA", "NONE", "NULL"}
 
     def two_digit(part: str) -> str:
+        part = str(part or "").strip().upper()
+        if is_unknown(part):
+            return "TBD"
         return part.zfill(2) if part.isdigit() and len(part) <= 2 else part
+
+    parts = [p.strip() for p in text.split("-") if p.strip()]
+
+    year = next((p for p in parts if is_year(p)), None)
+    if year is None:
+        extracted = extract_year_from_date_text(text)
+        if extracted:
+            return f"TBD-TBD-{extracted}"
+        return "TBD-TBD-TBD" if any(is_unknown(p) for p in parts) else text
+
+    if len(parts) == 1:
+        return f"TBD-TBD-{year}"
+
+    if len(parts) == 2:
+        other = parts[1] if is_year(parts[0]) else parts[0]
+        # With two-part dates, treat the non-year token as month.
+        return f"TBD-{two_digit(other)}-{year}"
 
     if is_year(parts[0]):
         year, month, day = parts[0], parts[1], parts[2]
-        day = "TBD" if day == "TBD" else two_digit(day)
-        month = "TBD" if month == "TBD" else two_digit(month)
-        return f"{day}-{month}-{year}"
+        return f"{two_digit(day)}-{two_digit(month)}-{year}"
     if is_year(parts[2]):
         day, month, year = parts[0], parts[1], parts[2]
-        day = "TBD" if day == "TBD" else two_digit(day)
-        month = "TBD" if month == "TBD" else two_digit(month)
-        return f"{day}-{month}-{year}"
-    return text
+        return f"{two_digit(day)}-{two_digit(month)}-{year}"
+
+    return f"TBD-TBD-{year}"
 
 
 def _safe_float(value: object) -> float:
@@ -681,30 +724,34 @@ class RevisionRowDialog(QDialog):
         self.setWindowTitle(title)
         self.result: Optional[dict[str, Any]] = None
         defaults = dict(defaults or {})
-        self.setMinimumWidth(520)
+        self.setMinimumWidth(560)
+
         root = QVBoxLayout(self)
         root.setContentsMargins(16, 16, 16, 16)
         root.setSpacing(10)
+
         header = QLabel(title)
         header.setObjectName("mainTitle")
         root.addWidget(header)
+
         grid = QGridLayout()
         grid.setHorizontalSpacing(10)
         grid.setVerticalSpacing(8)
-        self.date_edit = QLineEdit(str(defaults.get("revision_date") or datetime.now().isoformat(timespec="seconds")))
-        self.user_edit = QLineEdit(str(defaults.get("user_name") or "Kullanıcı"))
-        self.contract_edit = QLineEdit(str(defaults.get("contract_no") or ""))
-        self.delivery_edit = QLineEdit(str(defaults.get("delivery_name") or ""))
-        self.field_edit = QLineEdit(str(defaults.get("field_name") or ""))
-        self.old_edit = QLineEdit(str(defaults.get("old_value") or ""))
-        self.new_edit = QLineEdit(str(defaults.get("new_value") or ""))
-        self.desc_edit = QLineEdit(str(defaults.get("description") or ""))
-        self.desc_edit.setPlaceholderText("Açıklama zorunlu")
+
+        self.revision_edit = QLineEdit(str(defaults.get("revision_info") or defaults.get("field_name") or defaults.get("revision") or ""))
+        self.revision_edit.setPlaceholderText("Örn: R001 / İlk yayın / Revizyon notu")
+
+        self.date_edit = QLineEdit(str(defaults.get("revision_date") if defaults.get("revision_date") is not None else (defaults.get("date") or "")))
+        self.date_edit.setPlaceholderText("Örn: 20-06-2026 / TBD / kullanıcı belirler")
+
+        self.desc_edit = QTextEdit(str(defaults.get("description") or ""))
+        self.desc_edit.setPlaceholderText("Açıklama")
+        self.desc_edit.setFixedHeight(96)
+
         fields = [
-            ("Tarih / Saat", self.date_edit), ("Kullanıcı", self.user_edit),
-            ("Sözleşme", self.contract_edit), ("Teslimat", self.delivery_edit),
-            ("Alan", self.field_edit), ("Eski Değer", self.old_edit),
-            ("Yeni Değer", self.new_edit), ("Açıklama", self.desc_edit),
+            ("Revizyon Bilgisi", self.revision_edit),
+            ("Tarih", self.date_edit),
+            ("Açıklama", self.desc_edit),
         ]
         for row, (label, widget) in enumerate(fields):
             lab = QLabel(label)
@@ -712,6 +759,7 @@ class RevisionRowDialog(QDialog):
             grid.addWidget(lab, row, 0)
             grid.addWidget(widget, row, 1)
         root.addLayout(grid)
+
         actions = QHBoxLayout()
         actions.addStretch(1)
         cancel = QPushButton("İptal")
@@ -725,25 +773,18 @@ class RevisionRowDialog(QDialog):
         root.addLayout(actions)
 
     def _accept(self):
-        if not self.desc_edit.text().strip():
-            QMessageBox.warning(self, "Eksik", "Açıklama boş olamaz.")
-            return
+        revision_info = self.revision_edit.text().strip()
         date_text = self.date_edit.text().strip()
-        if date_text:
-            try:
-                datetime.fromisoformat(date_text.replace("Z", "+00:00"))
-            except Exception:
-                QMessageBox.warning(self, "Tarih hatası", "Tarih / Saat ISO formatında olmalı. Örnek: 2026-06-19T14:30:00")
-                return
+        description = self.desc_edit.toPlainText().strip()
+        if not any((revision_info, date_text, description)):
+            QMessageBox.warning(self, "Eksik", "En az bir alan doldurulmalı.")
+            return
         self.result = {
+            "revision_info": revision_info,
             "revision_date": date_text,
-            "user_name": self.user_edit.text().strip() or "Kullanıcı",
-            "contract_no": self.contract_edit.text().strip(),
-            "delivery_name": self.delivery_edit.text().strip(),
-            "field_name": self.field_edit.text().strip(),
-            "old_value": self.old_edit.text().strip(),
-            "new_value": self.new_edit.text().strip(),
-            "description": self.desc_edit.text().strip(),
+            "description": description,
+            # Eski tablo şemasıyla uyumluluk: Revizyon Bilgisi field_name alanında saklanır.
+            "field_name": revision_info,
         }
         self.accept()
 
@@ -1107,10 +1148,17 @@ class DeliveryScheduleReportDialog(QDialog):
         skip = set(skip or set())
         out = list(rows)
         if "year" not in skip and filters.get("year_range_valid"):
-            out = [r for r in out if r.year is not None and filters["start_year"] <= r.year <= filters["end_year"]]
+            # Keep uncertain dates visible. If a row has no extractable year
+            # (TBD-TBD-TBD / fully unknown), it should not disappear from the
+            # report just because the year filter is active. Rows with a known
+            # year still obey the selected year range.
+            out = [
+                r for r in out
+                if r.year is None or filters["start_year"] <= r.year <= filters["end_year"]
+            ]
         if "platform" not in skip and filters.get("platform") != "Tümü":
             out = [r for r in out if r.platform == filters.get("platform")]
-        if "yi_yd" not in skip and filters.get("yi_yd") != "Tümü":
+        if "yi_yd" not in skip and not _is_all_filter_value(filters.get("yi_yd"), "Tümü"):
             target = normalize_yi_yd(filters.get("yi_yd"))
             out = [r for r in out if normalize_yi_yd(r.domestic) == target]
         if "owner" not in skip and filters.get("owner") != "Tümü":
@@ -1159,7 +1207,7 @@ class DeliveryScheduleReportDialog(QDialog):
         ok = start_year is not None and end_year is not None
         self.year_range.setProperty("invalid", not ok)
         self.year_range.style().unpolish(self.year_range); self.year_range.style().polish(self.year_range)
-        return {"platform": self.platform.currentText(), "year_range": text, "start_year": start_year, "end_year": end_year, "year_range_valid": ok, "yi_yd": normalize_yi_yd(self.domestic.currentText()), "owner": self.owner.currentText(), "contract": self.contract.currentText(), "status": self.status.currentText()}
+        return {"platform": self.platform.currentText(), "year_range": text, "start_year": start_year, "end_year": end_year, "year_range_valid": ok, "yi_yd": normalize_yi_yd_filter(self.domestic.currentText()), "owner": self.owner.currentText(), "contract": self.contract.currentText(), "status": self.status.currentText()}
 
     def build_report_payload(self) -> dict[str, Any]:
         return {"filters": self.collect_filters(), "generated_at": date.today().isoformat(), "deliveries": [self._row_payload(row) for row in self.filtered_rows], "matrix": self._matrix_rows(self.filtered_rows)[1], "activity_logs": self.load_activity_log_preview(self.collect_filters())}
@@ -1261,8 +1309,10 @@ class DeliveryScheduleReportDialog(QDialog):
             deliveries = sorted({r.delivery for r in contract_rows if r.delivery and r.delivery != "-"})
             statuses = sorted({r.status for r in contract_rows if r.status and r.status != "-"})
 
+            dates = sorted({str(r.date_text or "").strip() for r in contract_rows if str(r.date_text or "").strip()})
             users_text = ", ".join(users[:3]) + (f" +{len(users) - 3}" if len(users) > 3 else "")
             owners_text = ", ".join(owners[:2]) + (f" +{len(owners) - 2}" if len(owners) > 2 else "")
+            dates_text = ", ".join(dates[:2]) + (f" +{len(dates) - 2}" if len(dates) > 2 else "")
             statuses_text = ", ".join(statuses[:2])
 
             parent = QTreeWidgetItem(self.delivery_tree)
@@ -1270,6 +1320,7 @@ class DeliveryScheduleReportDialog(QDialog):
             parent.setText(1, owners_text)
             parent.setText(2, users_text)
             parent.setText(4, f"{len(deliveries)} teslimat · {len(contract_rows)} satır")
+            parent.setText(5, dates_text)
             # Grup satırında bileşen toplamları yazılmıyor; yalnızca detay satırlarında adetler gösterilir.
             parent.setText(8, "")
             parent.setText(9, "")
@@ -1399,23 +1450,18 @@ class DeliveryScheduleReportDialog(QDialog):
     def _refresh_rev_table(self, filters: dict[str, Any]) -> None:
         from src.services.delivery_schedule_excel_exporter import build_delivery_schedule_revision_rows
 
-        self._rev_rows = build_delivery_schedule_revision_rows(self.store, limit=200, filters=self._rev_filters(filters))
+        # REV Takip şu an sadece kullanıcı tarafından girilen manuel satırları gösterir.
+        # Uygulama activity_logs kayıtları bilerek rapora alınmaz.
+        self._rev_rows = build_delivery_schedule_revision_rows(self.store, limit=200, filters=None)
         rows = [
             [
+                str(log.get("revision_info") or log.get("field") or log.get("revision") or ""),
                 str(log.get("date") or ""),
-                str(log.get("user") or "-"),
-                str(log.get("contract") or "-"),
-                str(log.get("delivery") or "-"),
-                str(log.get("field") or ""),
-                str(log.get("old_value") or ""),
-                str(log.get("new_value") or ""),
-                str(log.get("description") or "") + (" (Manuel)" if log.get("source") == "manual" else ""),
+                str(log.get("description") or ""),
             ]
             for log in self._rev_rows
         ]
-        if not rows:
-            rows = [["", "", "", "", "", "", "", "Seçili sözleşme filtrelerine uygun anlamlı revizyon kaydı bulunmuyor."]]
-        self.rev_view.setModel(SimpleTableModel(["Tarih", "Kullanıcı", "Sözleşme", "Teslimat", "Alan", "Eski Değer", "Yeni Değer", "Açıklama"], rows, self))
+        self.rev_view.setModel(SimpleTableModel(["Revizyon Bilgisi", "Tarih", "Açıklama"], rows, self))
 
     def load_activity_log_preview(self, filters: dict[str, Any]) -> list[list[str]]:
         self._refresh_rev_table(filters)
@@ -1430,14 +1476,17 @@ class DeliveryScheduleReportDialog(QDialog):
         has_real_selection = any(0 <= row < len(self._rev_rows) for row in selected_rows)
         single_row = selected_rows[0] if len(selected_rows) == 1 else -1
         single_data = self._rev_rows[single_row] if 0 <= single_row < len(self._rev_rows) else None
+
         menu = QMenu(self)
         add_action = menu.addAction("Satır Ekle")
         edit_action = menu.addAction("Satırı Düzenle")
         delete_action = menu.addAction("Seçili Satırı Sil")
         menu.addSeparator()
         refresh_action = menu.addAction("Yenile")
-        edit_action.setEnabled(bool(single_data and single_data.get("source") == "manual"))
+
+        edit_action.setEnabled(bool(single_data))
         delete_action.setEnabled(has_real_selection)
+
         action = menu.exec(self.rev_view.viewport().mapToGlobal(pos))
         if action == add_action:
             self._add_rev_row()
@@ -1449,19 +1498,16 @@ class DeliveryScheduleReportDialog(QDialog):
             self.refresh_preview()
 
     def _default_rev_values(self) -> dict[str, Any]:
-        filters = self.collect_filters()
-        contracts = self._selected_contracts_for_rev(filters)
         return {
-            "revision_date": datetime.now().isoformat(timespec="seconds"),
-            "user_name": self._current_actor_name(),
-            "contract_no": contracts[0] if len(contracts) == 1 else (str(filters.get("contract") or "") if filters.get("contract") != "Tüm seçili sözleşmeler" else ""),
+            "revision_info": "",
+            "revision_date": "",
             "description": "",
         }
 
     def _add_rev_row(self):
         from src.services.delivery_schedule_excel_exporter import save_manual_revision_row
 
-        dlg = RevisionRowDialog(self, self._default_rev_values(), "REV Kaydı Ekle")
+        dlg = RevisionRowDialog(self, self._default_rev_values(), "REV Satırı Ekle")
         if dlg.exec() and dlg.result:
             values = dict(dlg.result)
             values["created_by"] = self._current_actor_name()
@@ -1471,20 +1517,19 @@ class DeliveryScheduleReportDialog(QDialog):
     def _edit_rev_row(self, row: dict[str, Any]):
         from src.services.delivery_schedule_excel_exporter import save_manual_revision_row
 
-        if row.get("source") != "manual":
-            QMessageBox.information(self, "Otomatik kayıt", "Bu kayıt otomatik logdan gelmiştir. Genel log değiştirilemez. Dilerseniz bu kaydı gizleyip manuel bir REV kaydı ekleyebilirsiniz.")
+        manual_id = int(row.get("manual_id") or 0)
+        if manual_id <= 0:
             return
         defaults = {
-            "revision_date": row.get("date"), "user_name": row.get("user"),
-            "contract_no": row.get("contract"), "delivery_name": row.get("delivery"),
-            "field_name": row.get("field"), "old_value": row.get("old_value"),
-            "new_value": row.get("new_value"), "description": row.get("description"),
+            "revision_info": row.get("revision_info") or row.get("field") or row.get("revision") or "",
+            "revision_date": row.get("date") or "",
+            "description": row.get("description") or "",
         }
-        dlg = RevisionRowDialog(self, defaults, "REV Kaydını Düzenle")
+        dlg = RevisionRowDialog(self, defaults, "REV Satırını Düzenle")
         if dlg.exec() and dlg.result:
             values = dict(dlg.result)
             values["updated_by"] = self._current_actor_name()
-            save_manual_revision_row(self.store, values, row_id=int(row.get("manual_id") or 0))
+            save_manual_revision_row(self.store, values, row_id=manual_id)
             self.refresh_preview()
 
     def _delete_selected_rev_rows(self, selected_rows: list[int]):
@@ -1493,10 +1538,10 @@ class DeliveryScheduleReportDialog(QDialog):
         rows = [self._rev_rows[i] for i in selected_rows if 0 <= i < len(self._rev_rows)]
         if not rows:
             return
-        msg = "Bu REV kaydı rapordan kaldırılacak. Genel log kaydı silinmeyecek. Devam edilsin mi?"
+        msg = "Bu REV satırı silinecek. Devam edilsin mi?"
         if len(rows) > 1:
-            msg = f"{len(rows)} REV kaydı rapordan kaldırılacak. Genel log kayıtları silinmeyecek. Devam edilsin mi?"
-        if QMessageBox.question(self, "REV kaydı sil", msg, QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
+            msg = f"{len(rows)} REV satırı silinecek. Devam edilsin mi?"
+        if QMessageBox.question(self, "REV satırı sil", msg, QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
             return
         actor = self._current_actor_name()
         for row in rows:
