@@ -1356,13 +1356,26 @@ class STSStore:
 
         year_from..year_to (inclusive) yıl aralığındaki completion_date veya
         acceptance_date'e sahip tüm sözleşmeleri döndürür.
+
+        ÖNEMLİ — esnek tarih formatları: 'TBD' (tamamen belirsiz, yıldan
+        bağımsız) değerinin ilk 4 karakteri sayısal bir yıl DEĞİLDİR
+        (SUBSTR('TBD',1,4)='TBD'), bu yüzden eski
+        "SUBSTR(...,1,4) BETWEEN ? AND ?" koşulu bu kayıtları veritabanı
+        seviyesinde sessizce eliyordu (takvim ekranındaki "Tarihi belirsiz"
+        listesi hep boş kalıyordu). Bu yüzden her tarih alanı için ayrıca
+        "değer tam olarak 'TBD' mi" kontrolü eklenmiştir; bu durumda yıl
+        aralığından bağımsız olarak kayıt döndürülür. 'YYYY-TBD-TBD'
+        (sadece yıl biliniyor) formatına ayrıca dokunulmadı çünkü onun
+        ilk 4 karakteri zaten gerçek bir yıldır (SUBSTR('2026-TBD-TBD',1,4)
+        = '2026') ve mevcut SUBSTR filtresinden zaten doğru geçer — kendi
+        yılında listelenir, diğer yıllarda görünmez (istenen davranış).
+        '-' kasıtlı olarak hariç tutulur, çünkü tarih bilgisi taşımaz,
+        "bu alanda tarih uygulanmıyor" demektir.
         Sonuç: list[dict] — bağlantı nesnesi taşınmaz.
         """
-        params: list = [str(year_from), str(year_to)]
         plat_clause = ""
         if platform_filter:
             plat_clause = "AND p.name = ?"
-            params.append(platform_filter)
 
         sql = f"""
             SELECT
@@ -1379,10 +1392,16 @@ class STSStore:
             JOIN platforms p           ON p.id = cp.platform_id
             WHERE (
                 (c.completion_date  IS NOT NULL AND c.completion_date  != ''
-                    AND SUBSTR(c.completion_date,  1, 4) BETWEEN ? AND ?)
+                    AND (
+                        SUBSTR(c.completion_date,  1, 4) BETWEEN ? AND ?
+                        OR c.completion_date = 'TBD'
+                    ))
                 OR
                 (c.acceptance_date  IS NOT NULL AND c.acceptance_date  != ''
-                    AND SUBSTR(c.acceptance_date,  1, 4) BETWEEN ? AND ?)
+                    AND (
+                        SUBSTR(c.acceptance_date,  1, 4) BETWEEN ? AND ?
+                        OR c.acceptance_date = 'TBD'
+                    ))
             )
             {plat_clause}
             ORDER BY p.name, c.contract_no
@@ -1420,6 +1439,13 @@ class STSStore:
         Sistem termini (systems.completion_date) ve teslimat tarihleri
         (deliveries.acceptance_date, deliveries.planned_acceptance_date) için
         iki ayrı sorgu çalıştırır, birleştirir.
+
+        ÖNEMLİ — esnek tarih formatları: bkz. calendar_contract_events_bulk
+        docstring'i. 'TBD' değeri ilk 4 karakter olarak sayısal bir yıl
+        taşımadığı için eski SUBSTR(...,1,4) BETWEEN filtresi bu kayıtları
+        veritabanı seviyesinde sessizce eliyordu. Her iki sorguya da
+        "= 'TBD'" için ek bir OR koşulu eklendi; 'YYYY-TBD-TBD' zaten
+        SUBSTR ile doğru yıla atanıyor, ayrı işlem gerekmez.
         Sonuç: list[dict] — bağlantı nesnesi taşınmaz.
         """
         plat_clause = ""
@@ -1445,7 +1471,10 @@ class STSStore:
             JOIN contract_platforms cp ON cp.contract_id = c.id
             JOIN platforms p  ON p.id = cp.platform_id
             WHERE s.completion_date IS NOT NULL AND s.completion_date != ''
-              AND SUBSTR(s.completion_date, 1, 4) BETWEEN ? AND ?
+              AND (
+                  SUBSTR(s.completion_date, 1, 4) BETWEEN ? AND ?
+                  OR s.completion_date = 'TBD'
+              )
               {plat_clause}
             ORDER BY p.name, c.contract_no, s.name
         """
@@ -1477,10 +1506,16 @@ class STSStore:
             JOIN platforms p ON p.id  = cp.platform_id
             WHERE (
                 (d.acceptance_date IS NOT NULL AND d.acceptance_date != ''
-                    AND SUBSTR(d.acceptance_date, 1, 4) BETWEEN ? AND ?)
+                    AND (
+                        SUBSTR(d.acceptance_date, 1, 4) BETWEEN ? AND ?
+                        OR d.acceptance_date = 'TBD'
+                    ))
                 OR
                 (d.planned_acceptance_date IS NOT NULL AND d.planned_acceptance_date != ''
-                    AND SUBSTR(d.planned_acceptance_date, 1, 4) BETWEEN ? AND ?)
+                    AND (
+                        SUBSTR(d.planned_acceptance_date, 1, 4) BETWEEN ? AND ?
+                        OR d.planned_acceptance_date = 'TBD'
+                    ))
             )
             {plat_clause}
             ORDER BY p.name, c.contract_no, s.name, d.sort_order, d.id
