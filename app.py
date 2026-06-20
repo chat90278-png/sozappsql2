@@ -1898,7 +1898,7 @@ class _UserRowWidget(QWidget):
             self._check.setAlignment(Qt.AlignCenter)
             self._check.setStyleSheet(
                 "background:#2563eb;border-radius:4px;border:1.5px solid #2563eb;"
-                "color:white;font-size:11px;font-weight:700;"
+                "color:#0f172a;font-size:11px;font-weight:700;"
             )
         else:
             self._check.setText("")
@@ -2888,7 +2888,7 @@ class HeaderUserPopup(QFrame):
                 font-weight: 900;
             }
             QLabel#HeaderUserPopupName {
-                color: #ffffff;
+                color: #0f172a;
                 background: transparent;
                 border: 0;
                 font-size: 12px;
@@ -3247,7 +3247,7 @@ class ContractDialog(StyledDialog):
             active = False
         if active:
             btn.setStyleSheet(
-                "QPushButton{background:#2563eb;color:#ffffff;border:1px solid #1d4ed8;"
+                "QPushButton{background:#2563eb;color:#0f172a;border:1px solid #1d4ed8;"
                 "border-radius:8px;padding:6px 14px;font-weight:900;}"
                 "QPushButton:hover{background:#1d4ed8;}"
                 "QPushButton:pressed{background:#1e40af;}"
@@ -5894,7 +5894,7 @@ class UnitTrackingSidePanel(QFrame):
     def _style_filter_buttons(self):
         for key, btn in self._filter_buttons.items():
             if btn.isChecked():
-                btn.setStyleSheet("QPushButton{background:#0F3B82;color:white;border:1px solid #0F3B82;border-radius:12px;padding:3px 9px;font-weight:900;font-size:11px;}")
+                btn.setStyleSheet("QPushButton{background:#0F3B82;color:#0f172a;border:1px solid #0F3B82;border-radius:12px;padding:3px 9px;font-weight:900;font-size:11px;}")
             else:
                 btn.setStyleSheet("QPushButton{background:white;color:#334155;border:1px solid #CBD5E1;border-radius:12px;padding:3px 9px;font-weight:800;font-size:11px;}")
 
@@ -6240,7 +6240,7 @@ class DeliveryDialog(StyledDialog):
             + """
             QTableWidget#qtyTable {
                 background:#ffffff;
-                alternate-background-color:#ffffff;
+                alternate-background-color:#0f172a;
                 gridline-color:#d8e2ed;
                 selection-background-color:#dbeafe;
                 selection-color:#0f172a;
@@ -6530,7 +6530,7 @@ class DeliveryDialog(StyledDialog):
                 if btn:
                     btn.setText("◀" if active else "▶")
                     if active:
-                        btn.setStyleSheet("QPushButton#unitTrackingArrow{background:#0F3B82;color:white;border:1px solid #0F3B82;border-radius:5px;font-size:10px;font-weight:900;padding:0;}")
+                        btn.setStyleSheet("QPushButton#unitTrackingArrow{background:#0F3B82;color:#0f172a;border:1px solid #0F3B82;border-radius:5px;font-size:10px;font-weight:900;padding:0;}")
                     else:
                         btn.setStyleSheet("QPushButton#unitTrackingArrow{background:#DBEAFE;color:#1D4ED8;border:1px solid #93C5FD;border-radius:5px;font-size:10px;font-weight:900;padding:0;} QPushButton#unitTrackingArrow:hover{background:#BFDBFE;}")
                 for c in range(self.qty_table.columnCount()):
@@ -8291,9 +8291,9 @@ class ContractWorkWindow(QDialog):
         self.side_meta_popover.setObjectName("sideMetaPopover")
         self.side_meta_popover.setStyleSheet(
             "QFrame#sideMetaPopover{background:#ffffff; border:1px solid #c8d9ed; border-radius:12px;}"
-            "QPushButton#sidePanelAdd{background:#2563eb; color:#ffffff; border:0; border-radius:8px; font-size:20px; font-weight:900; padding:0;}"
+            "QPushButton#sidePanelAdd{background:#2563eb; color:#0f172a; border:0; border-radius:8px; font-size:20px; font-weight:900; padding:0;}"
             "QPushButton#sidePanelAdd:hover{background:#1d4ed8;}"
-            "QPushButton#documentActionPrimary{background:#2563eb; color:#ffffff; border:1px solid #2563eb; border-radius:9px; padding:0 12px; font-size:11px; font-weight:700; min-height:28px; max-height:32px;}"
+            "QPushButton#documentActionPrimary{background:#2563eb; color:#0f172a; border:1px solid #2563eb; border-radius:9px; padding:0 12px; font-size:11px; font-weight:700; min-height:28px; max-height:32px;}"
             "QPushButton#documentActionPrimary:hover{background:#1d4ed8; border-color:#1d4ed8;}"
             "QPushButton#documentAction{background:#f8fbff; color:#102a43; border:1px solid #cfe0f3; border-radius:9px; padding:0 12px; font-size:11px; font-weight:700; min-height:28px; max-height:32px;}"
             "QPushButton#documentAction:hover{background:#edf5ff; border-color:#9ec5f8;}"
@@ -8839,7 +8839,7 @@ class ContractWorkWindow(QDialog):
             btn_file.setFixedHeight(30)
             btn_file.setCursor(Qt.PointingHandCursor)
             btn_file.setStyleSheet(
-                "QPushButton{background:#2563eb;color:#ffffff;border:1px solid #2563eb;"
+                "QPushButton{background:#2563eb;color:#0f172a;border:1px solid #2563eb;"
                 "border-radius:9px;padding:0 12px;font-size:11px;font-weight:800;}"
                 "QPushButton:hover{background:#1d4ed8;border-color:#1d4ed8;}"
             )
@@ -10162,7 +10162,7 @@ class ContractWorkWindow(QDialog):
         card = QFrame(); card.setObjectName("sideFileCard"); card.setMinimumWidth(0); card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed); card.setFixedHeight(56); card.setProperty("contractFileId", file_id); card.installEventFilter(self)
         card.setStyleSheet("QFrame#sideFileCard{background:#f8fbff; border:1px solid #dbe7f5; border-radius:12px;} QFrame#sideFileCard:hover{background:#eef6ff; border-color:#b8cef0;} QLabel{background:transparent; border:0;} QToolButton{background:#ffffff; color:#334155; border:1px solid #d8e4f2; border-radius:8px; font-size:16px; font-weight:900;} QToolButton:hover{background:#eff6ff; border-color:#b8cef0;}")
         row = QHBoxLayout(card); row.setContentsMargins(9, 7, 9, 7); row.setSpacing(8)
-        icon = QLabel(icon_text); icon.setFixedSize(36, 36); icon.setAlignment(Qt.AlignCenter); icon.setStyleSheet(f"background:{icon_color}; color:#ffffff; border-radius:11px; font-size:13px; font-weight:900;")
+        icon = QLabel(icon_text); icon.setFixedSize(36, 36); icon.setAlignment(Qt.AlignCenter); icon.setStyleSheet(f"background:{icon_color}; color:#0f172a; border-radius:11px; font-size:13px; font-weight:900;")
         middle = QWidget(); middle.setMinimumWidth(0); middle.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed); middle.setStyleSheet("background:transparent;"); column = QVBoxLayout(middle); column.setContentsMargins(0, 0, 0, 0); column.setSpacing(2)
         title = ElidedLabel(filename); title.setMinimumWidth(0); title.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed); title.setToolTip(filename); title.setStyleSheet("color:#10233d; font-size:12px; font-weight:900;")
         meta = QLabel(f"{ext}  ·  {self.format_file_size(metadata.get('size_bytes', 0))}  ·  {self.format_file_date(metadata.get('created_at', ''))}"); meta.setMinimumWidth(0); meta.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed); meta.setStyleSheet("color:#64748b; font-size:10px;")
@@ -11249,7 +11249,7 @@ class ContractWorkWindow(QDialog):
 
         # Seçili değilse siyah, seçiliyse beyaz.
         name.setStyleSheet(
-            "background: transparent; color: #ffffff; font-weight: 900; font-size: 12px;"
+            "background: transparent; color: #0f172a; font-weight: 900; font-size: 12px;"
             if selected else
             "background: transparent; color: #0f172a; font-weight: 900; font-size: 12px;"
         )
@@ -12139,84 +12139,79 @@ class MainWindow(QMainWindow):
         self.open_windows_strip.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.open_windows_strip.setStyleSheet("""
             QFrame#openWindowsStrip {
-                background: #f3f7fc;
-                border: 1px solid #d9e5f2;
+                background: #eef5fc;
+                border: 1px solid #d7e4f2;
                 border-radius: 8px;
-                padding: 0px;
-                margin: 0px;
+                min-height: 30px;
+                max-height: 36px;
             }
             QLabel#openWindowsLabel {
-                color: #51677f;
+                color: #334155;
                 font-weight: 800;
                 font-size: 10px;
                 background: transparent;
-                padding: 0px 2px;
+                padding-left: 2px;
+                padding-right: 2px;
             }
-            QScrollArea#openWindowsScroll {
-                background: transparent;
-                border: none;
-                padding: 0px;
-                margin: 0px;
-            }
-            QScrollArea#openWindowsScroll > QWidget > QWidget {
-                background: transparent;
-            }
-            QFrame[toolChip="true"] {
-                background: #ffffff;
-                border: 1px solid #cddbeb;
-                border-radius: 10px;
-                padding: 0px;
-                margin: 0px;
-            }
-            QFrame[toolChip="true"][active="true"] {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 #1d4ed8, stop:1 #2563eb);
-                border: 1px solid #1e40af;
-            }
-            QFrame[toolChip="true"]:hover {
-                border-color: #93c5fd;
-                background: #f8fbff;
-            }
-            QFrame[toolChip="true"][active="true"]:hover {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 #1e40af, stop:1 #1d4ed8);
-                border-color: #bfdbfe;
-            }
-            QFrame[toolChip="true"] QPushButton {
+            QScrollArea#openWindowsScroll,
+            QWidget#openWindowsHost {
                 background: transparent;
                 border: 0;
-                color: #27445f;
-                font-weight: 800;
-                font-size: 11px;
-                padding: 2px 6px;
-                margin: 0px;
             }
-            QFrame[toolChip="true"][active="true"] QPushButton {
-                color: #ffffff;
+            QFrame[toolChip="true"] {
+                background: #f8fbff;
+                border: 1px solid #c7d7ea;
+                border-radius: 8px;
+                min-height: 24px;
+                max-height: 28px;
+            }
+            QFrame[toolChip="true"][active="true"] {
+                background: #dbeafe;
+                border: 1px solid #2563eb;
+            }
+            QFrame[toolChip="true"][stale="true"] {
+                background: #fff7ed;
+                border: 1px solid #f59e0b;
+            }
+            QFrame[toolChip="true"][active="true"][stale="true"] {
+                background: #ffedd5;
+                border: 1px solid #ea580c;
+            }
+            QPushButton#toolChipTitle {
+                background: transparent;
+                border: 0;
+                color: #0f172a;
+                font-weight: 900;
+                font-size: 10px;
+                padding: 3px 7px;
+                text-align: left;
+            }
+            QPushButton#toolChipTitle:hover {
+                color: #003b83;
+            }
+            QFrame[toolChip="true"][active="true"] QPushButton#toolChipTitle {
+                color: #002060;
+            }
+            QFrame[toolChip="true"][stale="true"] QPushButton#toolChipTitle {
+                color: #92400e;
             }
             QPushButton#toolChipClose {
-                color: #64748b;
+                background: transparent;
+                border: 0;
+                color: #475569;
                 font-weight: 900;
-                font-size: 13px;
-                padding: 0px 4px;
-                margin: 0px;
-                border-radius: 8px;
+                font-size: 11px;
+                padding: 2px 5px;
+                border-radius: 6px;
             }
             QPushButton#toolChipClose:hover {
-                background: rgba(248, 113, 113, 0.18);
-                color: #dc2626;
-            }
-            QFrame[toolChip="true"][active="true"] QPushButton#toolChipClose {
-                color: #dbeafe;
-            }
-            QFrame[toolChip="true"][active="true"] QPushButton#toolChipClose:hover {
-                background: rgba(255, 255, 255, 0.18);
-                color: #ffffff;
+                background: #dbeafe;
+                color: #b91c1c;
             }
         """)
         open_strip_lay = QHBoxLayout(self.open_windows_strip)
         open_strip_lay.setContentsMargins(8, 3, 8, 3)
-        open_strip_lay.setSpacing(6)
+        open_strip_lay.setSpacing(5)
         label = QLabel("▣ Pencereler:")
         label.setObjectName("openWindowsLabel")
         label.setFixedHeight(24)
@@ -12234,8 +12229,8 @@ class MainWindow(QMainWindow):
         self.open_windows_host.setStyleSheet("QWidget#openWindowsHost{background:transparent;border:0;}")
         self.open_windows_layout = QHBoxLayout(self.open_windows_host)
         self.open_windows_layout.setContentsMargins(0, 0, 0, 0)
-        self.open_windows_layout.setSpacing(6)
-        self.open_windows_layout.addStretch(1)
+        self.open_windows_layout.setSpacing(5)
+        self.open_windows_layout.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         self.open_windows_scroll.setWidget(self.open_windows_host)
         open_strip_lay.addWidget(self.open_windows_scroll, 1, Qt.AlignVCenter)
         self.open_windows_strip.hide()
@@ -12427,27 +12422,235 @@ class MainWindow(QMainWindow):
         if hasattr(self, "open_windows_strip"):
             self.open_windows_strip.setVisible(bool(getattr(self, "_tool_windows_by_key", {})))
 
+
+    def _sync_tool_chip_style(self, key: str) -> None:
+        chip = getattr(self, "_tool_window_chip_by_key", {}).get(key)
+        if not qt_obj_alive(chip):
+            return
+        active = str(chip.property("active") or "false") == "true"
+        stale = str(chip.property("stale") or "false") == "true"
+        title_btn = getattr(chip, "_title_btn", None)
+        if qt_obj_alive(title_btn):
+            base_title = str(getattr(chip, "_base_title", "") or title_btn.toolTip() or title_btn.text() or "")
+            prefix = "● " if stale else ""
+            title_btn.setText(prefix + base_title)
+            title_btn.setProperty("active", "true" if active else "false")
+            title_btn.setProperty("stale", "true" if stale else "false")
+            color = "#002060" if active else "#0f172a"
+            if stale:
+                color = "#92400e"
+            # Direct widget stylesheet wins over broader/global QPushButton rules.
+            title_btn.setStyleSheet(
+                "QPushButton#toolChipTitle {"
+                " background: transparent; border: 0;"
+                f" color: {color};"
+                " font-weight: 900; font-size: 10px;"
+                " padding: 3px 7px; text-align: left;"
+                "}"
+                "QPushButton#toolChipTitle:hover { color: #003b83; }"
+            )
+            title_btn.style().unpolish(title_btn)
+            title_btn.style().polish(title_btn)
+            title_btn.update()
+        chip.style().unpolish(chip)
+        chip.style().polish(chip)
+        chip.update()
+
+    def _mark_tool_window_stale(self, key: str, stale: bool = True) -> None:
+        chip = getattr(self, "_tool_window_chip_by_key", {}).get(key)
+        if not qt_obj_alive(chip):
+            return
+        chip.setProperty("stale", "true" if stale else "false")
+        self._sync_tool_chip_style(key)
+
+    def _notify_tool_windows_data_changed(self, scope: str = "all") -> None:
+        """Mark open tool windows as stale after contract/user/tag/platform data changes.
+
+        Reports are refreshed lazily when activated if they expose a safe refresh method.
+        Manager windows are only marked stale so unsaved edits are not overwritten.
+        """
+        for key in list(getattr(self, "_tool_windows_by_key", {}).keys()):
+            self._mark_tool_window_stale(key, True)
+
+    def _call_tool_window_refresh(self, widget: QWidget, scope: str = "all") -> bool:
+        # Keep this intentionally conservative. Only no-arg/optional refresh hooks are used.
+        method_names = (
+            "refresh_after_data_change",
+            "refresh_data",
+            "refresh_preview",
+            "refresh_report",
+            "reload_data",
+            "reload_preview",
+            "reload",
+            "refresh",
+            "update_preview",
+            "build_preview",
+            "load_data",
+        )
+        for name in method_names:
+            fn = getattr(widget, name, None)
+            if not callable(fn):
+                continue
+            try:
+                fn()
+                return True
+            except TypeError:
+                try:
+                    fn(scope)
+                    return True
+                except Exception:
+                    continue
+            except Exception:
+                # Do not crash the main app because a report failed to refresh.
+                traceback.print_exc()
+                continue
+        return False
+
+    def _refresh_stale_tool_window(self, key: str) -> bool:
+        chip = getattr(self, "_tool_window_chip_by_key", {}).get(key)
+        if not qt_obj_alive(chip) or str(chip.property("stale") or "false") != "true":
+            return False
+        # Manager/edit-heavy windows should not auto-refresh because they may have unsaved edits.
+        if str(key or "").startswith("manager:"):
+            return False
+        widget = getattr(self, "_tool_windows_by_key", {}).get(key)
+        if not self._tool_window_alive(widget):
+            self._unregister_tool_window(key)
+            return False
+        if self._call_tool_window_refresh(widget):
+            self._mark_tool_window_stale(key, False)
+            return True
+        return False
+
+    def _position_minimized_tool_windows(self) -> None:
+        """Eski davranış: minimize edilen tool window başlıklarını ana pencere altına diziyordu.
+
+        Bu davranış Windows'ta pencere geri çağrılınca pencerenin ekranın altında açılmasına
+        sebep oluyordu. Tool window'lar artık gerçek ayrı pencere gibi davranır; minimize
+        konumu elle taşınmaz.
+        """
+        return
+
+    def _center_tool_window(self, widget: QWidget) -> None:
+        """Tool window'u ana pencereye/screen'e göre güvenli şekilde ortala."""
+        if not self._tool_window_alive(widget):
+            return
+        try:
+            screen = None
+            try:
+                screen = widget.screen() or self.screen()
+            except Exception:
+                screen = None
+            if screen is None:
+                screen = QApplication.primaryScreen()
+            if screen is None:
+                return
+            available = screen.availableGeometry()
+
+            frame = widget.frameGeometry()
+            if not frame.isValid() or frame.width() <= 80 or frame.height() <= 60:
+                hint = widget.sizeHint()
+                w = max(widget.width(), hint.width(), 640)
+                h = max(widget.height(), hint.height(), 420)
+            else:
+                w = frame.width()
+                h = frame.height()
+
+            # Ana pencere görünürse onun merkezini kullan; aksi halde ekran merkezine düş.
+            try:
+                base_center = self.frameGeometry().center()
+                if not available.contains(base_center):
+                    base_center = available.center()
+            except Exception:
+                base_center = available.center()
+
+            x = base_center.x() - w // 2
+            y = base_center.y() - h // 2
+            x = max(available.left(), min(x, available.right() - w + 1))
+            y = max(available.top(), min(y, available.bottom() - h + 1))
+            widget.move(x, y)
+        except Exception:
+            pass
+
     def _set_active_tool_window(self, key: str) -> None:
         self._active_tool_window_key = str(key or "")
         for item_key, chip in list(getattr(self, "_tool_window_chip_by_key", {}).items()):
-            if not qt_obj_alive(chip):
+            if chip is None:
                 continue
-            chip.setProperty("active", "true" if item_key == self._active_tool_window_key else "false")
+            active = item_key == self._active_tool_window_key
+            self._apply_tool_chip_visual(chip, active)
+
+    def _tool_chip_frame_style(self, active: bool = False) -> str:
+        if active:
+            return "QFrame#toolWindowChip{background:#dbeafe;border:1px solid #2563eb;border-radius:8px;}"
+        return "QFrame#toolWindowChip{background:#f8fbff;border:1px solid #c7d7ea;border-radius:8px;}"
+
+    def _tool_chip_title_style(self, active: bool = False) -> str:
+        color = "#0f172a"  # her zaman koyu/siyah okunaklı metin
+        hover = "#1d4ed8"
+        return (
+            "QPushButton#toolChipTitle{background:transparent;border:0;color:" + color + ";"
+            "font-size:12px;font-weight:800;padding:0 2px;text-align:left;min-height:22px;max-height:24px;}"
+            "QPushButton#toolChipTitle:hover{color:" + hover + ";}"
+            "QPushButton#toolChipTitle:pressed{color:#0f172a;}"
+            "QPushButton#toolChipTitle:disabled{color:#0f172a;}"
+        )
+
+    def _tool_chip_close_style(self, active: bool = False) -> str:
+        return (
+            "QPushButton{background:transparent;border:0;color:#475569;font-size:12px;font-weight:900;"
+            "padding:0 2px;min-width:18px;max-width:18px;}"
+            "QPushButton:hover{color:#dc2626;}"
+        )
+
+    def _tool_chip_display_text(self, title: str, max_px: int = 170) -> str:
+        fm = self.fontMetrics()
+        try:
+            return fm.elidedText(str(title or ""), Qt.ElideRight, max_px)
+        except Exception:
+            t = str(title or "")
+            return t if len(t) <= 24 else (t[:21] + "...")
+
+    def _apply_tool_chip_visual(self, chip: QWidget, active: bool = False) -> None:
+        if chip is None:
+            return
+        try:
+            chip.setProperty("active", "true" if active else "false")
+        except Exception:
+            pass
+        try:
+            chip.setStyleSheet(self._tool_chip_frame_style(active))
+        except Exception:
+            pass
+        title_btn = chip.findChild(QPushButton, "toolChipTitle")
+        close_btn = chip.findChild(QPushButton, "toolChipClose")
+        full_title = chip.property("fullTitle") if hasattr(chip, 'property') else None
+        full_title = str(full_title or "")
+        if title_btn is not None:
+            title_btn.setStyleSheet(self._tool_chip_title_style(active))
+            max_px = max(110, title_btn.width() or 170)
+            shown = self._tool_chip_display_text(full_title or title_btn.text(), max_px)
+            title_btn.setText(shown)
+            title_btn.setToolTip(full_title or shown)
+        if close_btn is not None:
+            close_btn.setStyleSheet(self._tool_chip_close_style(active))
+        st = chip.style()
+        if st is not None:
             try:
-                style = chip.style()
-                style.unpolish(chip)
-                style.polish(chip)
+                st.unpolish(chip)
+                st.polish(chip)
             except Exception:
                 pass
-            chip.update()
+        chip.update()
 
     def _prepare_tool_window(self, widget: QWidget) -> QWidget:
-        """Tool-window manager'a alınan büyük ekranları gerçek ayrı pencere yapar.
-
-        Küçük modal formlar bu helper'a gelmez; bu yüzden burada minimize/maximize
-        butonlarını güvenle açabiliriz.
-        """
         try:
+            # Tool window'lar ana pencereye gömülü/minimize başlığı gibi davranmasın;
+            # gerçek bağımsız top-level pencere olsun. Referansı MainWindow registry tutuyor.
+            try:
+                widget.setParent(None)
+            except Exception:
+                pass
             if isinstance(widget, QDialog):
                 widget.setModal(False)
                 widget.setWindowModality(Qt.NonModal)
@@ -12455,68 +12658,85 @@ class MainWindow(QMainWindow):
                     widget.setSizeGripEnabled(True)
                 except Exception:
                     pass
-
-            flags = widget.windowFlags()
-            flags |= Qt.Window
-            flags |= Qt.WindowTitleHint
-            flags |= Qt.WindowSystemMenuHint
-            flags |= Qt.WindowMinimizeButtonHint
-            flags |= Qt.WindowMaximizeButtonHint
-            flags |= Qt.WindowCloseButtonHint
+            flags = (
+                Qt.Window
+                | Qt.WindowTitleHint
+                | Qt.WindowSystemMenuHint
+                | Qt.WindowMinimizeButtonHint
+                | Qt.WindowMaximizeButtonHint
+                | Qt.WindowCloseButtonHint
+            )
             widget.setWindowFlags(flags)
             widget.setAttribute(Qt.WA_DeleteOnClose, True)
-            widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-
-            try:
-                min_size = widget.minimumSize()
-                if min_size.width() < 640 or min_size.height() < 420:
-                    widget.setMinimumSize(max(640, min_size.width()), max(420, min_size.height()))
-            except Exception:
-                pass
-
-            try:
-                icon_path = app_icon_path()
-                if icon_path and Path(icon_path).exists():
-                    widget.setWindowIcon(QIcon(str(icon_path)))
-            except Exception:
-                pass
-
             widget.installEventFilter(self)
         except Exception:
             pass
         return widget
-
     def _create_tool_window_chip(self, key: str, title: str) -> QWidget:
-        chip = QFrame(self.open_windows_host)
+        chip = QFrame()
         chip.setProperty("toolChip", "true")
         chip.setProperty("active", "false")
-        chip.setToolTip(title)
-        chip.setFixedHeight(24)
-        lay = QHBoxLayout(chip)
-        lay.setContentsMargins(8, 0, 4, 0)
-        lay.setSpacing(2)
+        chip.setProperty("stale", "false")
+        chip.setProperty("fullTitle", str(title or ""))
+        chip.setObjectName("toolWindowChip")
+        chip.setMinimumHeight(26)
+        chip.setMaximumHeight(30)
+        chip.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        chip.setStyleSheet(self._tool_chip_frame_style(False))
 
-        title_btn = QPushButton(title)
-        title_btn.setToolTip(title)
+        lay = QHBoxLayout(chip)
+        lay.setContentsMargins(10, 3, 7, 3)
+        lay.setSpacing(6)
+
+        full_title = str(title or "")
+        metrics = QFontMetrics(self.font())
+        title_px = max(118, min(metrics.horizontalAdvance(full_title) + 18, 240))
+        chip_px = title_px + 32
+        chip.setMinimumWidth(chip_px)
+        chip.setMaximumWidth(chip_px)
+
+        title_btn = QPushButton(self._tool_chip_display_text(full_title, title_px))
+        title_btn.setObjectName("toolChipTitle")
+        title_btn.setFlat(True)
         title_btn.setCursor(Qt.PointingHandCursor)
+        title_btn.setToolTip(full_title)
+        title_btn.setMinimumWidth(title_px)
+        title_btn.setMaximumWidth(title_px)
         title_btn.setMinimumHeight(22)
-        title_btn.setMinimumWidth(88)
-        title_btn.setMaximumWidth(230)
+        title_btn.setMaximumHeight(24)
+        title_btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        title_btn.setStyleSheet(self._tool_chip_title_style(False))
         title_btn.clicked.connect(lambda _checked=False, k=key: self.raise_tool_window(k))
-        lay.addWidget(title_btn, 0, Qt.AlignVCenter)
 
         close_btn = QPushButton("×")
         close_btn.setObjectName("toolChipClose")
+        close_btn.setFlat(True)
         close_btn.setCursor(Qt.PointingHandCursor)
-        close_btn.setFixedSize(20, 20)
-        close_btn.setToolTip(f"{title} penceresini kapat")
+        close_btn.setToolTip("Pencereyi kapat")
+        close_btn.setMinimumSize(18, 20)
+        close_btn.setMaximumSize(20, 22)
+        close_btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        close_btn.setStyleSheet(self._tool_chip_close_style(False))
         close_btn.clicked.connect(lambda _checked=False, k=key: self.close_tool_window(k))
+
+        lay.addWidget(title_btn, 1, Qt.AlignVCenter)
         lay.addWidget(close_btn, 0, Qt.AlignVCenter)
 
-        insert_at = max(0, self.open_windows_layout.count() - 1)
-        self.open_windows_layout.insertWidget(insert_at, chip, 0, Qt.AlignVCenter)
+        # ÖNEMLİ: Görünen layout self.open_windows_layout'tır.
+        # open_windows_row_layout diye bir alan yoksa chip kayıtlı kalıp ekranda görünmez.
+        target_layout = getattr(self, "open_windows_layout", None)
+        if target_layout is not None:
+            target_layout.addWidget(chip, 0, Qt.AlignVCenter)
+            try:
+                self.open_windows_host.adjustSize()
+                self.open_windows_host.updateGeometry()
+                self.open_windows_scroll.updateGeometry()
+            except Exception:
+                pass
+
         self._tool_window_chip_by_key[key] = chip
         self._refresh_tool_window_strip_visibility()
+        self._apply_tool_chip_visual(chip, key == getattr(self, "_active_tool_window_key", ""))
         return chip
 
     def _unregister_tool_window(self, key: str) -> None:
@@ -12545,12 +12765,23 @@ class MainWindow(QMainWindow):
             self._unregister_tool_window(key)
             return None
         try:
-            if widget.isMinimized():
+            was_minimized = bool(widget.isMinimized())
+            was_hidden = not bool(widget.isVisible())
+            if was_minimized:
                 widget.showNormal()
-            elif not widget.isVisible():
+            elif was_hidden:
                 widget.show()
-            widget.raise_()
-            widget.activateWindow()
+            self._refresh_stale_tool_window(key)
+
+            def _finish_raise(w=widget, center=(was_minimized or was_hidden)):
+                if not self._tool_window_alive(w):
+                    return
+                if center:
+                    self._center_tool_window(w)
+                w.raise_()
+                w.activateWindow()
+
+            QTimer.singleShot(0, _finish_raise)
         except Exception:
             pass
         self._set_active_tool_window(key)
@@ -12572,8 +12803,15 @@ class MainWindow(QMainWindow):
             pass
         try:
             widget.show()
-            widget.raise_()
-            widget.activateWindow()
+
+            def _finish_open(w=widget):
+                if not self._tool_window_alive(w):
+                    return
+                self._center_tool_window(w)
+                w.raise_()
+                w.activateWindow()
+
+            QTimer.singleShot(0, _finish_open)
         except Exception:
             pass
         self._set_active_tool_window(key)
@@ -12853,7 +13091,13 @@ class MainWindow(QMainWindow):
                 for key, widget in list(getattr(self, "_tool_windows_by_key", {}).items()):
                     if obj is widget:
                         self._set_active_tool_window(key)
+                        self._refresh_stale_tool_window(key)
                         break
+
+            if etype == QEvent.WindowStateChange:
+                # Minimize edilen tool window'ların konumunu elle alta taşımıyoruz.
+                # Böylece chip'ten geri çağrıldığında pencere ekran altında açılmaz.
+                pass
 
             contract_viewport = None
             try:
@@ -13547,6 +13791,10 @@ class MainWindow(QMainWindow):
             self.calendar_window = None
 
     def request_refresh(self, select_platform: Optional[str] = None, scope: str = "all", platform: Optional[str] = None):
+        try:
+            self._notify_tool_windows_data_changed(locals().get("scope", "all"))
+        except Exception:
+            pass
         if not self.store:
             self.set_empty_state()
             return
