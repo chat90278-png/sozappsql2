@@ -84,7 +84,7 @@ from PySide6.QtWidgets import (
     QTreeWidget, QTreeWidgetItem, QDialog, QLineEdit, QComboBox, QDateEdit, QSpinBox, QDoubleSpinBox,
     QMessageBox, QFileDialog, QFrame, QScrollArea, QCheckBox, QHeaderView,
     QSizePolicy, QProgressBar, QProgressDialog, QStyledItemDelegate, QTextEdit,
-    QToolButton, QMenu, QInputDialog, QWidgetAction, QStackedWidget, QAbstractItemView, QStyle, QRadioButton, QButtonGroup
+    QToolButton, QMenu, QInputDialog, QWidgetAction, QStackedWidget, QAbstractItemView, QStyle, QRadioButton, QButtonGroup, QTabWidget, QTabBar
 )
 from shiboken6 import isValid as _qt_is_valid
 
@@ -12215,9 +12215,9 @@ class MainWindow(QMainWindow):
         sl.addWidget(self.upcoming_scroll, 1)
 
         calb=QPushButton("🗓 Takvim Görünümü"); calb.clicked.connect(self.open_calendar_tracking); sl.addWidget(calb, 0)
-        main.addWidget(strip, 0)
+        home_lay.addWidget(strip, 0)
 
-        body=QHBoxLayout(); body.setSpacing(8); main.addLayout(body,1)
+        body=QHBoxLayout(); body.setSpacing(8); home_lay.addLayout(body,1)
         left=QFrame(); left.setObjectName("panel"); left.setFixedWidth(350); lv=QVBoxLayout(left); lv.setContentsMargins(0, 0, 0, 0); lv.setSpacing(0)
         platform_head = QWidget(); ph = QHBoxLayout(platform_head); ph.setContentsMargins(12, 8, 12, 8); ph.setSpacing(6)
         h=QLabel("Platformlar"); h.setObjectName("panelTitle"); ph.addWidget(h); ph.addStretch(1)
