@@ -12218,7 +12218,8 @@ class MainWindow(QMainWindow):
         # The alert strip belongs to the real main layout; there is no embedded workspace container here.
         main.addWidget(strip, 0)
 
-        body=QHBoxLayout(); body.setSpacing(8); home_lay.addLayout(body,1)
+        # The main contract query body also stays on the real main layout.
+        body=QHBoxLayout(); body.setSpacing(8); main.addLayout(body,1)
         left=QFrame(); left.setObjectName("panel"); left.setFixedWidth(350); lv=QVBoxLayout(left); lv.setContentsMargins(0, 0, 0, 0); lv.setSpacing(0)
         platform_head = QWidget(); ph = QHBoxLayout(platform_head); ph.setContentsMargins(12, 8, 12, 8); ph.setSpacing(6)
         h=QLabel("Platformlar"); h.setObjectName("panelTitle"); ph.addWidget(h); ph.addStretch(1)
