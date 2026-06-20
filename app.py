@@ -908,7 +908,13 @@ class FilterableHeaderView(QHeaderView):
         self._day_ranges: Dict[int, Tuple[Optional[int], Optional[int]]] = {}
         self.sectionClicked.connect(self._on_section_clicked)
 
+    def _filter_disabled_for_col(self, col: int) -> bool:
+        # Sözleşme No ve Kullanıcı sütunlarında Excel-tipi header filtresi istenmiyor.
+        return int(col) in (COL_CONTRACT_NO, COL_USER)
+
     def has_active_filter(self, col: int) -> bool:
+        if self._filter_disabled_for_col(col):
+            return False
         return (
             (col in self._col_filters and self._col_filters[col] is not None)
             or col in self._date_ranges
@@ -971,6 +977,8 @@ class FilterableHeaderView(QHeaderView):
         return sorted(vals, key=lambda x: x.lower())
 
     def _on_section_clicked(self, col: int):
+        if self._filter_disabled_for_col(col):
+            return
         values = self._get_column_values(col)
         if not values and col not in (COL_T_DATE, COL_REMAINING):
             return
@@ -1180,6 +1188,8 @@ class FilterableHeaderView(QHeaderView):
 
     def paintSection(self, painter, rect, logical_index):
         super().paintSection(painter, rect, logical_index)
+        if self._filter_disabled_for_col(logical_index):
+            return
         # Filtre aktifse ikonu farkli goster
         active = self.has_active_filter(logical_index)
         icon = "▼" if active else "▾"  # solid down vs outline down
@@ -2577,11 +2587,20 @@ class ElidedValueLabel(QLabel):
 
 
 class PlatformTabsWidget(QWidget):
-    """Header içinde gömülü premium/neon platform sekme rayı."""
+    """Header içinde gömülü premium/neon platform sekme rayı.
+
+    Not: Önceki sürümde QScrollArea yüksekliği, host yüksekliği ve buton
+    yüksekliği birbirine çok yakın hesaplandığı için aktif mavi chip rail
+    çerçevesine tam oturmuyor gibi görünüyordu. Bu sürümde ölçüler sabit ve
+    simetriktir: rail 32px, iç boşluk 3px, buton 26px.
+    """
 
     activePlatformChanged = Signal(int)
 
-    DEFAULT_RAIL_HEIGHT = 38
+    DEFAULT_RAIL_HEIGHT = 32
+    INNER_PAD = 3
+    BUTTON_HEIGHT = 26
+    BUTTON_SPACING = 2
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -2604,39 +2623,45 @@ class PlatformTabsWidget(QWidget):
         self._rail.setFixedHeight(self._rail_height)
         self._rail.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         rail_lay = QHBoxLayout(self._rail)
-        rail_lay.setContentsMargins(2, 2, 2, 2)
+        rail_lay.setContentsMargins(self.INNER_PAD, self.INNER_PAD, self.INNER_PAD, self.INNER_PAD)
         rail_lay.setSpacing(0)
 
         self._scroll = QScrollArea(self._rail)
         self._scroll.setObjectName("PlatformTabScroll")
         self._scroll.setWidgetResizable(False)
         self._scroll.setFrameShape(QFrame.NoFrame)
-        self._scroll.setFixedHeight(self._rail_height)
+        self._scroll.setFixedHeight(self.BUTTON_HEIGHT)
         self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._scroll.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         self._scroll.viewport().setStyleSheet("background:transparent;border:0;")
-        rail_lay.addWidget(self._scroll, 1, Qt.AlignVCenter)
-        outer.addWidget(self._rail, 1, Qt.AlignVCenter)
+        rail_lay.addWidget(self._scroll, 0, Qt.AlignCenter)
+        outer.addWidget(self._rail, 0, Qt.AlignCenter)
 
         self._host = QWidget()
         self._host.setObjectName("PlatformTabScrollContent")
         self._host.setStyleSheet("QWidget#PlatformTabScrollContent{background:transparent;border:0;}")
         self._host.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-        self._host.setFixedHeight(self._rail_height)
+        self._host.setFixedHeight(self.BUTTON_HEIGHT)
         self._lay = QHBoxLayout(self._host)
         self._lay.setContentsMargins(0, 0, 0, 0)
-        self._lay.setSpacing(2)
+        self._lay.setSpacing(self.BUTTON_SPACING)
         self._lay.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         self._scroll.setWidget(self._host)
         self._apply_rail_style()
 
+    def _rail_padding_width(self) -> int:
+        return self.INNER_PAD * 2
+
+    def _button_height(self) -> int:
+        return self.BUTTON_HEIGHT
+
     def _apply_rail_style(self):
         self._rail.setStyleSheet("""
             QFrame#PlatformTabRail {
-                background: rgba(5, 18, 43, 0.62);
-                border: 1px solid rgba(96, 165, 250, 0.34);
-                border-radius: 17px;
+                background: rgba(5, 18, 43, 0.64);
+                border: 1px solid rgba(96, 165, 250, 0.44);
+                border-radius: 16px;
                 padding: 0px;
                 margin: 0px;
             }
@@ -2653,7 +2678,8 @@ class PlatformTabsWidget(QWidget):
         """)
 
     def set_platforms(self, platforms: List[object], active_platform_id: int = 0):
-        vals=[]; seen=set()
+        vals = []
+        seen = set()
         for p in platforms or []:
             if isinstance(p, dict):
                 pid = int(p.get("platform_id") or p.get("id") or 0)
@@ -2684,12 +2710,13 @@ class PlatformTabsWidget(QWidget):
             if widget:
                 widget.setParent(None)
                 widget.deleteLater()
+
         metrics = QFontMetrics(self.font())
         total_width = 0
         single = len(self._platforms) <= 1
-        margins = (0, 0, 0, 0)
-        self._lay.setContentsMargins(*margins)
-        self._lay.setSpacing(2)
+        self._lay.setContentsMargins(0, 0, 0, 0)
+        self._lay.setSpacing(self.BUTTON_SPACING)
+
         for platform in self._platforms:
             name = str(platform.get("platform_name") or "")
             pid = int(platform.get("platform_id") or 0)
@@ -2698,12 +2725,11 @@ class PlatformTabsWidget(QWidget):
             btn.setProperty("platform_id", pid)
             btn.setCheckable(True)
             btn.setCursor(Qt.PointingHandCursor)
-            # Height is derived from the polished button sizeHint; do not force it here.
-            chip_width = min(168, max(92 if single else 86, metrics.horizontalAdvance(name) + (44 if single else 40)))
-            btn.setFixedWidth(chip_width)
-            btn.setFixedHeight(30)
+            chip_width = min(168, max(92 if single else 84, metrics.horizontalAdvance(name) + (42 if single else 38)))
+            btn.setFixedSize(chip_width, self._button_height())
             btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
             btn.setToolTip(name)
+            # Dış çerçeveyi taşırdığı için drop shadow kullanılmıyor; neon etki border/gradient ile veriliyor.
             btn.setGraphicsEffect(None)
             btn.setStyleSheet("""
                 QPushButton#PlatformTabButton {
@@ -2713,8 +2739,10 @@ class PlatformTabsWidget(QWidget):
                     font-weight: 900;
                     font-size: 11px;
                     letter-spacing: 0.45px;
-                    padding: 4px 13px;
-                    border-radius: 14px;
+                    padding: 0px 12px;
+                    min-height: 26px;
+                    max-height: 26px;
+                    border-radius: 13px;
                     text-align: center;
                 }
                 QPushButton#PlatformTabButton[active="true"] {
@@ -2748,22 +2776,29 @@ class PlatformTabsWidget(QWidget):
             self._lay.addWidget(btn, 0, Qt.AlignVCenter)
             self._buttons[pid] = btn
             total_width += chip_width
-        self._sync_measured_heights()
-        self._refresh_button_states()
+
         if self._platforms:
             total_width += self._lay.spacing() * max(0, len(self._platforms) - 1)
-        left, _top, right, _bottom = margins
-        total_width += left + right
-        self._host.setFixedSize(max(1, total_width), self._host_height())
-        self._content_width = max(70, total_width)
-        fixed_width = min(self._content_width, self._max_width)
+
+        content_width = max(1, total_width)
+        self._host.setFixedSize(content_width, self._button_height())
+        self._content_width = max(70, content_width)
+
+        rail_width = self._content_width + self._rail_padding_width()
         if len(self._platforms) >= 4:
-            fixed_width = min(self._max_width, max(self._min_scroll_width, fixed_width))
-        self.setMinimumWidth(min(fixed_width, self._min_scroll_width if len(self._platforms) >= 4 else fixed_width))
+            rail_width = min(self._max_width, max(self._min_scroll_width, rail_width))
+        else:
+            rail_width = min(rail_width, self._max_width)
+        rail_width = max(80, rail_width)
+        scroll_width = max(1, rail_width - self._rail_padding_width())
+
+        self.setMinimumWidth(rail_width)
         self.setMaximumWidth(self._max_width)
-        self.setFixedWidth(fixed_width)
-        self._rail.setFixedWidth(fixed_width)
-        self._scroll.setFixedWidth(max(1, fixed_width - 4))
+        self.setFixedWidth(rail_width)
+        self._rail.setFixedWidth(rail_width)
+        self._scroll.setFixedWidth(scroll_width)
+        self._sync_measured_heights()
+        self._refresh_button_states()
         self.updateGeometry()
         self._ensure_active_visible()
         self.setToolTip(", ".join(str(p.get("platform_name") or "") for p in self._platforms))
@@ -2771,7 +2806,7 @@ class PlatformTabsWidget(QWidget):
     def _ensure_active_visible(self):
         active_btn = self._buttons.get(int(self._active or 0))
         if active_btn is not None:
-            self._scroll.ensureWidgetVisible(active_btn, 24, 0)
+            self._scroll.ensureWidgetVisible(active_btn, 0, 0)
 
     def _refresh_button_states(self):
         active_id = int(self._active or 0)
@@ -2779,14 +2814,7 @@ class PlatformTabsWidget(QWidget):
             active = bool(pid) and int(pid) == active_id
             btn.setProperty("active", "true" if active else "false")
             btn.setChecked(active)
-            if active:
-                glow = QGraphicsDropShadowEffect(btn)
-                glow.setBlurRadius(18)
-                glow.setOffset(0, 0)
-                glow.setColor(QColor(56, 189, 248, 120))
-                btn.setGraphicsEffect(glow)
-            else:
-                btn.setGraphicsEffect(None)
+            btn.setGraphicsEffect(None)
             btn.style().unpolish(btn)
             btn.style().polish(btn)
             btn.update()
@@ -2802,32 +2830,26 @@ class PlatformTabsWidget(QWidget):
         super().wheelEvent(event)
 
     def sizeHint(self) -> QSize:
-        width = min(max(70, self._content_width), self._max_width)
+        width = min(max(80, self._content_width + self._rail_padding_width()), self._max_width)
         if len(self._platforms) >= 4:
             width = max(self._min_scroll_width, width)
         return QSize(width, self._rail_height)
 
     def minimumSizeHint(self) -> QSize:
-        width = min(max(70, self._content_width), self._max_width)
+        width = min(max(80, self._content_width + self._rail_padding_width()), self._max_width)
         if len(self._platforms) >= 4:
             width = min(width, self._min_scroll_width)
         return QSize(width, self._rail_height)
 
     def _host_height(self) -> int:
-        left, top, right, bottom = self._lay.getContentsMargins()
-        button_height = max((btn.sizeHint().height() for btn in self._buttons.values()), default=0)
-        return max(1, button_height + top + bottom)
+        return self._button_height()
 
     def _sync_measured_heights(self) -> None:
-        host_height = self._host_height()
-        _left, rail_top, _right, rail_bottom = self._rail.layout().getContentsMargins()
-        rail_frame = self._rail.frameWidth() * 2
-        rail_height = max(self.DEFAULT_RAIL_HEIGHT, host_height + rail_top + rail_bottom + rail_frame)
-        self._rail_height = rail_height
-        self._host.setFixedHeight(host_height)
-        self._scroll.setFixedHeight(host_height)
-        self._rail.setFixedHeight(rail_height)
-        self.setFixedHeight(rail_height)
+        self._rail_height = self.DEFAULT_RAIL_HEIGHT
+        self._host.setFixedHeight(self._button_height())
+        self._scroll.setFixedHeight(self._button_height())
+        self._rail.setFixedHeight(self._rail_height)
+        self.setFixedHeight(self._rail_height)
 
     def _set_active(self, platform_id: int):
         platform_id = int(platform_id or 0)
@@ -12540,8 +12562,11 @@ class MainWindow(QMainWindow):
         cls = renk siniflandirmasi icin.
         """
         status_txt = str(it.get("status", "") or "").strip()
-        date_txt = str(it.get("_near_delivery_txt") or "-")
-        days_text = str(it.get("_near_delivery_days") or "-")
+        if "_near_delivery_txt" in it:
+            date_txt = str(it.get("_near_delivery_txt") or "")
+        else:
+            date_txt = ""
+        days_text = str(it.get("_near_delivery_days") or "")
         today_iso = date.today().isoformat()
         cache_key = (status_txt, date_txt, days_text, today_iso)
         if it.get("_health_cache_key") == cache_key and "_health_cache_value" in it:
@@ -13621,14 +13646,14 @@ class MainWindow(QMainWindow):
                     else:
                         has_flexible = True
         except Exception:
-            return "-", "-", None
+            return "", "", None
         if exact_plans:
             near = min(exact_plans)
             diff = (near - date.today()).days
             return near.isoformat(), (f"{diff} gün" if diff >= 0 else f"{abs(diff)} gün gecikti"), diff
         if has_flexible:
-            return "Belirsiz", "-", None
-        return "-", "-", None
+            return "", "", None
+        return "", "", None
 
     def _delivery_summary_map(self, rows: List[dict]) -> Dict[int, tuple[str, str, Optional[int]]]:
         ids = [int(r.get("row") or r.get("entry_start_row") or 0) for r in rows if int(r.get("row") or r.get("entry_start_row") or 0)]
@@ -13661,9 +13686,9 @@ class MainWindow(QMainWindow):
                 diff = (near - today).days
                 out[cid] = (near.isoformat(), f"{diff} gün" if diff >= 0 else f"{abs(diff)} gün gecikti", diff)
             elif has_flexible:
-                out[cid] = ("Belirsiz", "-", None)
+                out[cid] = ("", "", None)
             else:
-                out[cid] = ("-", "-", None)
+                out[cid] = ("", "", None)
         return out
 
     def _prepare_contract_row_cache(self, rows: List[dict]):
@@ -13672,6 +13697,13 @@ class MainWindow(QMainWindow):
         for it in rows:
             cid = int(it.get("row") or it.get("entry_start_row") or 0)
             delivery_txt, delivery_days, day_num = delivery_summary.get(cid) or self._contract_delivery_dates(it)
+            if str(delivery_txt or "").strip().lower() in {"belirsiz", "-"}:
+                delivery_txt = ""
+                delivery_days = ""
+                day_num = None
+            if not str(delivery_txt or "").strip():
+                delivery_days = ""
+                day_num = None
             completion = parse_flexible_date(delivery_txt)
             it["_completion_obj"] = completion
             it["_completion_ord"] = completion.toordinal() if completion else None
@@ -13848,14 +13880,20 @@ class MainWindow(QMainWindow):
                     "contract_type": str(it.get("type_display", it.get("type", "")) or ""),
                     "contract_item": it,
                 }
+                tdate_display = str(tdate or "").strip()
+                if tdate_display in {"-", "Belirsiz", "—"} or not parse_flexible_date(tdate_display):
+                    tdate_display = ""
+                days_display = str(days_text or "").strip() if tdate_display else ""
+                if days_display in {"-", "Belirsiz", "—"}:
+                    days_display = ""
                 vals=[
                     it.get("platform", ""),
                     it.get("type_display", it.get("type", "")) or "",
                     it.get("no", ""),
                     it.get("user", ""),
                     st_label,
-                    tdate,
-                    days_text,
+                    tdate_display,
+                    days_display,
                     None,  # col 7: Etiketler widget
                     None,  # col 8: Ozet butonu
                 ]
