@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from math import floor
 from pathlib import Path
 from typing import Any
+import re
 import unicodedata
 
 from openpyxl import Workbook
@@ -141,6 +142,58 @@ def _is_completed_contract_status(value: Any) -> bool:
         "closed",
     }
 
+def extract_year_from_date_text(value: object) -> int | None:
+    text = str(value or "").strip()
+    match = re.search(r"(?<!\d)(19\d{2}|20\d{2}|21\d{2})(?!\d)", text)
+    return int(match.group(1)) if match else None
+
+
+def normalize_report_date_display(value: object) -> str:
+    """Return a visible report date, preserving uncertain/TBD dates."""
+    raw = str(value or "").strip()
+    if not raw:
+        return "TBD-TBD-TBD"
+
+    text = raw.replace("/", "-").replace(".", "-").strip().upper()
+    compact_unknown = re.sub(r"[^A-Z0-9]+", "", text)
+    if compact_unknown in {"", "TBD", "TBDBELIRLENECEK", "BELIRSIZ", "BILINMIYOR", "UNKNOWN", "N/A", "NA", "NONE", "NULL"}:
+        return "TBD-TBD-TBD"
+
+    def is_year(part: str) -> bool:
+        return bool(re.fullmatch(r"(19\d{2}|20\d{2}|21\d{2})", str(part or "").strip()))
+
+    def is_unknown(part: str) -> bool:
+        token = re.sub(r"[^A-Z0-9]+", "", str(part or "").strip().upper())
+        return token in {"", "0", "00", "TBD", "BELIRSIZ", "BILINMIYOR", "UNKNOWN", "NA", "NONE", "NULL"}
+
+    def two_digit(part: str) -> str:
+        part = str(part or "").strip().upper()
+        if is_unknown(part):
+            return "TBD"
+        return part.zfill(2) if part.isdigit() and len(part) <= 2 else part
+
+    parts = [p.strip() for p in text.split("-") if p.strip()]
+    year = next((p for p in parts if is_year(p)), None)
+    if year is None:
+        extracted = extract_year_from_date_text(text)
+        if extracted:
+            return f"TBD-TBD-{extracted}"
+        return "TBD-TBD-TBD" if any(is_unknown(p) for p in parts) else text
+
+    if len(parts) == 1:
+        return f"TBD-TBD-{year}"
+    if len(parts) == 2:
+        other = parts[1] if is_year(parts[0]) else parts[0]
+        return f"TBD-{two_digit(other)}-{year}"
+    if is_year(parts[0]):
+        year, month, day = parts[0], parts[1], parts[2]
+        return f"{two_digit(day)}-{two_digit(month)}-{year}"
+    if is_year(parts[2]):
+        day, month, year = parts[0], parts[1], parts[2]
+        return f"{two_digit(day)}-{two_digit(month)}-{year}"
+    return f"TBD-TBD-{year}"
+
+
 def load_report_data(store, platform_name: str, user_id: int | list[int] | tuple[int, ...] | set[int] | None = None, contract_id: int | None = None) -> ReportData:
     """Load Platform Teslimat Özeti data.
 
@@ -268,6 +321,7 @@ def load_report_data(store, platform_name: str, user_id: int | list[int] | tuple
         uid = int(r["user_id"] or 0)
         cid = int(r["contract_id"] or 0)
         key = (uid, cid)
+        delivery_date = normalize_report_date_display(r["delivery_date"])
         if key not in seen:
             seen.add(key)
             data.summary.append(SummaryRow(
@@ -275,7 +329,7 @@ def load_report_data(store, platform_name: str, user_id: int | list[int] | tuple
                 str(r["user_name"] or "Tanımsız"),
                 cid,
                 str(r["contract_no"] or "-"),
-                str(r["delivery_date"] or ""),
+                delivery_date,
                 str(r["saved_status"] or ""),
                 str(r["saved_description"] or ""),
             ))
@@ -313,7 +367,7 @@ def load_report_data(store, platform_name: str, user_id: int | list[int] | tuple
                 str(r["user_name"] or "Tanımsız"),
                 cid,
                 str(r["contract_no"] or "-"),
-                str(r["delivery_date"] or ""),
+                delivery_date,
                 component_id,
                 component_name,
                 quantity,
