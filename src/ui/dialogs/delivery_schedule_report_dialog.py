@@ -264,6 +264,21 @@ def _fmt_amount(value: object) -> str:
     return str(int(number)) if number.is_integer() else f"{number:.2f}".rstrip("0").rstrip(".")
 
 
+def _short_join(values: Iterable[object], limit: int = 2, empty: str = "") -> str:
+    """Return a compact comma separated summary for group rows."""
+    clean: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        text = str(value or "").strip()
+        if not text or text == "-" or text.casefold() in seen:
+            continue
+        seen.add(text.casefold())
+        clean.append(text)
+    if not clean:
+        return empty
+    return ", ".join(clean[:limit]) + (f" +{len(clean) - limit}" if len(clean) > limit else "")
+
+
 def _payload_value(text: str, *keys: str) -> str:
     if not text:
         return ""
@@ -321,6 +336,7 @@ class DeliveryRow:
     delivery_id: int
     platform: str
     contract: str
+    system: str
     owner: str
     user: str
     domestic: str
@@ -528,17 +544,21 @@ class GroupedBarPreview(QWidget):
             return
         chart = r.adjusted(70, 48, -215, -245)
         maxv = max([max(v or [0]) for v in self.values.values()] or [1]) or 1
+        # Kılavuz değerleri küsuratlı göstermemek için ekseni tam sayılı adımlara taşı.
+        axis_step = max(1, int((maxv + 4) // 5))
+        axis_max = max(axis_step * 5, 1)
         for i in range(6):
-            y = chart.bottom() - int(chart.height() * i / 5)
+            guide_value = axis_step * i
+            y = chart.bottom() - int(chart.height() * guide_value / axis_max)
             p.setPen(QPen(QColor("#d8d8d8"))); p.drawLine(chart.left(), y, chart.right(), y)
-            p.setPen(QColor("#334155")); p.drawText(chart.left() - 42, y + 4, _fmt_amount(maxv * i / 5))
+            p.setPen(QColor("#334155")); p.drawText(chart.left() - 42, y + 4, str(int(guide_value)))
         group_w = max(self.group_width, chart.width() / max(len(self.users), 1)); bar_w = max(4, min(12, int(group_w / (len(self.parts) + 4))))
         for ui, user in enumerate(self.users):
             base_x = chart.left() + ui * group_w + group_w * .16
             for pi, part in enumerate(self.parts):
                 vals = self.values.get(part, [])
                 value = vals[ui] if ui < len(vals) else 0
-                h = int(chart.height() * value / maxv)
+                h = int(chart.height() * value / axis_max)
                 x = int(base_x + pi * (bar_w + 4)); y = chart.bottom() - h
                 p.setPen(Qt.NoPen); p.setBrush(QColor(CHART_COLORS[pi % len(CHART_COLORS)])); p.drawRect(x, y, bar_w, h)
                 if value:
@@ -1066,9 +1086,9 @@ class DeliveryScheduleReportDialog(QDialog):
     def _delivery_tab(self):
         """Build the Teslimat Verisi tab as a grouped QTreeWidget."""
         DELIVERY_COLS = [
-            "Sözleşme", "Sözleşme Sahibi", "Teslim Kullanıcısı", "Yİ/YD",
-            "Teslimat", "Tarih", "Seviye", "Parça",
-            "Sözleşme Adeti", "Teslim", "Kalan",
+            "Sözleşme No", "Sistem / Paket", "Teslimat", "Tarih",
+            "Sözleşme Sahibi", "Teslim Kullanıcısı", "Yİ/YD", "Seviye",
+            "Parça", "Sözleşme Adeti", "Teslim", "Kalan",
             "Konfigürasyon Tipi", "Opsiyon / Not", "Durum",
         ]
         self.delivery_tree = QTreeWidget()
@@ -1213,7 +1233,7 @@ class DeliveryScheduleReportDialog(QDialog):
         return {"filters": self.collect_filters(), "generated_at": date.today().isoformat(), "deliveries": [self._row_payload(row) for row in self.filtered_rows], "matrix": self._matrix_rows(self.filtered_rows)[1], "activity_logs": self.load_activity_log_preview(self.collect_filters())}
 
     def _row_payload(self, row: DeliveryRow) -> dict[str, Any]:
-        return {"contract_id": row.contract_id, "delivery_id": row.delivery_id, "platform": row.platform, "contract": row.contract, "owner": row.owner, "delivery_user": row.user, "yi_yd": row.domestic, "delivery": row.delivery, "date": row.date_text, "level": row.level, "part": row.part, "planned": row.planned, "delivered": row.delivered, "remaining": row.remaining, "config_type": row.config_type, "note": row.note, "status": row.status}
+        return {"contract_id": row.contract_id, "delivery_id": row.delivery_id, "platform": row.platform, "contract": row.contract, "system": row.system, "owner": row.owner, "delivery_user": row.user, "yi_yd": row.domestic, "delivery": row.delivery, "date": row.date_text, "level": row.level, "part": row.part, "planned": row.planned, "delivered": row.delivered, "remaining": row.remaining, "config_type": row.config_type, "note": row.note, "status": row.status}
 
     def clear_preview(self) -> None:
         self.filtered_rows = []
@@ -1253,15 +1273,16 @@ class DeliveryScheduleReportDialog(QDialog):
                        c.note AS contract_note, c.payload_json AS contract_payload_json, p.name AS platform_name,
                        d.id AS delivery_id, d.name AS delivery_name, d.status AS delivery_status,
                        d.planned_acceptance_date, d.acceptance_date, d.note AS delivery_note, d.payload_json AS delivery_payload_json,
-                       du.name AS delivery_user_name, du.yi_yd AS delivery_user_yi_yd, comp.name AS component_name,
-                       dc.planned, dc.delivered
+                       du.name AS delivery_user_name, du.yi_yd AS delivery_user_yi_yd, s.name AS system_name,
+                       comp.name AS component_name, dc.planned, dc.delivered
                 FROM deliveries d
                 JOIN contracts c ON c.id = d.contract_id
                 LEFT JOIN platforms p ON p.id = c.platform_id
+                LEFT JOIN systems s ON s.id = d.system_id
                 LEFT JOIN users du ON du.id = d.delivery_user_id
                 JOIN delivery_components dc ON dc.delivery_id = d.id
                 JOIN components comp ON comp.id = dc.component_id
-                ORDER BY p.name, c.contract_no, d.sort_order, d.id, comp.name
+                ORDER BY p.name, c.contract_no, COALESCE(s.name, ''), d.sort_order, d.id, comp.name
                 """
             ).fetchall()
         except Exception as exc:
@@ -1283,11 +1304,17 @@ class DeliveryScheduleReportDialog(QDialog):
             contract_payload = row["contract_payload_json"] if "contract_payload_json" in row.keys() else ""
             config = _payload_value(delivery_payload, "configuration_type", "config_type", "konfigurasyon_tipi") or _payload_value(contract_payload, "configuration_type", "config_type", "konfigurasyon_tipi")
             date_text = normalize_report_date_display(row["planned_acceptance_date"] or row["acceptance_date"] or "")
-            result.append(DeliveryRow(contract_id=contract_id, delivery_id=int(row["delivery_id"] or 0), platform=str(row["platform_name"] or "Tanımsız"), contract=str(row["contract_no"] or "-"), owner=owner_cache.get(contract_id) or "-", user=str(row["delivery_user_name"] or "Tanımsız"), domestic=normalize_yi_yd(row["delivery_user_yi_yd"] or row["contract_yi_yd"] or "-"), delivery=str(row["delivery_name"] or "-"), date_text=date_text, level="1", part=str(row["component_name"] or "-"), planned=planned, delivered=delivered, config_type=config, note=str(row["delivery_note"] or row["contract_note"] or ""), status=str(row["delivery_status"] or row["contract_status"] or "-")))
+            result.append(DeliveryRow(contract_id=contract_id, delivery_id=int(row["delivery_id"] or 0), platform=str(row["platform_name"] or "Tanımsız"), contract=str(row["contract_no"] or "-"), system=str(row["system_name"] or "Tanımsız Sistem"), owner=owner_cache.get(contract_id) or "-", user=str(row["delivery_user_name"] or "Tanımsız"), domestic=normalize_yi_yd(row["delivery_user_yi_yd"] or row["contract_yi_yd"] or "-"), delivery=str(row["delivery_name"] or "-"), date_text=date_text, level="1", part=str(row["component_name"] or "-"), planned=planned, delivered=delivered, config_type=config, note=str(row["delivery_note"] or row["contract_note"] or ""), status=str(row["delivery_status"] or row["contract_status"] or "-")))
         return result
 
     def _refresh_delivery_table(self, rows: list[DeliveryRow]) -> None:
-        """Populate the QTreeWidget with contract-grouped, collapsible rows."""
+        """Populate the tree as Contract + System/Paket groups.
+
+        Sözleşme için ayrı bir üst grup açılmaz. Ana satır her zaman
+        ``Sözleşme No + Sistem / Paket`` bloğudur; parça satırlarında
+        tekrar eden sözleşme/sistem bilgileri boş bırakılarak Excel'deki
+        hücre birleştirme görünümü uygulamada da okunur hale getirilir.
+        """
         self.delivery_tree.clear()
 
         if not rows:
@@ -1296,91 +1323,126 @@ class DeliveryScheduleReportDialog(QDialog):
         bold_font = QFont()
         bold_font.setBold(True)
 
-        grouped: dict[str, list[DeliveryRow]] = defaultdict(list)
+        grouped: dict[tuple[str, str], list[DeliveryRow]] = defaultdict(list)
         for row in rows:
-            grouped[row.contract].append(row)
+            grouped[(row.contract, row.system or "Tanımsız Sistem")].append(row)
 
-        # Sort by contract number
-        for contract_no in sorted(grouped.keys()):
-            contract_rows = grouped[contract_no]
+        for contract_no, system_name in sorted(grouped.keys(), key=lambda item: (item[0], item[1])):
+            group_rows = sorted(
+                grouped[(contract_no, system_name)],
+                key=lambda r: (str(r.delivery), str(r.date_text), str(r.user), str(r.part)),
+            )
 
-            owners = sorted({r.owner for r in contract_rows if r.owner and r.owner != "-"})
-            users = sorted({r.user for r in contract_rows if r.user and r.user != "Tanımsız"})
-            deliveries = sorted({r.delivery for r in contract_rows if r.delivery and r.delivery != "-"})
-            statuses = sorted({r.status for r in contract_rows if r.status and r.status != "-"})
+            deliveries = sorted({r.delivery for r in group_rows if r.delivery and r.delivery != "-"})
+            dates = sorted({str(r.date_text or "").strip() for r in group_rows if str(r.date_text or "").strip()})
+            owners = [owner.strip() for r in group_rows for owner in str(r.owner or "").split(",") if owner.strip()]
+            users = [r.user for r in group_rows if r.user]
+            yi_yd_values = [normalize_yi_yd(r.domestic) for r in group_rows if normalize_yi_yd(r.domestic) in {"Yİ", "YD"}]
+            statuses = [r.status for r in group_rows if r.status and r.status != "-"]
+            parts = sorted({r.part for r in group_rows if r.part and r.part != "-"})
 
-            dates = sorted({str(r.date_text or "").strip() for r in contract_rows if str(r.date_text or "").strip()})
-            users_text = ", ".join(users[:3]) + (f" +{len(users) - 3}" if len(users) > 3 else "")
-            owners_text = ", ".join(owners[:2]) + (f" +{len(owners) - 2}" if len(owners) > 2 else "")
-            dates_text = ", ".join(dates[:2]) + (f" +{len(dates) - 2}" if len(dates) > 2 else "")
-            statuses_text = ", ".join(statuses[:2])
+            planned_total = sum(_safe_float(r.planned) for r in group_rows)
+            delivered_total = sum(_safe_float(r.delivered) for r in group_rows)
+            remaining_total = sum(_safe_float(r.remaining) for r in group_rows)
 
             parent = QTreeWidgetItem(self.delivery_tree)
             parent.setText(0, contract_no)
-            parent.setText(1, owners_text)
-            parent.setText(2, users_text)
-            parent.setText(4, f"{len(deliveries)} teslimat · {len(contract_rows)} satır")
-            parent.setText(5, dates_text)
-            # Grup satırında bileşen toplamları yazılmıyor; yalnızca detay satırlarında adetler gösterilir.
-            parent.setText(8, "")
-            parent.setText(9, "")
-            parent.setText(10, "")
-            parent.setText(13, statuses_text)
+            parent.setText(1, system_name)
+            parent.setText(2, f"{len(deliveries)} teslimat · {len(group_rows)} satır" if deliveries else f"{len(group_rows)} satır")
+            parent.setText(3, _short_join(dates, limit=2))
+            parent.setText(4, _short_join(owners, limit=2, empty="-"))
+            parent.setText(5, _short_join(users, limit=2, empty="Tanımsız"))
+            parent.setText(6, _short_join(yi_yd_values, limit=2, empty="-"))
+            parent.setText(8, f"{len(parts)} parça")
+            parent.setText(9, _fmt_amount(planned_total))
+            parent.setText(10, _fmt_amount(delivered_total))
+            parent.setText(11, _fmt_amount(remaining_total))
+            parent.setText(14, _short_join(statuses, limit=2))
             parent.setExpanded(False)
 
-            # Style group row
             for col in range(self.delivery_tree.columnCount()):
                 parent.setBackground(col, QColor("#dceafa"))
                 parent.setForeground(col, QColor("#002060"))
                 parent.setFont(col, bold_font)
                 parent.setToolTip(col, parent.text(col))
 
-            # Detail rows
-            for i, row in enumerate(contract_rows):
+            previous_merge_key: tuple[str, str, str, str, str] | None = None
+            for i, row in enumerate(group_rows):
                 child = QTreeWidgetItem(parent)
-                child.setText(0, row.contract)
-                child.setText(1, row.owner)
-                child.setText(2, row.user)
-                child.setText(3, row.domestic)
-                child.setText(4, row.delivery)
-                child.setText(5, row.date_text)
-                child.setText(6, row.level)
-                child.setText(7, row.part)
-                child.setText(8, _fmt_amount(row.planned))
-                child.setText(9, _fmt_amount(row.delivered))
-                child.setText(10, _fmt_amount(row.remaining))
-                child.setText(11, row.config_type)
-                child.setText(12, row.note)
-                child.setText(13, row.status)
+                merge_key = (row.delivery, row.date_text, row.owner, row.user, row.domestic)
+                repeated = merge_key == previous_merge_key
+                previous_merge_key = merge_key
 
-                # Alternating colors for detail rows
+                child.setText(0, "")
+                child.setText(1, "")
+                child.setText(2, "" if repeated else row.delivery)
+                child.setText(3, "" if repeated else row.date_text)
+                child.setText(4, "" if repeated else row.owner)
+                child.setText(5, "" if repeated else row.user)
+                child.setText(6, "" if repeated else row.domestic)
+                child.setText(7, row.level)
+                child.setText(8, row.part)
+                child.setText(9, _fmt_amount(row.planned))
+                child.setText(10, _fmt_amount(row.delivered))
+                child.setText(11, _fmt_amount(row.remaining))
+                child.setText(12, row.config_type)
+                child.setText(13, row.note)
+                child.setText(14, row.status)
+
                 bg_color = QColor("#ffffff") if i % 2 == 0 else QColor("#f4f9ff")
                 for col in range(self.delivery_tree.columnCount()):
                     child.setBackground(col, bg_color)
                     child.setToolTip(col, child.text(col))
 
-                # Color the status cell
                 status_lower = row.status.lower()
                 if "risk" in status_lower or "gecik" in status_lower:
-                    child.setForeground(13, QColor(RED))
+                    child.setForeground(14, QColor(RED))
                 elif "tamam" in status_lower or "teslim" in status_lower:
-                    child.setForeground(13, QColor(GREEN))
+                    child.setForeground(14, QColor(GREEN))
 
     def _matrix_rows(self, rows: list[DeliveryRow]) -> tuple[list[str], list[list[Any]]]:
         users = sorted({r.user for r in rows})
         user_dates = {u: sorted({r.date_text for r in rows if r.user == u and r.date_text}) for u in users}
-        headers = ["Seviye", "Parça Numarası", "Teslimat Zamanı"] + [f"{u}\n{', '.join(user_dates.get(u, [])[:2])}" for u in users] + ["TOPLAM"]
-        by_part: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
-        part_dates: dict[str, set[str]] = defaultdict(set)
+        headers = [
+            "Sözleşme No", "Sistem / Paket", "Seviye", "Parça Numarası",
+            "Parça", "Teslimat Zamanı",
+        ] + [f"{u}\n{', '.join(user_dates.get(u, [])[:2])}" for u in users] + ["TOPLAM"]
+
+        by_system_part: dict[tuple[str, str, str], dict[str, float]] = defaultdict(lambda: defaultdict(float))
+        system_dates: dict[tuple[str, str], set[str]] = defaultdict(set)
+        part_dates: dict[tuple[str, str, str], set[str]] = defaultdict(set)
+        system_totals: dict[tuple[str, str], dict[str, float]] = defaultdict(lambda: defaultdict(float))
+
         for row in rows:
-            by_part[row.part][row.user] += row.remaining
+            system_key = (row.contract, row.system or "Tanımsız Sistem")
+            part_key = (row.contract, row.system or "Tanımsız Sistem", row.part)
+            by_system_part[part_key][row.user] += row.remaining
+            system_totals[system_key][row.user] += row.remaining
             if row.date_text:
-                part_dates[row.part].add(row.date_text)
-        matrix_rows = []
-        for part in sorted(by_part):
-            values = [_fmt_amount(by_part[part].get(user, 0)) for user in users]
-            total = sum(by_part[part].values())
-            matrix_rows.append(["1", part, ", ".join(sorted(part_dates[part])[:3]), *values, _fmt_amount(total)])
+                system_dates[system_key].add(row.date_text)
+                part_dates[part_key].add(row.date_text)
+
+        matrix_rows: list[list[Any]] = []
+        for contract_no, system_name in sorted(system_totals.keys(), key=lambda item: (item[0], item[1])):
+            totals_by_user = system_totals[(contract_no, system_name)]
+            total_values = [_fmt_amount(totals_by_user.get(user, 0)) for user in users]
+            total = sum(totals_by_user.values())
+            matrix_rows.append([
+                contract_no, system_name, "", "", "Sistem Toplamı",
+                ", ".join(sorted(system_dates[(contract_no, system_name)])[:3]),
+                *total_values, _fmt_amount(total),
+            ])
+
+            for _c, _s, part in sorted(k for k in by_system_part if k[0] == contract_no and k[1] == system_name):
+                values_by_user = by_system_part[(contract_no, system_name, part)]
+                values = [_fmt_amount(values_by_user.get(user, 0)) for user in users]
+                part_total = sum(values_by_user.values())
+                matrix_rows.append([
+                    "", "", "1", "", part,
+                    ", ".join(sorted(part_dates[(contract_no, system_name, part)])[:3]),
+                    *values, _fmt_amount(part_total),
+                ])
+
         return headers, matrix_rows
 
     def _refresh_matrix_table(self, rows: list[DeliveryRow]) -> None:
