@@ -771,6 +771,43 @@ def _ensure_excel():
     return excel
 
 
+def _safe_autofit_columns(ws) -> None:
+    """Best-effort AutoFit for Excel COM worksheets.
+
+    Some Excel/COM environments throw a '<unknown>.Columns' error when the
+    worksheet Columns property is accessed directly. AutoFit is only visual, so
+    it must never abort the export.
+    """
+    try:
+        ws.UsedRange.Columns.AutoFit()
+    except Exception:
+        try:
+            ws.Cells.EntireColumn.AutoFit()
+        except Exception:
+            pass
+
+
+def _safe_set_column_number_format(ws, column: int | str, number_format: str) -> None:
+    """Set a whole-column number format without relying on ws.Columns(...)."""
+    try:
+        if isinstance(column, int):
+            ws.Range(ws.Cells(1, int(column)), ws.Cells(ws.Rows.Count, int(column))).NumberFormat = number_format
+        else:
+            ws.Range(str(column)).NumberFormat = number_format
+    except Exception:
+        pass
+
+
+
+def _report_user_axis_value(row: dict[str, Any]) -> str:
+    """Return the user/owner label used by report matrix and dashboard columns.
+
+    In this report, the visible user axis means the contract owner/user
+    (Sözleşme Sahibi), not the delivery recipient (Teslim Kullanıcısı).
+    """
+    value = str(row.get("Sözleşme Sahibi") or "").strip()
+    return value if value and value != "-" else "Tanımsız"
+
 def _write_matrix(ws, rows: list[dict[str, Any]], report_date: str) -> None:
     """Write the matrix with one separate value column per user/date pair.
 
@@ -806,11 +843,11 @@ def _write_matrix(ws, rows: list[dict[str, Any]], report_date: str) -> None:
         suffix = f" +{len(items) - limit}" if len(items) > limit else ""
         return ", ".join(items[:limit]) + suffix
 
-    users = sorted({str(row.get("Teslim Kullanıcısı") or "Tanımsız") for row in rows})
+    users = sorted({_report_user_axis_value(row) for row in rows})
     date_columns: list[tuple[str, str]] = []
     for user in users:
         dates = sorted(
-            {str(row.get("Tarih") or "TBD-TBD-TBD") for row in rows if str(row.get("Teslim Kullanıcısı") or "Tanımsız") == user},
+            {str(row.get("Tarih") or "TBD-TBD-TBD") for row in rows if _report_user_axis_value(row) == user},
             key=_date_sort_key,
         )
         for dt in dates:
@@ -875,7 +912,7 @@ def _write_matrix(ws, rows: list[dict[str, Any]], report_date: str) -> None:
             for item in group_rows_data:
                 if part is not None and str(item.get("Parça") or "-") != part:
                     continue
-                if str(item.get("Teslim Kullanıcısı") or "Tanımsız") != user:
+                if _report_user_axis_value(item) != user:
                     continue
                 if str(item.get("Tarih") or "TBD-TBD-TBD") != dt:
                     continue
@@ -937,7 +974,7 @@ def _write_matrix(ws, rows: list[dict[str, Any]], report_date: str) -> None:
         ws.Application.ActiveWindow.FreezePanes = True
     except Exception:
         pass
-    ws.Columns.AutoFit()
+    _safe_autofit_columns(ws)
 
 def _format_table(ws, first_row: int, first_col: int, last_row: int, last_col: int, header_rows: int = 1) -> None:
     navy = 0x79360B
@@ -954,7 +991,7 @@ def _format_table(ws, first_row: int, first_col: int, last_row: int, last_col: i
     for row in range(first_row + header_rows, last_row + 1):
         if (row - first_row) % 2 == 0:
             ws.Range(ws.Cells(row, first_col), ws.Cells(row, last_col)).Interior.Color = light
-    ws.Columns.AutoFit()
+    _safe_autofit_columns(ws)
 
 
 def _write_delivery_entry(ws, rows: list[dict[str, Any]], report_date: str, platform_title: str) -> None:
@@ -994,7 +1031,7 @@ def _write_delivery_entry(ws, rows: list[dict[str, Any]], report_date: str, plat
             str(item.get("Sistem / Paket") or ""),
             str(item.get("Teslimat") or ""),
             str(item.get("Tarih") or ""),
-            str(item.get("Teslim Kullanıcısı") or ""),
+            _report_user_axis_value(item),
             str(item.get("Parça") or ""),
         ),
     )
@@ -1010,7 +1047,7 @@ def _write_delivery_entry(ws, rows: list[dict[str, Any]], report_date: str, plat
             str(row.get("Sistem / Paket") or "Sistem 1"),
             str(row.get("Teslimat") or "-"),
             str(row.get("Tarih") or ""),
-            str(row.get("Teslim Kullanıcısı") or "Tanımsız"),
+            _report_user_axis_value(row),
             str(row.get("Yİ/YD") or "-"),
         )
         is_first = key != last_key
@@ -1062,8 +1099,8 @@ def _write_delivery_entry(ws, rows: list[dict[str, Any]], report_date: str, plat
     used = ws.Range(ws.Cells(1, 1), ws.Cells(last_row, last_col))
     used.HorizontalAlignment = -4108
     used.VerticalAlignment = -4108
-    ws.Columns(4).NumberFormat = "@"
-    ws.Columns.AutoFit()
+    _safe_set_column_number_format(ws, 4, "@")
+    _safe_autofit_columns(ws)
 
 def _write_source_sheet(ws, rows: list[dict[str, Any]]) -> None:
     for col, header in enumerate(SOURCE_HEADERS, start=1):
@@ -1080,7 +1117,7 @@ def _write_source_sheet(ws, rows: list[dict[str, Any]]) -> None:
             cell.HorizontalAlignment = -4108
             cell.VerticalAlignment = -4108
     _format_table(ws, 1, 1, max(len(rows) + 1, 1), len(SOURCE_HEADERS))
-    ws.Columns.AutoFit()
+    _safe_autofit_columns(ws)
 
 
 def _write_rev_sheet(ws, activity_rows: list[list[Any]]) -> None:
@@ -1122,13 +1159,13 @@ def _build_dashboard(wb, ws, source_range: str, rows: list[dict[str, Any]], plat
     ws.Range("A2").VerticalAlignment = -4108
 
     total = sum(_safe_float(row["Sözleşme Adeti"]) for row in rows)
-    users = len({row["Teslim Kullanıcısı"] for row in rows})
+    users = len({_report_user_axis_value(row) for row in rows})
     contracts = len({row["Sözleşme"] for row in rows})
     risk = sum(1 for row in rows if _safe_float(row["Kalan"]) > 0 and "tamam" not in str(row["Durum"]).lower())
 
     kpi_specs = [
         ("SÖZLEŞME ADETİ", total, 1),
-        ("TESLİM KULLANICISI", users, 4),
+        ("SÖZLEŞME SAHİBİ", users, 4),
         ("SÖZLEŞME", contracts, 7),
         ("RİSKLİ SATIR", risk, 10),
     ]
@@ -1159,7 +1196,7 @@ def _build_dashboard(wb, ws, source_range: str, rows: list[dict[str, Any]], plat
     pivot_ws = wb.Worksheets("Pivot Ozet")
     pt = cache.CreatePivotTable(TableDestination=pivot_ws.Range("A3"), TableName="ptSiparisDurumu")
     pt.PivotFields("Sistem / Paket").Orientation = xl_row_field
-    pt.PivotFields("Teslim Kullanıcısı").Orientation = xl_column_field
+    pt.PivotFields("Sözleşme Sahibi").Orientation = xl_column_field
     data_field = pt.AddDataField(pt.PivotFields("Sözleşme Adeti"), "Sum of Sözleşme Adeti", xl_sum)
     data_field.NumberFormat = "#,##0"
 
@@ -1182,7 +1219,7 @@ def _build_dashboard(wb, ws, source_range: str, rows: list[dict[str, Any]], plat
         pass
 
     _add_slicers(wb, ws, pt, [pt_part, pt_yiyd, pt_year])
-    ws.Columns.AutoFit()
+    _safe_autofit_columns(ws)
 
 def _create_small_pivot_chart(wb, cache, dashboard_ws, row_field: str, value_field: str, title: str, chart_type: int, left: int, top: int, width: int, height: int, table_name: str):
     xl_row_field = 1
@@ -1303,7 +1340,7 @@ def add_unique_slicer(
 
 def _add_slicers(wb, ws, pivot_table, extra_pivot_tables=None) -> None:
     """Add one real Excel slicer per field and connect it to all dashboard pivots."""
-    fields = ["Sistem / Paket", "Yİ/YD", "Yıl", "Teslimat", "Platform", "Sözleşme", "Durum"]
+    fields = ["Sistem / Paket", "Sözleşme Sahibi", "Yİ/YD", "Yıl", "Teslimat", "Platform", "Sözleşme", "Durum"]
     left = 1110
     top = 380
     created_slicers: set[tuple[str, str]] = set()
