@@ -12215,7 +12215,8 @@ class MainWindow(QMainWindow):
         sl.addWidget(self.upcoming_scroll, 1)
 
         calb=QPushButton("🗓 Takvim Görünümü"); calb.clicked.connect(self.open_calendar_tracking); sl.addWidget(calb, 0)
-        home_lay.addWidget(strip, 0)
+        # The alert strip belongs to the real main layout; there is no embedded workspace container here.
+        main.addWidget(strip, 0)
 
         body=QHBoxLayout(); body.setSpacing(8); home_lay.addLayout(body,1)
         left=QFrame(); left.setObjectName("panel"); left.setFixedWidth(350); lv=QVBoxLayout(left); lv.setContentsMargins(0, 0, 0, 0); lv.setSpacing(0)
