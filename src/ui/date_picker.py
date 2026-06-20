@@ -47,7 +47,7 @@ class DatePickerDay(QLabel):
         self.events = list(events or [])
         self.setObjectName("datePickerDay")
         self.setAlignment(Qt.AlignCenter)
-        self.setFixedSize(34, 34)
+        self.setFixedSize(30, 30)
         self.setAttribute(Qt.WA_Hover, True)
         tooltip = self._build_tooltip()
         if tooltip:
@@ -79,10 +79,10 @@ class DatePickerDay(QLabel):
             QLabel#datePickerDay {{
                 background: {background};
                 border: 0;
-                border-radius: 10px;
+                border-radius: 9px;
                 color: {color};
-                font-size: 13px;
-                font-weight: 750;
+                font-size: 12px;
+                font-weight: 800;
             }}
             QLabel#datePickerDay:hover {{
                 background: {hover_background};
@@ -106,11 +106,11 @@ class DatePickerDay(QLabel):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
         painter.setPen(Qt.NoPen)
-        radius = 3
-        spacing = 8
+        radius = 2
+        spacing = 7
         total_width = (len(colors) - 1) * spacing
         start_x = (self.width() - total_width) / 2
-        y = self.height() - 6
+        y = self.height() - 5
         for idx, color in enumerate(colors):
             painter.setBrush(color)
             painter.drawEllipse(int(start_x + idx * spacing - radius), int(y - radius), radius * 2, radius * 2)
@@ -170,13 +170,13 @@ class DatePickerPopup(QDialog):
         }
         QFrame#datePickerShell {
             background: #ffffff;
-            border-radius: 18px;
+            border-radius: 16px;
             border: 1px solid #d8e2ed;
         }
         QFrame#datePickerHeader {
             background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #0b2f6b, stop:1 #1d4ed8);
-            border-top-left-radius: 18px;
-            border-top-right-radius: 18px;
+            border-top-left-radius: 16px;
+            border-top-right-radius: 16px;
         }
         QToolTip {
             background: #102033;
@@ -193,7 +193,7 @@ class DatePickerPopup(QDialog):
             background: rgba(255,255,255,.13);
             color: #ffffff;
             border: 0;
-            border-radius: 11px;
+            border-radius: 10px;
             font-size: 22px;
             font-weight: 900;
         }
@@ -209,8 +209,8 @@ class DatePickerPopup(QDialog):
             color: #ffffff;
             border: 0;
             border-radius: 8px;
-            padding: 2px 16px 2px 6px;
-            font-size: 15px;
+            padding: 0px 16px 0px 8px;
+            font-size: 14px;
             font-weight: 950;
         }
         QComboBox#datePickerMonth::drop-down {
@@ -222,8 +222,8 @@ class DatePickerPopup(QDialog):
             color: rgba(255,255,255,.78);
             border: 0;
             border-radius: 8px;
-            padding: 2px 16px 2px 6px;
-            font-size: 15px;
+            padding: 0px 16px 0px 8px;
+            font-size: 14px;
             font-weight: 900;
         }
         QComboBox#datePickerYear::drop-down {
@@ -243,13 +243,13 @@ class DatePickerPopup(QDialog):
         QLabel#datePickerWeekday {
             background: transparent;
             color: #475569;
-            font-size: 12px;
+            font-size: 11px;
             font-weight: 850;
         }
         QLabel#datePickerWeekdayWeekend {
             background: transparent;
             color: #ef4444;
-            font-size: 12px;
+            font-size: 11px;
             font-weight: 850;
         }
         QFrame#datePickerDays {
@@ -260,19 +260,19 @@ class DatePickerPopup(QDialog):
         QFrame#datePickerFlexible {
             background: #f8fbff;
             border-top: 1px solid #d8e2ed;
-            border-bottom-left-radius: 18px;
-            border-bottom-right-radius: 18px;
+            border-bottom-left-radius: 16px;
+            border-bottom-right-radius: 16px;
         }
         QPushButton#datePickerFlexibleOption {
             background: #ffffff;
             color: #0b2f6b;
             border: 1px solid #bfdbfe;
             border-radius: 10px;
-            padding: 8px 10px;
+            padding: 6px 7px;
             text-align: left;
-            font-size: 12px;
-            font-weight: 800;
-            min-height: 42px;
+            font-size: 11px;
+            font-weight: 850;
+            min-height: 48px;
         }
         QPushButton#datePickerFlexibleOption:hover {
             background: #eff6ff;
@@ -285,10 +285,10 @@ class DatePickerPopup(QDialog):
         QLabel#datePickerDay {
             background: transparent;
             border: 0;
-            border-radius: 10px;
+            border-radius: 9px;
             color: #0f172a;
-            font-size: 13px;
-            font-weight: 750;
+            font-size: 12px;
+            font-weight: 800;
         }
         QLabel#datePickerDay:hover {
             background: #eff6ff;
@@ -320,7 +320,7 @@ class DatePickerPopup(QDialog):
 
         shell = QFrame(self)
         shell.setObjectName("datePickerShell")
-        shell.setFixedWidth(390)
+        shell.setFixedWidth(340)
         shell_lay = QVBoxLayout(shell)
         shell_lay.setContentsMargins(0, 0, 0, 0)
         shell_lay.setSpacing(0)
@@ -329,12 +329,12 @@ class DatePickerPopup(QDialog):
         header = QFrame(shell)
         header.setObjectName("datePickerHeader")
         header_lay = QHBoxLayout(header)
-        header_lay.setContentsMargins(8, 8, 8, 8)
-        header_lay.setSpacing(8)
+        header_lay.setContentsMargins(8, 7, 8, 7)
+        header_lay.setSpacing(7)
 
         self.prev_btn = QPushButton("‹")
         self.prev_btn.setObjectName("datePickerNav")
-        self.prev_btn.setFixedSize(38, 38)
+        self.prev_btn.setFixedSize(32, 32)
         self.prev_btn.clicked.connect(self._prev_month)
 
         center = QWidget(header)
@@ -353,7 +353,7 @@ class DatePickerPopup(QDialog):
 
         self.next_btn = QPushButton("›")
         self.next_btn.setObjectName("datePickerNav")
-        self.next_btn.setFixedSize(38, 38)
+        self.next_btn.setFixedSize(32, 32)
         self.next_btn.clicked.connect(self._next_month)
 
         header_lay.addWidget(self.prev_btn, 0)
@@ -364,8 +364,8 @@ class DatePickerPopup(QDialog):
         weekdays = QFrame(shell)
         weekdays.setObjectName("datePickerWeekdays")
         week_lay = QGridLayout(weekdays)
-        week_lay.setContentsMargins(8, 8, 8, 8)
-        week_lay.setHorizontalSpacing(4)
+        week_lay.setContentsMargins(10, 6, 10, 6)
+        week_lay.setHorizontalSpacing(0)
         week_lay.setVerticalSpacing(0)
         for i, name in enumerate(WEEKDAY_LABELS):
             label = QLabel(name)
@@ -377,17 +377,19 @@ class DatePickerPopup(QDialog):
         days = QFrame(shell)
         days.setObjectName("datePickerDays")
         self.days_lay = QGridLayout(days)
-        self.days_lay.setContentsMargins(8, 8, 8, 12)
+        self.days_lay.setContentsMargins(12, 8, 12, 10)
         self.days_lay.setHorizontalSpacing(4)
-        self.days_lay.setVerticalSpacing(4)
+        self.days_lay.setVerticalSpacing(3)
         shell_lay.addWidget(days, 0)
 
         flexible = QFrame(shell)
         flexible.setObjectName("datePickerFlexible")
         flexible_lay = QGridLayout(flexible)
-        flexible_lay.setContentsMargins(12, 12, 12, 12)
-        flexible_lay.setHorizontalSpacing(8)
-        flexible_lay.setVerticalSpacing(8)
+        flexible_lay.setContentsMargins(10, 9, 10, 10)
+        flexible_lay.setHorizontalSpacing(6)
+        flexible_lay.setVerticalSpacing(6)
+        for column in range(3):
+            flexible_lay.setColumnStretch(column, 1)
 
         self.day_unknown_btn = QPushButton(flexible)
         self.day_unknown_btn.setObjectName("datePickerFlexibleOption")
@@ -401,7 +403,7 @@ class DatePickerPopup(QDialog):
 
         flexible_lay.addWidget(self.day_unknown_btn, 0, 0)
         flexible_lay.addWidget(self.month_day_unknown_btn, 0, 1)
-        flexible_lay.addWidget(self.tbd_btn, 1, 0, 1, 2)
+        flexible_lay.addWidget(self.tbd_btn, 0, 2)
         shell_lay.addWidget(flexible, 0)
 
     def _year_bounds(self) -> tuple[int, int]:
@@ -514,7 +516,7 @@ class DatePickerPopup(QDialog):
             btn.apply_visual(muted, weekend, is_today, selected)
             if not disabled:
                 btn.clicked.connect(self._pick)
-            self.days_lay.addWidget(btn, idx // 7, idx % 7)
+            self.days_lay.addWidget(btn, idx // 7, idx % 7, Qt.AlignCenter)
             self.day_buttons.append(btn)
 
         self._refresh_flexible_options()
@@ -527,7 +529,7 @@ class DatePickerPopup(QDialog):
         month_day_unknown = f"{self.current_year:04d}-TBD-TBD"
         self.day_unknown_btn.setText(f"Gün bilinmiyor\n{day_unknown}")
         self.month_day_unknown_btn.setText(f"Ay/Gün bilinmiyor\n{month_day_unknown}")
-        self.tbd_btn.setText("Tarih belirlenecek\nTBD")
+        self.tbd_btn.setText("Belirsiz\nTBD")
 
     def _pick(self, picked: date):
         self.selected_date = picked
