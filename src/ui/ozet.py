@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date
 from typing import Callable, Dict, List, Optional, Tuple
 
 from PySide6.QtCore import Qt
@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
 
 from src.ui.message_boxes import show_warning
 from src.domain.contract_timing import contract_timing
+from src.domain.flexible_date import flexible_or_blank, parse_flexible_date
 from src.models.app_models import ContractInfo, DeliveryInfo, SystemInfo
 from src.services.excel_store import ExcelStore
 
@@ -34,14 +35,29 @@ from src.services.excel_store import ExcelStore
 TR_MONTHS_SHORT = ["Oca", "Şub", "Mar", "Nis", "May", "Haz", "Tem", "Ağu", "Eyl", "Eki", "Kas", "Ara"]
 
 
-def parse_iso_date(text: str) -> Optional[date]:
-    text = str(text or "").strip()
-    if not text:
-        return None
-    try:
-        return datetime.strptime(text, "%Y-%m-%d").date()
-    except ValueError:
-        return None
+def flexible_date_value(value: object) -> str:
+    return flexible_or_blank(value)
+
+
+def exact_date(value: object) -> Optional[date]:
+    return parse_flexible_date(value)
+
+
+def latest_flexible_date(values: List[object]) -> str:
+    exact_dates: List[date] = []
+    flexible_values: List[str] = []
+    for value in values or []:
+        normalized = flexible_date_value(value)
+        if not normalized:
+            continue
+        parsed = exact_date(normalized)
+        if parsed:
+            exact_dates.append(parsed)
+        else:
+            flexible_values.append(normalized)
+    if exact_dates:
+        return max(exact_dates).isoformat()
+    return flexible_values[-1] if flexible_values else ""
 
 
 def as_number(value) -> float:
@@ -81,10 +97,15 @@ def status_label(status: str) -> str:
 
 
 def display_date(value: str) -> str:
-    d = parse_iso_date(value)
-    if not d:
+    normalized = flexible_date_value(value)
+    if not normalized:
         return "—"
-    return f"{d.day} {TR_MONTHS_SHORT[d.month - 1]} {d.year}"
+    d = exact_date(normalized)
+    if d:
+        return f"{d.day} {TR_MONTHS_SHORT[d.month - 1]} {d.year}"
+    if normalized == "-":
+        return "—"
+    return "Belirsiz" if normalized == "TBD" else normalized
 
 
 
@@ -93,10 +114,15 @@ def delivery_timing_text(deadline: Optional[date], acceptance: Optional[date], s
     return text
 
 def iso_display(value: str) -> str:
-    d = parse_iso_date(value)
-    if not d:
+    normalized = flexible_date_value(value)
+    if not normalized:
         return "—"
-    return d.strftime("%d.%m.%Y")
+    d = exact_date(normalized)
+    if d:
+        return d.strftime("%d.%m.%Y")
+    if normalized == "-":
+        return "—"
+    return "Belirsiz" if normalized == "TBD" else normalized
 
 
 @dataclass
@@ -112,15 +138,19 @@ class SummaryContext:
 
 
 def latest_acceptance_date_from_deliveries(deliveries: Dict[str, List[DeliveryInfo]]) -> str:
-    dates: List[date] = []
+    values: List[object] = []
     for delivery_list in (deliveries or {}).values():
         for delivery in delivery_list or []:
-            parsed = parse_iso_date(getattr(delivery, "acceptance_date", ""))
-            if parsed:
-                dates.append(parsed)
-    if not dates:
-        return ""
-    return max(dates).isoformat()
+            values.append(getattr(delivery, "acceptance_date", ""))
+    return latest_flexible_date(values)
+
+
+def latest_planned_date_from_deliveries(deliveries: Dict[str, List[DeliveryInfo]]) -> str:
+    values: List[object] = []
+    for delivery_list in (deliveries or {}).values():
+        for delivery in delivery_list or []:
+            values.append(getattr(delivery, "planned_acceptance_date", ""))
+    return latest_flexible_date(values)
 
 
 def latest_acceptance_date_for_system(ctx: SummaryContext, system_name: str, fallback: str = "") -> str:
@@ -128,7 +158,7 @@ def latest_acceptance_date_for_system(ctx: SummaryContext, system_name: str, fal
     latest = latest_acceptance_date_from_deliveries(system_deliveries)
     if latest:
         return latest
-    return fallback if parse_iso_date(fallback) else ""
+    return flexible_date_value(fallback)
 
 
 def latest_acceptance_date_for_context(ctx: SummaryContext) -> str:
@@ -136,7 +166,22 @@ def latest_acceptance_date_for_context(ctx: SummaryContext) -> str:
     if latest:
         return latest
     fallback = ctx.ci.acceptance_date if ctx.ci else ""
-    return fallback if parse_iso_date(fallback) else ""
+    return flexible_date_value(fallback)
+
+
+def planned_date_for_system(ctx: SummaryContext, system: SystemInfo) -> str:
+    system_deliveries = {system.name: list((ctx.deliveries or {}).get(system.name, []))}
+    planned = latest_planned_date_from_deliveries(system_deliveries)
+    if planned:
+        return planned
+    return flexible_date_value(getattr(system, "completion_date", ""))
+
+
+def planned_date_for_context(ctx: SummaryContext) -> str:
+    planned = latest_planned_date_from_deliveries(ctx.deliveries)
+    if planned:
+        return planned
+    return flexible_date_value(ctx.ci.completion_date if ctx.ci else ctx.item.get("completion_date", ""))
 
 
 class ContractSummaryDialog(QDialog):
@@ -882,12 +927,13 @@ class ContractSummaryDialog(QDialog):
             ci = ctx.ci
             if not ci:
                 continue
-            deadline = parse_iso_date(ci.completion_date)
+            planned = planned_date_for_context(ctx)
+            deadline = exact_date(planned)
             acceptance = latest_acceptance_date_for_context(ctx)
             rows.append([
                 ctx.button_label.replace("Ana Söz.", "Ana Sözleşme"),
-                display_date(ci.completion_date),
-                delivery_timing_text(deadline, parse_iso_date(acceptance), ci.status),
+                display_date(planned),
+                delivery_timing_text(deadline, exact_date(acceptance), ci.status),
                 display_date(acceptance),
             ])
         self.contract_info_table.setRowCount(len(rows))
@@ -905,7 +951,9 @@ class ContractSummaryDialog(QDialog):
             self.contract_info_table.setRowHeight(r, 30)
 
     def refresh_alert(self, ci: Optional[ContractInfo]):
-        d = parse_iso_date(ci.completion_date if ci else self.item.get("completion_date", ""))
+        ctx = self.primary_context()
+        planned = planned_date_for_context(ctx) if ctx else flexible_date_value(self.item.get("completion_date", ""))
+        d = exact_date(planned)
         st_kind = status_kind(ci.status if ci else self.item.get("status", ""))
         if d and st_kind != "done":
             delta = (d - date.today()).days
@@ -916,17 +964,19 @@ class ContractSummaryDialog(QDialog):
         self.alert.hide()
 
     def refresh_dates(self, ci: Optional[ContractInfo]):
-        deadline = parse_iso_date(ci.completion_date if ci else self.item.get("completion_date", ""))
-        self.termin_value.setText(display_date(ci.completion_date if ci else self.item.get("completion_date", "")))
+        ctx = self.primary_context()
+        planned = planned_date_for_context(ctx) if ctx else flexible_date_value(self.item.get("completion_date", ""))
+        deadline = exact_date(planned)
+        self.termin_value.setText(display_date(planned))
         scoped_deliveries: Dict[str, List[DeliveryInfo]] = {}
         for ctx in self.selected_contexts():
             for system_name, delivery_list in (ctx.deliveries or {}).items():
                 scoped_deliveries.setdefault(system_name, []).extend(delivery_list or [])
         acceptance = latest_acceptance_date_from_deliveries(scoped_deliveries)
         if not acceptance and ci:
-            acceptance = ci.acceptance_date if parse_iso_date(ci.acceptance_date) else ""
+            acceptance = flexible_date_value(ci.acceptance_date)
         status = ci.status if ci else self.item.get("status", "")
-        self.days_value.setText(delivery_timing_text(deadline, parse_iso_date(acceptance), status))
+        self.days_value.setText(delivery_timing_text(deadline, exact_date(acceptance), status))
         self.acceptance_value.setText(display_date(acceptance))
 
     def _system_chip(self, text: str, object_name: str = "systemChipNeutral") -> QLabel:
@@ -998,7 +1048,8 @@ class ContractSummaryDialog(QDialog):
         for ctx, sys in entries:
             kind = status_kind(sys.status)
             system_counts[kind] += 1
-            deadline = parse_iso_date(sys.completion_date)
+            planned = planned_date_for_system(ctx, sys)
+            deadline = exact_date(planned)
             if deadline and kind != "done":
                 delta = (deadline - date.today()).days
                 if delta < 0:
@@ -1039,7 +1090,7 @@ class ContractSummaryDialog(QDialog):
                 rows.append([
                     ctx.button_label.replace("Ana Söz.", "Ana Sözleşme"),
                     status_label(ci.status if ci else ctx.item.get("status", "")),
-                    iso_display(ci.completion_date if ci else ctx.item.get("completion_date", "")),
+                    iso_display(planned_date_for_context(ctx)),
                     iso_display(latest_acceptance_date_for_context(ctx)),
                     str(len(ctx.systems)),
                 ])
@@ -1057,7 +1108,7 @@ class ContractSummaryDialog(QDialog):
             rows.append([
                 sys.name,
                 status_label(sys.status),
-                iso_display(sys.completion_date),
+                iso_display(planned_date_for_system(ctx, sys)),
                 iso_display(latest_acceptance_date_for_system(ctx, sys.name, getattr(sys, "acceptance_date", ""))),
                 fmt_num(acceptance_count),
             ])
@@ -1201,7 +1252,7 @@ class ContractSummaryDialog(QDialog):
             pill.setStyleSheet("background:#ecfeff;color:#0891b2;border-radius:6px;padding:2px 7px;font-size:9px;font-weight:900;")
         else:
             pill.setStyleSheet("background:#fff7ed;color:#ea580c;border-radius:6px;padding:2px 7px;font-size:9px;font-weight:900;")
-        dt = QLabel(iso_display(delivery.acceptance_date))
+        dt = QLabel(iso_display(getattr(delivery, "acceptance_date", "") or getattr(delivery, "planned_acceptance_date", "")))
         dt.setStyleSheet("font-size:10px;color:#64748b;")
         lay.addWidget(dot)
         lay.addWidget(name, 1)
