@@ -1,4 +1,5 @@
 from __future__ import annotations
+import hashlib
 import json
 import mimetypes
 import os
@@ -10,6 +11,14 @@ from src.models.app_models import ComponentDef, ContractInfo, DeliveryInfo, Syst
 from src.domain.flexible_date import is_tbd_contract_no
 from src.services.sts_database import STSDatabase, now_iso
 from src import auth
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 class STSStore:
@@ -996,7 +1005,7 @@ class STSStore:
         if size > MAX_CONTRACT_FILE_SIZE_BYTES:
             raise ValueError("Dosya boyutu 120 MB üstünde olamaz.")
         try:
-            content = source.read_bytes()
+            file_hash = sha256_file(source)
         except OSError as exc:
             raise ValueError(f"Dosya okunamıyor: {exc}") from exc
         try:
@@ -1006,20 +1015,26 @@ class STSStore:
         duplicate = self.db.conn.execute(
             """
             SELECT id FROM contract_files
-            WHERE contract_id=? AND filename=?
-              AND (original_path=? OR (size_bytes=? AND content_blob=?))
+            WHERE contract_id=?
+              AND size_bytes=?
+              AND sha256=?
+              AND sha256<>''
             LIMIT 1
             """,
-            (cid, source.name, stored_path, len(content), content),
+            (cid, size, file_hash),
         ).fetchone()
         if duplicate:
             raise ValueError("Bu belge zaten ekli.")
+        try:
+            content = source.read_bytes()
+        except OSError as exc:
+            raise ValueError(f"Dosya okunamıyor: {exc}") from exc
         mime_type = mimetypes.guess_type(source.name)[0] or "application/octet-stream"
         ts = now_iso()
         with self.db.tx():
             self.db.conn.execute(
-                "INSERT INTO contract_files(contract_id,folder_id,filename,original_path,file_ext,mime_type,size_bytes,content_blob,note,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-                (cid, folder_id, source.name, stored_path, ext, mime_type, len(content), content, str(note or ""), ts, ts),
+                "INSERT INTO contract_files(contract_id,folder_id,filename,original_path,file_ext,mime_type,size_bytes,sha256,content_blob,note,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                (cid, folder_id, source.name, stored_path, ext, mime_type, size, file_hash, content, str(note or ""), ts, ts),
             )
             file_id = int(self.db.conn.execute("SELECT last_insert_rowid()").fetchone()[0])
         self._log(
@@ -1029,7 +1044,7 @@ class STSStore:
             contract_no=str(contract_no or ""),
             source="Document Manager",
             message="Belge eklendi",
-            payload={"filename": source.name, "folder_id": folder_id, "size_bytes": len(content), "mime_type": mime_type, "extension": ext},
+            payload={"filename": source.name, "folder_id": folder_id, "size_bytes": size, "mime_type": mime_type, "extension": ext},
         )
         return file_id
 

@@ -26,7 +26,7 @@ with TemporaryDirectory() as td:
         'delivery_components': {'delivery_id', 'component_id', 'planned', 'delivered'},
         'contract_tags': {'contract_id', 'tag_id'},
         'contract_file_folders': {'contract_id', 'parent_id', 'name', 'created_at', 'updated_at'},
-        'contract_files': {'contract_id', 'folder_id', 'filename', 'original_path', 'file_ext', 'mime_type', 'size_bytes', 'content_blob', 'note', 'created_at', 'updated_at'},
+        'contract_files': {'contract_id', 'folder_id', 'filename', 'original_path', 'file_ext', 'mime_type', 'size_bytes', 'sha256', 'content_blob', 'note', 'created_at', 'updated_at'},
         'activity_logs': {'platform_id', 'entity_type', 'entity_id', 'source', 'device_name'},
     }
     for table, columns in expected_columns.items():
@@ -48,7 +48,7 @@ with TemporaryDirectory() as td:
         'idx_contract_users_user_id',
         'idx_systems_contract_id', 'idx_systems_completion_date', 'idx_systems_contract_name', 'idx_system_components_component_id',
         'idx_deliveries_contract_id', 'idx_deliveries_system_id', 'idx_deliveries_delivery_user_id', 'idx_deliveries_contract_system',
-        'idx_deliveries_acceptance_date', 'idx_delivery_components_component_id', 'idx_contract_file_folders_contract_id', 'idx_contract_file_folders_parent_id', 'idx_contract_files_contract_id', 'idx_contract_files_folder_id', 'idx_logs_created_at',
+        'idx_deliveries_acceptance_date', 'idx_delivery_components_component_id', 'idx_contract_file_folders_contract_id', 'idx_contract_file_folders_parent_id', 'idx_contract_files_contract_id', 'idx_contract_files_folder_id', 'idx_contract_files_contract_size_sha256', 'idx_logs_created_at',
         'idx_logs_action', 'idx_logs_entity', 'idx_activity_logs_platform_contract',
         'idx_staff_role_id', 'idx_document_locks_contract_id',
     }
@@ -74,6 +74,7 @@ with TemporaryDirectory() as td:
     assert 'delivery_user_id' not in {r[1] for r in upgraded.conn.execute('PRAGMA table_info(systems)')}
     assert 'delivery_user_id' in {r[1] for r in upgraded.conn.execute('PRAGMA table_info(deliveries)')}
     assert 'folder_id' in {r[1] for r in upgraded.conn.execute('PRAGMA table_info(contract_files)')}
+    assert 'sha256' in {r[1] for r in upgraded.conn.execute('PRAGMA table_info(contract_files)')}
     assert 'display_order' in {r[1] for r in upgraded.conn.execute('PRAGMA table_info(components)')}
     assert 'sort_order' in {r[1] for r in upgraded.conn.execute('PRAGMA table_info(platforms)')}
     assert [r[0] for r in upgraded.conn.execute("SELECT name FROM components ORDER BY display_order")] == ['ACOMP', 'ZCOMP']

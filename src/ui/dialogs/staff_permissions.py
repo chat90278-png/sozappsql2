@@ -114,7 +114,7 @@ class StaffPermissionsDialog(QDialog):
         self._group_collapsed: dict[int, bool] = {}
         self._perm_rows: list[tuple] = []
 
-        self.setWindowTitle("Personel ve Yetki Yönetimi - STS")
+        self.setWindowTitle("Yetki Yönetimi - STS")
         # Default küçük açılsın ama kullanıcı isterse büyütebilsin / maximize edebilsin.
         self.setWindowFlags(
             self.windowFlags()
@@ -1179,7 +1179,7 @@ class StaffPermissionsDialog(QDialog):
                 auth.update_staff_record(self.db_or_path, self.current_user,
                                          int(self.selected_staff_id), **kw)
             self.refresh_all()
-            show_information(self, "Personel ve Yetki Yönetimi",
+            show_information(self, "Yetki Yönetimi",
                                     "Personel bilgileri kaydedildi.")
         except PermissionError:
             show_warning(self, "Yetkisiz İşlem",
