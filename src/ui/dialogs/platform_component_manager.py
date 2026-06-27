@@ -724,7 +724,7 @@ class PlatformComponentManagerDialog(QDialog):
         self._syncing_platform_header = False
         self._component_order_changed = False
         self._platform_order_changed = False
-        self.setWindowTitle("Platform ve Bileşen Yönetimi")
+        self.setWindowTitle("Platform / Bileşen Yönetimi")
         self.setMinimumSize(600, 460)
         self.setWindowFlags(self.windowFlags() | Qt.Window | Qt.WindowMaximizeButtonHint)
         self._build()
