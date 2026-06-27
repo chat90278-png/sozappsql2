@@ -38,6 +38,7 @@ with TemporaryDirectory() as td:
     file_id = store.add_contract_file("AKINCI", contract.no, source, contract.contract_type, note="Test belgesi")
     assert sha256(source) == original_hash
 
+    assert "sha256" in {r[1] for r in store.db.conn.execute("PRAGMA table_info(contract_files)")}
     listed = store.list_contract_files("AKINCI", contract.no, contract.contract_type)
     assert len(listed) == 1
     assert listed[0]["id"] == file_id
@@ -46,6 +47,8 @@ with TemporaryDirectory() as td:
     assert listed[0]["mime_type"] == "text/plain"
     assert listed[0]["size_bytes"] == source.stat().st_size
     assert listed[0]["note"] == "Test belgesi"
+    stored_hash = store.db.conn.execute("SELECT sha256 FROM contract_files WHERE id=?", (file_id,)).fetchone()[0]
+    assert stored_hash == original_hash
     expect_value_error(
         lambda: store.add_contract_file("AKINCI", contract.no, source, contract.contract_type),
         "Bu belge zaten ekli.",
@@ -104,6 +107,22 @@ with TemporaryDirectory() as td:
     assert foldered["folder_path"] == "Yeni Klasör/Teknik"
     folder_actions = {row[0] for row in store.db.conn.execute("SELECT action FROM activity_logs WHERE entity_type='document_folder'")}
     assert {"document_folder_created", "document_folder_renamed"} <= folder_actions
+
+    contract_id = store._find_contract_id("AKINCI", second.no, second.contract_type)
+    legacy_content = b"legacy hashless blob"
+    with store.db.tx():
+        store.db.conn.execute(
+            "INSERT INTO contract_files(contract_id,folder_id,filename,original_path,file_ext,mime_type,size_bytes,sha256,content_blob,note,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,datetime('now'),datetime('now'))",
+            (contract_id, None, "legacy.txt", "", "txt", "text/plain", len(legacy_content), "", legacy_content, "Legacy"),
+        )
+        legacy_file_id = int(store.db.conn.execute("SELECT last_insert_rowid()").fetchone()[0])
+    legacy_listed = [item for item in store.list_contract_files("AKINCI", second.no, second.contract_type) if item["id"] == legacy_file_id][0]
+    assert legacy_listed["filename"] == "legacy.txt"
+    legacy_filename, legacy_mime, legacy_bytes = store.get_contract_file_bytes(legacy_file_id)
+    assert legacy_filename == "legacy.txt"
+    assert legacy_mime == "text/plain"
+    assert legacy_bytes == legacy_content
+    assert store.delete_contract_file(legacy_file_id) is True
 
     assert MAX_CONTRACT_FILE_SIZE_BYTES == 120 * 1024 * 1024
     too_large = root / "buyuk.txt"

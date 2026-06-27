@@ -24,7 +24,7 @@ EXPECTED_COLUMNS = {
     "tags": ["id", "name", "color", "kind", "created_at", "updated_at"],
     "contract_tags": ["id", "contract_id", "tag_id"],
     "contract_file_folders": ["id", "contract_id", "parent_id", "name", "created_at", "updated_at"],
-    "contract_files": ["id", "contract_id", "folder_id", "filename", "original_path", "file_ext", "mime_type", "size_bytes", "content_blob", "note", "created_at", "updated_at"],
+    "contract_files": ["id", "contract_id", "folder_id", "filename", "original_path", "file_ext", "mime_type", "size_bytes", "sha256", "content_blob", "note", "created_at", "updated_at"],
     "contract_platforms": ["id", "contract_id", "platform_id", "sort_order", "is_primary", "created_at"],
     "contract_responsible_engineers": ["contract_id", "staff_id", "sort_order", "is_primary", "created_at"],
     "delivery_component_units": ["id", "delivery_component_id", "slot_no", "identifier", "is_delivered", "note", "created_at", "updated_at"],
@@ -44,6 +44,7 @@ with TemporaryDirectory() as td:
     assert "delivery_user_id" not in EXPECTED_COLUMNS["systems"]
     assert "delivery_user_id" in EXPECTED_COLUMNS["deliveries"]
     assert "planned_acceptance_date" in EXPECTED_COLUMNS["deliveries"]
+    assert "sha256" in EXPECTED_COLUMNS["contract_files"]
     assert "content_blob" in EXPECTED_COLUMNS["contract_files"]
 
     stats = store.database_stats()
