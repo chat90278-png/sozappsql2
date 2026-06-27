@@ -5,6 +5,7 @@ from tempfile import TemporaryDirectory
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from src.services.sts_database import CURRENT_SCHEMA_VERSION
 from src.services.sts_store import STSStore
 from src.ui.dialogs.schema_relationships import get_schema_relationships, relationship_text
 from tools.create_manual_sts_latest import create_manual_sts
@@ -12,18 +13,22 @@ from tools.create_manual_sts_latest import create_manual_sts
 EXPECTED_COLUMNS = {
     "platforms": ["id", "name", "display_name", "is_active", "is_excluded", "logo_blob", "logo_ext", "logo_mime", "logo_updated_at", "sort_order", "created_at", "updated_at"],
     "users": ["id", "name", "yi_yd", "active", "note", "created_at", "updated_at"],
-    "components": ["id", "name", "version", "unit", "active", "usage", "note", "display_order", "payload_json", "created_at", "updated_at"],
+    "components": ["id", "name", "version", "unit", "active", "usage", "note", "display_order", "payload_json", "created_at", "updated_at", "requires_unit_tracking", "unit_tracking_label"],
     "component_platforms": ["id", "component_id", "platform_id", "enabled"],
-    "contracts": ["id", "platform_id", "contract_no", "yi_yd", "contract_type", "type_display", "link_type", "status", "signed_date", "t0_date", "t0_months", "completion_date", "acceptance_date", "content", "note", "is_main", "parent_contract_id", "search_text", "payload_json", "created_at", "updated_at"],
+    "contracts": ["id", "platform_id", "contract_no", "yi_yd", "contract_type", "type_display", "link_type", "status", "signed_date", "t0_date", "t0_months", "completion_date", "acceptance_date", "content", "note", "is_main", "parent_contract_id", "search_text", "payload_json", "created_at", "updated_at", "responsible_engineer_id"],
     "contract_users": ["contract_id", "user_id"],
-    "systems": ["id", "contract_id", "name", "status", "completion_date", "acceptance_date", "note", "sort_order", "payload_json"],
+    "systems": ["id", "contract_id", "platform_id", "name", "status", "completion_date", "acceptance_date", "note", "sort_order", "payload_json"],
     "system_components": ["id", "system_id", "component_id", "qty", "note"],
-    "deliveries": ["id", "contract_id", "system_id", "delivery_user_id", "name", "status", "acceptance_date", "note", "sort_order", "payload_json"],
+    "deliveries": ["id", "contract_id", "system_id", "delivery_user_id", "name", "status", "planned_acceptance_date", "acceptance_date", "note", "sort_order", "payload_json"],
     "delivery_components": ["id", "delivery_id", "component_id", "planned", "delivered"],
     "tags": ["id", "name", "color", "kind", "created_at", "updated_at"],
     "contract_tags": ["id", "contract_id", "tag_id"],
     "contract_file_folders": ["id", "contract_id", "parent_id", "name", "created_at", "updated_at"],
     "contract_files": ["id", "contract_id", "folder_id", "filename", "original_path", "file_ext", "mime_type", "size_bytes", "content_blob", "note", "created_at", "updated_at"],
+    "contract_platforms": ["id", "contract_id", "platform_id", "sort_order", "is_primary", "created_at"],
+    "contract_responsible_engineers": ["contract_id", "staff_id", "sort_order", "is_primary", "created_at"],
+    "delivery_component_units": ["id", "delivery_component_id", "slot_no", "identifier", "is_delivered", "note", "created_at", "updated_at"],
+    "document_locks": ["id", "contract_id", "is_locked", "locked_by_staff_id", "locked_by_device_name", "locked_by_full_name", "locked_at", "updated_at"],
     "activity_logs": ["id", "created_at", "actor", "source", "device_name", "action", "entity_type", "entity_id", "entity_key", "platform_id", "contract_no", "message", "before_json", "after_json", "payload_json"],
 }
 
@@ -32,11 +37,13 @@ with TemporaryDirectory() as td:
     path = create_manual_sts(root / "manual_latest_v2_test.sts")
     store = STSStore(path)
     conn = store.db.conn
+    assert conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0] == str(CURRENT_SCHEMA_VERSION)
 
     for table, expected in EXPECTED_COLUMNS.items():
         assert [row[1] for row in conn.execute(f"PRAGMA table_info({table})")] == expected
     assert "delivery_user_id" not in EXPECTED_COLUMNS["systems"]
     assert "delivery_user_id" in EXPECTED_COLUMNS["deliveries"]
+    assert "planned_acceptance_date" in EXPECTED_COLUMNS["deliveries"]
     assert "content_blob" in EXPECTED_COLUMNS["contract_files"]
 
     stats = store.database_stats()
@@ -71,6 +78,8 @@ with TemporaryDirectory() as td:
     relationships = {relationship_text(item) for item in get_schema_relationships(conn, tables)}
     assert "contract_files.contract_id → contracts.id" in relationships
     assert "deliveries.delivery_user_id → users.id" in relationships
+    assert "contract_responsible_engineers.contract_id → contracts.id" in relationships
+    assert "contract_responsible_engineers.staff_id → staff.id" in relationships
     assert "systems.delivery_user_id → users.id" not in relationships
     assert store.db.foreign_key_check() == []
     assert store.db.integrity_check() == ["ok"]
