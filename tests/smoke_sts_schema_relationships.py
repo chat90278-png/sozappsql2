@@ -32,6 +32,9 @@ with TemporaryDirectory() as td:
     assert "contract_file_folders.parent_id → contract_file_folders.id" in texts
     assert "contract_files.contract_id → contracts.id" in texts
     assert "contract_files.folder_id → contract_file_folders.id" in texts
+    assert "contract_responsible_engineers.contract_id → contracts.id" in texts
+    assert "contract_responsible_engineers.staff_id → staff.id" in texts
+    assert "contracts.parent_contract_id → contracts.id" in texts
     groups = group_relationships_by_source(relationships)
     assert len(groups["deliveries"]) == 3
     assert {compact_relationship_text(item) for item in groups["deliveries"]} == {
@@ -45,6 +48,8 @@ with TemporaryDirectory() as td:
         "contract_users.contract_id → contracts.id",
         "contract_users.user_id → users.id",
         "deliveries.delivery_user_id → users.id",
+        "platform_delivery_report_lines.user_id → users.id",
+        "platform_delivery_report_summary.user_id → users.id",
     }
     component_groups = filter_relationship_groups(groups, "component")
     assert {"component_platforms", "system_components", "delivery_components"}.issubset(component_groups)

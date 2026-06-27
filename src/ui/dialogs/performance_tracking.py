@@ -30,7 +30,7 @@ class PerformanceTrackingDialog(QDialog):
         self.setObjectName(self.DIALOG_ID)
         self.stats = {}
         self.logs = []
-        self.setWindowTitle("Performans Takip - STS")
+        self.setWindowTitle("Performans İzleme - STS")
         self.setMinimumSize(1000, 620)
         self.resize(1180, 680)
         self.setStyleSheet(STYLE + self._local_style())
@@ -57,7 +57,7 @@ QHeaderView::section { background:#edf3ff; border:none; padding:6px; color:#2644
         hero = QFrame(); hero.setObjectName("perfHero")
         hl = QHBoxLayout(hero)
         tbox = QVBoxLayout()
-        t = QLabel("Performans Takip"); t.setObjectName("perfHeroTitle")
+        t = QLabel("Performans İzleme"); t.setObjectName("perfHeroTitle")
         d = QLabel("Uygulama açılışı, kayıt, cevap ve sorgu sürelerini sade şekilde izleyin.")
         d.setObjectName("perfHeroDesc")
         tbox.addWidget(t); tbox.addWidget(d)

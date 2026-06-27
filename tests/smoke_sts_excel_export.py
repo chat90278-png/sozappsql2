@@ -21,8 +21,8 @@ def rgb_endswith(cell, suffix):
     return str(value).upper().endswith(suffix)
 
 
-def rows_by_acceptance(ws, acceptance_name):
-    return [row for row in ws.iter_rows(min_row=2, values_only=True) if row[3] == acceptance_name]
+def rows_by_delivery(ws, delivery_name):
+    return [row for row in ws.iter_rows(min_row=2, values_only=True) if row[3] == delivery_name]
 
 
 with TemporaryDirectory() as td:
@@ -43,14 +43,14 @@ with TemporaryDirectory() as td:
 
     systems = [SystemInfo(name='S1', components={'C1':3,'C2':2}), SystemInfo(name='S2', components={'C1':1})]
     deliveries = {
-        'S1':[DeliveryInfo(name='Kabul 1', status='Devam Ediyor', acceptance_date='', note='N1', planned={'C1':2,'C2':2}, delivered={'C1':1,'C2':2})],
-        'S2':[DeliveryInfo(name='Kabul 2', status='Tamamlandı', acceptance_date='2026-03-01', note='', planned={'C1':1}, delivered={'C1':1})],
+        'S1':[DeliveryInfo(name='Teslimat 1', status='Devam Ediyor', acceptance_date='', note='N1', planned={'C1':2,'C2':2}, delivered={'C1':1,'C2':2})],
+        'S2':[DeliveryInfo(name='Teslimat 2', status='Tamamlandı', acceptance_date='2026-03-01', note='', planned={'C1':1}, delivered={'C1':1})],
     }
 
     s.write_contract(ci_no_system, [], {})
     s.write_contract(ci_with_delivery, systems, deliveries)
     s.write_contract(ci_other_platform, systems, deliveries)
-    s.write_contract(ci_system_only, [SystemInfo(name='Sistem Kabul Yok', components={'C1':5,'C2':4})], {})
+    s.write_contract(ci_system_only, [SystemInfo(name='Sistem Teslimat Yok', components={'C1':5,'C2':4})], {})
 
     progress = []
     out1 = Path(td)/'full.xlsx'
@@ -62,8 +62,8 @@ with TemporaryDirectory() as td:
 
     ws = wb1['AKINCI']
     expected_base_headers = [
-        'Sözleşme No', 'Sözleşme Türü', 'Sistem Adı', 'Kabul Adı', 'Kullanıcı', 'Yİ/YD',
-        'Durum', 'İmza Tarihi', 'T0 Tarihi', 'T0 Ay', 'Termin Tarihi', 'Kabul Tarihi',
+        'Sözleşme No', 'Sözleşme Türü', 'Sistem Adı', 'Teslimat Adı', 'Kullanıcı', 'Yİ/YD',
+        'Durum', 'İmza Tarihi', 'T0 Tarihi', 'T0 Ay', 'Termin Tarihi', 'Gerçek Teslimat',
         'Etiketler', 'Not',
     ]
     header_row = [cell.value for cell in ws[1]]
@@ -75,18 +75,18 @@ with TemporaryDirectory() as td:
 
     all_rows = list(ws.iter_rows(min_row=2, values_only=True))
     assert any(row[0] == 'K0' and row[2] == 'GENEL' and row[3] == 'Sözleşme Toplamı' for row in all_rows)
-    assert any(row[2] == 'Sistem Kabul Yok' and row[3] == 'Sistem Toplamı' for row in all_rows)
-    assert rows_by_acceptance(ws, 'Kabul 1') and rows_by_acceptance(ws, 'Kabul 2')
+    assert any(row[2] == 'Sistem Teslimat Yok' and row[3] == 'Sistem Toplamı' for row in all_rows)
+    assert rows_by_delivery(ws, 'Teslimat 1') and rows_by_delivery(ws, 'Teslimat 2')
 
     k1_total = next(row for row in all_rows if row[0] == 'K1' and row[3] == 'Sözleşme Toplamı')
     assert k1_total[14:20] == (4, 2, 2, 2, 2, 0)
-    k3_system = next(row for row in all_rows if row[2] == 'Sistem Kabul Yok' and row[3] == 'Sistem Toplamı')
+    k3_system = next(row for row in all_rows if row[2] == 'Sistem Teslimat Yok' and row[3] == 'Sistem Toplamı')
     assert k3_system[14:20] == (5, 0, 5, 4, 0, 4)
 
-    kabul1_row_index, kabul1 = next((idx, row) for idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2) if row[3] == 'Kabul 1')
-    kabul2_row_index, kabul2 = next((idx, row) for idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2) if row[3] == 'Kabul 2')
-    assert kabul1[16] == 1  # C1 kalan = 2 - 1, formülsüz sayı
-    assert kabul1[19] == 0  # C2 kalan = 2 - 2
+    teslimat1_row_index, teslimat1 = next((idx, row) for idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2) if row[3] == 'Teslimat 1')
+    teslimat2_row_index, teslimat2 = next((idx, row) for idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2) if row[3] == 'Teslimat 2')
+    assert teslimat1[16] == 1  # C1 kalan = 2 - 1, formülsüz sayı
+    assert teslimat1[19] == 0  # C2 kalan = 2 - 2
 
     assert rgb_endswith(ws['A1'], '0D2B55')
     assert ws['A1'].font.bold is True
@@ -94,10 +94,10 @@ with TemporaryDirectory() as td:
     assert ws.row_dimensions[1].height == 22
     assert ws.freeze_panes == 'A2'
     assert ws.auto_filter.ref == f'A1:T{ws.max_row}'
-    assert rgb_endswith(ws.cell(row=kabul1_row_index, column=17), 'FFF2CC')
-    assert rgb_endswith(ws.cell(row=kabul1_row_index, column=20), 'FFFFFF')
-    assert rgb_endswith(ws.cell(row=kabul1_row_index, column=7), 'DDEEFF')
-    assert rgb_endswith(ws.cell(row=kabul2_row_index, column=7), 'C6EFCE')
+    assert rgb_endswith(ws.cell(row=teslimat1_row_index, column=17), 'FFF2CC')
+    assert rgb_endswith(ws.cell(row=teslimat1_row_index, column=20), 'FFFFFF')
+    assert rgb_endswith(ws.cell(row=teslimat1_row_index, column=7), 'DDEEFF')
+    assert rgb_endswith(ws.cell(row=teslimat2_row_index, column=7), 'C6EFCE')
     assert any(str(rng).startswith('A') for rng in ws.merged_cells.ranges)
     assert any(str(rng).startswith('B') for rng in ws.merged_cells.ranges)
 
