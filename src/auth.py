@@ -51,7 +51,7 @@ PERMISSION_GROUPS = [
             ("manage_acceptances", "Teslimat Yönetimi", "Teslimat kayıtlarını yönetir."),
             ("manage_terms", "Termin Yönetimi", "Termin/takvim bilgilerini yönetir."),
             ("manage_labels", "Etiket Yönetimi", "Etiket tanımlarını yönetir."),
-            ("manage_platforms", "Platform ve Bileşen Yönetimi", "Platform ve bileşen tanımlarını yönetir."),
+            ("manage_platforms", "Platform / Bileşen Yönetimi", "Platform ve bileşen tanımlarını yönetir."),
             ("manage_components", "Bileşen Yönetimi", "Bileşen tanımlarını yönetir."),
         ],
     ),
