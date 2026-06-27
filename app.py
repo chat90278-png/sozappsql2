@@ -12014,6 +12014,8 @@ class MainWindow(QMainWindow):
         )
 
     def open_user_management(self):
+        if not self.require_permission_ui("manage_staff", "Kullanıcı Yönetimi"):
+            return
         if not self.store:
             QMessageBox.information(self, "Excel gerekli", "Önce bir Excel veya STS veri dosyası bağlayın.")
             return
@@ -13024,7 +13026,17 @@ class MainWindow(QMainWindow):
     def _refresh_permission_actions(self):
         is_admin = self._is_admin_staff()
         if hasattr(self, "user_management_action"):
-            self.user_management_action.setVisible(True)
+            self.user_management_action.setVisible(
+                is_admin or self._permission_action_visible("manage_staff")
+            )
+        if hasattr(self, "platform_component_action"):
+            self.platform_component_action.setVisible(
+                is_admin or self._permission_action_visible("manage_platforms")
+            )
+        if hasattr(self, "tag_management_action"):
+            self.tag_management_action.setVisible(
+                is_admin or self._permission_action_visible("manage_labels")
+            )
         if hasattr(self, "role_permissions_action"):
             self.role_permissions_action.setVisible(
                 is_admin
@@ -13056,10 +13068,10 @@ class MainWindow(QMainWindow):
         self._add_menu_action(reports_menu, "Platform Teslimat Özeti", self.open_platform_delivery_report)
 
         management_menu = menu.addMenu("Yönetim")
-        self._add_menu_action(management_menu, "Platform / Bileşen Yönetimi", self.manage_platforms)
+        self.platform_component_action = self._add_menu_action(management_menu, "Platform / Bileşen Yönetimi", self.manage_platforms)
         self.user_management_action = self._add_menu_action(management_menu, "Kullanıcı Yönetimi", self.open_user_management)
         self.role_permissions_action = self._add_menu_action(management_menu, "Yetki Yönetimi", self.open_personnel_permissions)
-        self._add_menu_action(management_menu, "Etiket Yönetimi", self.manage_tags)
+        self.tag_management_action = self._add_menu_action(management_menu, "Etiket Yönetimi", self.manage_tags)
 
         self.system_menu = menu.addMenu("Sistem")
         self.system_menu_action = self.system_menu.menuAction()
