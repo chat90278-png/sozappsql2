@@ -196,7 +196,7 @@ class DatabaseManagementDialog(QDialog):
         self.store = store
         self.current_staff = current_staff or getattr(parent, "current_staff", None) or auth.current_staff
         self.setObjectName("databaseEditorDialog")
-        self.setWindowTitle("Database Yönetimi - STS")
+        self.setWindowTitle("Veritabanı Yönetimi - STS")
         self.resize(1400, 820)
         self.setMinimumSize(1100, 680)
         self.setWindowFlags(Qt.Window | Qt.WindowMinMaxButtonsHint | Qt.WindowCloseButtonHint)

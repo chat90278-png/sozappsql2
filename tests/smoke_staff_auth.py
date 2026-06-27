@@ -24,6 +24,8 @@ from src.auth import (
     list_permissions,
     set_role_permission,
     update_staff_record,
+    create_system_admin,
+    build_system_admin_session,
 )
 from src.services.sts_database import STSDatabase
 import src.auth as auth_module
@@ -47,15 +49,15 @@ def test_staff_table_create_and_current_staff_payload():
     saved = get_staff_by_device(conn, "cihaz-1")
     current_staff = build_current_staff(saved)
 
-    assert row["role"] == "admin"
+    assert row["role"] == "manager"
     assert ROLE_LABELS["personnel"] == "Personel"
     assert verify_password("gizli", saved["password_hash"])
     assert current_staff["id"] == saved["id"]
     assert current_staff["device_name"] == "cihaz-1"
     assert current_staff["full_name"] == "Test Personel"
-    assert current_staff["role"] == "admin"
+    assert current_staff["role"] == "manager"
     assert current_staff["role_id"] is not None
-    assert current_staff["role_display_name"] == "Admin"
+    assert current_staff["role_display_name"] == "Yönetici"
     assert current_staff["is_active"] == 1
 
 
@@ -101,39 +103,31 @@ def test_permission_defaults_and_last_full_access_guard():
     ensure_staff_table(conn)
     admin_row = create_staff(conn, "admin-cihaz", "Admin", "gizli")
     admin = enrich_staff_permissions(conn, build_current_staff(admin_row))
-    assert auth_module.PERMISSION_RESTRICTIONS_ENABLED is False
-    assert has_permission(None, "manage_roles", conn)
-    assert has_permission(admin, "manage_roles", conn)
+    assert auth_module.PERMISSION_RESTRICTIONS_ENABLED is True
+    assert not has_permission(None, "manage_roles", conn)
+    assert not has_permission(admin, "manage_roles", conn)
     assert has_permission(admin, "sql_write", conn)
 
     roles = {r["name"]: r for r in list_roles(conn)}
     permissions = {p["code"] for p in list_permissions(conn)}
-    assert {"admin", "manager", "personnel", "viewer"}.issubset(roles)
+    assert {"manager", "personnel", "viewer"}.issubset(roles)
     assert {"manage_staff", "manage_roles", "open_sql_panel", "sql_read", "sql_write", "view_action_history", "change_staff_roles", "reset_staff_passwords"}.issubset(permissions)
 
     manager = create_staff(conn, "manager-cihaz", "Manager", "gizli", role_id=roles["manager"]["id"])
     manager_user = enrich_staff_permissions(conn, build_current_staff(manager))
-    assert has_permission(manager_user, "manage_staff", conn)
+    assert not has_permission(manager_user, "manage_staff", conn)
     assert has_permission(manager_user, "sql_write", conn)
     assert has_permission(manager_user, "view_action_history", conn)
 
-    original_restrictions_enabled = auth_module.PERMISSION_RESTRICTIONS_ENABLED
-    try:
-        auth_module.PERMISSION_RESTRICTIONS_ENABLED = True
-        assert not has_permission(manager_user, "manage_staff", conn)
-        assert has_permission(manager_user, "sql_write", conn)
-        assert has_permission(manager_user, "view_action_history", conn)
-    finally:
-        auth_module.PERMISSION_RESTRICTIONS_ENABLED = original_restrictions_enabled
-
     try:
         update_staff_record(conn, admin, admin["id"], is_active=0)
-    except ValueError as exc:
-        assert "yetkili kullanıcı" in str(exc)
+    except PermissionError as exc:
+        assert "manage_staff" in str(exc)
     else:
-        raise AssertionError("Son yetkili kullanıcı pasifleştirilememeli")
+        raise AssertionError("Yetkisiz kullanıcı personel pasifleştirememeli")
 
-    set_role_permission(conn, admin, roles["manager"]["id"], "sql_write", True)
+    system_admin = build_system_admin_session(create_system_admin(conn, "sys-admin", "gizli"), "sys-admin-cihaz")
+    set_role_permission(conn, system_admin, roles["manager"]["id"], "sql_write", True)
     manager_user = enrich_staff_permissions(conn, build_current_staff(get_staff_by_device(conn, "manager-cihaz")))
     assert has_permission(manager_user, "sql_write", conn)
 

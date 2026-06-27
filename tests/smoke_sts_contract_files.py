@@ -6,6 +6,7 @@ from tempfile import TemporaryDirectory
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.models.app_models import ContractInfo
+from src.config.app_config import MAX_CONTRACT_FILE_SIZE_BYTES
 from src.services.sts_store import STSStore
 
 
@@ -104,12 +105,13 @@ with TemporaryDirectory() as td:
     folder_actions = {row[0] for row in store.db.conn.execute("SELECT action FROM activity_logs WHERE entity_type='document_folder'")}
     assert {"document_folder_created", "document_folder_renamed"} <= folder_actions
 
+    assert MAX_CONTRACT_FILE_SIZE_BYTES == 120 * 1024 * 1024
     too_large = root / "buyuk.txt"
     with too_large.open("wb") as stream:
-        stream.truncate(50 * 1024 * 1024 + 1)
+        stream.truncate(MAX_CONTRACT_FILE_SIZE_BYTES + 1)
     expect_value_error(
         lambda: store.add_contract_file("AKINCI", second.no, too_large, second.contract_type),
-        "Dosya boyutu 50 MB üstünde olamaz.",
+        "Dosya boyutu 120 MB üstünde olamaz.",
     )
     risky = root / "calistirma.exe"
     risky.write_bytes(b"not executable")

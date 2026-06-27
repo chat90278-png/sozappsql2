@@ -65,6 +65,7 @@ from src.models.app_models import ComponentDef, ContractInfo, SystemInfo, Delive
 from src.domain.contract_timing import contract_timing, is_completed_status
 from src.domain.delivery_coverage import acceptance_coverage_issues
 from src.domain.flexible_date import flexible_or_blank, is_exact_date, is_tbd_contract_no, parse_flexible_date, validate_flexible_date, format_flexible_date
+from src.core.crash_logger import install_crash_handlers
 from src.ui.widgets import stat_card, set_card_value
 from src.ui.theme import STYLE
 from src.ui.tarih import ContractCalendarWindow
@@ -12014,6 +12015,8 @@ class MainWindow(QMainWindow):
         )
 
     def open_user_management(self):
+        if not self.require_permission_ui("manage_staff", "Kullanıcı Yönetimi"):
+            return
         if not self.store:
             QMessageBox.information(self, "Excel gerekli", "Önce bir Excel veya STS veri dosyası bağlayın.")
             return
@@ -13024,7 +13027,17 @@ class MainWindow(QMainWindow):
     def _refresh_permission_actions(self):
         is_admin = self._is_admin_staff()
         if hasattr(self, "user_management_action"):
-            self.user_management_action.setVisible(True)
+            self.user_management_action.setVisible(
+                is_admin or self._permission_action_visible("manage_staff")
+            )
+        if hasattr(self, "platform_component_action"):
+            self.platform_component_action.setVisible(
+                is_admin or self._permission_action_visible("manage_platforms")
+            )
+        if hasattr(self, "tag_management_action"):
+            self.tag_management_action.setVisible(
+                is_admin or self._permission_action_visible("manage_labels")
+            )
         if hasattr(self, "role_permissions_action"):
             self.role_permissions_action.setVisible(
                 is_admin
@@ -13056,10 +13069,10 @@ class MainWindow(QMainWindow):
         self._add_menu_action(reports_menu, "Platform Teslimat Özeti", self.open_platform_delivery_report)
 
         management_menu = menu.addMenu("Yönetim")
-        self._add_menu_action(management_menu, "Platform / Bileşen Yönetimi", self.manage_platforms)
+        self.platform_component_action = self._add_menu_action(management_menu, "Platform / Bileşen Yönetimi", self.manage_platforms)
         self.user_management_action = self._add_menu_action(management_menu, "Kullanıcı Yönetimi", self.open_user_management)
         self.role_permissions_action = self._add_menu_action(management_menu, "Yetki Yönetimi", self.open_personnel_permissions)
-        self._add_menu_action(management_menu, "Etiket Yönetimi", self.manage_tags)
+        self.tag_management_action = self._add_menu_action(management_menu, "Etiket Yönetimi", self.manage_tags)
 
         self.system_menu = menu.addMenu("Sistem")
         self.system_menu_action = self.system_menu.menuAction()
@@ -14888,31 +14901,9 @@ def open_share_contract_window(path: Path | str) -> Optional[ContractWorkWindow]
 
 
 if __name__ == "__main__":
-    sys.excepthook = _global_exc_handler
+    install_crash_handlers()
     configure_windows_app_identity()
     app = QApplication(sys.argv)
-
-    # ── Global yakalanmamış exception handler ────────────────────────────────
-    # QApplication oluşturulduktan SONRA kurulur; böylece handler içinde
-    # QApplication.instance() kontrolü güvenle yapılabilir.
-    # NOT: sys.excepthook yalnızca ana thread ve threading.Thread için çalışır;
-    # QThread içindeki hatalar worker'ların kendi except bloklarında yakalanır.
-    def _global_exc_handler(exc_type, exc_val, exc_tb):
-        if issubclass(exc_type, (KeyboardInterrupt, SystemExit)):
-            sys.__excepthook__(exc_type, exc_val, exc_tb)
-            return
-        _log.critical("Yakalanmamış hata", exc_info=(exc_type, exc_val, exc_tb))
-        # QApplication yoksa veya kapanıyorsa sadece logla, GUI gösterme
-        q_app = QApplication.instance()
-        if q_app is None:
-            return
-        try:
-            msg = f"Beklenmeyen bir hata oluştu.\n\n{exc_val}"
-            QMessageBox.critical(None, "Kritik Hata", msg)
-        except Exception:
-            pass
-
-    sys.excepthook = _global_exc_handler
     app.setApplicationName("STS")
     app.setApplicationDisplayName("STS")
     app.setDesktopFileName(APP_ID)
