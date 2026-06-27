@@ -711,6 +711,7 @@ class ElidedLabel(QLabel):
 
 from src.services.excel_store import ExcelStore
 from src.services.sts_store import STSStore
+from src.services.sts_database import CURRENT_SCHEMA_VERSION, STSMigrationError, read_sts_schema_version
 from src import auth
 from src.workers import ExcelLoadWorker, UserSaveWorker, ContractSaveWorker, AnalyzeDialog
 
@@ -11891,7 +11892,7 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Veri dosyası gerekli", "Önce bir STS veri dosyası açın.")
             return
         if not hasattr(self.store, "database_stats"):
-            QMessageBox.information(self, "Database Yönetimi", "Database yönetimi yalnızca STS veri dosyalarında desteklenir.")
+            QMessageBox.information(self, "Veritabanı Yönetimi", "Veritabanı yönetimi yalnızca STS veri dosyalarında desteklenir.")
             return
         from src.ui.dialogs.database_management import DatabaseManagementDialog
         self.open_or_raise_tool_window(
@@ -11908,15 +11909,15 @@ class MainWindow(QMainWindow):
         if not hasattr(self.store, "performance_stats"):
             QMessageBox.information(
                 self,
-                "Performans Takip",
-                "Performans takip ekranı yalnızca STS veri dosyalarında desteklenir."
+                "Performans İzleme",
+                "Performans izleme ekranı yalnızca STS veri dosyalarında desteklenir."
             )
             return
 
         from src.ui.dialogs.performance_tracking import PerformanceTrackingDialog
         self.open_or_raise_tool_window(
             "report:performance",
-            "Performans Takip",
+            "Performans İzleme",
             lambda: PerformanceTrackingDialog(self.store, self),
         )
 
@@ -11991,10 +11992,10 @@ class MainWindow(QMainWindow):
 
     def open_staff_permissions_dialog(self, initial_tab: str = "staffRoles"):
         if not self.store or not self.is_sts_mode():
-            QMessageBox.information(self, "Veri dosyası gerekli", "Personel ve yetki yönetimi için önce bir STS veri dosyası açın.")
+            QMessageBox.information(self, "Veri dosyası gerekli", "Yetki yönetimi için önce bir STS veri dosyası açın.")
             return
         required_permission = "manage_roles" if initial_tab == "rolePermissions" else "manage_staff"
-        if not self.require_permission_ui(required_permission, "Personel ve Yetki Yönetimi"):
+        if not self.require_permission_ui(required_permission, "Yetki Yönetimi"):
             return
         from src.ui.dialogs.staff_permissions import StaffPermissionsDialog
 
@@ -12008,7 +12009,7 @@ class MainWindow(QMainWindow):
 
         self.open_or_raise_tool_window(
             "manager:staff_permissions",
-            "Personel / Yetki Yönetimi",
+            "Yetki Yönetimi",
             factory,
         )
 
@@ -12108,24 +12109,7 @@ class MainWindow(QMainWindow):
         self.top_actions_btn.setText("☰")
         self.top_actions_btn.setToolTip("Menü")
         self.top_actions_btn.setPopupMode(QToolButton.InstantPopup)
-        self.top_actions_menu = QMenu(self.top_actions_btn)
-        self.top_actions_menu.setObjectName("topActionsMenu")
-        self.top_actions_menu.addAction("Veri Dosyası Değiştir", self.open_file)
-        self.top_actions_menu.addAction("Excel’e Aktar", self.export_sts_to_excel)
-        reports_menu = self.top_actions_menu.addMenu("Raporlar")
-        reports_menu.addAction("Tahmini Teslimat Takvimi", self.open_delivery_schedule_report)
-        reports_menu.addAction("Platform Teslimat Özeti", self.open_platform_delivery_report)
-        self.top_actions_menu.addAction("Database Yönetimi", self.open_database_management)
-        self.top_actions_menu.addAction("Performans Takip", self.open_performance_tracking)
-        self.top_actions_menu.addAction("Platform ve Bileşen Yönetimi", self.manage_platforms)
-        self.top_actions_menu.addSeparator()
-        self.user_management_action = self.top_actions_menu.addAction("Kullanıcı Yönetimi", self.open_user_management)
-        self.role_permissions_action = self.top_actions_menu.addAction("Personel ve Yetki Yönetimi", self.open_personnel_permissions)
-        self.top_actions_menu.addAction("Etiket Yönetimi", self.manage_tags)
-        self.activity_logs_action = self.top_actions_menu.addAction("İşlem Geçmişi", self.open_activity_logs)
-        self.top_actions_menu.addSeparator()
-        self.top_actions_menu.addAction("Kullanım Kılavuzu", self.open_usage_guide)
-        self.top_actions_menu.aboutToShow.connect(self._refresh_permission_actions)
+        self.top_actions_menu = self._build_top_actions_menu(self.top_actions_btn)
         self.top_actions_btn.setMenu(self.top_actions_menu)
         tl.addWidget(self.top_actions_btn)
         main.addWidget(top, 0)
@@ -13034,16 +13018,61 @@ class MainWindow(QMainWindow):
             return True
         return self.has_permission(permission_code)
 
+    def _is_admin_staff(self) -> bool:
+        return bool(self.current_staff and (self.current_staff or {}).get("is_admin"))
+
     def _refresh_permission_actions(self):
+        is_admin = self._is_admin_staff()
         if hasattr(self, "user_management_action"):
             self.user_management_action.setVisible(True)
         if hasattr(self, "role_permissions_action"):
             self.role_permissions_action.setVisible(
-                self._permission_action_visible("manage_staff")
-                or self._permission_action_visible("manage_roles")
+                is_admin
+                and (
+                    self._permission_action_visible("manage_staff")
+                    or self._permission_action_visible("manage_roles")
+                )
             )
         if hasattr(self, "activity_logs_action"):
-            self.activity_logs_action.setVisible(self._permission_action_visible("view_action_history"))
+            self.activity_logs_action.setVisible(
+                is_admin and self._permission_action_visible("view_action_history")
+            )
+        if hasattr(self, "system_menu_action"):
+            self.system_menu_action.setVisible(is_admin)
+
+    def _add_menu_action(self, menu: QMenu, title: str, callback):
+        return menu.addAction(title, callback)
+
+    def _build_top_actions_menu(self, parent) -> QMenu:
+        menu = QMenu(parent)
+        menu.setObjectName("topActionsMenu")
+
+        file_menu = menu.addMenu("Dosya İşlemleri")
+        self._add_menu_action(file_menu, "STS Dosyasını Değiştir", self.open_file)
+        self._add_menu_action(file_menu, "Excel’e Aktar", self.export_sts_to_excel)
+
+        reports_menu = menu.addMenu("Raporlar")
+        self._add_menu_action(reports_menu, "Tahmini Teslimat Takvimi", self.open_delivery_schedule_report)
+        self._add_menu_action(reports_menu, "Platform Teslimat Özeti", self.open_platform_delivery_report)
+
+        management_menu = menu.addMenu("Yönetim")
+        self._add_menu_action(management_menu, "Platform / Bileşen Yönetimi", self.manage_platforms)
+        self.user_management_action = self._add_menu_action(management_menu, "Kullanıcı Yönetimi", self.open_user_management)
+        self.role_permissions_action = self._add_menu_action(management_menu, "Yetki Yönetimi", self.open_personnel_permissions)
+        self._add_menu_action(management_menu, "Etiket Yönetimi", self.manage_tags)
+
+        self.system_menu = menu.addMenu("Sistem")
+        self.system_menu_action = self.system_menu.menuAction()
+        self._add_menu_action(self.system_menu, "Veritabanı Yönetimi", self.open_database_management)
+        self._add_menu_action(self.system_menu, "Performans İzleme", self.open_performance_tracking)
+        self.activity_logs_action = self._add_menu_action(self.system_menu, "İşlem Geçmişi", self.open_activity_logs)
+
+        help_menu = menu.addMenu("Yardım")
+        self._add_menu_action(help_menu, "Kullanım Kılavuzu", self.open_usage_guide)
+
+        menu.aboutToShow.connect(self._refresh_permission_actions)
+        self._refresh_permission_actions()
+        return menu
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -13677,9 +13706,32 @@ class MainWindow(QMainWindow):
         list[dict] ana thread'e döner).
         """
         actor = str((self.current_staff or {}).get("full_name") or "Personel")
+        warned_legacy_migration = False
         try:
+            schema_version = read_sts_schema_version(self.path)
+            if schema_version is None or schema_version < CURRENT_SCHEMA_VERSION:
+                warned_legacy_migration = True
+                QMessageBox.information(
+                    self,
+                    "STS dosyası güncellenecek",
+                    "Bu STS dosyası eski sürümde oluşturulmuş. Uygulama dosyayı yeni sürüme uyarlayacak.\n\n"
+                    "İşlem öncesi aynı klasöre otomatik yedek alınacaktır. "
+                    "Güncellenen dosya eski uygulamalarda açılmayabilir.",
+                )
             self.store = STSStore(self.path, actor=actor)
             self.contract_index = self.store.build_contract_index()
+        except STSMigrationError as exc:
+            _log.exception("STS migration hatası: %s", getattr(exc, "technical_detail", ""))
+            self._store_loading = False
+            self.set_loading_state(False)
+            self.set_empty_state()
+            backup_text = f"\n\nYedek dosya: {exc.backup_path}" if getattr(exc, "backup_path", None) else ""
+            QMessageBox.critical(
+                self,
+                "STS güncelleme hatası",
+                f"{exc.user_message}{backup_text}\n\nTeknik detaylar loga yazıldı.",
+            )
+            return
         except Exception as exc:
             _log.exception("STSStore ana-thread açılış hatası")
             self._store_loading = False
@@ -13695,6 +13747,13 @@ class MainWindow(QMainWindow):
         self.update_alert_strip()
         self._apply_platform_selection()
         self.connection_label.setText("✓ STS veri dosyası bağlı")
+        if warned_legacy_migration and getattr(getattr(self.store, "db", None), "migration_performed", False):
+            backup_path = getattr(self.store.db, "migration_backup_path", None)
+            QMessageBox.information(
+                self,
+                "STS dosyası güncellendi",
+                f"STS dosyası yeni sürüme uyumlu hale getirildi.\n\nYedek dosya: {backup_path}\n\nNot: Güncellenen dosya eski uygulamalarda açılmayabilir.",
+            )
         self._apply_version_to_ui()
         self._remember_version_baseline()
 
@@ -14009,7 +14068,7 @@ class MainWindow(QMainWindow):
         self.show_contract_summary(row, rows[row])
 
     def manage_platforms(self):
-        if not self.require_permission_ui("manage_platforms", "Platform ve Bileşen Yönetimi"):
+        if not self.require_permission_ui("manage_platforms", "Platform / Bileşen Yönetimi"):
             return
         if not self.store:
             QMessageBox.information(self, "Excel gerekli", "Önce bir Excel dosyası bağlayın.")

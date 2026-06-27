@@ -3,6 +3,7 @@ import json
 import sqlite3
 import platform as platform_module
 import re
+import shutil
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
@@ -51,6 +52,90 @@ def quote_identifier(identifier: str) -> str:
 LEGACY_CONTRACT_PARENT_NO_COLUMN = "parent_contract_" "no"
 LEGACY_CONTRACT_USERS_COLUMN = "user_" "names"
 LEGACY_DELIVERY_SYSTEM_LABEL_COLUMN = "system_" "name"
+CURRENT_SCHEMA_VERSION = 12
+
+
+class STSMigrationError(RuntimeError):
+    """Raised when a legacy STS schema cannot be safely migrated."""
+
+    def __init__(self, user_message: str, *, backup_path: Path | None = None, technical_detail: str = ""):
+        super().__init__(user_message)
+        self.user_message = user_message
+        self.backup_path = backup_path
+        self.technical_detail = technical_detail
+
+
+def _parse_schema_version(value) -> int | None:
+    try:
+        text = str(value or "").strip()
+        return int(text) if text else None
+    except Exception:
+        return None
+
+
+def read_sts_schema_version(path: Path | str) -> int | None:
+    """Read meta.schema_version without creating or mutating the database."""
+    p = Path(path)
+    if not p.exists():
+        return None
+    uri = f"file:{p.as_posix()}?mode=ro"
+    conn = sqlite3.connect(uri, uri=True)
+    try:
+        row = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='meta' LIMIT 1"
+        ).fetchone()
+        if not row:
+            return None
+        row = conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
+        return _parse_schema_version(row[0] if row else None)
+    finally:
+        conn.close()
+
+
+def make_migration_backup_path(path: Path | str, from_version: int | None, to_version: int = CURRENT_SCHEMA_VERSION) -> Path:
+    p = Path(path)
+    version_label = f"v{from_version}" if from_version is not None else "legacy"
+    stamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
+    base = p.with_name(f"{p.stem}__backup_before_migration_{version_label}_to_v{to_version}__{stamp}{p.suffix}")
+    candidate = base
+    counter = 2
+    while candidate.exists():
+        candidate = p.with_name(f"{base.stem}__{counter}{base.suffix}")
+        counter += 1
+    return candidate
+
+
+def diagnose_sts_file(path: Path | str) -> dict:
+    """Return debug diagnostics for an STS/SQLite file without changing it."""
+    p = Path(path)
+    result = {"path": str(p), "schema_version": None, "tables": [], "integrity_check": None, "foreign_key_check": []}
+    uri = f"file:{p.as_posix()}?mode=ro"
+    conn = sqlite3.connect(uri, uri=True)
+    try:
+        result["schema_version"] = read_sts_schema_version(p)
+        result["tables"] = [
+            str(row[0])
+            for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").fetchall()
+        ]
+        row = conn.execute("PRAGMA integrity_check").fetchone()
+        result["integrity_check"] = row[0] if row else None
+        result["foreign_key_check"] = [tuple(row) for row in conn.execute("PRAGMA foreign_key_check").fetchall()]
+        return result
+    finally:
+        conn.close()
+
+
+def print_sts_diagnostics(path: Path | str) -> dict:
+    """Print and return schema/integrity diagnostics for manual debugging."""
+    result = diagnose_sts_file(path)
+    print(f"STS file: {result['path']}")
+    print(f"schema_version: {result['schema_version']}")
+    print("tables:")
+    for table in result["tables"]:
+        print(f"  - {table}")
+    print(f"integrity_check: {result['integrity_check']}")
+    print(f"foreign_key_check: {result['foreign_key_check']}")
+    return result
 
 
 class STSDatabase:
@@ -58,6 +143,34 @@ class STSDatabase:
         self.path = Path(path)
         self.source = str(source or "Main UI")
         database_existed = self.path.exists()
+        self.migration_backup_path: Path | None = None
+        self.migration_from_version: int | None = None
+        self.migration_performed = False
+        needs_migration_backup = False
+        if database_existed:
+            try:
+                self.migration_from_version = read_sts_schema_version(self.path)
+            except Exception as exc:
+                raise STSMigrationError(
+                    "STS dosyasının şema bilgisi okunamadı. Dosya güncellenemedi.",
+                    technical_detail=str(exc),
+                ) from exc
+            if self.migration_from_version is not None and self.migration_from_version > CURRENT_SCHEMA_VERSION:
+                raise STSMigrationError(
+                    f"STS dosyası daha yeni bir şema sürümüyle oluşturulmuş (v{self.migration_from_version}). "
+                    f"Bu uygulama en fazla v{CURRENT_SCHEMA_VERSION} destekliyor.",
+                )
+            needs_migration_backup = self.migration_from_version is None or self.migration_from_version < CURRENT_SCHEMA_VERSION
+            if needs_migration_backup:
+                self.migration_backup_path = make_migration_backup_path(self.path, self.migration_from_version)
+                try:
+                    shutil.copy2(self.path, self.migration_backup_path)
+                except Exception as exc:
+                    raise STSMigrationError(
+                        "STS dosyası eski sürümde ancak migration öncesi yedek alınamadı. Dosyada değişiklik yapılmadı.",
+                        backup_path=self.migration_backup_path,
+                        technical_detail=str(exc),
+                    ) from exc
         self.conn = sqlite3.connect(str(self.path))
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA foreign_keys=ON")
@@ -65,9 +178,29 @@ class STSDatabase:
         self.conn.execute("PRAGMA busy_timeout=5000")
         self.conn.execute("PRAGMA synchronous=NORMAL")
         self.conn.execute("PRAGMA cache_size=-64000")
-        migrated = self.init_schema()
+        try:
+            migrated = self.init_schema()
+            if needs_migration_backup:
+                self._validate_after_migration()
+                self.migration_performed = True
+        except Exception as exc:
+            self.conn.close()
+            if needs_migration_backup and self.migration_backup_path and self.migration_backup_path.exists():
+                try:
+                    shutil.copy2(self.migration_backup_path, self.path)
+                except Exception as restore_exc:
+                    raise STSMigrationError(
+                        "STS dosyası güncellenemedi ve orijinal dosya yedekten geri yüklenemedi. Lütfen yedek dosyayı kullanın.",
+                        backup_path=self.migration_backup_path,
+                        technical_detail=f"Migration: {exc}; Restore: {restore_exc}",
+                    ) from exc
+            raise STSMigrationError(
+                "STS dosyası güncellenemedi. Orijinal dosya korunmaya çalışıldı. Lütfen yedek dosyayı kullanın.",
+                backup_path=self.migration_backup_path,
+                technical_detail=str(exc),
+            ) from exc
         if migrated:
-            self.add_log("schema_migrated", entity_type="database", message="Veritabanı şeması güncellendi", actor="Sistem", source="Migration", payload={"columns": migrated})
+            self.add_log("schema_migrated", entity_type="database", message="Veritabanı şeması güncellendi", actor="Sistem", source="Migration", payload={"columns": migrated, "backup_path": str(self.migration_backup_path or "")})
         self.add_log(
             "database_opened" if database_existed else "database_created",
             entity_type="database",
@@ -731,9 +864,23 @@ CREATE TABLE IF NOT EXISTS activity_logs(id INTEGER PRIMARY KEY AUTOINCREMENT,cr
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_pdr_summary_scope ON platform_delivery_report_summary(platform_id,user_id,contract_id)")
         self.conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_pdr_lines_serial_key ON platform_delivery_report_lines(platform_id,user_id,contract_id,component_id,serial_key)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_pdr_lines_scope ON platform_delivery_report_lines(platform_id,user_id,contract_id,component_id,serial_key)")
-        self.conn.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version','12')")
+        self.conn.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version',?)", (str(CURRENT_SCHEMA_VERSION),))
         self.conn.commit()
         return migrated
+
+
+    def _validate_after_migration(self) -> None:
+        row = self.conn.execute("PRAGMA integrity_check").fetchone()
+        integrity = str(row[0] if row else "").strip()
+        if integrity.lower() != "ok":
+            raise RuntimeError(f"SQLite integrity_check başarısız: {integrity}")
+        fk_rows = self.conn.execute("PRAGMA foreign_key_check").fetchall()
+        if fk_rows:
+            details = [tuple(row) for row in fk_rows[:10]]
+            raise RuntimeError(f"SQLite foreign_key_check hatası: {details}")
+        version = read_sts_schema_version(self.path)
+        if version != CURRENT_SCHEMA_VERSION:
+            raise RuntimeError(f"schema_version beklenen {CURRENT_SCHEMA_VERSION}, bulunan {version}")
 
     def _platform_id(self, platform: str | None):
         name = str(platform or "").strip()
