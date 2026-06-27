@@ -12,7 +12,7 @@ app.py içine yalnızca şunlar eklenir:
 from __future__ import annotations
 
 import calendar
-from datetime import datetime, date
+from datetime import date
 from typing import Dict, List, Optional
 
 from PySide6.QtCore import Qt, QTimer
@@ -51,26 +51,6 @@ def fmt_num(v) -> str:
     except Exception:
         return str(v or "")
 
-
-def parse_iso_date(text: str) -> Optional[date]:
-    text = (text or "").strip()
-    if not text:
-        return None
-    try:
-        return datetime.strptime(text, "%Y-%m-%d").date()
-    except ValueError:
-        return None
-
-
-
-
-def to_iso(qdate: QDate) -> str:
-    return f"{qdate.year():04d}-{qdate.month():02d}-{qdate.day():02d}"
-
-
-def iso_or_blank(text: str) -> str:
-    d = parse_iso_date(text)
-    return d.isoformat() if d else ""
 
 def add_months(d: date, months: int) -> date:
     month = d.month - 1 + int(months or 0)
@@ -241,58 +221,6 @@ class AutoAcceptDialog(QDialog):
                 combo.setCurrentIndex(idx if idx >= 0 else 0)
         finally:
             self._syncing_delivery_user = False
-
-    def _legacy_build_acceptance_date_input_unused(self) -> tuple[QLineEdit, QWidget]:
-        edit = QLineEdit()
-        edit.setPlaceholderText("yyyy-aa-gg")
-
-        btn = QPushButton("📅")
-        btn.setObjectName("dateBtn")
-        btn.setFixedSize(34, 34)
-        btn.setToolTip("Takvimden tarih seç")
-
-        wrap = QWidget(self)
-        lay = QHBoxLayout(wrap)
-        lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(6)
-        lay.addWidget(edit, 1)
-        lay.addWidget(btn, 0)
-
-        def choose_date():
-            popup = QDialog(self, Qt.Popup | Qt.FramelessWindowHint)
-            popup.setObjectName("calendarPopup")
-            pop_lay = QVBoxLayout(popup)
-            pop_lay.setContentsMargins(6, 6, 6, 6)
-            pop_lay.setSpacing(0)
-            cal = QCalendarWidget(popup)
-            cal.setVerticalHeaderFormat(QCalendarWidget.NoVerticalHeader)
-            cal.setGridVisible(True)
-            today = date.today()
-            cal.setMaximumDate(QDate(today.year, today.month, today.day))
-            disabled_fmt = QTextCharFormat()
-            disabled_fmt.setBackground(QColor("#EEF2F7"))
-            disabled_fmt.setForeground(QColor("#94A3B8"))
-            month_days = calendar.monthrange(today.year, today.month)[1]
-            for day_num in range(today.day + 1, month_days + 1):
-                cal.setDateTextFormat(QDate(today.year, today.month, day_num), disabled_fmt)
-            current = parse_iso_date(edit.text())
-            if current:
-                if current > today:
-                    current = today
-                cal.setSelectedDate(QDate(current.year, current.month, current.day))
-
-            def on_pick(qd: QDate):
-                edit.setText(to_iso(qd))
-                popup.accept()
-
-            cal.clicked.connect(on_pick)
-            pop_lay.addWidget(cal)
-            popup.adjustSize()
-            popup.move(btn.mapToGlobal(QPoint(0, btn.height() + 2)))
-            popup.exec()
-
-        btn.clicked.connect(choose_date)
-        return edit, wrap
 
     def _build_acceptance_date_input(self) -> tuple[QLineEdit, QWidget]:
         return build_date_input(self, max_date=date.today(), events_provider=self.date_picker_events)

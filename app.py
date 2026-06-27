@@ -65,6 +65,7 @@ from src.models.app_models import ComponentDef, ContractInfo, SystemInfo, Delive
 from src.domain.contract_timing import contract_timing, is_completed_status
 from src.domain.delivery_coverage import acceptance_coverage_issues
 from src.domain.flexible_date import flexible_or_blank, is_exact_date, is_tbd_contract_no, parse_flexible_date, validate_flexible_date, format_flexible_date
+from src.core.crash_logger import install_crash_handlers
 from src.ui.widgets import stat_card, set_card_value
 from src.ui.theme import STYLE
 from src.ui.tarih import ContractCalendarWindow
@@ -713,7 +714,7 @@ from src.services.excel_store import ExcelStore
 from src.services.sts_store import STSStore
 from src.services.sts_database import CURRENT_SCHEMA_VERSION, STSMigrationError, read_sts_schema_version
 from src import auth
-from src.workers import ExcelLoadWorker, UserSaveWorker, ContractSaveWorker, AnalyzeDialog
+from src.workers import ExcelLoadWorker, UserSaveWorker, ContractSaveWorker, AnalyzeDialog, STSIndexWorker
 
 _log = logging.getLogger("STS")
 
@@ -11718,6 +11719,9 @@ class MainWindow(QMainWindow):
         self._loader_worker: Optional[ExcelLoadWorker] = None
         self._sts_loader_thread: Optional[QThread] = None
         self._sts_loader_worker: Optional[STSLoadWorker] = None
+        self._sts_index_thread: Optional[QThread] = None
+        self._sts_index_worker: Optional[STSIndexWorker] = None
+        self._sts_warned_legacy_migration = False
         self._export_thread: Optional[QThread] = None
         self._export_worker = None
         self._streaming_index = False
@@ -12014,6 +12018,8 @@ class MainWindow(QMainWindow):
         )
 
     def open_user_management(self):
+        if not self.require_permission_ui("manage_staff", "Kullanıcı Yönetimi"):
+            return
         if not self.store:
             QMessageBox.information(self, "Excel gerekli", "Önce bir Excel veya STS veri dosyası bağlayın.")
             return
@@ -12857,6 +12863,10 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event: QCloseEvent) -> None:
         """Kapanışta değişiklik varsa dosya adını standart versiyon formatına taşır."""
+        if self._sts_operation_running():
+            QMessageBox.information(self, "Yükleme sürüyor", "STS dosyası açılırken lütfen işlemin tamamlanmasını bekleyin.")
+            event.ignore()
+            return
         if hasattr(self, "open_windows_strip") and not self.close_all_tool_windows():
             event.ignore()
             return
@@ -13024,7 +13034,17 @@ class MainWindow(QMainWindow):
     def _refresh_permission_actions(self):
         is_admin = self._is_admin_staff()
         if hasattr(self, "user_management_action"):
-            self.user_management_action.setVisible(True)
+            self.user_management_action.setVisible(
+                is_admin or self._permission_action_visible("manage_staff")
+            )
+        if hasattr(self, "platform_component_action"):
+            self.platform_component_action.setVisible(
+                is_admin or self._permission_action_visible("manage_platforms")
+            )
+        if hasattr(self, "tag_management_action"):
+            self.tag_management_action.setVisible(
+                is_admin or self._permission_action_visible("manage_labels")
+            )
         if hasattr(self, "role_permissions_action"):
             self.role_permissions_action.setVisible(
                 is_admin
@@ -13056,10 +13076,10 @@ class MainWindow(QMainWindow):
         self._add_menu_action(reports_menu, "Platform Teslimat Özeti", self.open_platform_delivery_report)
 
         management_menu = menu.addMenu("Yönetim")
-        self._add_menu_action(management_menu, "Platform / Bileşen Yönetimi", self.manage_platforms)
+        self.platform_component_action = self._add_menu_action(management_menu, "Platform / Bileşen Yönetimi", self.manage_platforms)
         self.user_management_action = self._add_menu_action(management_menu, "Kullanıcı Yönetimi", self.open_user_management)
         self.role_permissions_action = self._add_menu_action(management_menu, "Yetki Yönetimi", self.open_personnel_permissions)
-        self._add_menu_action(management_menu, "Etiket Yönetimi", self.manage_tags)
+        self.tag_management_action = self._add_menu_action(management_menu, "Etiket Yönetimi", self.manage_tags)
 
         self.system_menu = menu.addMenu("Sistem")
         self.system_menu_action = self.system_menu.menuAction()
@@ -13657,10 +13677,11 @@ class MainWindow(QMainWindow):
         Adımlar:
         1. STSLoadWorker arka planda dosya doğrulaması yapar (magic bytes).
         2. finished() sinyali gelince _on_sts_load_finished() ana thread'de
-           STSStore ve contract_index oluşturur.
+           STSStore bağlantısını açar.
+        3. Sözleşme indeksi STSIndexWorker içinde ayrı/geçici connection ile
+           hazırlanır ve ana thread'e yalnızca list[dict] olarak döner.
 
-        SQLite connection YALNIZCA ana thread'de (adım 2'de) açılır.
-        Worker hiçbir zaman connection nesnesi taşımaz.
+        Ana thread'de oluşturulan SQLite connection worker'a taşınmaz.
         """
         if self._sts_loader_thread and self._sts_loader_thread.isRunning():
             return
@@ -13669,7 +13690,9 @@ class MainWindow(QMainWindow):
         self.contract_index = []
         self._tag_color_map_cache = None
         self._store_loading = True
-        self.set_loading_state(True, "STS dosyası yükleniyor...")
+        self._index_ready_for_use = False
+        self._sts_warned_legacy_migration = False
+        self.set_loading_state(True, "STS dosyası kontrol ediliyor...")
 
         thread = QThread(self)
         worker = STSLoadWorker(self.path)
@@ -13693,24 +13716,31 @@ class MainWindow(QMainWindow):
         self._sts_loader_thread = None
         self._sts_loader_worker = None
 
+    def _clear_sts_index_refs(self):
+        self._sts_index_thread = None
+        self._sts_index_worker = None
+
+    def _sts_operation_running(self) -> bool:
+        for thread in (self._sts_loader_thread, self._sts_index_thread):
+            if thread is not None:
+                try:
+                    if thread.isRunning():
+                        return True
+                except RuntimeError:
+                    pass
+        return False
+
     def _on_sts_load_progress(self, percent: int, message: str):
         self.set_loading_state(True, f"{message}  %{percent}")
 
     def _on_sts_load_finished(self):
-        """Worker doğrulamayı geçti; STSStore ve index ANA THREAD'de açılır.
-
-        SQLite connection burada oluşur — hiçbir zaman worker thread'den
-        taşınmaz.  build_contract_index() büyük dosyalarda birkaç saniye
-        sürebilir; ilerleyen sürümlerde bu aşama da ayrı bir worker'a
-        taşınabilir (connection o worker'da açılıp kapatılır, yalnızca
-        list[dict] ana thread'e döner).
-        """
+        """Worker doğrulamayı geçti; ana store ana thread'de açılır, index ayrı worker'da hazırlanır."""
         actor = str((self.current_staff or {}).get("full_name") or "Personel")
-        warned_legacy_migration = False
         try:
+            self.set_loading_state(True, "STS dosyası açılıyor...")
             schema_version = read_sts_schema_version(self.path)
             if schema_version is None or schema_version < CURRENT_SCHEMA_VERSION:
-                warned_legacy_migration = True
+                self._sts_warned_legacy_migration = True
                 QMessageBox.information(
                     self,
                     "STS dosyası güncellenecek",
@@ -13719,35 +13749,60 @@ class MainWindow(QMainWindow):
                     "Güncellenen dosya eski uygulamalarda açılmayabilir.",
                 )
             self.store = STSStore(self.path, actor=actor)
-            self.contract_index = self.store.build_contract_index()
         except STSMigrationError as exc:
             _log.exception("STS migration hatası: %s", getattr(exc, "technical_detail", ""))
-            self._store_loading = False
-            self.set_loading_state(False)
-            self.set_empty_state()
             backup_text = f"\n\nYedek dosya: {exc.backup_path}" if getattr(exc, "backup_path", None) else ""
-            QMessageBox.critical(
-                self,
+            self._fail_sts_open_after_index_error(
                 "STS güncelleme hatası",
                 f"{exc.user_message}{backup_text}\n\nTeknik detaylar loga yazıldı.",
             )
             return
         except Exception as exc:
             _log.exception("STSStore ana-thread açılış hatası")
-            self._store_loading = False
-            self.set_loading_state(False)
-            self.set_empty_state()
-            QMessageBox.critical(self, "STS yükleme hatası",
-                                 f"STS dosyası açılamadı.\n\n{exc}")
+            self._fail_sts_open_after_index_error("STS yükleme hatası", f"STS dosyası açılamadı.\n\n{exc}")
             return
+        self._start_sts_index_build()
+
+    def _start_sts_index_build(self):
+        if self._sts_index_thread and self._sts_index_thread.isRunning():
+            return
+        self.set_loading_state(True, "Sözleşme indeksi hazırlanıyor...")
+        thread = QThread(self)
+        worker = STSIndexWorker(self.path)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.progress.connect(self._on_sts_index_progress)
+        worker.finished.connect(self._on_sts_index_finished)
+        worker.failed.connect(self._on_sts_index_failed)
+        worker.finished.connect(thread.quit)
+        worker.failed.connect(thread.quit)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(self._clear_sts_index_refs)
+        self._sts_index_thread = thread
+        self._sts_index_worker = worker
+        thread.start()
+
+    def _on_sts_index_progress(self, message: str):
+        self.set_loading_state(True, str(message or "Sözleşme indeksi hazırlanıyor..."))
+
+    def _on_sts_index_finished(self, index_rows):
+        if not self.store:
+            self._fail_sts_open_after_index_error(
+                "STS yükleme hatası",
+                "STS dosyası açıldı ancak ana bağlantı hazır olmadığı için sözleşme indeksi uygulanamadı.",
+            )
+            return
+        self.contract_index = [dict(row) for row in list(index_rows or [])]
         self._tag_color_map_cache = None
         self._store_loading = False
+        self._index_ready_for_use = True
         self.set_loading_state(False)
         self._set_platform_items(self.store.platform_names())
         self.update_alert_strip()
         self._apply_platform_selection()
         self.connection_label.setText("✓ STS veri dosyası bağlı")
-        if warned_legacy_migration and getattr(getattr(self.store, "db", None), "migration_performed", False):
+        if self._sts_warned_legacy_migration and getattr(getattr(self.store, "db", None), "migration_performed", False):
             backup_path = getattr(self.store.db, "migration_backup_path", None)
             QMessageBox.information(
                 self,
@@ -13756,6 +13811,30 @@ class MainWindow(QMainWindow):
             )
         self._apply_version_to_ui()
         self._remember_version_baseline()
+
+    def _on_sts_index_failed(self, message: str, traceback_text: str):
+        _log.error("STS index hazırlama hatası: %s\n%s", message, traceback_text)
+        self._fail_sts_open_after_index_error(
+            "STS indeks hatası",
+            "STS dosyası açıldı ancak sözleşme indeksi hazırlanırken hata oluştu. "
+            "Dosya kapatıldı. Lütfen dosyayı tekrar açmayı deneyin.",
+        )
+
+    def _fail_sts_open_after_index_error(self, title: str, message: str):
+        store = self.store
+        self.store = None
+        self.contract_index = []
+        self._tag_color_map_cache = None
+        self._store_loading = False
+        self._index_ready_for_use = False
+        try:
+            if store is not None and getattr(store, "db", None) is not None:
+                store.db.close()
+        except Exception:
+            pass
+        self.set_loading_state(False)
+        self.set_empty_state()
+        QMessageBox.critical(self, title, message)
 
     def _on_sts_load_failed(self, error_text: str):
         self._store_loading = False
@@ -14888,31 +14967,9 @@ def open_share_contract_window(path: Path | str) -> Optional[ContractWorkWindow]
 
 
 if __name__ == "__main__":
-    sys.excepthook = _global_exc_handler
+    install_crash_handlers()
     configure_windows_app_identity()
     app = QApplication(sys.argv)
-
-    # ── Global yakalanmamış exception handler ────────────────────────────────
-    # QApplication oluşturulduktan SONRA kurulur; böylece handler içinde
-    # QApplication.instance() kontrolü güvenle yapılabilir.
-    # NOT: sys.excepthook yalnızca ana thread ve threading.Thread için çalışır;
-    # QThread içindeki hatalar worker'ların kendi except bloklarında yakalanır.
-    def _global_exc_handler(exc_type, exc_val, exc_tb):
-        if issubclass(exc_type, (KeyboardInterrupt, SystemExit)):
-            sys.__excepthook__(exc_type, exc_val, exc_tb)
-            return
-        _log.critical("Yakalanmamış hata", exc_info=(exc_type, exc_val, exc_tb))
-        # QApplication yoksa veya kapanıyorsa sadece logla, GUI gösterme
-        q_app = QApplication.instance()
-        if q_app is None:
-            return
-        try:
-            msg = f"Beklenmeyen bir hata oluştu.\n\n{exc_val}"
-            QMessageBox.critical(None, "Kritik Hata", msg)
-        except Exception:
-            pass
-
-    sys.excepthook = _global_exc_handler
     app.setApplicationName("STS")
     app.setApplicationDisplayName("STS")
     app.setDesktopFileName(APP_ID)

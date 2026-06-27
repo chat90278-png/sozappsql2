@@ -52,7 +52,7 @@ def quote_identifier(identifier: str) -> str:
 LEGACY_CONTRACT_PARENT_NO_COLUMN = "parent_contract_" "no"
 LEGACY_CONTRACT_USERS_COLUMN = "user_" "names"
 LEGACY_DELIVERY_SYSTEM_LABEL_COLUMN = "system_" "name"
-CURRENT_SCHEMA_VERSION = 12
+CURRENT_SCHEMA_VERSION = 13
 
 
 class STSMigrationError(RuntimeError):
@@ -545,6 +545,7 @@ class STSDatabase:
         create_if("contract_file_folders", ("contract_id",), "CREATE INDEX IF NOT EXISTS idx_contract_file_folders_contract_id ON contract_file_folders(contract_id)")
         create_if("contract_file_folders", ("parent_id",), "CREATE INDEX IF NOT EXISTS idx_contract_file_folders_parent_id ON contract_file_folders(parent_id)")
         create_if("contract_files", ("contract_id",), "CREATE INDEX IF NOT EXISTS idx_contract_files_contract_id ON contract_files(contract_id)")
+        create_if("contract_files", ("contract_id", "size_bytes", "sha256"), "CREATE INDEX IF NOT EXISTS idx_contract_files_contract_size_sha256 ON contract_files(contract_id,size_bytes,sha256)")
         create_if("activity_logs", ("created_at",), "CREATE INDEX IF NOT EXISTS idx_logs_created_at ON activity_logs(created_at)")
         create_if("activity_logs", ("action",), "CREATE INDEX IF NOT EXISTS idx_logs_action ON activity_logs(action)")
         create_if("activity_logs", ("entity_type", "entity_id"), "CREATE INDEX IF NOT EXISTS idx_logs_entity ON activity_logs(entity_type,entity_id)")
@@ -574,7 +575,7 @@ CREATE TABLE IF NOT EXISTS deliveries(id INTEGER PRIMARY KEY AUTOINCREMENT,contr
 CREATE TABLE IF NOT EXISTS delivery_components(id INTEGER PRIMARY KEY AUTOINCREMENT,delivery_id INTEGER NOT NULL,component_id INTEGER NOT NULL,planned REAL DEFAULT 0,delivered REAL DEFAULT 0,UNIQUE(delivery_id,component_id),FOREIGN KEY(delivery_id) REFERENCES deliveries(id) ON DELETE CASCADE,FOREIGN KEY(component_id) REFERENCES components(id) ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS contract_tags(id INTEGER PRIMARY KEY AUTOINCREMENT,contract_id INTEGER NOT NULL,tag_id INTEGER NOT NULL,UNIQUE(contract_id,tag_id),FOREIGN KEY(contract_id) REFERENCES contracts(id) ON DELETE CASCADE,FOREIGN KEY(tag_id) REFERENCES tags(id) ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS contract_file_folders(id INTEGER PRIMARY KEY AUTOINCREMENT,contract_id INTEGER NOT NULL,parent_id INTEGER,name TEXT NOT NULL,created_at TEXT,updated_at TEXT,UNIQUE(contract_id,parent_id,name),FOREIGN KEY(contract_id) REFERENCES contracts(id) ON DELETE CASCADE,FOREIGN KEY(parent_id) REFERENCES contract_file_folders(id) ON DELETE CASCADE);
-CREATE TABLE IF NOT EXISTS contract_files(id INTEGER PRIMARY KEY AUTOINCREMENT,contract_id INTEGER NOT NULL,folder_id INTEGER,filename TEXT NOT NULL,original_path TEXT,file_ext TEXT,mime_type TEXT,size_bytes INTEGER NOT NULL DEFAULT 0,content_blob BLOB NOT NULL,note TEXT,created_at TEXT,updated_at TEXT,FOREIGN KEY(contract_id) REFERENCES contracts(id) ON DELETE CASCADE,FOREIGN KEY(folder_id) REFERENCES contract_file_folders(id) ON DELETE SET NULL);
+CREATE TABLE IF NOT EXISTS contract_files(id INTEGER PRIMARY KEY AUTOINCREMENT,contract_id INTEGER NOT NULL,folder_id INTEGER,filename TEXT NOT NULL,original_path TEXT,file_ext TEXT,mime_type TEXT,size_bytes INTEGER NOT NULL DEFAULT 0,sha256 TEXT DEFAULT '',content_blob BLOB NOT NULL,note TEXT,created_at TEXT,updated_at TEXT,FOREIGN KEY(contract_id) REFERENCES contracts(id) ON DELETE CASCADE,FOREIGN KEY(folder_id) REFERENCES contract_file_folders(id) ON DELETE SET NULL);
 CREATE TABLE IF NOT EXISTS activity_logs(id INTEGER PRIMARY KEY AUTOINCREMENT,created_at TEXT NOT NULL,actor TEXT,source TEXT,device_name TEXT,action TEXT NOT NULL,entity_type TEXT,entity_id TEXT,entity_key TEXT,platform_id INTEGER,contract_no TEXT,message TEXT,before_json TEXT,after_json TEXT,payload_json TEXT,FOREIGN KEY(platform_id) REFERENCES platforms(id) ON DELETE SET NULL);
             """
         )
@@ -679,6 +680,8 @@ CREATE TABLE IF NOT EXISTS activity_logs(id INTEGER PRIMARY KEY AUTOINCREMENT,cr
         # Document folders were added after embedded contract files shipped.
         if self._ensure_column("contract_files", "folder_id", "INTEGER"):
             migrated.append("contract_files.folder_id")
+        if self._ensure_column("contract_files", "sha256", "TEXT DEFAULT ''"):
+            migrated.append("contract_files.sha256")
         if self._ensure_column("contracts", "responsible_engineer_id", "INTEGER"):
             migrated.append("contracts.responsible_engineer_id")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_contracts_responsible_engineer_id ON contracts(responsible_engineer_id)")
@@ -686,6 +689,7 @@ CREATE TABLE IF NOT EXISTS activity_logs(id INTEGER PRIMARY KEY AUTOINCREMENT,cr
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_contract_file_folders_contract_id ON contract_file_folders(contract_id)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_contract_file_folders_parent_id ON contract_file_folders(parent_id)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_contract_files_folder_id ON contract_files(folder_id)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_contract_files_contract_size_sha256 ON contract_files(contract_id,size_bytes,sha256)")
         self._create_runtime_indexes()
         ensure_staff_table(self.conn)
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_staff_role_id ON staff(role_id)")
