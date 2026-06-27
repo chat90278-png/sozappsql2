@@ -711,6 +711,7 @@ class ElidedLabel(QLabel):
 
 from src.services.excel_store import ExcelStore
 from src.services.sts_store import STSStore
+from src.services.sts_database import CURRENT_SCHEMA_VERSION, STSMigrationError, read_sts_schema_version
 from src import auth
 from src.workers import ExcelLoadWorker, UserSaveWorker, ContractSaveWorker, AnalyzeDialog
 
@@ -13677,9 +13678,32 @@ class MainWindow(QMainWindow):
         list[dict] ana thread'e döner).
         """
         actor = str((self.current_staff or {}).get("full_name") or "Personel")
+        warned_legacy_migration = False
         try:
+            schema_version = read_sts_schema_version(self.path)
+            if schema_version is None or schema_version < CURRENT_SCHEMA_VERSION:
+                warned_legacy_migration = True
+                QMessageBox.information(
+                    self,
+                    "STS dosyası güncellenecek",
+                    "Bu STS dosyası eski sürümde oluşturulmuş. Uygulama dosyayı yeni sürüme uyarlayacak.\n\n"
+                    "İşlem öncesi aynı klasöre otomatik yedek alınacaktır. "
+                    "Güncellenen dosya eski uygulamalarda açılmayabilir.",
+                )
             self.store = STSStore(self.path, actor=actor)
             self.contract_index = self.store.build_contract_index()
+        except STSMigrationError as exc:
+            _log.exception("STS migration hatası: %s", getattr(exc, "technical_detail", ""))
+            self._store_loading = False
+            self.set_loading_state(False)
+            self.set_empty_state()
+            backup_text = f"\n\nYedek dosya: {exc.backup_path}" if getattr(exc, "backup_path", None) else ""
+            QMessageBox.critical(
+                self,
+                "STS güncelleme hatası",
+                f"{exc.user_message}{backup_text}\n\nTeknik detaylar loga yazıldı.",
+            )
+            return
         except Exception as exc:
             _log.exception("STSStore ana-thread açılış hatası")
             self._store_loading = False
@@ -13695,6 +13719,13 @@ class MainWindow(QMainWindow):
         self.update_alert_strip()
         self._apply_platform_selection()
         self.connection_label.setText("✓ STS veri dosyası bağlı")
+        if warned_legacy_migration and getattr(getattr(self.store, "db", None), "migration_performed", False):
+            backup_path = getattr(self.store.db, "migration_backup_path", None)
+            QMessageBox.information(
+                self,
+                "STS dosyası güncellendi",
+                f"STS dosyası yeni sürüme uyumlu hale getirildi.\n\nYedek dosya: {backup_path}\n\nNot: Güncellenen dosya eski uygulamalarda açılmayabilir.",
+            )
         self._apply_version_to_ui()
         self._remember_version_baseline()
 

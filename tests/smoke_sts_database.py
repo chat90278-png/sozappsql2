@@ -3,7 +3,7 @@ import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from src.services.sts_database import STSDatabase
+from src.services.sts_database import CURRENT_SCHEMA_VERSION, STSDatabase
 
 with TemporaryDirectory() as td:
     p = Path(td) / 'v2.sts'
@@ -13,7 +13,7 @@ with TemporaryDirectory() as td:
     assert db.conn.execute('PRAGMA busy_timeout').fetchone()[0] == 5000
     assert db.conn.execute('PRAGMA synchronous').fetchone()[0] == 1
     assert db.conn.execute('PRAGMA cache_size').fetchone()[0] == -64000
-    assert db.conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0] == '9'
+    assert db.conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0] == str(CURRENT_SCHEMA_VERSION)
 
     expected_columns = {
         'components': {'display_order'},

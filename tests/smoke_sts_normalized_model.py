@@ -6,7 +6,7 @@ from tempfile import TemporaryDirectory
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.models.app_models import ContractInfo, DeliveryInfo, SystemInfo
-from src.services.sts_database import STSDatabase
+from src.services.sts_database import CURRENT_SCHEMA_VERSION, STSDatabase
 from src.services.sts_store import STSStore
 
 
@@ -80,7 +80,7 @@ with TemporaryDirectory() as td:
     assert "user_id" not in column_names(upgraded.conn, "contracts")
     assert "system_" "name" not in column_names(upgraded.conn, "deliveries")
     assert upgraded.conn.execute("SELECT COUNT(*) FROM contract_users").fetchone()[0] == 2
-    assert upgraded.conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0] == "9"
+    assert upgraded.conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0] == str(CURRENT_SCHEMA_VERSION)
     assert upgraded.conn.execute("SELECT system_id FROM deliveries WHERE id=1").fetchone()[0] == 1
     assert upgraded.foreign_key_check() == []
     assert upgraded.integrity_check() == ["ok"]
