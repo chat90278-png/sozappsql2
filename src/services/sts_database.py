@@ -214,12 +214,30 @@ class STSDatabase:
 
     @contextmanager
     def tx(self):
-        try:
-            yield
-            self.conn.commit()
-        except Exception:
-            self.conn.rollback()
-            raise
+        """Transaction context manager.
+
+        Ust uste cagrildiginda (ornegin batch_save() icinde write_contract())
+        ic cagrı SAVEPOINT kullanir — dis transaction'i erken kapatmaz.
+        Bu sayede dis kod rollback yapabilir, atomicity korunur.
+        """
+        if self.conn.in_transaction:
+            # Zaten acik bir transaction var — SAVEPOINT ile ic transaction ac
+            sp = f"_tx_{id(self) & 0xFFFF}"
+            self.conn.execute(f"SAVEPOINT {sp}")
+            try:
+                yield
+                self.conn.execute(f"RELEASE SAVEPOINT {sp}")
+            except Exception:
+                self.conn.execute(f"ROLLBACK TO SAVEPOINT {sp}")
+                self.conn.execute(f"RELEASE SAVEPOINT {sp}")
+                raise
+        else:
+            try:
+                yield
+                self.conn.commit()
+            except Exception:
+                self.conn.rollback()
+                raise
 
     def _table_columns(self, table: str) -> set[str]:
         rows = self.conn.execute(f"PRAGMA table_info({quote_identifier(table)})").fetchall()
