@@ -814,6 +814,9 @@ class DeliveryScheduleReportDialog(QDialog):
     def __init__(self, parent=None, store=None):
         super().__init__(parent)
         self.store = store or getattr(parent, "store", None)
+        # NOT: self.conn ana thread connection'ını tutar — doğrudan sorgu için.
+        # ExcelExportWorker'a asla geçirilmemeli; worker kendi bağlantısını
+        # kendi açıyor (store_path STRING alıyor). Bu yapı korunmalı.
         self.conn = _conn_from_store(self.store)
         self.all_rows: list[DeliveryRow] = []
         self.filtered_rows: list[DeliveryRow] = []
