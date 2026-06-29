@@ -5001,7 +5001,7 @@ class SystemDialog(StyledDialog):
                     self,
                     "Bileşenler Silinecek",
                     "Aşağıdaki bileşenlerin onay kutusunu kaldırdınız. Güncelleme sonrası bu bileşenler "
-                    "sistemden ve bu sisteme ait teslimatlardan silinecek; Excel'deki ilgili değer hücreleri boşaltılacak.\n\n"
+                    "sistemden ve bu sisteme ait teslimatlardan silinecek; ilgili değer hücreleri sıfırlanacak.\n\n"
                     f"{shown}\n\nOnaylıyor musunuz?",
                 ):
                     return
@@ -8163,11 +8163,11 @@ class ContractWorkWindow(QDialog):
             if action == "delete":
                 info = dict((payload or {}).get("result") or {})
                 if not info:
-                    QMessageBox.warning(self, "Hata", "Sözleşme Excel'de bulunamadı veya silinemedi.")
+                    QMessageBox.warning(self, "Hata", "Sözleşme bulunamadı veya silinemedi.")
                     return
                 self._drop_deleted_context_cache(info)
                 self.deleted_contract_info = info
-                QMessageBox.information(self, "Silindi", "Sözleşme Excel'den silindi.")
+                QMessageBox.information(self, "Silindi", "Sözleşme silindi.")
                 self.accept()
                 return
 
@@ -8194,7 +8194,7 @@ class ContractWorkWindow(QDialog):
                         f"Sözleşme kaydedildi ancak belgeler aktarılırken hata oluştu:\n{flush_exc}")
             self.is_new_contract = False
             self.refresh_sd_sidebar()
-            QMessageBox.information(self, "Kaydedildi", "Sözleşme Excel'e yazıldı.")
+            QMessageBox.information(self, "Kaydedildi", "Sözleşme kaydedildi.")
             self._is_dirty = False
             self.accept()
         except Exception as exc:
@@ -8208,7 +8208,7 @@ class ContractWorkWindow(QDialog):
         if parent and hasattr(parent, "set_busy_overlay"):
             parent.set_busy_overlay(False)
         self._pending_contract_save_context = None
-        QMessageBox.critical(self, "Hata", f"Excel işlemi sırasında hata:\n{message}")
+        QMessageBox.critical(self, "Hata", f"Kaydetme işlemi sırasında hata:\n{message}")
 
     def delete_contract(self):
         if not self._ensure_share_can_edit("Sözleşmeyi Sil"):
@@ -8222,7 +8222,7 @@ class ContractWorkWindow(QDialog):
             return
         msg = (
             f"{platform} platformundaki '{no}' sözleşmesi silinecek.\n\n"
-            "Bu işlem tüm sistemler ve teslimatlar ile birlikte Excel'den kalıcı olarak kaldırır.\n"
+            "Bu işlem tüm sistemler ve teslimatlar ile birlikte kalıcı olarak kaldırır.\n"
             "Devam etmek istiyor musunuz?"
         )
         if not ask_yes_no(self, "Sözleşmeyi Sil", msg):
@@ -11205,7 +11205,7 @@ class ContractWorkWindow(QDialog):
         current_key = self._context_key()
         if current_key in self._context_cache:
             self._load_cached_context(current_key)
-        QMessageBox.information(self, "Kaydedildi", "Ana sözleşme ve bağlı SD kayıtları Excel'e yazıldı.")
+        QMessageBox.information(self, "Kaydedildi", "Ana sözleşme ve bağlı SD kayıtları kaydedildi.")
         self._is_dirty = False
         self.accept()
         return True
@@ -11698,7 +11698,7 @@ from src.ui.dialogs.workbook_start import WorkbookStartDialog
 from src.ui.contract import work_window_view as cw_view
 
 class MainWindow(QMainWindow):
-    def __init__(self, store: Optional[ExcelStore] = None, contract_index: Optional[List[dict]] = None, initial_path: Optional[Path] = None, current_staff: Optional[dict] = None):
+    def __init__(self, store: Optional[STSStore] = None, contract_index: Optional[List[dict]] = None, initial_path: Optional[Path] = None, current_staff: Optional[dict] = None):
         super().__init__()
         self.path = Path(initial_path) if initial_path else (store.path if store else Path(DEFAULT_FILE))
         self.store = store
@@ -11746,7 +11746,7 @@ class MainWindow(QMainWindow):
                 self._remember_version_baseline()
         else:
             self.set_empty_state()
-            self.connection_label.setText("Excel bağlı değil")
+            self.connection_label.setText("STS bağlı değil")
 
 
     def export_sts_to_excel(self):
@@ -12097,7 +12097,7 @@ class MainWindow(QMainWindow):
             logo.setAlignment(Qt.AlignCenter)
             tl.addWidget(logo)
         title=QLabel(APP_TITLE); title.setObjectName("appTitle"); tl.addWidget(title)
-        self.connection_label=QLabel("✓ Excel bağlı"); self.connection_label.setObjectName("okPill"); tl.addWidget(self.connection_label)
+        self.connection_label=QLabel("STS bağlı değil"); self.connection_label.setObjectName("okPill"); tl.addWidget(self.connection_label)
         tl.addStretch()
         self.top_actions_btn = QToolButton()
         self.top_actions_btn.setObjectName("topMenuBtn")
@@ -12373,7 +12373,7 @@ class MainWindow(QMainWindow):
         self.index_progress_badge = QLabel(self.centralWidget())
         self.index_progress_badge.setObjectName("miniProgressPill")
         self.index_progress_badge.setAlignment(Qt.AlignCenter)
-        self.index_progress_badge.setText("Excel %0")
+        self.index_progress_badge.setText("STS %0")
         self.index_progress_badge.hide()
         self.index_progress_badge.raise_()
         self._send_query_logo_to_back()
@@ -12381,13 +12381,13 @@ class MainWindow(QMainWindow):
     def update_connection_badge(self, mode: str):
         m = str(mode or "").strip().lower()
         if m == "ok":
-            self.connection_label.setText("✓ Excel bağlı")
+            self.connection_label.setText("✓ STS bağlı")
             self.connection_label.setProperty("status", "ok")
         elif m == "loading":
-            self.connection_label.setText("Excel analiz ediliyor")
+            self.connection_label.setText("STS yükleniyor")
             self.connection_label.setProperty("status", "loading")
         else:
-            self.connection_label.setText("Excel bağlı değil")
+            self.connection_label.setText("STS bağlı değil")
             self.connection_label.setProperty("status", "bad")
         st = self.connection_label.style()
         st.unpolish(self.connection_label)
@@ -13081,7 +13081,7 @@ class MainWindow(QMainWindow):
         if not hasattr(self, "index_progress_badge"):
             return
         p = int(max(0, min(100, int(percent or 0))))
-        self.index_progress_badge.setText(f"Excel okuma %{p}")
+        self.index_progress_badge.setText(f"STS indeks %{p}")
         self.position_index_progress_badge()
         self.index_progress_badge.setVisible(bool(visible))
 
