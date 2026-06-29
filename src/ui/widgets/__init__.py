@@ -7,6 +7,7 @@ from .contract_file_widgets import (
     ElidedValueLabel,
 )
 from .filterable_header import FilterableHeaderView, PlatformListDelegate
+from .platform_select import _PlatformRowWidget, PlatformSelectWidget
 
 
 def stat_card(title, value):
