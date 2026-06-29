@@ -714,7 +714,7 @@ from src.services.excel_store import ExcelStore
 from src.services.sts_store import STSStore
 from src.services.sts_database import CURRENT_SCHEMA_VERSION, STSMigrationError, read_sts_schema_version
 from src import auth
-from src.workers import ExcelLoadWorker, UserSaveWorker, ContractSaveWorker, AnalyzeDialog, STSIndexWorker
+from src.workers import UserSaveWorker, ContractSaveWorker, STSIndexWorker
 
 _log = logging.getLogger("STS")
 
@@ -11720,8 +11720,6 @@ class MainWindow(QMainWindow):
         self.contract_index = contract_index if contract_index is not None else []
         self._tag_color_map_cache: Optional[Dict[str, str]] = None
         self._loading = False
-        self._loader_thread: Optional[QThread] = None
-        self._loader_worker: Optional[ExcelLoadWorker] = None
         self._sts_loader_thread: Optional[QThread] = None
         self._sts_loader_worker: Optional[STSLoadWorker] = None
         self._sts_index_thread: Optional[QThread] = None
@@ -11729,13 +11727,10 @@ class MainWindow(QMainWindow):
         self._sts_warned_legacy_migration = False
         self._export_thread: Optional[QThread] = None
         self._export_worker = None
-        self._streaming_index = False
         self._store_loading = False
-        self._last_load_timings: Dict[str, float] = {}
         self._index_ready_for_use = False
         self._version_baseline_signature = None
         self.calendar_window: Optional[ContractCalendarWindow] = None
-        self._pending_select_platform: Optional[str] = None
         self.selected_platforms: set[str] = set()
         self.multi_platform_mode: bool = False
         self._updating_platform_list = False
@@ -11755,7 +11750,11 @@ class MainWindow(QMainWindow):
         if self.store:
             if not self.contract_index:
                 # UI thread'i bloklamamak için hazır store olsa bile indeksleme yükünü worker'a bırak.
-                self.start_sts_load(self.store.path) if str(self.store.path).lower().endswith(".sts") else self.start_excel_load(self.store.path)
+                if str(self.store.path).lower().endswith(".sts"):
+                    self.start_sts_load(self.store.path)
+                else:
+                    QMessageBox.warning(self, "STS dosyası gerekli", EXCEL_DATA_SOURCE_DISABLED_MESSAGE)
+                    self.set_empty_state()
             else:
                 self.refresh(rebuild_index=False)
                 self._apply_version_to_ui()
@@ -13637,45 +13636,6 @@ class MainWindow(QMainWindow):
                 self._busy_cursor_on = False
             QApplication.processEvents()
 
-    def start_excel_load(self, path: Path):
-        if self._loader_thread and self._loader_thread.isRunning():
-            return
-        self.path = Path(path)
-        self.store = None
-        self.contract_index = []
-        self.all_contract_rows = []
-        self.selected_platforms.clear()
-        self.multi_platform_mode = False
-        self._store_loading = True
-        self._index_ready_for_use = False
-        self._last_load_timings = {}
-        self._version_baseline_signature = None
-        if hasattr(self, "platform_list"):
-            self.platform_list.clear()
-            self.refresh_platform_list_ui()
-        if hasattr(self, "contract_table"):
-            self.contract_table.setRowCount(0)
-        self._streaming_index = False
-        self.set_index_progress_badge(True, 0)
-        self.set_loading_state(True, "Analiz ediliyor...")
-        self._loader_thread = QThread(self)
-        self._loader_worker = ExcelLoadWorker(self.path)
-        self._loader_worker.moveToThread(self._loader_thread)
-        self._loader_thread.started.connect(self._loader_worker.run)
-        self._loader_worker.store_ready.connect(self.on_excel_store_ready)
-        self._loader_worker.batch_ready.connect(self.on_excel_index_batch)
-        self._loader_worker.index_ready.connect(self.on_excel_index_ready)
-        self._loader_worker.finished.connect(self.on_excel_loaded)
-        self._loader_worker.failed.connect(self.on_excel_load_failed)
-        self._loader_worker.progress.connect(self.on_excel_load_progress)
-        self._loader_worker.finished.connect(self._loader_thread.quit)
-        self._loader_worker.failed.connect(self._loader_thread.quit)
-        self._loader_thread.finished.connect(self._loader_worker.deleteLater)
-        self._loader_thread.finished.connect(self._loader_thread.deleteLater)
-        self._loader_thread.finished.connect(self._clear_loader_refs)
-        self._loader_thread.start()
-
-
     def start_sts_load(self, path: Path):
         """STS dosyasını yükler.
 
@@ -13856,10 +13816,6 @@ class MainWindow(QMainWindow):
             and str(self.path).lower().endswith(".sts")
         )
 
-    def _clear_loader_refs(self):
-        self._loader_worker = None
-        self._loader_thread = None
-
     def _refresh_index_tags_only(self):
         if not self.store:
             return
@@ -13954,8 +13910,7 @@ class MainWindow(QMainWindow):
                     self._apply_platform_selection()
                 self.connection_label.setText("✓ STS veri dosyası bağlı")
                 return
-            self._pending_select_platform = select_platform
-            self.start_excel_load(self.path)
+            QMessageBox.warning(self, "STS dosyası gerekli", EXCEL_DATA_SOURCE_DISABLED_MESSAGE)
             return
         if kind == "tags":
             self.set_busy_overlay(True, "Etiketler güncelleniyor...", 35)
@@ -13983,106 +13938,6 @@ class MainWindow(QMainWindow):
             self._apply_platform_selection()
         else:
             self.set_empty_state()
-
-    def on_excel_store_ready(self, store):
-        self.store = store
-        self.path = self.store.path
-        self.contract_index = []
-        self._tag_color_map_cache = None
-        self._streaming_index = True
-        self.loading_overlay.hide()
-        self._loading = False
-        self.update_connection_badge("loading")
-        self.connection_label.setText("Excel indeksleniyor %0")
-        self.set_index_progress_badge(True, 0)
-        platforms = self.store.platform_names()
-        self._set_platform_items(platforms)
-        self.update_alert_strip()
-        self._apply_platform_selection()
-
-    def on_excel_index_batch(self, platform: str, rows, mapped_percent: int, message: str):
-        new_rows = [dict(it) for it in list(rows or [])]
-        self.set_index_progress_badge(True, int(mapped_percent or 0))
-        if not new_rows:
-            self.connection_label.setText(f"Excel indeksleniyor %{int(mapped_percent or 0)}")
-            return
-        self.contract_index.extend(new_rows)
-        self.connection_label.setText(f"Excel indeksleniyor %{int(mapped_percent or 0)}")
-        if self.store:
-            self._apply_platform_selection()
-
-    def on_excel_index_ready(self, platforms, index, timings):
-        self.contract_index = list(index or [])
-        self._last_load_timings = dict(timings or {})
-        self._tag_color_map_cache = None
-        self._streaming_index = False
-        self._loading = False
-        if hasattr(self, "loading_overlay"):
-            self.loading_overlay.hide()
-        self._index_ready_for_use = True
-        self.update_connection_badge("ok")
-        self.connection_label.setText("Liste hazır (detay düzenleme arka planda hazırlanıyor)")
-        self.set_index_progress_badge(False, 100)
-        platform_list = list(platforms or [])
-        self._set_platform_items(platform_list)
-        self.update_alert_strip()
-        self.refresh_open_calendar()
-        if self._pending_select_platform:
-            self.select_platform(self._pending_select_platform)
-        elif self.platform_list.count():
-            self._apply_platform_selection()
-        else:
-            self.contract_table.setRowCount(0)
-
-    def on_excel_loaded(self, store, index):
-        selected_platform = next(iter(self.selected_platforms)) if len(self.selected_platforms) == 1 else ""
-        self.store = store
-        self.contract_index = list(index or [])
-        self.path = self.store.path
-        self._tag_color_map_cache = None
-        self._store_loading = False
-        self._index_ready_for_use = False
-        self.set_loading_state(False)
-        self.set_index_progress_badge(False, 100)
-        self._streaming_index = False
-        self.refresh(rebuild_index=False)
-        self.refresh_open_calendar()
-        if self._pending_select_platform:
-            self.select_platform(self._pending_select_platform)
-        elif selected_platform:
-            self.select_platform(selected_platform)
-        self._pending_select_platform = None
-        self._apply_version_to_ui()
-        self._remember_version_baseline()
-
-    def on_excel_load_failed(self, error_text: str):
-        self._store_loading = False
-        self._index_ready_for_use = False
-        self.set_loading_state(False)
-        self.set_index_progress_badge(False, 0)
-        self.set_empty_state()
-        self._pending_select_platform = None
-        QMessageBox.critical(self, "Excel yükleme hatası", f"Excel dosyası okunamadı.\n\n{error_text}")
-
-    def on_excel_load_progress(self, percent: int, message: str):
-        p = int(max(0, min(100, int(percent or 0))))
-        msg = str(message or "Analiz ediliyor...")
-        self.set_index_progress_badge(True, p)
-        if self._loading and hasattr(self, "loading_progress"):
-            self.loading_progress.setRange(0, 100)
-            self.loading_progress.setValue(p)
-        if self._loading and hasattr(self, "loading_label"):
-            self.loading_label.setText(f"{msg}  %{p}")
-        elif getattr(self, "_store_loading", False):
-            if self._index_ready_for_use:
-                self.update_connection_badge("ok")
-                self.connection_label.setText("Liste hazır (detay düzenleme arka planda hazırlanıyor)")
-            else:
-                self.update_connection_badge("loading")
-                self.connection_label.setText(f"{msg} %{p}")
-        elif self.store:
-            self.update_connection_badge("loading")
-            self.connection_label.setText(f"Excel indeksleniyor %{p}")
 
     def on_contract_save_progress(self, percent: int, message: str):
         self.set_busy_overlay(True, message, percent)
