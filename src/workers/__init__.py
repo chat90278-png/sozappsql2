@@ -1,2 +1,2 @@
-from .excel_workers import ExcelLoadWorker, ComponentSaveWorker, UserSaveWorker, ContractSaveWorker, AnalyzeDialog
+from .excel_workers import ComponentSaveWorker, UserSaveWorker, ContractSaveWorker
 from .sts_index_worker import STSIndexWorker
