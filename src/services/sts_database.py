@@ -174,7 +174,7 @@ class STSDatabase:
         self.conn = sqlite3.connect(str(self.path))
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA foreign_keys=ON")
-        self.conn.execute("PRAGMA journal_mode=DELETE")
+        self.conn.execute("PRAGMA journal_mode=WAL")   # WAL: concurrent reader + writer, crash recovery
         self.conn.execute("PRAGMA busy_timeout=5000")
         self.conn.execute("PRAGMA synchronous=NORMAL")
         self.conn.execute("PRAGMA cache_size=-64000")
