@@ -11,7 +11,7 @@ from src.ui.theme import STYLE
 
 
 class WorkbookStartDialog(QDialog):
-    """Uygulama açılışında Excel/STS dosyası seçtirir."""
+    """Uygulama açılışında STS veri dosyası seçtirir."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -32,12 +32,12 @@ class WorkbookStartDialog(QDialog):
         title.setObjectName("mainTitle")
         root.addWidget(title)
 
-        desc = QLabel("Mevcut sözleşme takip Excel dosyanızı buraya sürükleyip bırakın veya dosya seçin. Dosya seçildikten sonra platformlar, kullanıcılar, bileşenler ve ana sözleşmeler analiz edilir.")
+        desc = QLabel("STS veri dosyanızı seçin veya buraya sürükleyin. Dosya seçildikten sonra platformlar, kullanıcılar, bileşenler ve ana sözleşmeler hazırlanır.")
         desc.setWordWrap(True)
         desc.setObjectName("muted")
         root.addWidget(desc)
 
-        self.drop_box = QLabel("Excel dosyasını buraya sürükleyip bırak\n.xlsx / .xlsm / .sts")
+        self.drop_box = QLabel("STS veri dosyanızı buraya sürükleyip bırakın\n.sts")
         self.drop_box.setAlignment(Qt.AlignCenter)
         self.drop_box.setMinimumHeight(150)
         self.drop_box.setStyleSheet(
@@ -65,7 +65,7 @@ class WorkbookStartDialog(QDialog):
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():
             for url in event.mimeData().urls():
-                if url.toLocalFile().lower().endswith((".xlsx", ".xlsm", ".sts")):
+                if url.toLocalFile().lower().endswith(".sts"):
                     event.acceptProposedAction()
                     return
         event.ignore()
@@ -73,14 +73,14 @@ class WorkbookStartDialog(QDialog):
     def dropEvent(self, event):
         for url in event.mimeData().urls():
             path = Path(url.toLocalFile())
-            if path.suffix.lower() in [".xlsx", ".xlsm", ".sts"]:
+            if path.suffix.lower() == ".sts":
                 self.selected_path = path
                 self.accept()
                 return
-        show_warning(self, "Dosya uygun değil", "Lütfen .xlsx/.xlsm veya .sts uzantılı dosya bırakın.")
+        show_warning(self, "Dosya uygun değil", "Lütfen .sts uzantılı bir STS veri dosyası bırakın.")
 
     def pick_file(self):
-        p, _ = QFileDialog.getOpenFileName(self, "Veri dosyası seç", str(Path.cwd()), "Data (*.sts *.xlsx *.xlsm)")
+        p, _ = QFileDialog.getOpenFileName(self, "STS veri dosyası seç", str(Path.cwd()), "STS Dosyası (*.sts)")
         if p:
             self.selected_path = Path(p)
             self.accept()
