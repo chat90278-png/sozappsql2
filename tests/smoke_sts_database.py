@@ -9,7 +9,7 @@ with TemporaryDirectory() as td:
     p = Path(td) / 'v2.sts'
     db = STSDatabase(p)
     assert db.conn.execute('PRAGMA foreign_keys').fetchone()[0] == 1
-    assert db.conn.execute('PRAGMA journal_mode').fetchone()[0].lower() == 'delete'
+    assert db.conn.execute('PRAGMA journal_mode').fetchone()[0].lower() == 'wal'
     assert db.conn.execute('PRAGMA busy_timeout').fetchone()[0] == 5000
     assert db.conn.execute('PRAGMA synchronous').fetchone()[0] == 1
     assert db.conn.execute('PRAGMA cache_size').fetchone()[0] == -64000
