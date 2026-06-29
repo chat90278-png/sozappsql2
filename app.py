@@ -18,7 +18,7 @@ import logging
 from pathlib import Path
 from datetime import date, datetime, timedelta
 from typing import Callable, Dict, List, Optional, Protocol, Tuple
-from auto_accept import open_auto_accept_dialog
+from src.ui.dialogs.auto_accept_dialog import open_auto_accept_dialog
 
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
