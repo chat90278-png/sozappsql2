@@ -4869,12 +4869,15 @@ class ContractWorkWindow(QDialog):
         return QMessageBox.warning(self, title, text)
 
     def refresh_summary_only(self):
+        from src.ui.contract import work_window_view as cw_view
         cw_view.refresh_summary_only(self)
 
     def update_system_metric_cards(self, sys_info: Optional[SystemInfo]):
+        from src.ui.contract import work_window_view as cw_view
         cw_view.update_system_metric_cards(self, sys_info)
 
     def refresh_right(self):
+        from src.ui.contract import work_window_view as cw_view
         cw_view.refresh_right(self)
 
     def refresh_delivery_table(self):
