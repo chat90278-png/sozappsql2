@@ -563,6 +563,20 @@ PLATFORM_SELECTED_ROLE = Qt.UserRole + 100
 
 
 
+def configure_table(table, compact: bool = False):
+    """Tablo görünümünü standart şekilde yapılandırır."""
+    from src.ui.delegates import CenterTableDelegate
+    table.setItemDelegate(CenterTableDelegate(table))
+    table.verticalHeader().setVisible(False)
+    table.setAlternatingRowColors(True)
+    table.setShowGrid(True)
+    table.setSelectionBehavior(table.SelectRows)
+    table.setSelectionMode(table.SingleSelection)
+    table.horizontalHeader().setMinimumHeight(42 if not compact else 34)
+    table.verticalHeader().setDefaultSectionSize(34 if not compact else 28)
+    table.setWordWrap(False)
+
+
 def form_label(txt):
     l = QLabel(txt)
     l.setObjectName("formLabel")
@@ -4869,12 +4883,15 @@ class ContractWorkWindow(QDialog):
         return QMessageBox.warning(self, title, text)
 
     def refresh_summary_only(self):
+        from src.ui.contract import work_window_view as cw_view
         cw_view.refresh_summary_only(self)
 
     def update_system_metric_cards(self, sys_info: Optional[SystemInfo]):
+        from src.ui.contract import work_window_view as cw_view
         cw_view.update_system_metric_cards(self, sys_info)
 
     def refresh_right(self):
+        from src.ui.contract import work_window_view as cw_view
         cw_view.refresh_right(self)
 
     def refresh_delivery_table(self):
