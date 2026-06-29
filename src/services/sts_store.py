@@ -356,9 +356,10 @@ class STSStore:
 
     def delete_platform(self, name):
         nm = str(name or "").strip()
-        self.db.conn.execute("DELETE FROM platforms WHERE name=?", (nm,)); self.db.conn.commit()
+        with self.db.tx():
+            self.db.conn.execute("DELETE FROM platforms WHERE name=?", (nm,))
+            self._log("platform_deleted", entity_type="platform", entity_key=nm, platform=nm, message=f"Platform silindi: {nm}")
         self._clear_id_cache("platform")
-        self._log("platform_deleted", entity_type="platform", entity_key=nm, platform=nm, message=f"Platform silindi: {nm}")
     def load_excluded_platforms(self):
         return [r[0] for r in self.db.conn.execute("SELECT name FROM platforms WHERE is_excluded=1").fetchall()]
     def save_excluded_platforms(self, excluded):
@@ -463,10 +464,10 @@ class STSStore:
         nm = str(name or "").strip()
         if not nm:
             return
-        self.db.conn.execute("DELETE FROM components WHERE name=?", (nm,))
-        self.db.conn.commit()
+        with self.db.tx():
+            self.db.conn.execute("DELETE FROM components WHERE name=?", (nm,))
+            self._log("component_deleted", entity_type="component", entity_key=nm, message="Bileşen silindi")
         self._clear_id_cache("component")
-        self._log("component_deleted", entity_type="component", entity_key=nm, message="Bileşen silindi")
     def write_components(self, components_payload, actor=None):
         ts = now_iso()
         before_components = {str(row["name"]): {"version": row["version"] or "", "unit": row["unit"] or "Adet", "active": bool(row["active"]), "usage": float(row["usage"] or 1), "note": row["note"] or ""} for row in self.db.conn.execute("SELECT name,version,unit,active,usage,note FROM components")}
