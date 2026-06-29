@@ -2,40 +2,10 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
-from typing import List
 
 from PySide6.QtCore import QObject, Signal
 
 from src.services.excel_store import ExcelStore
-
-
-class UserSaveWorker(QObject):
-    progress = Signal(int, str)
-    finished = Signal()
-    failed = Signal(str)
-
-    def __init__(self, path: Path, users_payload: List[dict], actor: str):
-        super().__init__()
-        self.path = Path(path)
-        self.users_payload = [dict(x or {}) for x in list(users_payload or [])]
-        self.actor = str(actor or "Sistem")
-
-    def run(self):
-        try:
-            if str(self.path).lower().endswith(".sts"):
-                raise RuntimeError("STS dosyası Excel worker ile açılamaz; STSStore kullanılmalı.")
-            self.progress.emit(10, "Excel açılıyor...")
-            store = ExcelStore(self.path)
-            with store.batch_save():
-                self.progress.emit(42, "Kullanıcılar kaydediliyor...")
-                store.write_users(self.users_payload, actor=self.actor)
-                self.progress.emit(94, "Excel kaydediliyor...")
-                store.save()
-            self.progress.emit(100, "Tamamlandı")
-            self.finished.emit()
-        except Exception as exc:
-            self.failed.emit(str(exc))
-
 
 
 class ContractSaveWorker(QObject):
