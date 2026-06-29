@@ -577,8 +577,8 @@ def configure_table(table, compact: bool = False):
     table.verticalHeader().setVisible(False)
     table.setAlternatingRowColors(True)
     table.setShowGrid(True)
-    table.setSelectionBehavior(table.SelectRows)
-    table.setSelectionMode(table.SingleSelection)
+    table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+    table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
     table.horizontalHeader().setMinimumHeight(42 if not compact else 34)
     table.verticalHeader().setDefaultSectionSize(34 if not compact else 28)
     table.setWordWrap(False)
@@ -740,11 +740,17 @@ class ContractWorkWindow(QDialog):
         self.resize(1450, 860)
         self.setWindowState(Qt.WindowMaximized)  # Varsayılan tam ekran
         self.setStyleSheet(STYLE)
+        _log.debug("ContractWorkWindow.build başlangıç")
         self.build()
+        _log.debug("ContractWorkWindow.build tamamlandı")
+        _log.debug("ContractWorkWindow.build_busy_overlay başlangıç")
         self.build_busy_overlay()
+        _log.debug("ContractWorkWindow.build_busy_overlay tamamlandı")
         # Mevcut sozlesmede 'Secili Sistemi Sil' butonunu gizle
         self.delete_system_btn.setVisible(self.is_new_contract)
+        _log.debug("ContractWorkWindow.refresh başlangıç")
         self.refresh()
+        _log.debug("ContractWorkWindow.refresh tamamlandı")
         # Değişiklik tespiti için başlangıç snapshot'ı al
         if not self.is_new_contract:
             self._apply_derived_statuses(self.ci, self.systems, self.deliveries)

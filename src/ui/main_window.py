@@ -3642,7 +3642,17 @@ class MainWindow(QMainWindow):
         if not ci:
             QMessageBox.warning(self, "Bulunamadı", "Sözleşme detayları okunamadı.")
             return
-        work = ContractWorkWindow(self.store, ci, self, systems=systems, deliveries=deliveries)
+        try:
+            work = ContractWorkWindow(self.store, ci, self, systems=systems, deliveries=deliveries)
+        except Exception as exc:
+            traceback.print_exc()
+            _log.exception("ContractWorkWindow açılamadı")
+            QMessageBox.critical(
+                self,
+                "Sözleşme detayı açılamadı",
+                f"Sözleşme detay ekranı açılırken hata oluştu:\n\n{exc}",
+            )
+            return
         if work.exec():
             deleted_info = getattr(work, "deleted_contract_info", None)
             if deleted_info:
