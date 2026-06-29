@@ -718,6 +718,11 @@ from src.workers import ExcelLoadWorker, UserSaveWorker, ContractSaveWorker, Ana
 
 _log = logging.getLogger("STS")
 
+EXCEL_DATA_SOURCE_DISABLED_MESSAGE = (
+    "Excel dosyaları artık veri kaynağı olarak açılamaz. Lütfen .sts dosyası seçin. "
+    "Excel yalnızca rapor/export çıktısı olarak kullanılmaktadır."
+)
+
 
 class STSLoadWorker(QObject):
     """STS dosyasını ana thread'i bloklamadan önce doğrular.
@@ -14086,31 +14091,31 @@ class MainWindow(QMainWindow):
         dlg = WorkbookStartDialog(self)
         if dlg.exec() and dlg.selected_path:
             sel = Path(dlg.selected_path)
+            if sel.suffix.lower() != ".sts":
+                QMessageBox.warning(self, "STS dosyası gerekli", EXCEL_DATA_SOURCE_DISABLED_MESSAGE)
+                return
             if not self.close_all_tool_windows():
                 return
-            if sel.suffix.lower() == ".sts":
-                if _share_metadata_from_path(sel):
-                    try:
-                        win = open_share_contract_window(sel)
-                        if win:
-                            if not hasattr(self, "_share_windows"):
-                                self._share_windows = []
-                            self._share_windows.append(win)
-                            win.destroyed.connect(lambda *_args, w=win: self._share_windows.remove(w) if hasattr(self, "_share_windows") and w in self._share_windows else None)
-                            win.show()
-                    except Exception as exc:
-                        QMessageBox.critical(self, "Paylaşım açılamadı", f"Paylaşım dosyası açılamadı.\n\n{exc}")
-                    return
-                if not auth.ensure_system_admin_setup(sel, self):
-                    return
-                staff = auth.require_staff_login(sel, self)
-                if not staff:
-                    return
-                self.current_staff = staff
-                auth.current_staff = staff
-                self.start_sts_load(sel)
-            else:
-                self.start_excel_load(sel)
+            if _share_metadata_from_path(sel):
+                try:
+                    win = open_share_contract_window(sel)
+                    if win:
+                        if not hasattr(self, "_share_windows"):
+                            self._share_windows = []
+                        self._share_windows.append(win)
+                        win.destroyed.connect(lambda *_args, w=win: self._share_windows.remove(w) if hasattr(self, "_share_windows") and w in self._share_windows else None)
+                        win.show()
+                except Exception as exc:
+                    QMessageBox.critical(self, "Paylaşım açılamadı", f"Paylaşım dosyası açılamadı.\n\n{exc}")
+                return
+            if not auth.ensure_system_admin_setup(sel, self):
+                return
+            staff = auth.require_staff_login(sel, self)
+            if not staff:
+                return
+            self.current_staff = staff
+            auth.current_staff = staff
+            self.start_sts_load(sel)
 
     def show_contract_summary(self, row: int, item: dict):
         if not self.store:
@@ -14998,11 +15003,16 @@ if __name__ == "__main__":
             QMessageBox.critical(None, "Paylaşım açılamadı", f"Paylaşım dosyası açılamadı.\n\n{exc}")
             sys.exit(1)
 
-    start_dialog = WorkbookStartDialog()
-    if not start_dialog.exec() or not start_dialog.selected_path:
-        sys.exit(0)
-
-    selected_path = Path(start_dialog.selected_path)
+    selected_path = None
+    while selected_path is None:
+        start_dialog = WorkbookStartDialog()
+        if not start_dialog.exec() or not start_dialog.selected_path:
+            sys.exit(0)
+        candidate_path = Path(start_dialog.selected_path)
+        if candidate_path.suffix.lower() != ".sts":
+            QMessageBox.warning(None, "STS dosyası gerekli", EXCEL_DATA_SOURCE_DISABLED_MESSAGE)
+            continue
+        selected_path = candidate_path
     if _share_metadata_from_path(selected_path):
         try:
             win = open_share_contract_window(selected_path)
@@ -15017,12 +15027,11 @@ if __name__ == "__main__":
             sys.exit(1)
 
     staff = None
-    if selected_path.suffix.lower() == ".sts":
-        if not auth.ensure_system_admin_setup(selected_path):
-            sys.exit(0)
-        staff = auth.require_staff_login(selected_path)
-        if not staff:
-            sys.exit(0)
+    if not auth.ensure_system_admin_setup(selected_path):
+        sys.exit(0)
+    staff = auth.require_staff_login(selected_path)
+    if not staff:
+        sys.exit(0)
 
     win = MainWindow(initial_path=selected_path, current_staff=staff)
     win.show()
@@ -15030,10 +15039,7 @@ if __name__ == "__main__":
     def _start_initial_load():
         app.setQuitOnLastWindowClosed(True)
         try:
-            if selected_path.suffix.lower() == ".sts":
-                win.start_sts_load(selected_path)
-            else:
-                win.start_excel_load(selected_path)
+            win.start_sts_load(selected_path)
         except Exception as exc:
             _log.exception("Başlangıç yükleme hatası")
             traceback.print_exc()
