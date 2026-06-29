@@ -60,6 +60,7 @@ from src.config.app_config import (
     LOG_HEADERS,
     TAG_HEADERS,
     EXTRA_SYSTEM_SHEET_NAMES,
+    EXCEL_DATA_SOURCE_DISABLED_MESSAGE,
 )
 from src.models.app_models import ComponentDef, ContractInfo, SystemInfo, DeliveryInfo, TagDef
 from src.domain.contract_timing import contract_timing, is_completed_status
@@ -541,10 +542,6 @@ from src.workers import ContractSaveWorker, STSIndexWorker, STSLoadWorker
 
 _log = logging.getLogger("STS")
 
-EXCEL_DATA_SOURCE_DISABLED_MESSAGE = (
-    "Excel dosyaları artık veri kaynağı olarak açılamaz. Lütfen .sts dosyası seçin. "
-    "Excel yalnızca rapor/export çıktısı olarak kullanılmaktadır."
-)
 
 
 

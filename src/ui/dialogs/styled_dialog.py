@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
 )
 
 from src.models.app_models import TagDef
+from src.config.app_config import EXCEL_DATA_SOURCE_DISABLED_MESSAGE
 from src.services.excel_store import ExcelStore
 from src.services.sts_store import STSStore
 from src.ui.delegates import DropdownDelegate
@@ -18,10 +19,6 @@ from src.ui.theme import STYLE
 from src.ui.toast import ToastNotification
 
 
-EXCEL_DATA_SOURCE_DISABLED_MESSAGE = (
-    "Excel dosyaları artık veri kaynağı olarak açılamaz. Lütfen .sts dosyası seçin. "
-    "Excel yalnızca rapor/export çıktısı olarak kullanılmaktadır."
-)
 
 
 def normalized_tag_key(value: str) -> str:
