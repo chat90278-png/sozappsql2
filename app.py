@@ -12010,7 +12010,7 @@ class MainWindow(QMainWindow):
         if not self.require_permission_ui("manage_staff", "Kullanıcı Yönetimi"):
             return
         if not self.store:
-            QMessageBox.information(self, "Excel gerekli", "Önce bir Excel veya STS veri dosyası bağlayın.")
+            QMessageBox.information(self, "Veri dosyası gerekli", "Önce bir STS veri dosyası bağlayın.")
             return
 
         def factory():
@@ -13969,7 +13969,7 @@ class MainWindow(QMainWindow):
         if not self.require_permission_ui("manage_platforms", "Platform / Bileşen Yönetimi"):
             return
         if not self.store:
-            QMessageBox.information(self, "Excel gerekli", "Önce bir Excel dosyası bağlayın.")
+            QMessageBox.information(self, "Veri dosyası gerekli", "Önce bir STS veri dosyası bağlayın.")
             return
 
         def factory():
@@ -14016,7 +14016,7 @@ class MainWindow(QMainWindow):
         if not self.require_permission_ui("manage_labels", "Etiket Yönetimi"):
             return
         if not self.store:
-            QMessageBox.information(self, "Excel gerekli", "Önce bir Excel dosyası bağlayın.")
+            QMessageBox.information(self, "Veri dosyası gerekli", "Önce bir STS veri dosyası bağlayın.")
             return
 
         def factory():
@@ -14050,7 +14050,7 @@ class MainWindow(QMainWindow):
         if not self.require_permission_ui("manage_components", "Bileşen Yönetimi"):
             return
         if not self.store:
-            QMessageBox.information(self, "Excel gerekli", "Önce bir Excel dosyası bağlayın.")
+            QMessageBox.information(self, "Veri dosyası gerekli", "Önce bir STS veri dosyası bağlayın.")
             return
 
         def factory():
@@ -14081,7 +14081,7 @@ class MainWindow(QMainWindow):
 
     def open_calendar_tracking(self):
         if not self.store:
-            QMessageBox.information(self, "Excel gerekli", "Önce bir Excel dosyası bağlayın.")
+            QMessageBox.information(self, "Veri dosyası gerekli", "Önce bir STS veri dosyası bağlayın.")
             return
 
         def factory():
@@ -14124,7 +14124,7 @@ class MainWindow(QMainWindow):
         if not self.require_permission_ui("create_contracts", "Sözleşme Ekleme"):
             return
         if not self.store:
-            QMessageBox.information(self, "Excel gerekli", "Önce bir Excel dosyası bağlayın.")
+            QMessageBox.information(self, "Veri dosyası gerekli", "Önce bir STS veri dosyası bağlayın.")
             return
         if not self.store.load_users():
             QMessageBox.information(self, "Kullanıcı gerekli", "Sözleşme girmeden önce kullanıcı tanımlayın.")
@@ -14628,8 +14628,8 @@ class MainWindow(QMainWindow):
             if getattr(self, "_store_loading", False):
                 QMessageBox.information(
                     self,
-                    "Excel hazırlanıyor",
-                    "Liste hazır. Sözleşme detayı için Excel düzenleme modu birkaç saniye içinde hazır olacak.",
+                    "STS yükleniyor",
+                    "Liste hazır. Sözleşme detayı birkaç saniye içinde hazır olacak.",
                 )
             return
         platform = item.get("platform")
