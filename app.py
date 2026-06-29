@@ -14292,22 +14292,20 @@ class MainWindow(QMainWindow):
         ids = [int(r.get("row") or r.get("entry_start_row") or 0) for r in rows if int(r.get("row") or r.get("entry_start_row") or 0)]
         if not ids or not getattr(getattr(self.store, "db", None), "conn", None):
             return {}
-        placeholders = ",".join("?" for _ in ids)
         summary: Dict[int, tuple[list, bool]] = {cid: ([], False) for cid in ids}
         try:
-            for cid, raw in self.store.db.conn.execute(
-                f"SELECT contract_id, planned_acceptance_date FROM deliveries WHERE contract_id IN ({placeholders})",
-                ids,
-            ).fetchall():
-                exacts, has_flexible = summary.setdefault(int(cid), ([], False))
-                text = str(raw or "").strip()
-                if not text:
-                    continue
-                parsed = parse_flexible_date(text)
-                if parsed:
-                    exacts.append(parsed)
-                else:
-                    has_flexible = True
+            dates_map = self.store.get_delivery_planned_dates(ids)
+            for cid, date_list in dates_map.items():
+                exacts = []
+                has_flexible = False
+                for text in date_list:
+                    if not text:
+                        continue
+                    parsed = parse_flexible_date(text)
+                    if parsed:
+                        exacts.append(parsed)
+                    else:
+                        has_flexible = True
                 summary[int(cid)] = (exacts, has_flexible)
         except Exception:
             return {}
