@@ -20,9 +20,6 @@ from datetime import date, datetime, timedelta
 from typing import Callable, Dict, List, Optional, Protocol, Tuple
 from src.ui.dialogs.auto_accept_dialog import open_auto_accept_dialog
 
-from openpyxl import Workbook, load_workbook
-from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
-from openpyxl.utils import get_column_letter
 
 from src.domain.constants import (
     CORE_SHEETS,
