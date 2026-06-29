@@ -31,3 +31,8 @@ from .user_select import (
     _UserRowWidget, _MultiUserDropdown, MultiUserSelectWidget,
     MultiStaffSelectWidget, MultiPlatformSelectWidget,
 )
+from .platform_tabs import (
+    PlatformTabsWidget, HeaderUserPopup, FixedContractTypeField,
+    BadgeTabButton, ContractActionTabs, ContractSharePopover,
+    UnitTrackingSlotCard, UnitTrackingSidePanel,
+)
