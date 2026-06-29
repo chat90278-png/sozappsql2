@@ -563,6 +563,20 @@ PLATFORM_SELECTED_ROLE = Qt.UserRole + 100
 
 
 
+def configure_table(table, compact: bool = False):
+    """Tablo görünümünü standart şekilde yapılandırır."""
+    from src.ui.delegates import CenterTableDelegate
+    table.setItemDelegate(CenterTableDelegate(table))
+    table.verticalHeader().setVisible(False)
+    table.setAlternatingRowColors(True)
+    table.setShowGrid(True)
+    table.setSelectionBehavior(table.SelectRows)
+    table.setSelectionMode(table.SingleSelection)
+    table.horizontalHeader().setMinimumHeight(42 if not compact else 34)
+    table.verticalHeader().setDefaultSectionSize(34 if not compact else 28)
+    table.setWordWrap(False)
+
+
 def form_label(txt):
     l = QLabel(txt)
     l.setObjectName("formLabel")
