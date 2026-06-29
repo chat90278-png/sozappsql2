@@ -6,7 +6,7 @@ import sys
 from datetime import date
 from typing import Callable, Dict, List, Optional, Tuple
 
-from src.config.app_config import STATUS_VALUES
+from src.domain.constants import STATUS_VALUES
 from src.domain.flexible_date import flexible_or_blank, parse_flexible_date, validate_flexible_date
 from src.models.app_models import DeliveryInfo, SystemInfo
 from src.services.excel_store import as_number, fmt_num, iso_or_blank, normalize_sheet_name
