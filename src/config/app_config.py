@@ -48,3 +48,8 @@ EXTRA_SYSTEM_SHEET_NAMES = {
     "kullanicilar",
     "platform logolari",
 }
+
+EXCEL_DATA_SOURCE_DISABLED_MESSAGE = (
+    "Excel dosyaları artık veri kaynağı olarak açılamaz. Lütfen .sts dosyası seçin. "
+    "Excel yalnızca rapor/export çıktısı olarak kullanılmaktadır."
+)
