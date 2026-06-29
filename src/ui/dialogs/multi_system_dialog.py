@@ -21,6 +21,31 @@ from PySide6.QtWidgets import (
 )
 
 
+def normalize_sheet_name(name: str) -> str:
+    txt = str(name or "").strip().lower()
+    repl = {
+        "\u0131": "i",
+        "\u0130": "i",
+        "\u015f": "s",
+        "\u011f": "g",
+        "\u00fc": "u",
+        "\u00f6": "o",
+        "\u00e7": "c",
+    }
+    for a, b in repl.items():
+        txt = txt.replace(a, b)
+    return txt
+
+
+def as_number(v):
+    try:
+        if callable(v) or isinstance(v, (dict, list, tuple, set)):
+            return 0.0
+        return float(v or 0)
+    except Exception:
+        return 0.0
+
+
 def form_label(txt):
     l = QLabel(txt)
     l.setObjectName("formLabel")
