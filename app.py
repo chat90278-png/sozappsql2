@@ -11757,7 +11757,6 @@ class MainWindow(QMainWindow):
                     self.set_empty_state()
             else:
                 self.refresh(rebuild_index=False)
-                self._apply_version_to_ui()
                 self._remember_version_baseline()
         else:
             self.set_empty_state()
@@ -12830,25 +12829,6 @@ class MainWindow(QMainWindow):
                 return False
         return True
 
-    def _apply_version_to_ui(self):
-        try:
-            from src.services.version_manager import read_version
-            ver = read_version(self.store)
-            if ver:
-                workbook_name = Path(getattr(self.store, "path", self.path)).stem
-                label_parts = [part for part in [workbook_name] if part]
-                if ver.lower() not in workbook_name.lower():
-                    label_parts.append(f"[{ver}]")
-                self.setWindowTitle(f"{APP_TITLE}  [{ver}]")
-                self.connection_label.setText(f"✓ Excel bağlı  {' '.join(label_parts) or ver}")
-                self.connection_label.setProperty("status", "ok")
-                st = self.connection_label.style()
-                st.unpolish(self.connection_label)
-                st.polish(self.connection_label)
-                self.connection_label.update()
-        except Exception:
-            pass
-
     def _excel_file_signature(self):
         try:
             path = Path(getattr(self.store, "path", self.path))
@@ -12882,12 +12862,6 @@ class MainWindow(QMainWindow):
                     if new_path:
                         self.path = Path(new_path)
                         self._remember_version_baseline()
-                # Eski Excel modu için mevcut version_manager davranışı korunur.
-                elif getattr(self.store, "wb", None):
-                    from src.services.version_manager import bump_version, save_store_as_versioned_file
-                    new_ver = bump_version(self.store)
-                    self.path = save_store_as_versioned_file(self.store, new_ver)
-                    self._remember_version_baseline()
             except Exception:
                 pass
         super().closeEvent(event)
@@ -13774,7 +13748,6 @@ class MainWindow(QMainWindow):
                 "STS dosyası güncellendi",
                 f"STS dosyası yeni sürüme uyumlu hale getirildi.\n\nYedek dosya: {backup_path}\n\nNot: Güncellenen dosya eski uygulamalarda açılmayabilir.",
             )
-        self._apply_version_to_ui()
         self._remember_version_baseline()
 
     def _on_sts_index_failed(self, message: str, traceback_text: str):
