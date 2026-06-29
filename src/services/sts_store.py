@@ -1915,13 +1915,36 @@ class STSStore:
             deliveries.setdefault(d['delivery_system'],[]).append(di)
         return ci, systems, deliveries
 
+    def get_delivery_planned_dates(self, contract_ids: list) -> dict:
+        """Verilen contract_id listesi için planned_acceptance_date degerlerini dondurur.
+
+        Donus: {contract_id: [tarih_str, ...]}
+        STSStore API katmanini atlayan dogrudan db.conn.execute() cagrilarinin
+        yerine kullanilmali (app.py _delivery_summary_map).
+        """
+        if not contract_ids:
+            return {}
+        placeholders = ",".join("?" for _ in contract_ids)
+        result: dict = {int(cid): [] for cid in contract_ids}
+        try:
+            for cid, raw in self.db.conn.execute(
+                f"SELECT contract_id, planned_acceptance_date FROM deliveries "
+                f"WHERE contract_id IN ({placeholders})",
+                list(contract_ids),
+            ).fetchall():
+                result.setdefault(int(cid), []).append(str(raw or "").strip())
+        except Exception:
+            pass
+        return result
+
     def delete_contract(self, platform, contract_no, start_row=None, actor=None, progress_cb=None):
         row=self.db.conn.execute("SELECT id FROM contracts WHERE platform_id=? AND contract_no=? ORDER BY id LIMIT 1",(self.get_platform_id(platform),contract_no)).fetchone()
         if not row: return {"platform":platform,"contract_no":contract_no,"start_row":0,"end_row":0,"deleted_rows":0}
         cid=row[0]
         before = self.db.conn.execute("SELECT contract_no,contract_type,status,completion_date,acceptance_date FROM contracts WHERE id=?", (cid,)).fetchone()
-        self.db.conn.execute("DELETE FROM contracts WHERE id=?",(cid,)); self.db.conn.commit()
-        self._log("contract_deleted", entity_type="contract", entity_id=cid, platform=str(platform or ""), contract_no=str(contract_no or ""), source="Contract Detail", message="Sözleşme silindi", before=dict(before) if before else None, actor=actor or self.current_actor())
+        with self.db.tx():
+            self.db.conn.execute("DELETE FROM contracts WHERE id=?",(cid,))
+            self._log("contract_deleted", entity_type="contract", entity_id=cid, platform=str(platform or ""), contract_no=str(contract_no or ""), source="Contract Detail", message="Sözleşme silindi", before=dict(before) if before else None, actor=actor or self.current_actor())
         return {"platform":platform,"contract_no":contract_no,"start_row":cid,"end_row":cid,"deleted_rows":1}
 
     # ---- Unit tracking helpers ----
