@@ -27,3 +27,7 @@ def set_card_value(card, value):
     labs = card.findChildren(QLabel)
     if len(labs) > 1:
         labs[1].setText(str(value))
+from .user_select import (
+    _UserRowWidget, _MultiUserDropdown, MultiUserSelectWidget,
+    MultiStaffSelectWidget, MultiPlatformSelectWidget,
+)
