@@ -714,7 +714,7 @@ from src.services.excel_store import ExcelStore
 from src.services.sts_store import STSStore
 from src.services.sts_database import CURRENT_SCHEMA_VERSION, STSMigrationError, read_sts_schema_version
 from src import auth
-from src.workers import UserSaveWorker, ContractSaveWorker, STSIndexWorker
+from src.workers import ContractSaveWorker, STSIndexWorker
 
 _log = logging.getLogger("STS")
 
@@ -1343,9 +1343,6 @@ class UserManagerDialog(StyledDialog):
         self.store = store
         self.users = store.load_users(active_only=False)
         self.changed = False
-        self._save_thread: Optional[QThread] = None
-        self._save_worker: Optional[UserSaveWorker] = None
-        self._save_payload: List[dict] = []
         self._saving = False
         self._busy_cursor_on = False
         self.resize(760, 500)
@@ -1521,42 +1518,20 @@ class UserManagerDialog(StyledDialog):
                 "active": active_txt in ["evet", "true", "1", "aktif", "yes"],
                 "note": (self.table.item(r, 3).text() if self.table.item(r, 3) else ""),
             })
-        self._save_payload = list(result)
         if _is_sts_store(self.store):
             try:
                 self.set_busy(True, "Kullanıcılar kaydediliyor...", 25)
-                self.store.write_users(self._save_payload, actor=self.store.current_actor())
+                self.store.write_users(result, actor=self.store.current_actor())
                 self.store.save()
                 self.on_save_finished()
             except Exception as exc:
                 self.on_save_failed(str(exc))
             return
-        self._start_async_save()
-
-    def _start_async_save(self):
-        if self._save_thread and self._save_thread.isRunning():
-            return
-        self.set_busy(True, "Kullanıcı güncellemesi başlatılıyor...", 6)
-        self._save_thread = QThread(self)
-        self._save_worker = UserSaveWorker(self.store.path, self._save_payload, self.store.current_actor())
-        self._save_worker.moveToThread(self._save_thread)
-        self._save_thread.started.connect(self._save_worker.run)
-        self._save_worker.progress.connect(self.on_save_progress)
-        self._save_worker.finished.connect(self.on_save_finished)
-        self._save_worker.failed.connect(self.on_save_failed)
-        self._save_worker.finished.connect(self._save_thread.quit)
-        self._save_worker.failed.connect(self._save_thread.quit)
-        self._save_thread.finished.connect(self._save_worker.deleteLater)
-        self._save_thread.finished.connect(self._save_thread.deleteLater)
-        self._save_thread.finished.connect(self._clear_save_refs)
-        self._save_thread.start()
-
-    def _clear_save_refs(self):
-        self._save_worker = None
-        self._save_thread = None
-
-    def on_save_progress(self, percent: int, message: str):
-        self.set_busy(True, str(message or "İşlem yapılıyor..."), int(max(0, min(100, int(percent or 0)))))
+        QMessageBox.warning(
+            self,
+            "STS veri dosyası gerekli",
+            "Kullanıcı yönetimi yalnızca STS veri dosyalarında desteklenir. Lütfen .sts dosyası açın.",
+        )
 
     def on_save_finished(self):
         try:
