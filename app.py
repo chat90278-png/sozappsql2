@@ -714,9 +714,14 @@ from src.services.excel_store import ExcelStore
 from src.services.sts_store import STSStore
 from src.services.sts_database import CURRENT_SCHEMA_VERSION, STSMigrationError, read_sts_schema_version
 from src import auth
-from src.workers import ExcelLoadWorker, UserSaveWorker, ContractSaveWorker, AnalyzeDialog, STSIndexWorker
+from src.workers import ContractSaveWorker, STSIndexWorker
 
 _log = logging.getLogger("STS")
+
+EXCEL_DATA_SOURCE_DISABLED_MESSAGE = (
+    "Excel dosyaları artık veri kaynağı olarak açılamaz. Lütfen .sts dosyası seçin. "
+    "Excel yalnızca rapor/export çıktısı olarak kullanılmaktadır."
+)
 
 
 class STSLoadWorker(QObject):
@@ -1338,9 +1343,6 @@ class UserManagerDialog(StyledDialog):
         self.store = store
         self.users = store.load_users(active_only=False)
         self.changed = False
-        self._save_thread: Optional[QThread] = None
-        self._save_worker: Optional[UserSaveWorker] = None
-        self._save_payload: List[dict] = []
         self._saving = False
         self._busy_cursor_on = False
         self.resize(760, 500)
@@ -1516,42 +1518,20 @@ class UserManagerDialog(StyledDialog):
                 "active": active_txt in ["evet", "true", "1", "aktif", "yes"],
                 "note": (self.table.item(r, 3).text() if self.table.item(r, 3) else ""),
             })
-        self._save_payload = list(result)
         if _is_sts_store(self.store):
             try:
                 self.set_busy(True, "Kullanıcılar kaydediliyor...", 25)
-                self.store.write_users(self._save_payload, actor=self.store.current_actor())
+                self.store.write_users(result, actor=self.store.current_actor())
                 self.store.save()
                 self.on_save_finished()
             except Exception as exc:
                 self.on_save_failed(str(exc))
             return
-        self._start_async_save()
-
-    def _start_async_save(self):
-        if self._save_thread and self._save_thread.isRunning():
-            return
-        self.set_busy(True, "Kullanıcı güncellemesi başlatılıyor...", 6)
-        self._save_thread = QThread(self)
-        self._save_worker = UserSaveWorker(self.store.path, self._save_payload, self.store.current_actor())
-        self._save_worker.moveToThread(self._save_thread)
-        self._save_thread.started.connect(self._save_worker.run)
-        self._save_worker.progress.connect(self.on_save_progress)
-        self._save_worker.finished.connect(self.on_save_finished)
-        self._save_worker.failed.connect(self.on_save_failed)
-        self._save_worker.finished.connect(self._save_thread.quit)
-        self._save_worker.failed.connect(self._save_thread.quit)
-        self._save_thread.finished.connect(self._save_worker.deleteLater)
-        self._save_thread.finished.connect(self._save_thread.deleteLater)
-        self._save_thread.finished.connect(self._clear_save_refs)
-        self._save_thread.start()
-
-    def _clear_save_refs(self):
-        self._save_worker = None
-        self._save_thread = None
-
-    def on_save_progress(self, percent: int, message: str):
-        self.set_busy(True, str(message or "İşlem yapılıyor..."), int(max(0, min(100, int(percent or 0)))))
+        QMessageBox.warning(
+            self,
+            "STS veri dosyası gerekli",
+            "Kullanıcı yönetimi yalnızca STS veri dosyalarında desteklenir. Lütfen .sts dosyası açın.",
+        )
 
     def on_save_finished(self):
         try:
@@ -8075,7 +8055,7 @@ class ContractWorkWindow(QDialog):
         self.ci = new_ci
         self._set_dirty()
 
-        # Excel'e yaz
+        # STS veri dosyasına yaz
         try:
             self.sync_summary_to_system()
             self._apply_derived_statuses(self.ci, self.systems, self.deliveries)
@@ -8172,11 +8152,11 @@ class ContractWorkWindow(QDialog):
             if action == "delete":
                 info = dict((payload or {}).get("result") or {})
                 if not info:
-                    QMessageBox.warning(self, "Hata", "Sözleşme Excel'de bulunamadı veya silinemedi.")
+                    QMessageBox.warning(self, "Hata", "Sözleşme STS veri dosyasında bulunamadı veya silinemedi.")
                     return
                 self._drop_deleted_context_cache(info)
                 self.deleted_contract_info = info
-                QMessageBox.information(self, "Silindi", "Sözleşme Excel'den silindi.")
+                QMessageBox.information(self, "Silindi", "Sözleşme STS veri dosyasından silindi.")
                 self.accept()
                 return
 
@@ -8203,7 +8183,7 @@ class ContractWorkWindow(QDialog):
                         f"Sözleşme kaydedildi ancak belgeler aktarılırken hata oluştu:\n{flush_exc}")
             self.is_new_contract = False
             self.refresh_sd_sidebar()
-            QMessageBox.information(self, "Kaydedildi", "Sözleşme Excel'e yazıldı.")
+            QMessageBox.information(self, "Kaydedildi", "Sözleşme STS veri dosyasına kaydedildi.")
             self._is_dirty = False
             self.accept()
         except Exception as exc:
@@ -8217,7 +8197,7 @@ class ContractWorkWindow(QDialog):
         if parent and hasattr(parent, "set_busy_overlay"):
             parent.set_busy_overlay(False)
         self._pending_contract_save_context = None
-        QMessageBox.critical(self, "Hata", f"Excel işlemi sırasında hata:\n{message}")
+        QMessageBox.critical(self, "Hata", f"STS veri dosyası işlemi sırasında hata:\n{message}")
 
     def delete_contract(self):
         if not self._ensure_share_can_edit("Sözleşmeyi Sil"):
@@ -8231,7 +8211,7 @@ class ContractWorkWindow(QDialog):
             return
         msg = (
             f"{platform} platformundaki '{no}' sözleşmesi silinecek.\n\n"
-            "Bu işlem tüm sistemler ve teslimatlar ile birlikte Excel'den kalıcı olarak kaldırır.\n"
+            "Bu işlem tüm sistemler ve teslimatlar ile birlikte STS veri dosyasından kalıcı olarak kaldırır.\n"
             "Devam etmek istiyor musunuz?"
         )
         if not ask_yes_no(self, "Sözleşmeyi Sil", msg):
@@ -11214,7 +11194,7 @@ class ContractWorkWindow(QDialog):
         current_key = self._context_key()
         if current_key in self._context_cache:
             self._load_cached_context(current_key)
-        QMessageBox.information(self, "Kaydedildi", "Ana sözleşme ve bağlı SD kayıtları Excel'e yazıldı.")
+        QMessageBox.information(self, "Kaydedildi", "Ana sözleşme ve bağlı SD kayıtları STS veri dosyasına kaydedildi.")
         self._is_dirty = False
         self.accept()
         return True
@@ -11715,8 +11695,6 @@ class MainWindow(QMainWindow):
         self.contract_index = contract_index if contract_index is not None else []
         self._tag_color_map_cache: Optional[Dict[str, str]] = None
         self._loading = False
-        self._loader_thread: Optional[QThread] = None
-        self._loader_worker: Optional[ExcelLoadWorker] = None
         self._sts_loader_thread: Optional[QThread] = None
         self._sts_loader_worker: Optional[STSLoadWorker] = None
         self._sts_index_thread: Optional[QThread] = None
@@ -11724,13 +11702,10 @@ class MainWindow(QMainWindow):
         self._sts_warned_legacy_migration = False
         self._export_thread: Optional[QThread] = None
         self._export_worker = None
-        self._streaming_index = False
         self._store_loading = False
-        self._last_load_timings: Dict[str, float] = {}
         self._index_ready_for_use = False
         self._version_baseline_signature = None
         self.calendar_window: Optional[ContractCalendarWindow] = None
-        self._pending_select_platform: Optional[str] = None
         self.selected_platforms: set[str] = set()
         self.multi_platform_mode: bool = False
         self._updating_platform_list = False
@@ -11750,10 +11725,13 @@ class MainWindow(QMainWindow):
         if self.store:
             if not self.contract_index:
                 # UI thread'i bloklamamak için hazır store olsa bile indeksleme yükünü worker'a bırak.
-                self.start_sts_load(self.store.path) if str(self.store.path).lower().endswith(".sts") else self.start_excel_load(self.store.path)
+                if str(self.store.path).lower().endswith(".sts"):
+                    self.start_sts_load(self.store.path)
+                else:
+                    QMessageBox.warning(self, "STS dosyası gerekli", EXCEL_DATA_SOURCE_DISABLED_MESSAGE)
+                    self.set_empty_state()
             else:
                 self.refresh(rebuild_index=False)
-                self._apply_version_to_ui()
                 self._remember_version_baseline()
         else:
             self.set_empty_state()
@@ -12826,25 +12804,6 @@ class MainWindow(QMainWindow):
                 return False
         return True
 
-    def _apply_version_to_ui(self):
-        try:
-            from src.services.version_manager import read_version
-            ver = read_version(self.store)
-            if ver:
-                workbook_name = Path(getattr(self.store, "path", self.path)).stem
-                label_parts = [part for part in [workbook_name] if part]
-                if ver.lower() not in workbook_name.lower():
-                    label_parts.append(f"[{ver}]")
-                self.setWindowTitle(f"{APP_TITLE}  [{ver}]")
-                self.connection_label.setText(f"✓ Excel bağlı  {' '.join(label_parts) or ver}")
-                self.connection_label.setProperty("status", "ok")
-                st = self.connection_label.style()
-                st.unpolish(self.connection_label)
-                st.polish(self.connection_label)
-                self.connection_label.update()
-        except Exception:
-            pass
-
     def _excel_file_signature(self):
         try:
             path = Path(getattr(self.store, "path", self.path))
@@ -12878,12 +12837,6 @@ class MainWindow(QMainWindow):
                     if new_path:
                         self.path = Path(new_path)
                         self._remember_version_baseline()
-                # Eski Excel modu için mevcut version_manager davranışı korunur.
-                elif getattr(self.store, "wb", None):
-                    from src.services.version_manager import bump_version, save_store_as_versioned_file
-                    new_ver = bump_version(self.store)
-                    self.path = save_store_as_versioned_file(self.store, new_ver)
-                    self._remember_version_baseline()
             except Exception:
                 pass
         super().closeEvent(event)
@@ -13632,45 +13585,6 @@ class MainWindow(QMainWindow):
                 self._busy_cursor_on = False
             QApplication.processEvents()
 
-    def start_excel_load(self, path: Path):
-        if self._loader_thread and self._loader_thread.isRunning():
-            return
-        self.path = Path(path)
-        self.store = None
-        self.contract_index = []
-        self.all_contract_rows = []
-        self.selected_platforms.clear()
-        self.multi_platform_mode = False
-        self._store_loading = True
-        self._index_ready_for_use = False
-        self._last_load_timings = {}
-        self._version_baseline_signature = None
-        if hasattr(self, "platform_list"):
-            self.platform_list.clear()
-            self.refresh_platform_list_ui()
-        if hasattr(self, "contract_table"):
-            self.contract_table.setRowCount(0)
-        self._streaming_index = False
-        self.set_index_progress_badge(True, 0)
-        self.set_loading_state(True, "Analiz ediliyor...")
-        self._loader_thread = QThread(self)
-        self._loader_worker = ExcelLoadWorker(self.path)
-        self._loader_worker.moveToThread(self._loader_thread)
-        self._loader_thread.started.connect(self._loader_worker.run)
-        self._loader_worker.store_ready.connect(self.on_excel_store_ready)
-        self._loader_worker.batch_ready.connect(self.on_excel_index_batch)
-        self._loader_worker.index_ready.connect(self.on_excel_index_ready)
-        self._loader_worker.finished.connect(self.on_excel_loaded)
-        self._loader_worker.failed.connect(self.on_excel_load_failed)
-        self._loader_worker.progress.connect(self.on_excel_load_progress)
-        self._loader_worker.finished.connect(self._loader_thread.quit)
-        self._loader_worker.failed.connect(self._loader_thread.quit)
-        self._loader_thread.finished.connect(self._loader_worker.deleteLater)
-        self._loader_thread.finished.connect(self._loader_thread.deleteLater)
-        self._loader_thread.finished.connect(self._clear_loader_refs)
-        self._loader_thread.start()
-
-
     def start_sts_load(self, path: Path):
         """STS dosyasını yükler.
 
@@ -13809,7 +13723,6 @@ class MainWindow(QMainWindow):
                 "STS dosyası güncellendi",
                 f"STS dosyası yeni sürüme uyumlu hale getirildi.\n\nYedek dosya: {backup_path}\n\nNot: Güncellenen dosya eski uygulamalarda açılmayabilir.",
             )
-        self._apply_version_to_ui()
         self._remember_version_baseline()
 
     def _on_sts_index_failed(self, message: str, traceback_text: str):
@@ -13850,10 +13763,6 @@ class MainWindow(QMainWindow):
             and self.path is not None
             and str(self.path).lower().endswith(".sts")
         )
-
-    def _clear_loader_refs(self):
-        self._loader_worker = None
-        self._loader_thread = None
 
     def _refresh_index_tags_only(self):
         if not self.store:
@@ -13949,8 +13858,7 @@ class MainWindow(QMainWindow):
                     self._apply_platform_selection()
                 self.connection_label.setText("✓ STS veri dosyası bağlı")
                 return
-            self._pending_select_platform = select_platform
-            self.start_excel_load(self.path)
+            QMessageBox.warning(self, "STS dosyası gerekli", EXCEL_DATA_SOURCE_DISABLED_MESSAGE)
             return
         if kind == "tags":
             self.set_busy_overlay(True, "Etiketler güncelleniyor...", 35)
@@ -13979,106 +13887,6 @@ class MainWindow(QMainWindow):
         else:
             self.set_empty_state()
 
-    def on_excel_store_ready(self, store):
-        self.store = store
-        self.path = self.store.path
-        self.contract_index = []
-        self._tag_color_map_cache = None
-        self._streaming_index = True
-        self.loading_overlay.hide()
-        self._loading = False
-        self.update_connection_badge("loading")
-        self.connection_label.setText("Excel indeksleniyor %0")
-        self.set_index_progress_badge(True, 0)
-        platforms = self.store.platform_names()
-        self._set_platform_items(platforms)
-        self.update_alert_strip()
-        self._apply_platform_selection()
-
-    def on_excel_index_batch(self, platform: str, rows, mapped_percent: int, message: str):
-        new_rows = [dict(it) for it in list(rows or [])]
-        self.set_index_progress_badge(True, int(mapped_percent or 0))
-        if not new_rows:
-            self.connection_label.setText(f"Excel indeksleniyor %{int(mapped_percent or 0)}")
-            return
-        self.contract_index.extend(new_rows)
-        self.connection_label.setText(f"Excel indeksleniyor %{int(mapped_percent or 0)}")
-        if self.store:
-            self._apply_platform_selection()
-
-    def on_excel_index_ready(self, platforms, index, timings):
-        self.contract_index = list(index or [])
-        self._last_load_timings = dict(timings or {})
-        self._tag_color_map_cache = None
-        self._streaming_index = False
-        self._loading = False
-        if hasattr(self, "loading_overlay"):
-            self.loading_overlay.hide()
-        self._index_ready_for_use = True
-        self.update_connection_badge("ok")
-        self.connection_label.setText("Liste hazır (detay düzenleme arka planda hazırlanıyor)")
-        self.set_index_progress_badge(False, 100)
-        platform_list = list(platforms or [])
-        self._set_platform_items(platform_list)
-        self.update_alert_strip()
-        self.refresh_open_calendar()
-        if self._pending_select_platform:
-            self.select_platform(self._pending_select_platform)
-        elif self.platform_list.count():
-            self._apply_platform_selection()
-        else:
-            self.contract_table.setRowCount(0)
-
-    def on_excel_loaded(self, store, index):
-        selected_platform = next(iter(self.selected_platforms)) if len(self.selected_platforms) == 1 else ""
-        self.store = store
-        self.contract_index = list(index or [])
-        self.path = self.store.path
-        self._tag_color_map_cache = None
-        self._store_loading = False
-        self._index_ready_for_use = False
-        self.set_loading_state(False)
-        self.set_index_progress_badge(False, 100)
-        self._streaming_index = False
-        self.refresh(rebuild_index=False)
-        self.refresh_open_calendar()
-        if self._pending_select_platform:
-            self.select_platform(self._pending_select_platform)
-        elif selected_platform:
-            self.select_platform(selected_platform)
-        self._pending_select_platform = None
-        self._apply_version_to_ui()
-        self._remember_version_baseline()
-
-    def on_excel_load_failed(self, error_text: str):
-        self._store_loading = False
-        self._index_ready_for_use = False
-        self.set_loading_state(False)
-        self.set_index_progress_badge(False, 0)
-        self.set_empty_state()
-        self._pending_select_platform = None
-        QMessageBox.critical(self, "Excel yükleme hatası", f"Excel dosyası okunamadı.\n\n{error_text}")
-
-    def on_excel_load_progress(self, percent: int, message: str):
-        p = int(max(0, min(100, int(percent or 0))))
-        msg = str(message or "Analiz ediliyor...")
-        self.set_index_progress_badge(True, p)
-        if self._loading and hasattr(self, "loading_progress"):
-            self.loading_progress.setRange(0, 100)
-            self.loading_progress.setValue(p)
-        if self._loading and hasattr(self, "loading_label"):
-            self.loading_label.setText(f"{msg}  %{p}")
-        elif getattr(self, "_store_loading", False):
-            if self._index_ready_for_use:
-                self.update_connection_badge("ok")
-                self.connection_label.setText("Liste hazır (detay düzenleme arka planda hazırlanıyor)")
-            else:
-                self.update_connection_badge("loading")
-                self.connection_label.setText(f"{msg} %{p}")
-        elif self.store:
-            self.update_connection_badge("loading")
-            self.connection_label.setText(f"Excel indeksleniyor %{p}")
-
     def on_contract_save_progress(self, percent: int, message: str):
         self.set_busy_overlay(True, message, percent)
 
@@ -14086,31 +13894,31 @@ class MainWindow(QMainWindow):
         dlg = WorkbookStartDialog(self)
         if dlg.exec() and dlg.selected_path:
             sel = Path(dlg.selected_path)
+            if sel.suffix.lower() != ".sts":
+                QMessageBox.warning(self, "STS dosyası gerekli", EXCEL_DATA_SOURCE_DISABLED_MESSAGE)
+                return
             if not self.close_all_tool_windows():
                 return
-            if sel.suffix.lower() == ".sts":
-                if _share_metadata_from_path(sel):
-                    try:
-                        win = open_share_contract_window(sel)
-                        if win:
-                            if not hasattr(self, "_share_windows"):
-                                self._share_windows = []
-                            self._share_windows.append(win)
-                            win.destroyed.connect(lambda *_args, w=win: self._share_windows.remove(w) if hasattr(self, "_share_windows") and w in self._share_windows else None)
-                            win.show()
-                    except Exception as exc:
-                        QMessageBox.critical(self, "Paylaşım açılamadı", f"Paylaşım dosyası açılamadı.\n\n{exc}")
-                    return
-                if not auth.ensure_system_admin_setup(sel, self):
-                    return
-                staff = auth.require_staff_login(sel, self)
-                if not staff:
-                    return
-                self.current_staff = staff
-                auth.current_staff = staff
-                self.start_sts_load(sel)
-            else:
-                self.start_excel_load(sel)
+            if _share_metadata_from_path(sel):
+                try:
+                    win = open_share_contract_window(sel)
+                    if win:
+                        if not hasattr(self, "_share_windows"):
+                            self._share_windows = []
+                        self._share_windows.append(win)
+                        win.destroyed.connect(lambda *_args, w=win: self._share_windows.remove(w) if hasattr(self, "_share_windows") and w in self._share_windows else None)
+                        win.show()
+                except Exception as exc:
+                    QMessageBox.critical(self, "Paylaşım açılamadı", f"Paylaşım dosyası açılamadı.\n\n{exc}")
+                return
+            if not auth.ensure_system_admin_setup(sel, self):
+                return
+            staff = auth.require_staff_login(sel, self)
+            if not staff:
+                return
+            self.current_staff = staff
+            auth.current_staff = staff
+            self.start_sts_load(sel)
 
     def show_contract_summary(self, row: int, item: dict):
         if not self.store:
@@ -14998,11 +14806,16 @@ if __name__ == "__main__":
             QMessageBox.critical(None, "Paylaşım açılamadı", f"Paylaşım dosyası açılamadı.\n\n{exc}")
             sys.exit(1)
 
-    start_dialog = WorkbookStartDialog()
-    if not start_dialog.exec() or not start_dialog.selected_path:
-        sys.exit(0)
-
-    selected_path = Path(start_dialog.selected_path)
+    selected_path = None
+    while selected_path is None:
+        start_dialog = WorkbookStartDialog()
+        if not start_dialog.exec() or not start_dialog.selected_path:
+            sys.exit(0)
+        candidate_path = Path(start_dialog.selected_path)
+        if candidate_path.suffix.lower() != ".sts":
+            QMessageBox.warning(None, "STS dosyası gerekli", EXCEL_DATA_SOURCE_DISABLED_MESSAGE)
+            continue
+        selected_path = candidate_path
     if _share_metadata_from_path(selected_path):
         try:
             win = open_share_contract_window(selected_path)
@@ -15017,12 +14830,11 @@ if __name__ == "__main__":
             sys.exit(1)
 
     staff = None
-    if selected_path.suffix.lower() == ".sts":
-        if not auth.ensure_system_admin_setup(selected_path):
-            sys.exit(0)
-        staff = auth.require_staff_login(selected_path)
-        if not staff:
-            sys.exit(0)
+    if not auth.ensure_system_admin_setup(selected_path):
+        sys.exit(0)
+    staff = auth.require_staff_login(selected_path)
+    if not staff:
+        sys.exit(0)
 
     win = MainWindow(initial_path=selected_path, current_staff=staff)
     win.show()
@@ -15030,10 +14842,7 @@ if __name__ == "__main__":
     def _start_initial_load():
         app.setQuitOnLastWindowClosed(True)
         try:
-            if selected_path.suffix.lower() == ".sts":
-                win.start_sts_load(selected_path)
-            else:
-                win.start_excel_load(selected_path)
+            win.start_sts_load(selected_path)
         except Exception as exc:
             _log.exception("Başlangıç yükleme hatası")
             traceback.print_exc()
