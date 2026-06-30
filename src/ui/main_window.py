@@ -108,7 +108,7 @@ from src.ui.widgets.platform_tabs import (
 from src.ui.contract.contract_work_window import ContractWorkWindow
 
 from PySide6.QtCore import Qt, QDate, QObject, QThread, Signal, QTimer, QPoint, QSize, QRect, QEvent, QPropertyAnimation, QEasingCurve, QUrl, QAbstractTableModel, QModelIndex
-from PySide6.QtGui import QFont, QFontMetrics, QColor, QPixmap, QIcon, QPainter, QAction, QCursor, QCloseEvent, QDesktopServices, QKeySequence, QShortcut, QTextCharFormat
+from PySide6.QtGui import QFont, QFontMetrics, QColor, QPixmap, QIcon, QPainter, QPen, QAction, QCursor, QCloseEvent, QDesktopServices, QKeySequence, QShortcut, QTextCharFormat
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget,QGraphicsOpacityEffect, QGraphicsDropShadowEffect, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QPushButton, QListWidget, QListWidgetItem, QTableWidget, QTableWidgetItem,
@@ -721,6 +721,8 @@ class ContractTagsDelegate(QStyledItemDelegate):
 
         painter.save()
         try:
+            painter.setRenderHint(QPainter.Antialiasing, True)
+            painter.setRenderHint(QPainter.TextAntialiasing, True)
             margin_x = 5
             margin_y = 4
             chip_sp = 3
@@ -747,7 +749,10 @@ class ContractTagsDelegate(QStyledItemDelegate):
                 chip_w = fm.horizontalAdvance(tag_text) + 2 * chip_pad_x
                 chip_rect = QRect(x, y, chip_w, chip_h)
                 painter.setBrush(QColor(_rgb_to_hex(bg)))
-                painter.setPen(QColor(_rgb_to_hex(border_c)))
+                pen = QPen(QColor(_rgb_to_hex(border_c)))
+                pen.setWidth(1)
+                pen.setCosmetic(True)
+                painter.setPen(pen)
                 painter.drawRoundedRect(chip_rect, radius, radius)
                 painter.setPen(QColor(_rgb_to_hex(txt_c)))
                 painter.drawText(chip_rect.adjusted(chip_pad_x, 0, -chip_pad_x, 0), Qt.AlignCenter, tag_text)
