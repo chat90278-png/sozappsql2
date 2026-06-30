@@ -717,7 +717,6 @@ class MainWindow(QMainWindow):
         self._export_worker = None
         self._store_loading = False
         self._export_sts_to_excel_running = False
-        self._set_busy_overlay_running = False
         self._opening_contract = False
         self._refreshing_platform_index = False
         self._index_ready_for_use = False
