@@ -20,6 +20,7 @@ from pathlib import Path
 from datetime import date, datetime, timedelta
 from typing import Callable, Dict, List, Optional, Protocol, Tuple
 from src.ui.dialogs.auto_accept_dialog import open_auto_accept_dialog
+from src.services import perf_tracker
 
 
 from src.domain.constants import (
@@ -3652,7 +3653,12 @@ class MainWindow(QMainWindow):
             start_row = item.get("row")
             self.set_busy_overlay(True, "Sözleşme detayı yükleniyor...")
             try:
-                ci, systems, deliveries = self.store.load_contract_structure(platform, no, start_row=start_row)
+                with perf_tracker.measure(
+                    perf_tracker.OP_CONTRACT_OPEN,
+                    self.store.path,
+                    meta={"platform": platform, "contract_no": no, "row": start_row},
+                ):
+                    ci, systems, deliveries = self.store.load_contract_structure(platform, no, start_row=start_row)
             finally:
                 self.set_busy_overlay(False)
             if not ci:

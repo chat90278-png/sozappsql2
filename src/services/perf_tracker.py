@@ -9,6 +9,9 @@ from typing import Any, Dict, Generator, Optional
 
 OP_EXCEL_LOAD      = "excel_load"
 OP_CACHE_BUILD     = "cache_build"
+OP_CONTRACT_LIST_LOAD = "contract_list_load"
+OP_CONTRACT_OPEN   = "contract_open"
+OP_DB_OPEN         = "db_open"
 OP_CONTRACT_SAVE   = "contract_save"
 OP_CONTRACT_DELETE = "contract_delete"
 OP_COMPONENT_SAVE  = "component_save"
