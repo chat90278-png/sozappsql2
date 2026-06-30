@@ -3380,6 +3380,51 @@ class MainWindow(QMainWindow):
             return
         self._filter_apply_timer.start(180)
 
+    def _contract_status_display(self, it: dict) -> tuple[str, str]:
+        cls, st_label, _days_text, _tdate = self._contract_health(it)
+        if cls in {"geciken", "gecikmeli_teslim"}:
+            color = "#dc2626"
+        elif cls == "kritik":
+            color = "#b45309"
+        elif cls == "tamamlandi":
+            color = "#047857"
+        else:
+            color = "#1f5be3"
+        return st_label, color
+
+    def _contract_remaining_display(self, it: dict) -> tuple[str, str]:
+        cls, _st_label, days_text, tdate = self._contract_health(it)
+        tdate_display = str(tdate or "").strip()
+        if tdate_display in {"-", "Belirsiz", "—"} or not parse_flexible_date(tdate_display):
+            tdate_display = ""
+        remaining_text = str(days_text or "").strip() if tdate_display else ""
+        if remaining_text in {"-", "Belirsiz", "—"}:
+            remaining_text = ""
+
+        if cls in {"geciken", "gecikmeli_teslim"}:
+            color = "#dc2626"
+        elif "erken teslim edildi" in str(remaining_text):
+            color = "#047857"
+        elif str(remaining_text) in {"Termin gününde teslim edildi", "Teslim tarihi yok", "—"}:
+            color = "#64748b"
+        elif str(remaining_text).endswith("gün"):
+            days_num = as_number(str(remaining_text).replace(" gün", ""))
+            if days_num <= 60:
+                color = "#b45309"
+            else:
+                color = "#1f5be3"
+        else:
+            color = "#047857"
+        return remaining_text, color
+
+    def _contract_tags_for_row(self, it: dict, tags_map=None) -> list:
+        return list(it.get("tags", []) or [])
+
+    def _contract_row_height_for_tags(self, tag_count: int) -> int:
+        n = int(tag_count or 0)
+        return max(36, n * 22 + max(0, n - 1) * 3 + 8) if n > 0 else 36
+
+
     def apply_contract_filter(self):
         q = (self.search_input.text() if hasattr(self, "search_input") else "").strip().lower()
         selected_type = str(self.filter_type.currentData() or "").strip() if hasattr(self, "filter_type") else ""
@@ -3532,7 +3577,9 @@ class MainWindow(QMainWindow):
                 for c in range(self.contract_table.columnCount()):
                     self.contract_table.removeCellWidget(r, c)
                 self.contract_table.setRowHeight(r, 36)
-                cls, st_label, days_text, tdate = self._contract_health(it)
+                cls, _st_label, _days_text, tdate = self._contract_health(it)
+                st_label, status_color = self._contract_status_display(it)
+                days_display, remaining_color = self._contract_remaining_display(it)
                 payload = {
                     "platform": str(it.get("platform", "") or ""),
                     "contract_no": str(it.get("no", "") or ""),
@@ -3542,9 +3589,6 @@ class MainWindow(QMainWindow):
                 tdate_display = str(tdate or "").strip()
                 if tdate_display in {"-", "Belirsiz", "—"} or not parse_flexible_date(tdate_display):
                     tdate_display = ""
-                days_display = str(days_text or "").strip() if tdate_display else ""
-                if days_display in {"-", "Belirsiz", "—"}:
-                    days_display = ""
                 vals=[
                     it.get("platform", ""),
                     it.get("type_display", it.get("type", "")) or "",
@@ -3559,7 +3603,7 @@ class MainWindow(QMainWindow):
                 for c,v in enumerate(vals):
                     if c == COL_TAGS:
                         # Etiketler: dikey sıralı renkli chip'ler
-                        tags_list = list(it.get("tags", []) or [])
+                        tags_list = self._contract_tags_for_row(it, _tag_color_map)
                         if not tags_list:
                             empty = QTableWidgetItem("")
                             empty.setFlags(empty.flags() & ~Qt.ItemIsEditable)
@@ -3591,9 +3635,7 @@ class MainWindow(QMainWindow):
                         self.contract_table.setItem(r, COL_TAGS, placeholder)
                         self.contract_table.setCellWidget(r, COL_TAGS, wrap)
                         # Satır yüksekliğini etiket sayısına göre ayarla
-                        CHIP_H, CHIP_SP, PAD = 22, 3, 8
-                        n = len(tags_list)
-                        row_h = max(36, n * CHIP_H + max(0, n - 1) * CHIP_SP + PAD) if n > 0 else 36
+                        row_h = self._contract_row_height_for_tags(len(tags_list))
                         self.contract_table.setRowHeight(r, max(self.contract_table.rowHeight(r), row_h))
                         continue
                     if c == COL_SUMMARY:
@@ -3620,29 +3662,9 @@ class MainWindow(QMainWindow):
                     cell.setFlags(cell.flags() & ~Qt.ItemIsEditable)
                     cell.setData(Qt.UserRole, payload)
                     if c == COL_STATUS:
-                        if cls in {"geciken", "gecikmeli_teslim"}:
-                            cell.setForeground(QColor("#dc2626"))
-                        elif cls == "kritik":
-                            cell.setForeground(QColor("#b45309"))
-                        elif cls == "tamamlandi":
-                            cell.setForeground(QColor("#047857"))
-                        else:
-                            cell.setForeground(QColor("#1f5be3"))
+                        cell.setForeground(QColor(status_color))
                     if c == COL_REMAINING:
-                        if cls in {"geciken", "gecikmeli_teslim"}:
-                            cell.setForeground(QColor("#dc2626"))
-                        elif "erken teslim edildi" in str(v):
-                            cell.setForeground(QColor("#047857"))
-                        elif str(v) in {"Termin gününde teslim edildi", "Teslim tarihi yok", "—"}:
-                            cell.setForeground(QColor("#64748b"))
-                        elif str(v).endswith("gün"):
-                            days_num = as_number(str(v).replace(" gün", ""))
-                            if days_num <= 60:
-                                cell.setForeground(QColor("#b45309"))
-                            else:
-                                cell.setForeground(QColor("#1f5be3"))
-                        else:
-                            cell.setForeground(QColor("#047857"))
+                        cell.setForeground(QColor(remaining_color))
                     self.contract_table.setItem(r,c,cell)
         finally:
             self.contract_table.blockSignals(False)
@@ -3725,14 +3747,10 @@ class MainWindow(QMainWindow):
             self.contract_table.setEnabled(True)
             self._opening_contract = False
 
-    def open_selected_contract(self, row, col):
+    def _extract_contract_item_from_cell(self, row: int, col: int) -> dict | None:
         rows = getattr(self.contract_table, "_visible_rows", [])
         if row < 0 or row >= self.contract_table.rowCount():
-            return
-        if col == COL_SUMMARY:
-            if row < len(rows):
-                self.show_contract_summary(row, rows[row])
-            return
+            return None
         payload = None
         for column in range(self.contract_table.columnCount()):
             cell = self.contract_table.item(row, column)
@@ -3741,19 +3759,29 @@ class MainWindow(QMainWindow):
                 payload = candidate
                 break
         if payload and isinstance(payload.get("contract_item"), dict):
-            self.open_contract_item(payload["contract_item"])
-            return
+            return payload["contract_item"]
         if row < len(rows):
-            self.open_contract_item(rows[row])
-            return
+            return rows[row]
         platform_item = self.contract_table.item(row, COL_PLATFORM)
         type_item = self.contract_table.item(row, COL_TYPE)
         no_item = self.contract_table.item(row, COL_CONTRACT_NO)
-        self.open_contract_item({
+        return {
             "platform": platform_item.text() if platform_item else "",
             "type": type_item.text() if type_item else "",
             "no": no_item.text() if no_item else "",
-        })
+        }
+
+    def open_selected_contract(self, row, col):
+        rows = getattr(self.contract_table, "_visible_rows", [])
+        if row < 0 or row >= self.contract_table.rowCount():
+            return
+        if col == COL_SUMMARY:
+            if row < len(rows):
+                self.show_contract_summary(row, rows[row])
+            return
+        item = self._extract_contract_item_from_cell(row, col)
+        if item:
+            self.open_contract_item(item)
 
     def _apply_deleted_contract_to_index(self, deleted_info: dict):
         p = str((deleted_info or {}).get("platform") or "")
