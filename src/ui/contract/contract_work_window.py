@@ -720,6 +720,7 @@ class ContractWorkWindow(QDialog):
         self._pending_contract_save_context = None
         self._file_dialog_open: bool = False
         self._documents_changed: bool = False
+        self._import_contract_folders_running: bool = False
         self._is_dirty: bool = False   # Kullanıcı henüz değişiklik yapmadı
         # Yeni sözleşme modunda belgeler için in-memory bekleme yapısı
         self._pending_doc_folders: list = []   # [{id, parent_id, name}]
@@ -3899,81 +3900,87 @@ class ContractWorkWindow(QDialog):
         self._pending_doc_files.clear()
 
     def _import_contract_folders(self, folder_paths, parent_folder_id=None):
-        if not self._ensure_share_can_edit("Belgeler"):
+        if getattr(self, "_import_contract_folders_running", False):
             return
-        """Windows'tan sürüklenen klasörleri recursive olarak STS içine aktarır."""
-        if not self._ensure_document_access(interactive=True):
-            return
-        ALLOWED_EXTS = {"pdf", "doc", "docx", "xls", "xlsx", "xlsm", "ppt", "pptx", "png", "jpg", "jpeg", "txt"}
-
-        added_files = 0
-        skipped_files = 0
-        errors = []
-
-        def import_folder(fs_path, db_parent_id):
-            """Tek klasörü recursive içe aktar. Klasörü DB'de oluştur, dosyalarını ekle."""
-            nonlocal added_files, skipped_files
-            fs_path = Path(fs_path)
-            folder_name = fs_path.name or "Klasör"
-            # Klasörü DB'ye oluştur
-            try:
-                created = self.store.create_contract_file_folder(
-                    self.ci.platform, self.ci.no, self.ci.contract_type,
-                    parent_id=db_parent_id, name=folder_name
-                )
-                db_folder_id = int(created.get("id") or 0)
-            except Exception as exc:
-                errors.append(f"Klasör oluşturulamadı ({folder_name}): {exc}")
+        self._import_contract_folders_running = True
+        try:
+            if not self._ensure_share_can_edit("Belgeler"):
                 return
-
-            # Dosyaları ekle
-            try:
-                children = sorted(fs_path.iterdir(), key=lambda p: (p.is_dir(), p.name.casefold()))
-            except Exception as exc:
-                errors.append(f"Klasör okunamadı ({folder_name}): {exc}")
+            """Windows'tan sürüklenen klasörleri recursive olarak STS içine aktarır."""
+            if not self._ensure_document_access(interactive=True):
                 return
+            ALLOWED_EXTS = {"pdf", "doc", "docx", "xls", "xlsx", "xlsm", "ppt", "pptx", "png", "jpg", "jpeg", "txt"}
 
-            for child in children:
-                QApplication.processEvents()
-                if child.is_dir():
-                    import_folder(child, db_folder_id)
-                elif child.is_file():
-                    ext = child.suffix.lower().lstrip(".")
-                    if ext not in ALLOWED_EXTS:
-                        skipped_files += 1
-                        continue
-                    try:
-                        self.store.add_contract_file(
-                            self.ci.platform, self.ci.no, child,
-                            self.ci.contract_type, folder_id=db_folder_id
-                        )
-                        added_files += 1
-                    except Exception as exc:
-                        msg = str(exc)
-                        if "zaten ekli" in msg.lower():
+            added_files = 0
+            skipped_files = 0
+            errors = []
+
+            def import_folder(fs_path, db_parent_id):
+                """Tek klasörü recursive içe aktar. Klasörü DB'de oluştur, dosyalarını ekle."""
+                nonlocal added_files, skipped_files
+                fs_path = Path(fs_path)
+                folder_name = fs_path.name or "Klasör"
+                # Klasörü DB'ye oluştur
+                try:
+                    created = self.store.create_contract_file_folder(
+                        self.ci.platform, self.ci.no, self.ci.contract_type,
+                        parent_id=db_parent_id, name=folder_name
+                    )
+                    db_folder_id = int(created.get("id") or 0)
+                except Exception as exc:
+                    errors.append(f"Klasör oluşturulamadı ({folder_name}): {exc}")
+                    return
+
+                # Dosyaları ekle
+                try:
+                    children = sorted(fs_path.iterdir(), key=lambda p: (p.is_dir(), p.name.casefold()))
+                except Exception as exc:
+                    errors.append(f"Klasör okunamadı ({folder_name}): {exc}")
+                    return
+
+                for child in children:
+                    QApplication.processEvents()
+                    if child.is_dir():
+                        import_folder(child, db_folder_id)
+                    elif child.is_file():
+                        ext = child.suffix.lower().lstrip(".")
+                        if ext not in ALLOWED_EXTS:
                             skipped_files += 1
-                        else:
-                            errors.append(f"{child.name}: {msg}")
+                            continue
+                        try:
+                            self.store.add_contract_file(
+                                self.ci.platform, self.ci.no, child,
+                                self.ci.contract_type, folder_id=db_folder_id
+                            )
+                            added_files += 1
+                        except Exception as exc:
+                            msg = str(exc)
+                            if "zaten ekli" in msg.lower():
+                                skipped_files += 1
+                            else:
+                                errors.append(f"{child.name}: {msg}")
 
-        for fp in (folder_paths or []):
-            import_folder(fp, parent_folder_id)
-            QApplication.processEvents()
+            for fp in (folder_paths or []):
+                import_folder(fp, parent_folder_id)
+                QApplication.processEvents()
 
-        self._mark_documents_changed()
-        self.render_contract_files()
+            self._mark_documents_changed()
+            self.render_contract_files()
 
-        # Özet mesajı
-        parts = []
-        if added_files:
-            parts.append(f"{added_files} dosya eklendi")
-        if skipped_files:
-            parts.append(f"{skipped_files} desteklenmeyen/zaten ekli dosya atlandı")
-        summary = ", ".join(parts) if parts else "Eklenecek dosya bulunamadı."
-        if errors:
-            summary += f"\n\nHatalar ({len(errors)}):\n" + "\n".join(errors[:5])
-            QMessageBox.warning(self, "Klasör İçe Aktarma", summary)
-        elif added_files or skipped_files:
-            QMessageBox.information(self, "Klasör İçe Aktarıldı", summary)
+            # Özet mesajı
+            parts = []
+            if added_files:
+                parts.append(f"{added_files} dosya eklendi")
+            if skipped_files:
+                parts.append(f"{skipped_files} desteklenmeyen/zaten ekli dosya atlandı")
+            summary = ", ".join(parts) if parts else "Eklenecek dosya bulunamadı."
+            if errors:
+                summary += f"\n\nHatalar ({len(errors)}):\n" + "\n".join(errors[:5])
+                QMessageBox.warning(self, "Klasör İçe Aktarma", summary)
+            elif added_files or skipped_files:
+                QMessageBox.information(self, "Klasör İçe Aktarıldı", summary)
+        finally:
+            self._import_contract_folders_running = False
 
     def add_contract_file(self):
         self._pick_contract_files()
