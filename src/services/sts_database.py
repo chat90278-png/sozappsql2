@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import List
 
 from src.auth import ensure_document_locks_table, ensure_staff_table
+from src.services import perf_tracker
 
 
 def now_iso() -> str:
@@ -171,34 +172,40 @@ class STSDatabase:
                         backup_path=self.migration_backup_path,
                         technical_detail=str(exc),
                     ) from exc
-        self.conn = sqlite3.connect(str(self.path))
-        self.conn.row_factory = sqlite3.Row
-        self.conn.execute("PRAGMA foreign_keys=ON")
-        self.conn.execute("PRAGMA journal_mode=WAL")   # WAL: concurrent reader + writer, crash recovery
-        self.conn.execute("PRAGMA busy_timeout=5000")
-        self.conn.execute("PRAGMA synchronous=NORMAL")
-        self.conn.execute("PRAGMA cache_size=-64000")
-        try:
-            migrated = self.init_schema()
-            if needs_migration_backup:
-                self._validate_after_migration()
-                self.migration_performed = True
-        except Exception as exc:
-            self.conn.close()
-            if needs_migration_backup and self.migration_backup_path and self.migration_backup_path.exists():
-                try:
-                    shutil.copy2(self.migration_backup_path, self.path)
-                except Exception as restore_exc:
-                    raise STSMigrationError(
-                        "STS dosyası güncellenemedi ve orijinal dosya yedekten geri yüklenemedi. Lütfen yedek dosyayı kullanın.",
-                        backup_path=self.migration_backup_path,
-                        technical_detail=f"Migration: {exc}; Restore: {restore_exc}",
-                    ) from exc
-            raise STSMigrationError(
-                "STS dosyası güncellenemedi. Orijinal dosya korunmaya çalışıldı. Lütfen yedek dosyayı kullanın.",
-                backup_path=self.migration_backup_path,
-                technical_detail=str(exc),
-            ) from exc
+        migrated = False
+        with perf_tracker.measure(
+            perf_tracker.OP_DB_OPEN,
+            self.path,
+            meta={"database_existed": database_existed},
+        ):
+            self.conn = sqlite3.connect(str(self.path))
+            self.conn.row_factory = sqlite3.Row
+            self.conn.execute("PRAGMA foreign_keys=ON")
+            self.conn.execute("PRAGMA journal_mode=WAL")   # WAL: concurrent reader + writer, crash recovery
+            self.conn.execute("PRAGMA busy_timeout=5000")
+            self.conn.execute("PRAGMA synchronous=NORMAL")
+            self.conn.execute("PRAGMA cache_size=-64000")
+            try:
+                migrated = self.init_schema()
+                if needs_migration_backup:
+                    self._validate_after_migration()
+                    self.migration_performed = True
+            except Exception as exc:
+                self.conn.close()
+                if needs_migration_backup and self.migration_backup_path and self.migration_backup_path.exists():
+                    try:
+                        shutil.copy2(self.migration_backup_path, self.path)
+                    except Exception as restore_exc:
+                        raise STSMigrationError(
+                            "STS dosyası güncellenemedi ve orijinal dosya yedekten geri yüklenemedi. Lütfen yedek dosyayı kullanın.",
+                            backup_path=self.migration_backup_path,
+                            technical_detail=f"Migration: {exc}; Restore: {restore_exc}",
+                        ) from exc
+                raise STSMigrationError(
+                    "STS dosyası güncellenemedi. Orijinal dosya korunmaya çalışıldı. Lütfen yedek dosyayı kullanın.",
+                    backup_path=self.migration_backup_path,
+                    technical_detail=str(exc),
+                ) from exc
         if migrated:
             self.add_log("schema_migrated", entity_type="database", message="Veritabanı şeması güncellendi", actor="Sistem", source="Migration", payload={"columns": migrated, "backup_path": str(self.migration_backup_path or "")})
         self.add_log(
