@@ -107,7 +107,7 @@ from src.ui.widgets.platform_tabs import (
 )
 from src.ui.contract.contract_work_window import ContractWorkWindow
 
-from PySide6.QtCore import Qt, QDate, QObject, QThread, Signal, QTimer, QPoint, QSize, QRect, QEvent, QPropertyAnimation, QEasingCurve, QUrl
+from PySide6.QtCore import Qt, QDate, QObject, QThread, Signal, QTimer, QPoint, QSize, QRect, QEvent, QPropertyAnimation, QEasingCurve, QUrl, QAbstractTableModel, QModelIndex
 from PySide6.QtGui import QFont, QFontMetrics, QColor, QPixmap, QIcon, QPainter, QAction, QCursor, QCloseEvent, QDesktopServices, QKeySequence, QShortcut, QTextCharFormat
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget,QGraphicsOpacityEffect, QGraphicsDropShadowEffect, QVBoxLayout, QHBoxLayout, QGridLayout,
@@ -556,6 +556,139 @@ COL_REMAINING = 6
 COL_TAGS = 7
 COL_SUMMARY = 8
 PLATFORM_SELECTED_ROLE = Qt.UserRole + 100
+
+
+class ContractTableModel(QAbstractTableModel):
+    HEADERS = [
+        "Platform",
+        "Sözleşme Türü",
+        "Sözleşme No",
+        "Kullanıcı",
+        "Durum",
+        "Termin Tarihi",
+        "Kalan Gün",
+        "Etiketler",
+        "Özet",
+    ]
+
+    def __init__(
+        self,
+        parent=None,
+        *,
+        status_display_fn: Optional[Callable[[dict], tuple[str, str]]] = None,
+        remaining_display_fn: Optional[Callable[[dict], tuple[str, str]]] = None,
+        tags_fn: Optional[Callable[[dict], list]] = None,
+        row_height_fn: Optional[Callable[[int], int]] = None,
+    ):
+        super().__init__(parent)
+        self._rows: list[dict] = []
+        self._status_display_fn = status_display_fn
+        self._remaining_display_fn = remaining_display_fn
+        self._tags_fn = tags_fn
+        self._row_height_fn = row_height_fn
+
+    def setRows(self, rows: list[dict]) -> None:
+        self.beginResetModel()
+        self._rows = list(rows)
+        self.endResetModel()
+
+    def rowCount(self, parent=QModelIndex()) -> int:
+        if parent.isValid():
+            return 0
+        return len(self._rows)
+
+    def columnCount(self, parent=QModelIndex()) -> int:
+        if parent.isValid():
+            return 0
+        return COL_SUMMARY + 1
+
+    def _status_display(self, it: dict) -> tuple[str, str]:
+        if callable(self._status_display_fn):
+            return self._status_display_fn(it)
+        return "", ""
+
+    def _remaining_display(self, it: dict) -> tuple[str, str]:
+        if callable(self._remaining_display_fn):
+            return self._remaining_display_fn(it)
+        return "", ""
+
+    def _tags_for_row(self, it: dict) -> list:
+        if callable(self._tags_fn):
+            return list(self._tags_fn(it) or [])
+        return []
+
+    def _row_height_for_tags(self, tag_count: int) -> int:
+        if callable(self._row_height_fn):
+            return int(self._row_height_fn(tag_count))
+        return 36
+
+    def data(self, index, role=Qt.DisplayRole):
+        if not index.isValid():
+            return None
+        row = index.row()
+        if row < 0 or row >= len(self._rows):
+            return None
+        it = self._rows[row]
+        col = index.column()
+
+        if role == Qt.DisplayRole:
+            if col == COL_PLATFORM:
+                return it.get("platform", "")
+            if col == COL_TYPE:
+                return it.get("type_display") or it.get("type", "")
+            if col == COL_CONTRACT_NO:
+                return it.get("no", "")
+            if col == COL_USER:
+                return it.get("user", "")
+            if col == COL_STATUS:
+                status_text, _color = self._status_display(it)
+                return status_text
+            if col == COL_T_DATE:
+                completion_date = str(it.get("completion_date") or "").strip()
+                if completion_date in {"-", "Belirsiz", "—"} or not parse_flexible_date(completion_date):
+                    return ""
+                return completion_date
+            if col == COL_REMAINING:
+                remaining_text, _color = self._remaining_display(it)
+                return remaining_text
+            if col == COL_TAGS:
+                return ", ".join(str(tag) for tag in self._tags_for_row(it))
+            if col == COL_SUMMARY:
+                return ""
+
+        if role == Qt.ForegroundRole:
+            if col == COL_STATUS:
+                _status_text, color = self._status_display(it)
+                return QColor(color) if color else None
+            if col == COL_REMAINING:
+                _remaining_text, color = self._remaining_display(it)
+                return QColor(color) if color else None
+
+        if role == Qt.UserRole:
+            return it
+
+        if role == Qt.ToolTipRole:
+            if col == COL_SUMMARY:
+                return "Bileşen özetini gör"
+            if col == COL_TAGS:
+                return ", ".join(str(tag) for tag in self._tags_for_row(it))
+
+        if role == Qt.TextAlignmentRole:
+            if col == COL_SUMMARY:
+                return int(Qt.AlignCenter)
+            return int(Qt.AlignVCenter | Qt.AlignLeft)
+
+        if role == Qt.SizeHintRole and col == COL_TAGS:
+            height = self._row_height_for_tags(len(self._tags_for_row(it)))
+            return QSize(-1, height)
+
+        return None
+
+    def headerData(self, section, orientation, role=Qt.DisplayRole):
+        if orientation == Qt.Horizontal and role == Qt.DisplayRole:
+            if 0 <= section < len(self.HEADERS):
+                return self.HEADERS[section]
+        return None
 
 
 
