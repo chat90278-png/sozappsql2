@@ -5,6 +5,9 @@ from pathlib import Path
 
 from PySide6.QtCore import QObject, Signal
 
+from src.services.sts_database import STSMigrationError
+from src.services.sts_store import STSStore
+
 _log = logging.getLogger(__name__)
 
 
@@ -16,9 +19,10 @@ class STSLoadWorker(QObject):
     worker thread'de oluşturulan bir connection ana thread'de kullanılırsa
     ProgrammingError (check_same_thread=True default) veya veri bozulması olur.
 
-    Worker yalnızca dosya varlığı ve magic-bytes doğrulaması yapar, ardından
-    parametresiz finished() sinyali gönderir. Asıl STSStore ve contract index
-    ana thread'de _on_sts_load_finished() içinde oluşturulur.
+    Worker dosya varlığı ve magic-bytes doğrulamasından sonra STSStore'u yalnızca
+    kendi thread'inde açıp kapatarak migration hazırlığını tamamlar, ardından
+    parametresiz finished() sinyali gönderir. Ana thread kendi STSStore
+    bağlantısını _on_sts_load_finished() içinde yeniden oluşturur.
     """
 
     progress = Signal(int, str)
@@ -42,9 +46,20 @@ class STSLoadWorker(QObject):
                 header = fh.read(16)
             if not header.startswith(b"SQLite format 3"):
                 raise ValueError("Dosya geçerli bir STS/SQLite veritabanı değil.")
+            self.progress.emit(55, "Veritabanı hazırlanıyor...")
+            store = None
+            try:
+                store = STSStore(self.path, actor="Index Worker", source="STS Index Worker")
+            finally:
+                if store is not None:
+                    store.db.close()
             self.progress.emit(80, "Doğrulama tamamlandı, yükleniyor...")
             self.finished.emit()
+        except STSMigrationError as exc:
+            _log.exception("STSLoadWorker migration hatası: %s", getattr(exc, "technical_detail", ""))
+            backup_text = f"\n\nYedek dosya: {exc.backup_path}" if getattr(exc, "backup_path", None) else ""
+            self.failed.emit(f"{exc.user_message}{backup_text}\n\nTeknik detaylar loga yazıldı.")
         except Exception as exc:
-            _log.exception("STSLoadWorker doğrulama hatası")
+            _log.exception("STSLoadWorker doğrulama/hazırlık hatası")
             self.failed.emit(str(exc))
 

@@ -715,6 +715,8 @@ class MainWindow(QMainWindow):
         self._export_thread: Optional[QThread] = None
         self._export_worker = None
         self._store_loading = False
+        self._opening_contract = False
+        self._refreshing_platform_index = False
         self._index_ready_for_use = False
         self._version_baseline_signature = None
         self.calendar_window: Optional[ContractCalendarWindow] = None
@@ -2601,9 +2603,9 @@ class MainWindow(QMainWindow):
         """STS dosyasını yükler.
 
         Adımlar:
-        1. STSLoadWorker arka planda dosya doğrulaması yapar (magic bytes).
+        1. STSLoadWorker arka planda dosya doğrulaması ve migration hazırlığı yapar.
         2. finished() sinyali gelince _on_sts_load_finished() ana thread'de
-           STSStore bağlantısını açar.
+           STSStore bağlantısını yeniden açar.
         3. Sözleşme indeksi STSIndexWorker içinde ayrı/geçici connection ile
            hazırlanır ve ana thread'e yalnızca list[dict] olarak döner.
 
@@ -2804,41 +2806,50 @@ class MainWindow(QMainWindow):
         self.contract_index = ordered
 
     def _refresh_single_platform_index(self, platform: str, select_platform: Optional[str] = None):
-        if not self.store:
-            self.set_empty_state()
+        if getattr(self, "_refreshing_platform_index", False):
             return
-        p = safe_sheet_name(str(platform or ""))
-        if not p:
-            self.request_refresh(select_platform=select_platform, scope="all")
-            return
-        current_rows: Dict[str, List[dict]] = {}
-        for it in self.contract_index:
-            pp = str(it.get("platform", "") or "")
-            current_rows.setdefault(pp, []).append(dict(it))
-        self.set_busy_overlay(True, f"{p} güncelleniyor...", 25)
+        self._refreshing_platform_index = True
+        self.platform_list.setEnabled(False)
+        self.contract_table.setEnabled(False)
         try:
-            QApplication.processEvents()
-            tags_map = self.store.all_contract_tags_map()
-            self.set_busy_overlay(True, "Sözleşme satırları okunuyor...", 62)
-            QApplication.processEvents()
-            current_rows[p] = self.store.list_main_contracts(p, tags_map=tags_map)
-            self._rebuild_index_in_platform_order(current_rows)
-            self.set_busy_overlay(True, "Arayüz yenileniyor...", 92)
-            QApplication.processEvents()
-            platforms = self.store.platform_names()
-            self._set_platform_items(platforms)
-            self.update_alert_strip()
-            self.refresh_open_calendar()
-            target = str(select_platform or p)
-            if target:
-                self.select_platform(target)
-            elif self.platform_list.count():
-                self._apply_platform_selection()
-            else:
+            if not self.store:
                 self.set_empty_state()
+                return
+            p = safe_sheet_name(str(platform or ""))
+            if not p:
+                self.request_refresh(select_platform=select_platform, scope="all")
+                return
+            current_rows: Dict[str, List[dict]] = {}
+            for it in self.contract_index:
+                pp = str(it.get("platform", "") or "")
+                current_rows.setdefault(pp, []).append(dict(it))
+            self.set_busy_overlay(True, f"{p} güncelleniyor...", 25)
+            try:
+                QApplication.processEvents()
+                tags_map = self.store.all_contract_tags_map()
+                self.set_busy_overlay(True, "Sözleşme satırları okunuyor...", 62)
+                QApplication.processEvents()
+                current_rows[p] = self.store.list_main_contracts(p, tags_map=tags_map)
+                self._rebuild_index_in_platform_order(current_rows)
+                self.set_busy_overlay(True, "Arayüz yenileniyor...", 92)
+                QApplication.processEvents()
+                platforms = self.store.platform_names()
+                self._set_platform_items(platforms)
+                self.update_alert_strip()
+                self.refresh_open_calendar()
+                target = str(select_platform or p)
+                if target:
+                    self.select_platform(target)
+                elif self.platform_list.count():
+                    self._apply_platform_selection()
+                else:
+                    self.set_empty_state()
+            finally:
+                self.set_busy_overlay(False)
         finally:
-            self.set_busy_overlay(False)
-
+            self.platform_list.setEnabled(True)
+            self.contract_table.setEnabled(True)
+            self._refreshing_platform_index = False
 
     def refresh_open_calendar(self):
         cal = getattr(self, "calendar_window", None)
@@ -3623,67 +3634,75 @@ class MainWindow(QMainWindow):
         self.position_query_logo_background()
 
     def open_contract_item(self, item: dict):
-        if not self.store:
-            if getattr(self, "_store_loading", False):
-                QMessageBox.information(
+        if getattr(self, "_opening_contract", False):
+            return
+        self._opening_contract = True
+        self.contract_table.setEnabled(False)
+        try:
+            if not self.store:
+                if getattr(self, "_store_loading", False):
+                    QMessageBox.information(
+                        self,
+                        "STS yükleniyor",
+                        "Liste hazır. Sözleşme detayı birkaç saniye içinde hazır olacak.",
+                    )
+                return
+            platform = item.get("platform")
+            no = item.get("no")
+            start_row = item.get("row")
+            self.set_busy_overlay(True, "Sözleşme detayı yükleniyor...")
+            try:
+                ci, systems, deliveries = self.store.load_contract_structure(platform, no, start_row=start_row)
+            finally:
+                self.set_busy_overlay(False)
+            if not ci:
+                QMessageBox.warning(self, "Bulunamadı", "Sözleşme detayları okunamadı.")
+                return
+            try:
+                work = ContractWorkWindow(self.store, ci, self, systems=systems, deliveries=deliveries)
+            except Exception as exc:
+                traceback.print_exc()
+                _log.exception("ContractWorkWindow açılamadı")
+                QMessageBox.critical(
                     self,
-                    "STS yükleniyor",
-                    "Liste hazır. Sözleşme detayı birkaç saniye içinde hazır olacak.",
+                    "Sözleşme detayı açılamadı",
+                    f"Sözleşme detay ekranı açılırken hata oluştu:\n\n{exc}",
                 )
-            return
-        platform = item.get("platform")
-        no = item.get("no")
-        start_row = item.get("row")
-        self.set_busy_overlay(True, "Sözleşme detayı yükleniyor...")
-        try:
-            ci, systems, deliveries = self.store.load_contract_structure(platform, no, start_row=start_row)
-        finally:
-            self.set_busy_overlay(False)
-        if not ci:
-            QMessageBox.warning(self, "Bulunamadı", "Sözleşme detayları okunamadı.")
-            return
-        try:
-            work = ContractWorkWindow(self.store, ci, self, systems=systems, deliveries=deliveries)
-        except Exception as exc:
-            traceback.print_exc()
-            _log.exception("ContractWorkWindow açılamadı")
-            QMessageBox.critical(
-                self,
-                "Sözleşme detayı açılamadı",
-                f"Sözleşme detay ekranı açılırken hata oluştu:\n\n{exc}",
-            )
-            return
-        if work.exec():
-            deleted_info = getattr(work, "deleted_contract_info", None)
-            if deleted_info:
-                # Silme sonrası tam excel indeksini yeniden kurmak (binlerce satırda)
-                # gereksiz uzun sürüyor. Mevcut indeksi yerinde güncelleriz.
-                self.set_busy_overlay(True, "Liste güncelleniyor...", 82)
-                try:
-                    self._apply_deleted_contract_to_index(deleted_info)
-                    self.set_busy_overlay(True, "Arayüz yenileniyor...", 96)
-                    platforms = self.store.platform_names()
-                    self._set_platform_items(platforms)
-                    self.update_alert_strip()
-                    if str(platform or "") in platforms:
-                        self.select_platform(platform)
-                    elif self.platform_list.count():
-                        self._apply_platform_selection()
-                    else:
-                        self.set_empty_state()
-                finally:
-                    self.set_busy_overlay(False)
-            else:
-                old_platform = str(platform or "")
-                work_ci = getattr(work, "ci", None)
-                new_platform = str(getattr(work_ci, "platform", "") or old_platform)
-                if old_platform and new_platform and old_platform != new_platform:
-                    self.request_refresh(select_platform=old_platform, scope="platform", platform=old_platform)
-                    self.request_refresh(select_platform=new_platform, scope="platform", platform=new_platform)
-                    self.select_platform(new_platform)
+                return
+            if work.exec():
+                deleted_info = getattr(work, "deleted_contract_info", None)
+                if deleted_info:
+                    # Silme sonrası tam excel indeksini yeniden kurmak (binlerce satırda)
+                    # gereksiz uzun sürüyor. Mevcut indeksi yerinde güncelleriz.
+                    self.set_busy_overlay(True, "Liste güncelleniyor...", 82)
+                    try:
+                        self._apply_deleted_contract_to_index(deleted_info)
+                        self.set_busy_overlay(True, "Arayüz yenileniyor...", 96)
+                        platforms = self.store.platform_names()
+                        self._set_platform_items(platforms)
+                        self.update_alert_strip()
+                        if str(platform or "") in platforms:
+                            self.select_platform(platform)
+                        elif self.platform_list.count():
+                            self._apply_platform_selection()
+                        else:
+                            self.set_empty_state()
+                    finally:
+                        self.set_busy_overlay(False)
                 else:
-                    target = new_platform or old_platform
-                    self.request_refresh(select_platform=target, scope="platform", platform=target)
+                    old_platform = str(platform or "")
+                    work_ci = getattr(work, "ci", None)
+                    new_platform = str(getattr(work_ci, "platform", "") or old_platform)
+                    if old_platform and new_platform and old_platform != new_platform:
+                        self.request_refresh(select_platform=old_platform, scope="platform", platform=old_platform)
+                        self.request_refresh(select_platform=new_platform, scope="platform", platform=new_platform)
+                        self.select_platform(new_platform)
+                    else:
+                        target = new_platform or old_platform
+                        self.request_refresh(select_platform=target, scope="platform", platform=target)
+        finally:
+            self.contract_table.setEnabled(True)
+            self._opening_contract = False
 
     def open_selected_contract(self, row, col):
         rows = getattr(self.contract_table, "_visible_rows", [])

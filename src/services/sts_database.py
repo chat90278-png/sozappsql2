@@ -642,26 +642,52 @@ CREATE TABLE IF NOT EXISTS activity_logs(id INTEGER PRIMARY KEY AUTOINCREMENT,cr
             """).rowcount
             if sys_updated and sys_updated > 0:
                 migrated.append("systems.platform_id.backfill")
-            for contract in self.conn.execute("SELECT id, platform_id FROM contracts WHERE platform_id IS NOT NULL").fetchall():
-                cid = int(contract[0]); primary_pid = int(contract[1])
-                rows = self.conn.execute(
-                    "SELECT id, platform_id, is_primary FROM contract_platforms WHERE contract_id=? ORDER BY is_primary DESC, sort_order ASC, id ASC",
-                    (cid,),
-                ).fetchall()
+            contracts = self.conn.execute("SELECT id, platform_id FROM contracts WHERE platform_id IS NOT NULL").fetchall()
+            platforms_by_contract = {}
+            for row in self.conn.execute(
+                """
+                SELECT id, contract_id, platform_id, is_primary, sort_order
+                FROM contract_platforms
+                ORDER BY contract_id ASC, is_primary DESC, sort_order ASC, id ASC
+                """
+            ).fetchall():
+                platforms_by_contract.setdefault(int(row[1]), []).append(row)
+            missing_platforms = [
+                (int(contract[0]), int(contract[1]))
+                for contract in contracts
+                if int(contract[0]) not in platforms_by_contract
+            ]
+            if missing_platforms:
+                self.conn.executemany(
+                    "INSERT OR IGNORE INTO contract_platforms(contract_id,platform_id,sort_order,is_primary) VALUES(?,?,0,1)",
+                    missing_platforms,
+                )
+                platforms_by_contract = {}
+                for row in self.conn.execute(
+                    """
+                    SELECT id, contract_id, platform_id, is_primary, sort_order
+                    FROM contract_platforms
+                    ORDER BY contract_id ASC, is_primary DESC, sort_order ASC, id ASC
+                    """
+                ).fetchall():
+                    platforms_by_contract.setdefault(int(row[1]), []).append(row)
+            primary_updates = []
+            contract_updates = []
+            for contract in contracts:
+                cid = int(contract[0])
+                rows = platforms_by_contract.get(cid, [])
                 if not rows:
-                    self.conn.execute(
-                        "INSERT OR IGNORE INTO contract_platforms(contract_id,platform_id,sort_order,is_primary) VALUES(?,?,0,1)",
-                        (cid, primary_pid),
-                    )
                     continue
                 primary_id = None; selected_pid = None
                 for row in rows:
-                    if primary_id is None and int(row[2] or 0) == 1:
-                        primary_id = int(row[0]); selected_pid = int(row[1])
+                    if primary_id is None and int(row[3] or 0) == 1:
+                        primary_id = int(row[0]); selected_pid = int(row[2])
                 if primary_id is None:
-                    primary_id = int(rows[0][0]); selected_pid = int(rows[0][1])
-                self.conn.execute("UPDATE contract_platforms SET is_primary=CASE WHEN id=? THEN 1 ELSE 0 END WHERE contract_id=?", (primary_id, cid))
-                self.conn.execute("UPDATE contracts SET platform_id=? WHERE id=?", (selected_pid, cid))
+                    primary_id = int(rows[0][0]); selected_pid = int(rows[0][2])
+                primary_updates.append((primary_id, cid))
+                contract_updates.append((selected_pid, cid))
+            self.conn.executemany("UPDATE contract_platforms SET is_primary=CASE WHEN id=? THEN 1 ELSE 0 END WHERE contract_id=?", primary_updates)
+            self.conn.executemany("UPDATE contracts SET platform_id=? WHERE id=?", contract_updates)
             self.conn.execute("CREATE INDEX IF NOT EXISTS idx_contract_platforms_contract ON contract_platforms(contract_id)")
             self.conn.execute("CREATE INDEX IF NOT EXISTS idx_contract_platforms_platform ON contract_platforms(platform_id)")
             self.conn.execute("CREATE INDEX IF NOT EXISTS idx_systems_contract_platform ON systems(contract_id, platform_id)")
