@@ -2588,25 +2588,32 @@ class MainWindow(QMainWindow):
             self.update_connection_badge("ok" if self.store else "bad")
 
     def set_busy_overlay(self, visible: bool, message: str = "İşlem yapılıyor...", percent: int = 0):
-        # Excel worker yüklemesi yokken kısa/orta süreli senkron işlemlerde kullan.
-        if not hasattr(self, "_busy_cursor_on"):
-            self._busy_cursor_on = False
-        if visible:
-            self.loading_label.setText(message)
-            self.loading_progress.setRange(0, 100)
-            self.loading_progress.setValue(int(max(0, min(100, percent))))
-            self.position_loading_overlay()
-            self.loading_overlay.show()
-            if not self._busy_cursor_on:
-                QApplication.setOverrideCursor(Qt.WaitCursor)
-                self._busy_cursor_on = True
-            QApplication.processEvents()
-        else:
-            self.loading_overlay.hide()
-            if self._busy_cursor_on:
-                QApplication.restoreOverrideCursor()
+        if getattr(self, "_set_busy_overlay_running", False):
+            return
+        self._set_busy_overlay_running = True
+        try:
+            # Excel worker yüklemesi yokken kısa/orta süreli senkron işlemlerde kullan.
+            if not hasattr(self, "_busy_cursor_on"):
                 self._busy_cursor_on = False
-            QApplication.processEvents()
+            if visible:
+                self.loading_label.setText(message)
+                self.loading_progress.setRange(0, 100)
+                self.loading_progress.setValue(int(max(0, min(100, percent))))
+                self.position_loading_overlay()
+                self.loading_overlay.show()
+                if not self._busy_cursor_on:
+                    QApplication.setOverrideCursor(Qt.WaitCursor)
+                    self._busy_cursor_on = True
+                QApplication.processEvents()
+            else:
+                self.loading_overlay.hide()
+                if self._busy_cursor_on:
+                    QApplication.restoreOverrideCursor()
+                    self._busy_cursor_on = False
+                QApplication.processEvents()
+
+        finally:
+            self._set_busy_overlay_running = False
 
     def start_sts_load(self, path: Path):
         """STS dosyasını yükler.
