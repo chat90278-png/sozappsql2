@@ -10,6 +10,7 @@ from src.config.app_config import MAX_CONTRACT_FILE_SIZE_BYTES
 from src.models.app_models import ComponentDef, ContractInfo, DeliveryInfo, SystemInfo, TagDef
 from src.domain.flexible_date import is_tbd_contract_no
 from src.services.sts_database import STSDatabase, now_iso
+from src.services import perf_tracker
 from src import auth
 
 
@@ -1366,9 +1367,12 @@ class STSStore:
             })
         return rows
     def build_contract_index(self, progress_cb=None):
-        out=[]; tags=self.all_contract_tags_map()
-        for p in self.platform_names(): out.extend(self.list_main_contracts(p,tags_map=tags))
-        return out
+        meta = {}
+        with perf_tracker.measure(perf_tracker.OP_CONTRACT_LIST_LOAD, self.path, meta=meta):
+            out=[]; tags=self.all_contract_tags_map()
+            for p in self.platform_names(): out.extend(self.list_main_contracts(p,tags_map=tags))
+            meta["row_count"] = len(out)
+            return out
 
     # ── Takvim için toplu bulk sorgular ───────────────────────────────────────
     # Bu metodlar doğrudan çağrıldığında mevcut (ana-thread) connection'ı kullanır.
