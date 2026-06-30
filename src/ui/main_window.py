@@ -2830,7 +2830,12 @@ class MainWindow(QMainWindow):
         if hasattr(self, "platform_selection_badge"):
             self.refresh_platform_list_ui()
         self.all_contract_rows = []
-        self.contract_table.setRowCount(0)
+        if getattr(self, "_use_contract_table_view", False):
+            if hasattr(self, "contract_model") and self.contract_model is not None:
+                self.contract_model.setRows([])
+            self.contract_table._visible_rows = []
+        else:
+            self.contract_table.setRowCount(0)
         self.set_index_progress_badge(False, 0)
         self.overdue_count.setText("0")
         self.critical_count.setText("0")
@@ -4029,6 +4034,18 @@ class MainWindow(QMainWindow):
 
     def _extract_contract_item_from_cell(self, row: int, col: int) -> dict | None:
         rows = getattr(self.contract_table, "_visible_rows", [])
+        if getattr(self, "_use_contract_table_view", False):
+            model = self.contract_table.model() if hasattr(self.contract_table, "model") else None
+            row_count = model.rowCount() if model is not None else 0
+            if row < 0 or row >= row_count:
+                return None
+            if row < len(rows):
+                return rows[row]
+            if model is not None:
+                index = model.index(row, col)
+                it = index.data(Qt.UserRole) if index.isValid() else None
+                return it if isinstance(it, dict) else None
+            return None
         if row < 0 or row >= self.contract_table.rowCount():
             return None
         payload = None
@@ -4072,7 +4089,12 @@ class MainWindow(QMainWindow):
 
     def open_selected_contract(self, row, col):
         rows = getattr(self.contract_table, "_visible_rows", [])
-        if row < 0 or row >= self.contract_table.rowCount():
+        if getattr(self, "_use_contract_table_view", False):
+            model = self.contract_table.model() if hasattr(self.contract_table, "model") else None
+            row_count = model.rowCount() if model is not None else 0
+            if row < 0 or row >= row_count:
+                return
+        elif row < 0 or row >= self.contract_table.rowCount():
             return
         if col == COL_SUMMARY:
             if row < len(rows):
