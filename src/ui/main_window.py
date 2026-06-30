@@ -111,7 +111,7 @@ from PySide6.QtCore import Qt, QDate, QObject, QThread, Signal, QTimer, QPoint, 
 from PySide6.QtGui import QFont, QFontMetrics, QColor, QPixmap, QIcon, QPainter, QPen, QAction, QCursor, QCloseEvent, QDesktopServices, QKeySequence, QShortcut, QTextCharFormat
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget,QGraphicsOpacityEffect, QGraphicsDropShadowEffect, QVBoxLayout, QHBoxLayout, QGridLayout,
-    QLabel, QPushButton, QListWidget, QListWidgetItem, QTableWidget, QTableWidgetItem,
+    QLabel, QPushButton, QListWidget, QListWidgetItem, QTableWidget, QTableWidgetItem, QTableView,
     QTreeWidget, QTreeWidgetItem, QDialog, QLineEdit, QComboBox, QDateEdit, QSpinBox, QDoubleSpinBox,
     QMessageBox, QFileDialog, QFrame, QScrollArea, QCheckBox, QHeaderView,
     QSizePolicy, QProgressBar, QProgressDialog, QStyledItemDelegate, QStyleOptionViewItem, QTextEdit,
@@ -749,10 +749,7 @@ class ContractTagsDelegate(QStyledItemDelegate):
                 chip_w = fm.horizontalAdvance(tag_text) + 2 * chip_pad_x
                 chip_rect = QRect(x, y, chip_w, chip_h)
                 painter.setBrush(QColor(_rgb_to_hex(bg)))
-                pen = QPen(QColor(_rgb_to_hex(border_c)))
-                pen.setWidth(1)
-                pen.setCosmetic(True)
-                painter.setPen(pen)
+                painter.setPen(QColor(_rgb_to_hex(border_c)))
                 painter.drawRoundedRect(chip_rect, radius, radius)
                 painter.setPen(QColor(_rgb_to_hex(txt_c)))
                 painter.drawText(chip_rect.adjusted(chip_pad_x, 0, -chip_pad_x, 0), Qt.AlignCenter, tag_text)
@@ -936,6 +933,7 @@ class MainWindow(QMainWindow):
         self.current_staff = current_staff or auth.current_staff
         self.contract_index = contract_index if contract_index is not None else []
         self._tag_color_map_cache: Optional[Dict[str, str]] = None
+        self._use_contract_table_view = False  # Feature flag: True yapılırsa QTableView kullanılır
         self._loading = False
         self._sts_loader_thread: Optional[QThread] = None
         self._sts_loader_worker: Optional[STSLoadWorker] = None
@@ -1572,26 +1570,67 @@ class MainWindow(QMainWindow):
         fb.addWidget(self.clear_filters_btn, 0)
         fb.addStretch()
         self.filter_bar.setVisible(False)
-        self.contract_table=QTableWidget(0,9)
-        self.contract_table.setObjectName("contractTable")
-        # Yatay scroll yok — sütunlar her zaman tablo içinde kalır
-        self.contract_table.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        # Excel gibi sutun filtresi
-        self._filter_header = FilterableHeaderView(Qt.Horizontal, self.contract_table)
-        self._filter_header.filterChanged.connect(self.schedule_apply_contract_filter)
-        self.contract_table.setHorizontalHeader(self._filter_header)
-        self.contract_table.setHorizontalHeaderLabels(["Platform", "Sözleşme Türü", "Sözleşme No", "Kullanıcı", "Durum", "Termin Tarihi", "Kalan Gün", "Etiketler", "Özet"])
-        self.contract_table._filter_col_keys = ["platform", "type", "no", "user", "status", "date", "days", "tags", "summary"]
-        self.contract_table._sort_mode = 'default'  # siralama modu
-        # Tüm sütunlar Stretch — her zaman ekranı doldurur, yatay kaymaz.
-        # Özet sabit 72px sağ kenarda.
-        _hh = self.contract_table.horizontalHeader()
-        _hh.setSectionResizeMode(QHeaderView.Stretch)    # hepsi orantılı dolar
-        _hh.setSectionResizeMode(COL_SUMMARY, QHeaderView.Fixed)   # Özet sabit
-        self.contract_table.setColumnWidth(COL_SUMMARY, 72)
-        self.contract_table.verticalHeader().setVisible(False)
-        self.contract_table.cellDoubleClicked.connect(self.open_selected_contract)
-        self.contract_table.cellClicked.connect(self._on_contract_cell_clicked)
+        if self._use_contract_table_view:
+            # YENİ: QTableView yolu
+            self.contract_table = QTableView()
+            self.contract_table.setObjectName("contractTable")
+            self.contract_table.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+            self.contract_model = ContractTableModel(
+                self.contract_table,
+                status_display_fn=self._contract_status_display,
+                remaining_display_fn=self._contract_remaining_display,
+                tags_fn=self._contract_tags_for_row,
+                row_height_fn=self._contract_row_height_for_tags,
+            )
+            self.contract_table.setModel(self.contract_model)
+            self._filter_header = FilterableHeaderView(Qt.Horizontal, self.contract_table)
+            self._filter_header.filterChanged.connect(self.schedule_apply_contract_filter)
+            self.contract_table.setHorizontalHeader(self._filter_header)
+            self.contract_table._filter_col_keys = ["platform", "type", "no", "user", "status", "date", "days", "tags", "summary"]
+            self.contract_table._sort_mode = 'default'
+            _hh = self.contract_table.horizontalHeader()
+            _hh.setSectionResizeMode(QHeaderView.Stretch)
+            _hh.setSectionResizeMode(COL_SUMMARY, QHeaderView.Fixed)
+            self.contract_table.setColumnWidth(COL_SUMMARY, 72)
+            self.contract_table.verticalHeader().setVisible(False)
+            self._tags_delegate = ContractTagsDelegate(
+                self._contract_tags_for_row,
+                lambda name: self._tag_color_map_cache.get(
+                    self.store._normalize_label(name) if self.store else name, "#3B82F6"
+                ) if self._tag_color_map_cache is not None else "#3B82F6",
+                self._contract_row_height_for_tags,
+                self.contract_table,
+            )
+            self._summary_delegate = ContractSummaryDelegate(self.contract_table)
+            self.contract_table.setItemDelegateForColumn(COL_TAGS, self._tags_delegate)
+            self.contract_table.setItemDelegateForColumn(COL_SUMMARY, self._summary_delegate)
+            self.contract_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+            self.contract_table.setSelectionMode(QAbstractItemView.SingleSelection)
+            self.contract_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+            self.contract_table.clicked.connect(self._on_contract_view_clicked)
+            self.contract_table.doubleClicked.connect(self._on_contract_view_double_clicked)
+        else:
+            # ESKİ: QTableWidget yolu — MEVCUT KOD AYNEN BURADA KALSIN, DEĞİŞTİRME
+            self.contract_table=QTableWidget(0,9)
+            self.contract_table.setObjectName("contractTable")
+            # Yatay scroll yok — sütunlar her zaman tablo içinde kalır
+            self.contract_table.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+            # Excel gibi sutun filtresi
+            self._filter_header = FilterableHeaderView(Qt.Horizontal, self.contract_table)
+            self._filter_header.filterChanged.connect(self.schedule_apply_contract_filter)
+            self.contract_table.setHorizontalHeader(self._filter_header)
+            self.contract_table.setHorizontalHeaderLabels(["Platform", "Sözleşme Türü", "Sözleşme No", "Kullanıcı", "Durum", "Termin Tarihi", "Kalan Gün", "Etiketler", "Özet"])
+            self.contract_table._filter_col_keys = ["platform", "type", "no", "user", "status", "date", "days", "tags", "summary"]
+            self.contract_table._sort_mode = 'default'  # siralama modu
+            # Tüm sütunlar Stretch — her zaman ekranı doldurur, yatay kaymaz.
+            # Özet sabit 72px sağ kenarda.
+            _hh = self.contract_table.horizontalHeader()
+            _hh.setSectionResizeMode(QHeaderView.Stretch)    # hepsi orantılı dolar
+            _hh.setSectionResizeMode(COL_SUMMARY, QHeaderView.Fixed)   # Özet sabit
+            self.contract_table.setColumnWidth(COL_SUMMARY, 72)
+            self.contract_table.verticalHeader().setVisible(False)
+            self.contract_table.cellDoubleClicked.connect(self.open_selected_contract)
+            self.contract_table.cellClicked.connect(self._on_contract_cell_clicked)
         self.contract_table.viewport().installEventFilter(self)
         rv.addWidget(self.contract_table,1)
         self.query_logo_bg = QLabel(self.contract_table)
@@ -2788,7 +2827,12 @@ class MainWindow(QMainWindow):
         if hasattr(self, "platform_selection_badge"):
             self.refresh_platform_list_ui()
         self.all_contract_rows = []
-        self.contract_table.setRowCount(0)
+        if getattr(self, "_use_contract_table_view", False):
+            if hasattr(self, "contract_model") and self.contract_model is not None:
+                self.contract_model.setRows([])
+            self.contract_table._visible_rows = []
+        else:
+            self.contract_table.setRowCount(0)
         self.set_index_progress_badge(False, 0)
         self.overdue_count.setText("0")
         self.critical_count.setText("0")
@@ -3796,108 +3840,117 @@ class MainWindow(QMainWindow):
             self._tag_color_map_cache = tag_color_map
         _tag_color_map = self._tag_color_map_cache
 
-        self.contract_table.setUpdatesEnabled(False)
-        self.contract_table.blockSignals(True)
-        try:
-            self.contract_table.clearContents()
-            self.contract_table.setRowCount(len(rows))
+        if getattr(self, "_use_contract_table_view", False):
+            self.contract_model.setRows(rows)
             self.contract_table._visible_rows = rows
-            for r,it in enumerate(rows):
-                for c in range(self.contract_table.columnCount()):
-                    self.contract_table.removeCellWidget(r, c)
-                self.contract_table.setRowHeight(r, 36)
-                cls, _st_label, _days_text, tdate = self._contract_health(it)
-                st_label, status_color = self._contract_status_display(it)
-                days_display, remaining_color = self._contract_remaining_display(it)
-                payload = {
-                    "platform": str(it.get("platform", "") or ""),
-                    "contract_no": str(it.get("no", "") or ""),
-                    "contract_type": str(it.get("type_display", it.get("type", "")) or ""),
-                    "contract_item": it,
-                }
-                tdate_display = str(tdate or "").strip()
-                if tdate_display in {"-", "Belirsiz", "—"} or not parse_flexible_date(tdate_display):
-                    tdate_display = ""
-                vals=[
-                    it.get("platform", ""),
-                    it.get("type_display", it.get("type", "")) or "",
-                    it.get("no", ""),
-                    it.get("user", ""),
-                    st_label,
-                    tdate_display,
-                    days_display,
-                    None,  # col 7: Etiketler widget
-                    None,  # col 8: Ozet butonu
-                ]
-                for c,v in enumerate(vals):
-                    if c == COL_TAGS:
-                        # Etiketler: dikey sıralı renkli chip'ler
-                        tags_list = self._contract_tags_for_row(it, _tag_color_map)
-                        if not tags_list:
-                            empty = QTableWidgetItem("")
-                            empty.setFlags(empty.flags() & ~Qt.ItemIsEditable)
-                            empty.setData(Qt.UserRole, payload)
-                            self.contract_table.setItem(r, COL_TAGS, empty)
-                            self.contract_table.setRowHeight(r, max(self.contract_table.rowHeight(r), 36))
+            # Satır yüksekliklerini tag sayısına göre ayarla (resizeRowsToContents
+            # yerine, performans için manuel)
+            for r, it in enumerate(rows):
+                tags = self._contract_tags_for_row(it)
+                self.contract_table.setRowHeight(r, self._contract_row_height_for_tags(len(tags)))
+        else:
+            self.contract_table.setUpdatesEnabled(False)
+            self.contract_table.blockSignals(True)
+            try:
+                self.contract_table.clearContents()
+                self.contract_table.setRowCount(len(rows))
+                self.contract_table._visible_rows = rows
+                for r,it in enumerate(rows):
+                    for c in range(self.contract_table.columnCount()):
+                        self.contract_table.removeCellWidget(r, c)
+                    self.contract_table.setRowHeight(r, 36)
+                    cls, _st_label, _days_text, tdate = self._contract_health(it)
+                    st_label, status_color = self._contract_status_display(it)
+                    days_display, remaining_color = self._contract_remaining_display(it)
+                    payload = {
+                        "platform": str(it.get("platform", "") or ""),
+                        "contract_no": str(it.get("no", "") or ""),
+                        "contract_type": str(it.get("type_display", it.get("type", "")) or ""),
+                        "contract_item": it,
+                    }
+                    tdate_display = str(tdate or "").strip()
+                    if tdate_display in {"-", "Belirsiz", "—"} or not parse_flexible_date(tdate_display):
+                        tdate_display = ""
+                    vals=[
+                        it.get("platform", ""),
+                        it.get("type_display", it.get("type", "")) or "",
+                        it.get("no", ""),
+                        it.get("user", ""),
+                        st_label,
+                        tdate_display,
+                        days_display,
+                        None,  # col 7: Etiketler widget
+                        None,  # col 8: Ozet butonu
+                    ]
+                    for c,v in enumerate(vals):
+                        if c == COL_TAGS:
+                            # Etiketler: dikey sıralı renkli chip'ler
+                            tags_list = self._contract_tags_for_row(it, _tag_color_map)
+                            if not tags_list:
+                                empty = QTableWidgetItem("")
+                                empty.setFlags(empty.flags() & ~Qt.ItemIsEditable)
+                                empty.setData(Qt.UserRole, payload)
+                                self.contract_table.setItem(r, COL_TAGS, empty)
+                                self.contract_table.setRowHeight(r, max(self.contract_table.rowHeight(r), 36))
+                                continue
+                            wrap = QWidget()
+                            wrap.setStyleSheet("QWidget{background:transparent;border:0px;}")
+                            wl = QVBoxLayout(wrap)
+                            wl.setContentsMargins(5, 4, 5, 4)
+                            wl.setSpacing(3)
+                            wl.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+                            for tag_name in tags_list:
+                                color = _tag_color_map.get(self.store._normalize_label(tag_name) if self.store else tag_name, "#3B82F6")
+                                base_rgb = _hex_to_rgb(color)
+                                bg = _mix_rgb(base_rgb, (255, 255, 255), 0.78)
+                                border_c = _mix_rgb(base_rgb, (255, 255, 255), 0.28)
+                                txt_c = _rgb_to_hex(_mix_rgb(base_rgb, (15, 23, 42), 0.22))
+                                chip = QLabel(tag_name)
+                                chip.setStyleSheet(
+                                    f"QLabel{{background:{_rgb_to_hex(bg)};color:{txt_c};"
+                                    f"border:1px solid {_rgb_to_hex(border_c)};border-radius:9px;"
+                                    f"padding:2px 8px;font-size:11px;font-weight:700;}}"
+                                )
+                                wl.addWidget(chip)
+                            placeholder = QTableWidgetItem("")
+                            placeholder.setData(Qt.UserRole, payload)
+                            self.contract_table.setItem(r, COL_TAGS, placeholder)
+                            self.contract_table.setCellWidget(r, COL_TAGS, wrap)
+                            # Satır yüksekliğini etiket sayısına göre ayarla
+                            row_h = self._contract_row_height_for_tags(len(tags_list))
+                            self.contract_table.setRowHeight(r, max(self.contract_table.rowHeight(r), row_h))
                             continue
-                        wrap = QWidget()
-                        wrap.setStyleSheet("QWidget{background:transparent;border:0px;}")
-                        wl = QVBoxLayout(wrap)
-                        wl.setContentsMargins(5, 4, 5, 4)
-                        wl.setSpacing(3)
-                        wl.setAlignment(Qt.AlignTop | Qt.AlignLeft)
-                        for tag_name in tags_list:
-                            color = _tag_color_map.get(self.store._normalize_label(tag_name) if self.store else tag_name, "#3B82F6")
-                            base_rgb = _hex_to_rgb(color)
-                            bg = _mix_rgb(base_rgb, (255, 255, 255), 0.78)
-                            border_c = _mix_rgb(base_rgb, (255, 255, 255), 0.28)
-                            txt_c = _rgb_to_hex(_mix_rgb(base_rgb, (15, 23, 42), 0.22))
-                            chip = QLabel(tag_name)
-                            chip.setStyleSheet(
-                                f"QLabel{{background:{_rgb_to_hex(bg)};color:{txt_c};"
-                                f"border:1px solid {_rgb_to_hex(border_c)};border-radius:9px;"
-                                f"padding:2px 8px;font-size:11px;font-weight:700;}}"
+                        if c == COL_SUMMARY:
+                            lbl = QLabel("\U0001F50D")
+                            lbl.setAlignment(Qt.AlignCenter)
+                            lbl.setToolTip("Bileşen özetini gör")
+                            lbl.setStyleSheet(
+                                "QLabel{font-size:16px;color:#185FA5;background:transparent;border:0px;}"
+                                "QLabel:hover{color:#042C53;}"
                             )
-                            wl.addWidget(chip)
-                        placeholder = QTableWidgetItem("")
-                        placeholder.setData(Qt.UserRole, payload)
-                        self.contract_table.setItem(r, COL_TAGS, placeholder)
-                        self.contract_table.setCellWidget(r, COL_TAGS, wrap)
-                        # Satır yüksekliğini etiket sayısına göre ayarla
-                        row_h = self._contract_row_height_for_tags(len(tags_list))
-                        self.contract_table.setRowHeight(r, max(self.contract_table.rowHeight(r), row_h))
-                        continue
-                    if c == COL_SUMMARY:
-                        lbl = QLabel("\U0001F50D")
-                        lbl.setAlignment(Qt.AlignCenter)
-                        lbl.setToolTip("Bileşen özetini gör")
-                        lbl.setStyleSheet(
-                            "QLabel{font-size:16px;color:#185FA5;background:transparent;border:0px;}"
-                            "QLabel:hover{color:#042C53;}"
-                        )
-                        wrap = QWidget()
-                        wrap.setStyleSheet("QWidget{background:transparent;border:0px;}")
-                        wl = QHBoxLayout(wrap)
-                        wl.setContentsMargins(0,0,0,0)
-                        wl.setSpacing(0)
-                        wl.setAlignment(Qt.AlignCenter)
-                        wl.addWidget(lbl)
-                        placeholder = QTableWidgetItem("")
-                        placeholder.setData(Qt.UserRole, payload)
-                        self.contract_table.setItem(r, COL_SUMMARY, placeholder)
-                        self.contract_table.setCellWidget(r, COL_SUMMARY, wrap)
-                        continue
-                    cell = QTableWidgetItem(str(v or ""))
-                    cell.setFlags(cell.flags() & ~Qt.ItemIsEditable)
-                    cell.setData(Qt.UserRole, payload)
-                    if c == COL_STATUS:
-                        cell.setForeground(QColor(status_color))
-                    if c == COL_REMAINING:
-                        cell.setForeground(QColor(remaining_color))
-                    self.contract_table.setItem(r,c,cell)
-        finally:
-            self.contract_table.blockSignals(False)
-            self.contract_table.setUpdatesEnabled(True)
+                            wrap = QWidget()
+                            wrap.setStyleSheet("QWidget{background:transparent;border:0px;}")
+                            wl = QHBoxLayout(wrap)
+                            wl.setContentsMargins(0,0,0,0)
+                            wl.setSpacing(0)
+                            wl.setAlignment(Qt.AlignCenter)
+                            wl.addWidget(lbl)
+                            placeholder = QTableWidgetItem("")
+                            placeholder.setData(Qt.UserRole, payload)
+                            self.contract_table.setItem(r, COL_SUMMARY, placeholder)
+                            self.contract_table.setCellWidget(r, COL_SUMMARY, wrap)
+                            continue
+                        cell = QTableWidgetItem(str(v or ""))
+                        cell.setFlags(cell.flags() & ~Qt.ItemIsEditable)
+                        cell.setData(Qt.UserRole, payload)
+                        if c == COL_STATUS:
+                            cell.setForeground(QColor(status_color))
+                        if c == COL_REMAINING:
+                            cell.setForeground(QColor(remaining_color))
+                        self.contract_table.setItem(r,c,cell)
+            finally:
+                self.contract_table.blockSignals(False)
+                self.contract_table.setUpdatesEnabled(True)
         self.position_query_logo_background()
 
     def open_contract_item(self, item: dict):
@@ -3978,6 +4031,18 @@ class MainWindow(QMainWindow):
 
     def _extract_contract_item_from_cell(self, row: int, col: int) -> dict | None:
         rows = getattr(self.contract_table, "_visible_rows", [])
+        if getattr(self, "_use_contract_table_view", False):
+            model = self.contract_table.model() if hasattr(self.contract_table, "model") else None
+            row_count = model.rowCount() if model is not None else 0
+            if row < 0 or row >= row_count:
+                return None
+            if row < len(rows):
+                return rows[row]
+            if model is not None:
+                index = model.index(row, col)
+                it = index.data(Qt.UserRole) if index.isValid() else None
+                return it if isinstance(it, dict) else None
+            return None
         if row < 0 or row >= self.contract_table.rowCount():
             return None
         payload = None
@@ -4000,9 +4065,33 @@ class MainWindow(QMainWindow):
             "no": no_item.text() if no_item else "",
         }
 
+    def _on_contract_view_clicked(self, index):
+        if not index.isValid():
+            return
+        if index.column() == COL_SUMMARY:
+            it = index.data(Qt.UserRole)
+            if isinstance(it, dict):
+                self.show_contract_summary(index.row(), it)
+
+    def _on_contract_view_double_clicked(self, index):
+        if not index.isValid():
+            return
+        it = index.data(Qt.UserRole)
+        if not isinstance(it, dict):
+            return
+        if index.column() == COL_SUMMARY:
+            self.show_contract_summary(index.row(), it)
+        else:
+            self.open_contract_item(it)
+
     def open_selected_contract(self, row, col):
         rows = getattr(self.contract_table, "_visible_rows", [])
-        if row < 0 or row >= self.contract_table.rowCount():
+        if getattr(self, "_use_contract_table_view", False):
+            model = self.contract_table.model() if hasattr(self.contract_table, "model") else None
+            row_count = model.rowCount() if model is not None else 0
+            if row < 0 or row >= row_count:
+                return
+        elif row < 0 or row >= self.contract_table.rowCount():
             return
         if col == COL_SUMMARY:
             if row < len(rows):
