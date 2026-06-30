@@ -749,10 +749,7 @@ class ContractTagsDelegate(QStyledItemDelegate):
                 chip_w = fm.horizontalAdvance(tag_text) + 2 * chip_pad_x
                 chip_rect = QRect(x, y, chip_w, chip_h)
                 painter.setBrush(QColor(_rgb_to_hex(bg)))
-                pen = QPen(QColor(_rgb_to_hex(border_c)))
-                pen.setWidth(1)
-                pen.setCosmetic(True)
-                painter.setPen(pen)
+                painter.setPen(QColor(_rgb_to_hex(border_c)))
                 painter.drawRoundedRect(chip_rect, radius, radius)
                 painter.setPen(QColor(_rgb_to_hex(txt_c)))
                 painter.drawText(chip_rect.adjusted(chip_pad_x, 0, -chip_pad_x, 0), Qt.AlignCenter, tag_text)
