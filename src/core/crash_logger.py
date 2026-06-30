@@ -62,6 +62,22 @@ def _sys_excepthook(exc_type: Type[BaseException], exc_value: BaseException, exc
             _PREV_SYS_EXCEPTHOOK(exc_type, exc_value, exc_tb)
         return
     _safe_log_exception("Unhandled Python exception", exc_type, exc_value, exc_tb)
+    try:
+        from PySide6.QtCore import QThread
+        from PySide6.QtWidgets import QApplication, QMessageBox
+
+        app = QApplication.instance()
+        if app is not None and QThread.currentThread() == app.thread():
+            QMessageBox.critical(
+                None,
+                "Beklenmeyen Hata",
+                "Uygulamada beklenmeyen bir hata oluştu. İşlem güvenli şekilde durduruldu. "
+                "Hata kaydı şu konuma yazıldı:\n\n"
+                f"{crash_log_path()}\n\n"
+                "Lütfen bu dosyayı destek ekibiyle paylaşın.",
+            )
+    except Exception:
+        pass
 
 
 def _threading_excepthook(args) -> None:
