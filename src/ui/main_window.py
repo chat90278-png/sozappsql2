@@ -2603,9 +2603,9 @@ class MainWindow(QMainWindow):
         """STS dosyasını yükler.
 
         Adımlar:
-        1. STSLoadWorker arka planda dosya doğrulaması yapar (magic bytes).
+        1. STSLoadWorker arka planda dosya doğrulaması ve migration hazırlığı yapar.
         2. finished() sinyali gelince _on_sts_load_finished() ana thread'de
-           STSStore bağlantısını açar.
+           STSStore bağlantısını yeniden açar.
         3. Sözleşme indeksi STSIndexWorker içinde ayrı/geçici connection ile
            hazırlanır ve ana thread'e yalnızca list[dict] olarak döner.
 
