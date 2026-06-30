@@ -716,6 +716,7 @@ class MainWindow(QMainWindow):
         self._export_worker = None
         self._store_loading = False
         self._opening_contract = False
+        self._refreshing_platform_index = False
         self._index_ready_for_use = False
         self._version_baseline_signature = None
         self.calendar_window: Optional[ContractCalendarWindow] = None
@@ -2805,41 +2806,50 @@ class MainWindow(QMainWindow):
         self.contract_index = ordered
 
     def _refresh_single_platform_index(self, platform: str, select_platform: Optional[str] = None):
-        if not self.store:
-            self.set_empty_state()
+        if getattr(self, "_refreshing_platform_index", False):
             return
-        p = safe_sheet_name(str(platform or ""))
-        if not p:
-            self.request_refresh(select_platform=select_platform, scope="all")
-            return
-        current_rows: Dict[str, List[dict]] = {}
-        for it in self.contract_index:
-            pp = str(it.get("platform", "") or "")
-            current_rows.setdefault(pp, []).append(dict(it))
-        self.set_busy_overlay(True, f"{p} güncelleniyor...", 25)
+        self._refreshing_platform_index = True
+        self.platform_list.setEnabled(False)
+        self.contract_table.setEnabled(False)
         try:
-            QApplication.processEvents()
-            tags_map = self.store.all_contract_tags_map()
-            self.set_busy_overlay(True, "Sözleşme satırları okunuyor...", 62)
-            QApplication.processEvents()
-            current_rows[p] = self.store.list_main_contracts(p, tags_map=tags_map)
-            self._rebuild_index_in_platform_order(current_rows)
-            self.set_busy_overlay(True, "Arayüz yenileniyor...", 92)
-            QApplication.processEvents()
-            platforms = self.store.platform_names()
-            self._set_platform_items(platforms)
-            self.update_alert_strip()
-            self.refresh_open_calendar()
-            target = str(select_platform or p)
-            if target:
-                self.select_platform(target)
-            elif self.platform_list.count():
-                self._apply_platform_selection()
-            else:
+            if not self.store:
                 self.set_empty_state()
+                return
+            p = safe_sheet_name(str(platform or ""))
+            if not p:
+                self.request_refresh(select_platform=select_platform, scope="all")
+                return
+            current_rows: Dict[str, List[dict]] = {}
+            for it in self.contract_index:
+                pp = str(it.get("platform", "") or "")
+                current_rows.setdefault(pp, []).append(dict(it))
+            self.set_busy_overlay(True, f"{p} güncelleniyor...", 25)
+            try:
+                QApplication.processEvents()
+                tags_map = self.store.all_contract_tags_map()
+                self.set_busy_overlay(True, "Sözleşme satırları okunuyor...", 62)
+                QApplication.processEvents()
+                current_rows[p] = self.store.list_main_contracts(p, tags_map=tags_map)
+                self._rebuild_index_in_platform_order(current_rows)
+                self.set_busy_overlay(True, "Arayüz yenileniyor...", 92)
+                QApplication.processEvents()
+                platforms = self.store.platform_names()
+                self._set_platform_items(platforms)
+                self.update_alert_strip()
+                self.refresh_open_calendar()
+                target = str(select_platform or p)
+                if target:
+                    self.select_platform(target)
+                elif self.platform_list.count():
+                    self._apply_platform_selection()
+                else:
+                    self.set_empty_state()
+            finally:
+                self.set_busy_overlay(False)
         finally:
-            self.set_busy_overlay(False)
-
+            self.platform_list.setEnabled(True)
+            self.contract_table.setEnabled(True)
+            self._refreshing_platform_index = False
 
     def refresh_open_calendar(self):
         cal = getattr(self, "calendar_window", None)
