@@ -107,14 +107,14 @@ from src.ui.widgets.platform_tabs import (
 )
 from src.ui.contract.contract_work_window import ContractWorkWindow
 
-from PySide6.QtCore import Qt, QDate, QObject, QThread, Signal, QTimer, QPoint, QSize, QRect, QEvent, QPropertyAnimation, QEasingCurve, QUrl
-from PySide6.QtGui import QFont, QFontMetrics, QColor, QPixmap, QIcon, QPainter, QAction, QCursor, QCloseEvent, QDesktopServices, QKeySequence, QShortcut, QTextCharFormat
+from PySide6.QtCore import Qt, QDate, QObject, QThread, Signal, QTimer, QPoint, QSize, QRect, QEvent, QPropertyAnimation, QEasingCurve, QUrl, QAbstractTableModel, QModelIndex
+from PySide6.QtGui import QFont, QFontMetrics, QColor, QPixmap, QIcon, QPainter, QPen, QAction, QCursor, QCloseEvent, QDesktopServices, QKeySequence, QShortcut, QTextCharFormat
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget,QGraphicsOpacityEffect, QGraphicsDropShadowEffect, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QPushButton, QListWidget, QListWidgetItem, QTableWidget, QTableWidgetItem,
     QTreeWidget, QTreeWidgetItem, QDialog, QLineEdit, QComboBox, QDateEdit, QSpinBox, QDoubleSpinBox,
     QMessageBox, QFileDialog, QFrame, QScrollArea, QCheckBox, QHeaderView,
-    QSizePolicy, QProgressBar, QProgressDialog, QStyledItemDelegate, QTextEdit,
+    QSizePolicy, QProgressBar, QProgressDialog, QStyledItemDelegate, QStyleOptionViewItem, QTextEdit,
     QToolButton, QMenu, QInputDialog, QWidgetAction, QStackedWidget, QAbstractItemView, QStyle, QRadioButton, QButtonGroup, QTabWidget, QTabBar, QCalendarWidget
 )
 from shiboken6 import isValid as _qt_is_valid
@@ -556,6 +556,235 @@ COL_REMAINING = 6
 COL_TAGS = 7
 COL_SUMMARY = 8
 PLATFORM_SELECTED_ROLE = Qt.UserRole + 100
+
+
+class ContractTableModel(QAbstractTableModel):
+    HEADERS = [
+        "Platform",
+        "Sözleşme Türü",
+        "Sözleşme No",
+        "Kullanıcı",
+        "Durum",
+        "Termin Tarihi",
+        "Kalan Gün",
+        "Etiketler",
+        "Özet",
+    ]
+
+    def __init__(
+        self,
+        parent=None,
+        *,
+        status_display_fn: Optional[Callable[[dict], tuple[str, str]]] = None,
+        remaining_display_fn: Optional[Callable[[dict], tuple[str, str]]] = None,
+        tags_fn: Optional[Callable[[dict], list]] = None,
+        row_height_fn: Optional[Callable[[int], int]] = None,
+    ):
+        super().__init__(parent)
+        self._rows: list[dict] = []
+        self._status_display_fn = status_display_fn
+        self._remaining_display_fn = remaining_display_fn
+        self._tags_fn = tags_fn
+        self._row_height_fn = row_height_fn
+
+    def setRows(self, rows: list[dict]) -> None:
+        self.beginResetModel()
+        self._rows = list(rows)
+        self.endResetModel()
+
+    def rowCount(self, parent=QModelIndex()) -> int:
+        if parent.isValid():
+            return 0
+        return len(self._rows)
+
+    def columnCount(self, parent=QModelIndex()) -> int:
+        if parent.isValid():
+            return 0
+        return COL_SUMMARY + 1
+
+    def _status_display(self, it: dict) -> tuple[str, str]:
+        if callable(self._status_display_fn):
+            return self._status_display_fn(it)
+        return "", ""
+
+    def _remaining_display(self, it: dict) -> tuple[str, str]:
+        if callable(self._remaining_display_fn):
+            return self._remaining_display_fn(it)
+        return "", ""
+
+    def _tags_for_row(self, it: dict) -> list:
+        if callable(self._tags_fn):
+            return list(self._tags_fn(it) or [])
+        return []
+
+    def _row_height_for_tags(self, tag_count: int) -> int:
+        if callable(self._row_height_fn):
+            return int(self._row_height_fn(tag_count))
+        return 36
+
+    def data(self, index, role=Qt.DisplayRole):
+        if not index.isValid():
+            return None
+        row = index.row()
+        if row < 0 or row >= len(self._rows):
+            return None
+        it = self._rows[row]
+        col = index.column()
+
+        if role == Qt.DisplayRole:
+            if col == COL_PLATFORM:
+                return it.get("platform", "")
+            if col == COL_TYPE:
+                return it.get("type_display") or it.get("type", "")
+            if col == COL_CONTRACT_NO:
+                return it.get("no", "")
+            if col == COL_USER:
+                return it.get("user", "")
+            if col == COL_STATUS:
+                status_text, _color = self._status_display(it)
+                return status_text
+            if col == COL_T_DATE:
+                completion_date = str(it.get("completion_date") or "").strip()
+                if completion_date in {"-", "Belirsiz", "—"} or not parse_flexible_date(completion_date):
+                    return ""
+                return completion_date
+            if col == COL_REMAINING:
+                remaining_text, _color = self._remaining_display(it)
+                return remaining_text
+            if col == COL_TAGS:
+                return ", ".join(str(tag) for tag in self._tags_for_row(it))
+            if col == COL_SUMMARY:
+                return ""
+
+        if role == Qt.ForegroundRole:
+            if col == COL_STATUS:
+                _status_text, color = self._status_display(it)
+                return QColor(color) if color else None
+            if col == COL_REMAINING:
+                _remaining_text, color = self._remaining_display(it)
+                return QColor(color) if color else None
+
+        if role == Qt.UserRole:
+            return it
+
+        if role == Qt.ToolTipRole:
+            if col == COL_SUMMARY:
+                return "Bileşen özetini gör"
+            if col == COL_TAGS:
+                return ", ".join(str(tag) for tag in self._tags_for_row(it))
+
+        if role == Qt.TextAlignmentRole:
+            if col == COL_SUMMARY:
+                return int(Qt.AlignCenter)
+            return int(Qt.AlignVCenter | Qt.AlignLeft)
+
+        if role == Qt.SizeHintRole and col == COL_TAGS:
+            height = self._row_height_for_tags(len(self._tags_for_row(it)))
+            return QSize(-1, height)
+
+        return None
+
+    def headerData(self, section, orientation, role=Qt.DisplayRole):
+        if orientation == Qt.Horizontal and role == Qt.DisplayRole:
+            if 0 <= section < len(self.HEADERS):
+                return self.HEADERS[section]
+        return None
+
+
+class ContractTagsDelegate(QStyledItemDelegate):
+    def __init__(self, tags_fn, tag_color_fn, row_height_fn=None, parent=None):
+        super().__init__(parent)
+        self._tags_fn = tags_fn
+        self._tag_color_fn = tag_color_fn
+        self._row_height_fn = row_height_fn
+
+    def _tags_for_index(self, index) -> tuple[Optional[dict], list]:
+        it = index.data(Qt.UserRole)
+        if not isinstance(it, dict):
+            return None, []
+        tags_list = list(self._tags_fn(it) or []) if callable(self._tags_fn) else []
+        return it, tags_list
+
+    def _row_height_for_tags(self, tag_count: int) -> int:
+        if callable(self._row_height_fn):
+            return int(self._row_height_fn(tag_count))
+        n = int(tag_count or 0)
+        return max(36, n * 22 + max(0, n - 1) * 3 + 8) if n > 0 else 36
+
+    def paint(self, painter: QPainter, option: QStyleOptionViewItem, index):
+        _it, tags_list = self._tags_for_index(index)
+        if _it is None:
+            super().paint(painter, option, index)
+            return
+        if not tags_list:
+            return
+
+        painter.save()
+        try:
+            painter.setRenderHint(QPainter.Antialiasing, True)
+            painter.setRenderHint(QPainter.TextAntialiasing, True)
+            margin_x = 5
+            margin_y = 4
+            chip_sp = 3
+            chip_h = 22
+            chip_pad_x = 8
+            radius = 9
+
+            font = QFont(option.font)
+            font.setPointSize(11)
+            font.setBold(True)
+            painter.setFont(font)
+            fm = QFontMetrics(font)
+
+            x = option.rect.left() + margin_x
+            y = option.rect.top() + margin_y
+            for tag_name in tags_list:
+                tag_text = str(tag_name)
+                color = self._tag_color_fn(tag_text) if callable(self._tag_color_fn) else "#3B82F6"
+                base_rgb = _hex_to_rgb(color)
+                bg = _mix_rgb(base_rgb, (255, 255, 255), 0.78)
+                border_c = _mix_rgb(base_rgb, (255, 255, 255), 0.28)
+                txt_c = _mix_rgb(base_rgb, (15, 23, 42), 0.22)
+
+                chip_w = fm.horizontalAdvance(tag_text) + 2 * chip_pad_x
+                chip_rect = QRect(x, y, chip_w, chip_h)
+                painter.setBrush(QColor(_rgb_to_hex(bg)))
+                pen = QPen(QColor(_rgb_to_hex(border_c)))
+                pen.setWidth(1)
+                pen.setCosmetic(True)
+                painter.setPen(pen)
+                painter.drawRoundedRect(chip_rect, radius, radius)
+                painter.setPen(QColor(_rgb_to_hex(txt_c)))
+                painter.drawText(chip_rect.adjusted(chip_pad_x, 0, -chip_pad_x, 0), Qt.AlignCenter, tag_text)
+                y += chip_h + chip_sp
+        finally:
+            painter.restore()
+
+    def sizeHint(self, option: QStyleOptionViewItem, index) -> QSize:
+        it = index.data(Qt.UserRole)
+        if not isinstance(it, dict):
+            return super().sizeHint(option, index)
+        tags_list = list(self._tags_fn(it) or []) if callable(self._tags_fn) else []
+        return QSize(option.rect.width(), self._row_height_for_tags(len(tags_list)))
+
+
+class ContractSummaryDelegate(QStyledItemDelegate):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+
+    def paint(self, painter: QPainter, option: QStyleOptionViewItem, index):
+        painter.save()
+        try:
+            font = QFont(option.font)
+            font.setPointSize(16)
+            painter.setFont(font)
+            painter.setPen(QColor("#185FA5"))
+            painter.drawText(option.rect, Qt.AlignCenter, "\U0001F50D")
+        finally:
+            painter.restore()
+
+    def sizeHint(self, option: QStyleOptionViewItem, index) -> QSize:
+        return super().sizeHint(option, index)
 
 
 
@@ -3380,6 +3609,51 @@ class MainWindow(QMainWindow):
             return
         self._filter_apply_timer.start(180)
 
+    def _contract_status_display(self, it: dict) -> tuple[str, str]:
+        cls, st_label, _days_text, _tdate = self._contract_health(it)
+        if cls in {"geciken", "gecikmeli_teslim"}:
+            color = "#dc2626"
+        elif cls == "kritik":
+            color = "#b45309"
+        elif cls == "tamamlandi":
+            color = "#047857"
+        else:
+            color = "#1f5be3"
+        return st_label, color
+
+    def _contract_remaining_display(self, it: dict) -> tuple[str, str]:
+        cls, _st_label, days_text, tdate = self._contract_health(it)
+        tdate_display = str(tdate or "").strip()
+        if tdate_display in {"-", "Belirsiz", "—"} or not parse_flexible_date(tdate_display):
+            tdate_display = ""
+        remaining_text = str(days_text or "").strip() if tdate_display else ""
+        if remaining_text in {"-", "Belirsiz", "—"}:
+            remaining_text = ""
+
+        if cls in {"geciken", "gecikmeli_teslim"}:
+            color = "#dc2626"
+        elif "erken teslim edildi" in str(remaining_text):
+            color = "#047857"
+        elif str(remaining_text) in {"Termin gününde teslim edildi", "Teslim tarihi yok", "—"}:
+            color = "#64748b"
+        elif str(remaining_text).endswith("gün"):
+            days_num = as_number(str(remaining_text).replace(" gün", ""))
+            if days_num <= 60:
+                color = "#b45309"
+            else:
+                color = "#1f5be3"
+        else:
+            color = "#047857"
+        return remaining_text, color
+
+    def _contract_tags_for_row(self, it: dict, tags_map=None) -> list:
+        return list(it.get("tags", []) or [])
+
+    def _contract_row_height_for_tags(self, tag_count: int) -> int:
+        n = int(tag_count or 0)
+        return max(36, n * 22 + max(0, n - 1) * 3 + 8) if n > 0 else 36
+
+
     def apply_contract_filter(self):
         q = (self.search_input.text() if hasattr(self, "search_input") else "").strip().lower()
         selected_type = str(self.filter_type.currentData() or "").strip() if hasattr(self, "filter_type") else ""
@@ -3532,7 +3806,9 @@ class MainWindow(QMainWindow):
                 for c in range(self.contract_table.columnCount()):
                     self.contract_table.removeCellWidget(r, c)
                 self.contract_table.setRowHeight(r, 36)
-                cls, st_label, days_text, tdate = self._contract_health(it)
+                cls, _st_label, _days_text, tdate = self._contract_health(it)
+                st_label, status_color = self._contract_status_display(it)
+                days_display, remaining_color = self._contract_remaining_display(it)
                 payload = {
                     "platform": str(it.get("platform", "") or ""),
                     "contract_no": str(it.get("no", "") or ""),
@@ -3542,9 +3818,6 @@ class MainWindow(QMainWindow):
                 tdate_display = str(tdate or "").strip()
                 if tdate_display in {"-", "Belirsiz", "—"} or not parse_flexible_date(tdate_display):
                     tdate_display = ""
-                days_display = str(days_text or "").strip() if tdate_display else ""
-                if days_display in {"-", "Belirsiz", "—"}:
-                    days_display = ""
                 vals=[
                     it.get("platform", ""),
                     it.get("type_display", it.get("type", "")) or "",
@@ -3559,7 +3832,7 @@ class MainWindow(QMainWindow):
                 for c,v in enumerate(vals):
                     if c == COL_TAGS:
                         # Etiketler: dikey sıralı renkli chip'ler
-                        tags_list = list(it.get("tags", []) or [])
+                        tags_list = self._contract_tags_for_row(it, _tag_color_map)
                         if not tags_list:
                             empty = QTableWidgetItem("")
                             empty.setFlags(empty.flags() & ~Qt.ItemIsEditable)
@@ -3591,9 +3864,7 @@ class MainWindow(QMainWindow):
                         self.contract_table.setItem(r, COL_TAGS, placeholder)
                         self.contract_table.setCellWidget(r, COL_TAGS, wrap)
                         # Satır yüksekliğini etiket sayısına göre ayarla
-                        CHIP_H, CHIP_SP, PAD = 22, 3, 8
-                        n = len(tags_list)
-                        row_h = max(36, n * CHIP_H + max(0, n - 1) * CHIP_SP + PAD) if n > 0 else 36
+                        row_h = self._contract_row_height_for_tags(len(tags_list))
                         self.contract_table.setRowHeight(r, max(self.contract_table.rowHeight(r), row_h))
                         continue
                     if c == COL_SUMMARY:
@@ -3620,29 +3891,9 @@ class MainWindow(QMainWindow):
                     cell.setFlags(cell.flags() & ~Qt.ItemIsEditable)
                     cell.setData(Qt.UserRole, payload)
                     if c == COL_STATUS:
-                        if cls in {"geciken", "gecikmeli_teslim"}:
-                            cell.setForeground(QColor("#dc2626"))
-                        elif cls == "kritik":
-                            cell.setForeground(QColor("#b45309"))
-                        elif cls == "tamamlandi":
-                            cell.setForeground(QColor("#047857"))
-                        else:
-                            cell.setForeground(QColor("#1f5be3"))
+                        cell.setForeground(QColor(status_color))
                     if c == COL_REMAINING:
-                        if cls in {"geciken", "gecikmeli_teslim"}:
-                            cell.setForeground(QColor("#dc2626"))
-                        elif "erken teslim edildi" in str(v):
-                            cell.setForeground(QColor("#047857"))
-                        elif str(v) in {"Termin gününde teslim edildi", "Teslim tarihi yok", "—"}:
-                            cell.setForeground(QColor("#64748b"))
-                        elif str(v).endswith("gün"):
-                            days_num = as_number(str(v).replace(" gün", ""))
-                            if days_num <= 60:
-                                cell.setForeground(QColor("#b45309"))
-                            else:
-                                cell.setForeground(QColor("#1f5be3"))
-                        else:
-                            cell.setForeground(QColor("#047857"))
+                        cell.setForeground(QColor(remaining_color))
                     self.contract_table.setItem(r,c,cell)
         finally:
             self.contract_table.blockSignals(False)
@@ -3725,14 +3976,10 @@ class MainWindow(QMainWindow):
             self.contract_table.setEnabled(True)
             self._opening_contract = False
 
-    def open_selected_contract(self, row, col):
+    def _extract_contract_item_from_cell(self, row: int, col: int) -> dict | None:
         rows = getattr(self.contract_table, "_visible_rows", [])
         if row < 0 or row >= self.contract_table.rowCount():
-            return
-        if col == COL_SUMMARY:
-            if row < len(rows):
-                self.show_contract_summary(row, rows[row])
-            return
+            return None
         payload = None
         for column in range(self.contract_table.columnCount()):
             cell = self.contract_table.item(row, column)
@@ -3741,19 +3988,29 @@ class MainWindow(QMainWindow):
                 payload = candidate
                 break
         if payload and isinstance(payload.get("contract_item"), dict):
-            self.open_contract_item(payload["contract_item"])
-            return
+            return payload["contract_item"]
         if row < len(rows):
-            self.open_contract_item(rows[row])
-            return
+            return rows[row]
         platform_item = self.contract_table.item(row, COL_PLATFORM)
         type_item = self.contract_table.item(row, COL_TYPE)
         no_item = self.contract_table.item(row, COL_CONTRACT_NO)
-        self.open_contract_item({
+        return {
             "platform": platform_item.text() if platform_item else "",
             "type": type_item.text() if type_item else "",
             "no": no_item.text() if no_item else "",
-        })
+        }
+
+    def open_selected_contract(self, row, col):
+        rows = getattr(self.contract_table, "_visible_rows", [])
+        if row < 0 or row >= self.contract_table.rowCount():
+            return
+        if col == COL_SUMMARY:
+            if row < len(rows):
+                self.show_contract_summary(row, rows[row])
+            return
+        item = self._extract_contract_item_from_cell(row, col)
+        if item:
+            self.open_contract_item(item)
 
     def _apply_deleted_contract_to_index(self, deleted_info: dict):
         p = str((deleted_info or {}).get("platform") or "")
