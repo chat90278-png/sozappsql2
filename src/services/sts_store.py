@@ -1335,9 +1335,22 @@ class STSStore:
 
     def list_main_contracts(self, platform, tags_map=None):
         rows=[]; tags_map = tags_map or self.all_contract_tags_map()
+        users_by_contract = {}
+        user_rows = self.db.conn.execute(
+            """
+            SELECT cu.contract_id, u.name
+            FROM contract_users cu
+            JOIN users u ON u.id = cu.user_id
+            ORDER BY cu.contract_id, u.name
+            """
+        ).fetchall()
+        for user_row in user_rows:
+            name = str(user_row[1] or "").strip()
+            if name:
+                users_by_contract.setdefault(int(user_row[0]), []).append(name)
         for r in self.db.conn.execute("SELECT c.*,p.name AS platform FROM contracts c JOIN contract_platforms cp ON cp.contract_id=c.id JOIN platforms p ON p.id=cp.platform_id WHERE cp.platform_id=? ORDER BY c.id",(self.get_platform_id(platform),)):
             tags=tags_map.get((r['platform'],r['contract_no'],r['contract_type']),[])
-            users = self._contract_users(int(r["id"]))
+            users = users_by_contract.get(int(r["id"]), [])
             user_display = self._user_display(users)
             search_text = str(r["search_text"] or "")
             if users and not search_text:
