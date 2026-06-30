@@ -7,7 +7,7 @@ from PySide6.QtCore import QDate, QPoint, QRect, QSize, Qt, Signal
 from PySide6.QtGui import QAction, QColor
 from PySide6.QtWidgets import (
     QDateEdit, QHeaderView, QHBoxLayout, QLabel, QLineEdit, QMenu,
-    QPushButton, QStyle, QStyledItemDelegate, QTableWidget, QVBoxLayout,
+    QPushButton, QStyle, QStyledItemDelegate, QTableView, QTableWidget, QVBoxLayout,
     QWidget, QWidgetAction,
 )
 
@@ -177,7 +177,7 @@ class FilterableHeaderView(QHeaderView):
 
     def _get_column_values(self, col: int) -> List[str]:
         table = self.parent()
-        if not isinstance(table, QTableWidget):
+        if not isinstance(table, (QTableWidget, QTableView)):
             return []
         vals = set()
         # Tum satirlari tara (visible_rows varsa onu kullan)
@@ -206,11 +206,20 @@ class FilterableHeaderView(QHeaderView):
                     if v:
                         vals.add(v)
         else:
-            for r in range(table.rowCount()):
-                item = table.item(r, col)
-                v = str(item.text() if item else "").strip()
-                if v:
-                    vals.add(v)
+            if isinstance(table, QTableWidget):
+                for r in range(table.rowCount()):
+                    item = table.item(r, col)
+                    v = str(item.text() if item else "").strip()
+                    if v:
+                        vals.add(v)
+            elif isinstance(table, QTableView):
+                model = table.model()
+                if model is not None:
+                    for r in range(model.rowCount()):
+                        idx = model.index(r, col)
+                        v = str(model.data(idx, Qt.DisplayRole) or "").strip()
+                        if v:
+                            vals.add(v)
         return sorted(vals, key=lambda x: x.lower())
 
     def _on_section_clicked(self, col: int):
