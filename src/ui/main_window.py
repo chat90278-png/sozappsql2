@@ -20,6 +20,7 @@ from pathlib import Path
 from datetime import date, datetime, timedelta
 from typing import Callable, Dict, List, Optional, Protocol, Tuple
 from src.ui.dialogs.auto_accept_dialog import open_auto_accept_dialog
+from src.services import perf_tracker
 
 
 from src.domain.constants import (
@@ -715,6 +716,7 @@ class MainWindow(QMainWindow):
         self._export_thread: Optional[QThread] = None
         self._export_worker = None
         self._store_loading = False
+        self._export_sts_to_excel_running = False
         self._opening_contract = False
         self._refreshing_platform_index = False
         self._index_ready_for_use = False
@@ -753,81 +755,88 @@ class MainWindow(QMainWindow):
 
 
     def export_sts_to_excel(self):
-        if self._export_thread and self._export_thread.isRunning():
-            QMessageBox.information(self, "Excel’e Aktar",
-                                    "İşlem devam ediyor, lütfen bekleyin.")
+        if getattr(self, "_export_sts_to_excel_running", False):
             return
-        if not self.require_permission_ui("export_data", "Excel’e Aktar"):
-            return
-        if not self.store:
-            QMessageBox.information(self, "Veri dosyası gerekli", "Önce bir STS veri dosyası açın.")
-            return
-        if not hasattr(self.store, "export_to_excel"):
-            QMessageBox.information(self, "Excel’e Aktar", "Excel’e aktarım yalnızca STS veri dosyalarında desteklenir.")
-            return
-        active_platform = ""
-        selected = set(getattr(self, "selected_platforms", set()))
-        if len(selected) == 1:
-            active_platform = next(iter(selected))
-        from src.ui.dialogs.excel_export_options import ExcelExportDialog
-        dlg = ExcelExportDialog(self.store, self, active_platform=active_platform, contract_index=getattr(self, "contract_index", None))
-        if not dlg.exec() or not dlg.result_options:
-            return
-        opts = dict(dlg.result_options)
+        self._export_sts_to_excel_running = True
         try:
-            suggested_out = suggested_export_excel_path(getattr(self, "path", None), opts)
-        except Exception:
-            suggested_out = Path(self.path).with_suffix(".xlsx")
-        try:
-            out, _ = QFileDialog.getSaveFileName(self, "Excel’e Aktar", str(suggested_out), "Excel (*.xlsx)")
-        except Exception as exc:
-            QMessageBox.critical(self, "Excel’e Aktar", f"Kayıt penceresi açılamadı:\n{exc}")
-            return
-        if not out:
-            return
-        if not str(out).lower().endswith(".xlsx"):
-            out = str(out) + ".xlsx"
-        from src.workers.export_workers import ExcelExportWorker
-        self._export_progress = QProgressDialog("Excel dosyası hazırlanıyor...", "", 0, 100, self)
-        self._export_progress.setWindowTitle("Excel’e Aktar")
-        self._export_progress.setLabelText("Excel dosyası hazırlanıyor...")
-        self._export_progress.setCancelButton(None)
-        self._export_progress.setMinimumDuration(0)
-        self._export_progress.setAutoClose(False)
-        self._export_progress.setAutoReset(False)
-        self._export_progress.setValue(0)
-        self._export_progress.show()
-        QApplication.processEvents()
+            if self._export_thread and self._export_thread.isRunning():
+                QMessageBox.information(self, "Excel’e Aktar",
+                                        "İşlem devam ediyor, lütfen bekleyin.")
+                return
+            if not self.require_permission_ui("export_data", "Excel’e Aktar"):
+                return
+            if not self.store:
+                QMessageBox.information(self, "Veri dosyası gerekli", "Önce bir STS veri dosyası açın.")
+                return
+            if not hasattr(self.store, "export_to_excel"):
+                QMessageBox.information(self, "Excel’e Aktar", "Excel’e aktarım yalnızca STS veri dosyalarında desteklenir.")
+                return
+            active_platform = ""
+            selected = set(getattr(self, "selected_platforms", set()))
+            if len(selected) == 1:
+                active_platform = next(iter(selected))
+            from src.ui.dialogs.excel_export_options import ExcelExportDialog
+            dlg = ExcelExportDialog(self.store, self, active_platform=active_platform, contract_index=getattr(self, "contract_index", None))
+            if not dlg.exec() or not dlg.result_options:
+                return
+            opts = dict(dlg.result_options)
+            try:
+                suggested_out = suggested_export_excel_path(getattr(self, "path", None), opts)
+            except Exception:
+                suggested_out = Path(self.path).with_suffix(".xlsx")
+            try:
+                out, _ = QFileDialog.getSaveFileName(self, "Excel’e Aktar", str(suggested_out), "Excel (*.xlsx)")
+            except Exception as exc:
+                QMessageBox.critical(self, "Excel’e Aktar", f"Kayıt penceresi açılamadı:\n{exc}")
+                return
+            if not out:
+                return
+            if not str(out).lower().endswith(".xlsx"):
+                out = str(out) + ".xlsx"
+            from src.workers.export_workers import ExcelExportWorker
+            self._export_progress = QProgressDialog("Excel dosyası hazırlanıyor...", "", 0, 100, self)
+            self._export_progress.setWindowTitle("Excel’e Aktar")
+            self._export_progress.setLabelText("Excel dosyası hazırlanıyor...")
+            self._export_progress.setCancelButton(None)
+            self._export_progress.setMinimumDuration(0)
+            self._export_progress.setAutoClose(False)
+            self._export_progress.setAutoReset(False)
+            self._export_progress.setValue(0)
+            self._export_progress.show()
+            QApplication.processEvents()
 
-        db_path = getattr(getattr(self.store, "db", None), "path", None)
-        if not db_path:
-            self._export_progress.close()
-            QMessageBox.critical(self, "Excel’e Aktar", "Veritabanı yolu belirlenemedi.")
-            return
+            db_path = getattr(getattr(self.store, "db", None), "path", None)
+            if not db_path:
+                self._export_progress.close()
+                QMessageBox.critical(self, "Excel’e Aktar", "Veritabanı yolu belirlenemedi.")
+                return
 
-        self._export_thread = QThread(self)
-        # Worker'a canlı store/bağlantı DEĞİL, dosya yolu verilir; worker kendi
-        # salt-okunur sqlite bağlantısını kendi thread'inde açar (thread-safe).
-        self._export_worker = ExcelExportWorker(db_path, out, opts)
-        self._export_worker.moveToThread(self._export_thread)
-        self._export_thread.started.connect(self._export_worker.run)
-        # KRİTİK: Sinyaller lambda/yerel fonksiyona DEĞİL, ana penceredeki
-        # gerçek metotlara bağlanır. Lambda bağlanırsa Qt onu sinyali yayan
-        # thread'de (worker) çalıştırır ve GUI'ye worker thread'inden dokunmak
-        # uygulamayı çökertir. Alıcı self (ana thread'de yaşayan QObject)
-        # olduğunda Qt bağlantıyı otomatik QueuedConnection yapar; tüm GUI
-        # işleri güvenle ana thread'de çalışır.
-        self._export_out_path = str(out)
-        self._export_opts = dict(opts)
-        self._export_worker.progress.connect(self._on_export_progress)
-        self._export_worker.finished.connect(self._on_export_finished)
-        self._export_worker.failed.connect(self._on_export_failed)
-        self._export_worker.finished.connect(self._export_thread.quit)
-        self._export_worker.failed.connect(self._export_thread.quit)
-        self._export_thread.finished.connect(self._export_worker.deleteLater)
-        self._export_thread.finished.connect(self._export_thread.deleteLater)
-        self._export_thread.finished.connect(self._clear_export_refs)
-        self._export_thread.start()
+            self._export_thread = QThread(self)
+            # Worker'a canlı store/bağlantı DEĞİL, dosya yolu verilir; worker kendi
+            # salt-okunur sqlite bağlantısını kendi thread'inde açar (thread-safe).
+            self._export_worker = ExcelExportWorker(db_path, out, opts)
+            self._export_worker.moveToThread(self._export_thread)
+            self._export_thread.started.connect(self._export_worker.run)
+            # KRİTİK: Sinyaller lambda/yerel fonksiyona DEĞİL, ana penceredeki
+            # gerçek metotlara bağlanır. Lambda bağlanırsa Qt onu sinyali yayan
+            # thread'de (worker) çalıştırır ve GUI'ye worker thread'inden dokunmak
+            # uygulamayı çökertir. Alıcı self (ana thread'de yaşayan QObject)
+            # olduğunda Qt bağlantıyı otomatik QueuedConnection yapar; tüm GUI
+            # işleri güvenle ana thread'de çalışır.
+            self._export_out_path = str(out)
+            self._export_opts = dict(opts)
+            self._export_worker.progress.connect(self._on_export_progress)
+            self._export_worker.finished.connect(self._on_export_finished)
+            self._export_worker.failed.connect(self._on_export_failed)
+            self._export_worker.finished.connect(self._export_thread.quit)
+            self._export_worker.failed.connect(self._export_thread.quit)
+            self._export_thread.finished.connect(self._export_worker.deleteLater)
+            self._export_thread.finished.connect(self._export_thread.deleteLater)
+            self._export_thread.finished.connect(self._clear_export_refs)
+            self._export_thread.start()
+
+        finally:
+            self._export_sts_to_excel_running = False
 
     # --- Excel export slot'ları: sinyaller worker thread'inden gelir ama bu
     # metotlar ana pencerenin (ana thread) metodu olduğu için Qt bunları
@@ -3652,7 +3661,12 @@ class MainWindow(QMainWindow):
             start_row = item.get("row")
             self.set_busy_overlay(True, "Sözleşme detayı yükleniyor...")
             try:
-                ci, systems, deliveries = self.store.load_contract_structure(platform, no, start_row=start_row)
+                with perf_tracker.measure(
+                    perf_tracker.OP_CONTRACT_OPEN,
+                    self.store.path,
+                    meta={"platform": platform, "contract_no": no, "row": start_row},
+                ):
+                    ci, systems, deliveries = self.store.load_contract_structure(platform, no, start_row=start_row)
             finally:
                 self.set_busy_overlay(False)
             if not ci:
