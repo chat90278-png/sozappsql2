@@ -114,7 +114,7 @@ from PySide6.QtWidgets import (
     QLabel, QPushButton, QListWidget, QListWidgetItem, QTableWidget, QTableWidgetItem,
     QTreeWidget, QTreeWidgetItem, QDialog, QLineEdit, QComboBox, QDateEdit, QSpinBox, QDoubleSpinBox,
     QMessageBox, QFileDialog, QFrame, QScrollArea, QCheckBox, QHeaderView,
-    QSizePolicy, QProgressBar, QProgressDialog, QStyledItemDelegate, QTextEdit,
+    QSizePolicy, QProgressBar, QProgressDialog, QStyledItemDelegate, QStyleOptionViewItem, QTextEdit,
     QToolButton, QMenu, QInputDialog, QWidgetAction, QStackedWidget, QAbstractItemView, QStyle, QRadioButton, QButtonGroup, QTabWidget, QTabBar, QCalendarWidget
 )
 from shiboken6 import isValid as _qt_is_valid
@@ -689,6 +689,97 @@ class ContractTableModel(QAbstractTableModel):
             if 0 <= section < len(self.HEADERS):
                 return self.HEADERS[section]
         return None
+
+
+class ContractTagsDelegate(QStyledItemDelegate):
+    def __init__(self, tags_fn, tag_color_fn, row_height_fn=None, parent=None):
+        super().__init__(parent)
+        self._tags_fn = tags_fn
+        self._tag_color_fn = tag_color_fn
+        self._row_height_fn = row_height_fn
+
+    def _tags_for_index(self, index) -> tuple[Optional[dict], list]:
+        it = index.data(Qt.UserRole)
+        if not isinstance(it, dict):
+            return None, []
+        tags_list = list(self._tags_fn(it) or []) if callable(self._tags_fn) else []
+        return it, tags_list
+
+    def _row_height_for_tags(self, tag_count: int) -> int:
+        if callable(self._row_height_fn):
+            return int(self._row_height_fn(tag_count))
+        n = int(tag_count or 0)
+        return max(36, n * 22 + max(0, n - 1) * 3 + 8) if n > 0 else 36
+
+    def paint(self, painter: QPainter, option: QStyleOptionViewItem, index):
+        _it, tags_list = self._tags_for_index(index)
+        if _it is None:
+            super().paint(painter, option, index)
+            return
+        if not tags_list:
+            return
+
+        painter.save()
+        try:
+            margin_x = 5
+            margin_y = 4
+            chip_sp = 3
+            chip_h = 22
+            chip_pad_x = 8
+            radius = 9
+
+            font = QFont(option.font)
+            font.setPointSize(11)
+            font.setBold(True)
+            painter.setFont(font)
+            fm = QFontMetrics(font)
+
+            x = option.rect.left() + margin_x
+            y = option.rect.top() + margin_y
+            for tag_name in tags_list:
+                tag_text = str(tag_name)
+                color = self._tag_color_fn(tag_text) if callable(self._tag_color_fn) else "#3B82F6"
+                base_rgb = _hex_to_rgb(color)
+                bg = _mix_rgb(base_rgb, (255, 255, 255), 0.78)
+                border_c = _mix_rgb(base_rgb, (255, 255, 255), 0.28)
+                txt_c = _mix_rgb(base_rgb, (15, 23, 42), 0.22)
+
+                chip_w = fm.horizontalAdvance(tag_text) + 2 * chip_pad_x
+                chip_rect = QRect(x, y, chip_w, chip_h)
+                painter.setBrush(QColor(_rgb_to_hex(bg)))
+                painter.setPen(QColor(_rgb_to_hex(border_c)))
+                painter.drawRoundedRect(chip_rect, radius, radius)
+                painter.setPen(QColor(_rgb_to_hex(txt_c)))
+                painter.drawText(chip_rect.adjusted(chip_pad_x, 0, -chip_pad_x, 0), Qt.AlignCenter, tag_text)
+                y += chip_h + chip_sp
+        finally:
+            painter.restore()
+
+    def sizeHint(self, option: QStyleOptionViewItem, index) -> QSize:
+        it = index.data(Qt.UserRole)
+        if not isinstance(it, dict):
+            return super().sizeHint(option, index)
+        tags_list = list(self._tags_fn(it) or []) if callable(self._tags_fn) else []
+        return QSize(option.rect.width(), self._row_height_for_tags(len(tags_list)))
+
+
+class ContractSummaryDelegate(QStyledItemDelegate):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+
+    def paint(self, painter: QPainter, option: QStyleOptionViewItem, index):
+        painter.save()
+        try:
+            font = QFont(option.font)
+            font.setPointSize(16)
+            painter.setFont(font)
+            painter.setPen(QColor("#185FA5"))
+            painter.drawText(option.rect, Qt.AlignCenter, "\U0001F50D")
+        finally:
+            painter.restore()
+
+    def sizeHint(self, option: QStyleOptionViewItem, index) -> QSize:
+        return super().sizeHint(option, index)
 
 
 
