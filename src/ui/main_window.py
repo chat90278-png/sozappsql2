@@ -737,7 +737,9 @@ class ContractTagsDelegate(QStyledItemDelegate):
             fm = QFontMetrics(font)
 
             x = option.rect.left() + margin_x
-            y = option.rect.top() + margin_y
+            n = len(tags_list)
+            total_h = n * chip_h + max(0, n - 1) * chip_sp
+            y = option.rect.top() + max(margin_y, (option.rect.height() - total_h) // 2)
             for tag_name in tags_list:
                 tag_text = str(tag_name)
                 color = self._tag_color_fn(tag_text) if callable(self._tag_color_fn) else "#3B82F6"
@@ -3896,9 +3898,9 @@ class MainWindow(QMainWindow):
                             wrap = QWidget()
                             wrap.setStyleSheet("QWidget{background:transparent;border:0px;}")
                             wl = QVBoxLayout(wrap)
-                            wl.setContentsMargins(5, 4, 5, 0)
+                            wl.setContentsMargins(5, 3, 5, 3)
                             wl.setSpacing(3)
-                            wl.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+                            wl.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
                             for tag_name in tags_list:
                                 color = _tag_color_map.get(self.store._normalize_label(tag_name) if self.store else tag_name, "#3B82F6")
                                 base_rgb = _hex_to_rgb(color)
