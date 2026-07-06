@@ -1347,9 +1347,9 @@ class DeliveryScheduleReportDialog(QDialog):
             statuses = [r.status for r in group_rows if r.status and r.status != "-"]
             parts = sorted({r.part for r in group_rows if r.part and r.part != "-"})
 
-            planned_total = sum(_safe_float(r.planned) for r in group_rows)
-            delivered_total = sum(_safe_float(r.delivered) for r in group_rows)
-            remaining_total = sum(_safe_float(r.remaining) for r in group_rows)
+            display_no = contract_no
+            if len(contract_no) > 22:
+                display_no = contract_no[:19] + "..."
 
             display_no = contract_no
             if len(contract_no) > 22:
@@ -1365,9 +1365,9 @@ class DeliveryScheduleReportDialog(QDialog):
             parent.setText(5, _short_join(users, limit=2, empty="Tanımsız"))
             parent.setText(6, _short_join(yi_yd_values, limit=2, empty="-"))
             parent.setText(8, f"{len(parts)} parça")
-            parent.setText(9, _fmt_amount(planned_total))
-            parent.setText(10, _fmt_amount(delivered_total))
-            parent.setText(11, _fmt_amount(remaining_total))
+            parent.setText(9, "")
+            parent.setText(10, "")
+            parent.setText(11, "")
             parent.setText(14, _short_join(statuses, limit=2))
             parent.setExpanded(False)
 
