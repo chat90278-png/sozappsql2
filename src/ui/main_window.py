@@ -3896,7 +3896,7 @@ class MainWindow(QMainWindow):
                             wrap = QWidget()
                             wrap.setStyleSheet("QWidget{background:transparent;border:0px;}")
                             wl = QVBoxLayout(wrap)
-                            wl.setContentsMargins(5, 4, 5, 4)
+                            wl.setContentsMargins(5, 4, 5, 0)
                             wl.setSpacing(3)
                             wl.setAlignment(Qt.AlignTop | Qt.AlignLeft)
                             for tag_name in tags_list:
@@ -3906,6 +3906,7 @@ class MainWindow(QMainWindow):
                                 border_c = _mix_rgb(base_rgb, (255, 255, 255), 0.28)
                                 txt_c = _rgb_to_hex(_mix_rgb(base_rgb, (15, 23, 42), 0.22))
                                 chip = QLabel(tag_name)
+                                chip.setFixedHeight(22)
                                 chip.setStyleSheet(
                                     f"QLabel{{background:{_rgb_to_hex(bg)};color:{txt_c};"
                                     f"border:1px solid {_rgb_to_hex(border_c)};border-radius:9px;"
