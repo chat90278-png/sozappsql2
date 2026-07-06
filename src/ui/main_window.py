@@ -2132,6 +2132,12 @@ class MainWindow(QMainWindow):
                         self._remember_version_baseline()
             except Exception:
                 pass
+        if getattr(self, "store", None) and getattr(self.store, "db", None):
+            try:
+                self.store.db.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            except Exception:
+                pass
+            self.store.db.close()
         super().closeEvent(event)
 
     def build_loading_overlay(self):
