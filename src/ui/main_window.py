@@ -1564,7 +1564,7 @@ class MainWindow(QMainWindow):
         self.sort_combo.addItem("Kalan Gün (Azalan)", "days_desc")
         self.sort_combo.addItem("Kullanıcı (A-Z)", "user_asc")
         self.sort_combo.addItem("Kullanıcı (Z-A)", "user_desc")
-        self.sort_combo.currentIndexChanged.connect(self.schedule_apply_contract_filter)
+        self.sort_combo.currentIndexChanged.connect(self._on_sort_combo_changed)
         fb.addWidget(self.sort_combo, 0)
         self.clear_filters_btn = QPushButton("Temizle")
         self.clear_filters_btn.setObjectName("secondary")
@@ -3497,6 +3497,11 @@ class MainWindow(QMainWindow):
             else:
                 self.filter_type.setFocus()
 
+    def _on_sort_combo_changed(self, *_args):
+        if hasattr(self, "contract_table") and hasattr(self.contract_table, "_sort_mode"):
+            self.contract_table._sort_mode = 'default'
+        self.schedule_apply_contract_filter()
+
     def clear_query_filters(self):
         self.search_input.clear()
         if hasattr(self, "date_from_filter"):
@@ -3515,6 +3520,8 @@ class MainWindow(QMainWindow):
             self.filter_status.setCurrentIndex(0)
         if hasattr(self, 'sort_combo'):
             self.sort_combo.setCurrentIndex(0)
+        if hasattr(self, "contract_table") and hasattr(self.contract_table, "_sort_mode"):
+            self.contract_table._sort_mode = 'default'
         # Sutun filtrelerini temizle
         if hasattr(self, '_filter_header'):
             self._filter_header.clear_all_filters()
@@ -4082,10 +4089,7 @@ class MainWindow(QMainWindow):
         it = index.data(Qt.UserRole)
         if not isinstance(it, dict):
             return
-        if index.column() == COL_SUMMARY:
-            self.show_contract_summary(index.row(), it)
-        else:
-            self.open_contract_item(it)
+        self.open_contract_item(it)
 
     def open_selected_contract(self, row, col):
         rows = getattr(self.contract_table, "_visible_rows", [])
