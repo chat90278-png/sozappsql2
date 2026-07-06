@@ -1432,6 +1432,17 @@ def ensure_document_locks_table(db_or_path: sqlite3.Connection | str | Path) -> 
             )
             """
         )
+        columns = _table_columns(conn, "document_locks")
+        for name, ddl in (
+            ("is_locked", "INTEGER NOT NULL DEFAULT 0"),
+            ("locked_by_staff_id", "INTEGER"),
+            ("locked_by_device_name", "TEXT"),
+            ("locked_by_full_name", "TEXT"),
+            ("locked_at", "TEXT"),
+            ("updated_at", "TEXT"),
+        ):
+            if name not in columns:
+                conn.execute(f"ALTER TABLE document_locks ADD COLUMN {name} {ddl}")
         conn.commit()
     finally:
         if should_close:

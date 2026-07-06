@@ -146,8 +146,7 @@ class FilterableHeaderView(QHeaderView):
         self.sectionClicked.connect(self._on_section_clicked)
 
     def _filter_disabled_for_col(self, col: int) -> bool:
-        # Sözleşme No ve Kullanıcı sütunlarında Excel-tipi header filtresi istenmiyor.
-        return int(col) in (COL_CONTRACT_NO, COL_USER)
+        return False
 
     def has_active_filter(self, col: int) -> bool:
         if self._filter_disabled_for_col(col):

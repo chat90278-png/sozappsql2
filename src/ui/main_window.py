@@ -737,7 +737,9 @@ class ContractTagsDelegate(QStyledItemDelegate):
             fm = QFontMetrics(font)
 
             x = option.rect.left() + margin_x
-            y = option.rect.top() + margin_y
+            n = len(tags_list)
+            total_h = n * chip_h + max(0, n - 1) * chip_sp
+            y = option.rect.top() + max(margin_y, (option.rect.height() - total_h) // 2)
             for tag_name in tags_list:
                 tag_text = str(tag_name)
                 color = self._tag_color_fn(tag_text) if callable(self._tag_color_fn) else "#3B82F6"
@@ -1562,7 +1564,7 @@ class MainWindow(QMainWindow):
         self.sort_combo.addItem("Kalan Gün (Azalan)", "days_desc")
         self.sort_combo.addItem("Kullanıcı (A-Z)", "user_asc")
         self.sort_combo.addItem("Kullanıcı (Z-A)", "user_desc")
-        self.sort_combo.currentIndexChanged.connect(self.schedule_apply_contract_filter)
+        self.sort_combo.currentIndexChanged.connect(self._on_sort_combo_changed)
         fb.addWidget(self.sort_combo, 0)
         self.clear_filters_btn = QPushButton("Temizle")
         self.clear_filters_btn.setObjectName("secondary")
@@ -3495,6 +3497,11 @@ class MainWindow(QMainWindow):
             else:
                 self.filter_type.setFocus()
 
+    def _on_sort_combo_changed(self, *_args):
+        if hasattr(self, "contract_table") and hasattr(self.contract_table, "_sort_mode"):
+            self.contract_table._sort_mode = 'default'
+        self.schedule_apply_contract_filter()
+
     def clear_query_filters(self):
         self.search_input.clear()
         if hasattr(self, "date_from_filter"):
@@ -3513,6 +3520,8 @@ class MainWindow(QMainWindow):
             self.filter_status.setCurrentIndex(0)
         if hasattr(self, 'sort_combo'):
             self.sort_combo.setCurrentIndex(0)
+        if hasattr(self, "contract_table") and hasattr(self.contract_table, "_sort_mode"):
+            self.contract_table._sort_mode = 'default'
         # Sutun filtrelerini temizle
         if hasattr(self, '_filter_header'):
             self._filter_header.clear_all_filters()
@@ -3896,9 +3905,9 @@ class MainWindow(QMainWindow):
                             wrap = QWidget()
                             wrap.setStyleSheet("QWidget{background:transparent;border:0px;}")
                             wl = QVBoxLayout(wrap)
-                            wl.setContentsMargins(5, 4, 5, 4)
+                            wl.setContentsMargins(5, 3, 5, 3)
                             wl.setSpacing(3)
-                            wl.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+                            wl.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
                             for tag_name in tags_list:
                                 color = _tag_color_map.get(self.store._normalize_label(tag_name) if self.store else tag_name, "#3B82F6")
                                 base_rgb = _hex_to_rgb(color)
@@ -3906,6 +3915,7 @@ class MainWindow(QMainWindow):
                                 border_c = _mix_rgb(base_rgb, (255, 255, 255), 0.28)
                                 txt_c = _rgb_to_hex(_mix_rgb(base_rgb, (15, 23, 42), 0.22))
                                 chip = QLabel(tag_name)
+                                chip.setFixedHeight(22)
                                 chip.setStyleSheet(
                                     f"QLabel{{background:{_rgb_to_hex(bg)};color:{txt_c};"
                                     f"border:1px solid {_rgb_to_hex(border_c)};border-radius:9px;"
@@ -4079,10 +4089,7 @@ class MainWindow(QMainWindow):
         it = index.data(Qt.UserRole)
         if not isinstance(it, dict):
             return
-        if index.column() == COL_SUMMARY:
-            self.show_contract_summary(index.row(), it)
-        else:
-            self.open_contract_item(it)
+        self.open_contract_item(it)
 
     def open_selected_contract(self, row, col):
         rows = getattr(self.contract_table, "_visible_rows", [])
