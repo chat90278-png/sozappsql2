@@ -252,6 +252,18 @@ def normalize_report_date_display(value: object) -> str:
     return f"TBD-TBD-{year}"
 
 
+def _safe_set(item: QTreeWidgetItem, col: int, value: object) -> None:
+    text = "" if value is None else str(value)
+    try:
+        item.setText(col, text)
+    except Exception as exc:
+        print(f"[DeliveryScheduleReportDialog] setText failed for col={col}: {exc}")
+        try:
+            item.setText(col, "")
+        except Exception as fallback_exc:
+            print(f"[DeliveryScheduleReportDialog] fallback setText failed for col={col}: {fallback_exc}")
+
+
 def _safe_float(value: object) -> float:
     try:
         return float(value or 0)
@@ -811,6 +823,8 @@ class RevisionRowDialog(QDialog):
 # ─── Main Dialog ─────────────────────────────────────────────────────────────
 
 class DeliveryScheduleReportDialog(QDialog):
+    _refresh_delivery_table_requested = Signal(object)
+
     def __init__(self, parent=None, store=None):
         super().__init__(parent)
         self.store = store or getattr(parent, "store", None)
@@ -824,6 +838,7 @@ class DeliveryScheduleReportDialog(QDialog):
         self._export_worker: Optional[ExcelExportWorker] = None
         self._loading_overlay: Optional[ExcelLoadingOverlay] = None
         self._rev_rows: list[dict[str, Any]] = []
+        self._refresh_delivery_table_requested.connect(self._refresh_delivery_table_main)
         self.setWindowTitle("Tahmini Teslimat Takvimi")
         self.setWindowFlags(Qt.Window | Qt.WindowMinimizeButtonHint | Qt.WindowMaximizeButtonHint | Qt.WindowCloseButtonHint)
         self.resize(1450, 850); self.setMinimumSize(1180, 720)
@@ -1311,6 +1326,13 @@ class DeliveryScheduleReportDialog(QDialog):
         return result
 
     def _refresh_delivery_table(self, rows: list[DeliveryRow]) -> None:
+        if QThread.currentThread() != self.thread():
+            print("[DeliveryScheduleReportDialog] _refresh_delivery_table called outside GUI thread; queueing refresh.")
+            self._refresh_delivery_table_requested.emit(list(rows or []))
+            return
+        self._refresh_delivery_table_main(rows)
+
+    def _refresh_delivery_table_main(self, rows: list[DeliveryRow]) -> None:
         """Populate the tree as Contract + System/Paket groups.
 
         Sözleşme için ayrı bir üst grup açılmaz. Ana satır her zaman
@@ -1318,10 +1340,30 @@ class DeliveryScheduleReportDialog(QDialog):
         tekrar eden sözleşme/sistem bilgileri boş bırakılarak Excel'deki
         hücre birleştirme görünümü uygulamada da okunur hale getirilir.
         """
-        self.delivery_tree.clear()
+        cols = self.delivery_tree.columnCount()
+        print(f"[DeliveryScheduleReportDialog] Refreshing table, rows: {len(rows) if rows is not None else None}, columnCount: {cols}")
+        for idx, row in enumerate((rows or [])[:3]):
+            print(
+                "[DeliveryScheduleReportDialog] row sample "
+                f"{idx}: contract_no={getattr(row, 'contract', None)!r}, "
+                f"planned={getattr(row, 'planned', None)!r}, "
+                f"delivered={getattr(row, 'delivered', None)!r}, "
+                f"remaining={getattr(row, 'remaining', None)!r}"
+            )
 
         if not rows:
+            self.delivery_tree.clear()
             return
+
+        if cols < 12:
+            print(f"[DeliveryScheduleReportDialog] Warning: delivery_tree has {cols} columns; expected at least 12. Refresh skipped.")
+            self.delivery_tree.clear()
+            return
+
+        self.delivery_tree.clear()
+        header = self.delivery_tree.header()
+        header.setSectionResizeMode(0, QHeaderView.Interactive)
+        header.resizeSection(0, 180)
 
         bold_font = QFont()
         bold_font.setBold(True)
@@ -1344,30 +1386,37 @@ class DeliveryScheduleReportDialog(QDialog):
             statuses = [r.status for r in group_rows if r.status and r.status != "-"]
             parts = sorted({r.part for r in group_rows if r.part and r.part != "-"})
 
-            planned_total = sum(_safe_float(r.planned) for r in group_rows)
-            delivered_total = sum(_safe_float(r.delivered) for r in group_rows)
-            remaining_total = sum(_safe_float(r.remaining) for r in group_rows)
+            full_contract_no = "" if contract_no is None else str(contract_no)
+            display_no = full_contract_no
+            if len(full_contract_no) > 22:
+                display_no = full_contract_no[:19] + "..."
 
             parent = QTreeWidgetItem(self.delivery_tree)
-            parent.setText(0, contract_no)
-            parent.setText(1, system_name)
-            parent.setText(2, f"{len(deliveries)} teslimat · {len(group_rows)} satır" if deliveries else f"{len(group_rows)} satır")
-            parent.setText(3, _short_join(dates, limit=2))
-            parent.setText(4, _short_join(owners, limit=2, empty="-"))
-            parent.setText(5, _short_join(users, limit=2, empty="Tanımsız"))
-            parent.setText(6, _short_join(yi_yd_values, limit=2, empty="-"))
-            parent.setText(8, f"{len(parts)} parça")
-            parent.setText(9, _fmt_amount(planned_total))
-            parent.setText(10, _fmt_amount(delivered_total))
-            parent.setText(11, _fmt_amount(remaining_total))
-            parent.setText(14, _short_join(statuses, limit=2))
+            _safe_set(parent, 0, display_no)
+            parent.setToolTip(0, full_contract_no)
+            _safe_set(parent, 1, system_name)
+            _safe_set(parent, 2, f"{len(deliveries)} teslimat · {len(group_rows)} satır" if deliveries else f"{len(group_rows)} satır")
+            _safe_set(parent, 3, _short_join(dates, limit=2))
+            _safe_set(parent, 4, _short_join(owners, limit=2, empty="-"))
+            _safe_set(parent, 5, _short_join(users, limit=2, empty="Tanımsız"))
+            _safe_set(parent, 6, _short_join(yi_yd_values, limit=2, empty="-"))
+            _safe_set(parent, 8, f"{len(parts)} parça")
+            _safe_set(parent, 9, "")
+            _safe_set(parent, 10, "")
+            _safe_set(parent, 11, "")
+            _safe_set(parent, 14, _short_join(statuses, limit=2))
             parent.setExpanded(False)
 
             for col in range(self.delivery_tree.columnCount()):
                 parent.setBackground(col, QColor("#dceafa"))
                 parent.setForeground(col, QColor("#002060"))
                 parent.setFont(col, bold_font)
-                parent.setToolTip(col, parent.text(col))
+                tooltip_text = parent.text(col)
+                if col == 0:
+                    if not parent.toolTip(0):
+                        parent.setToolTip(0, tooltip_text)
+                else:
+                    parent.setToolTip(col, tooltip_text)
 
             previous_merge_key: tuple[str, str, str, str, str] | None = None
             for i, row in enumerate(group_rows):
@@ -1376,28 +1425,33 @@ class DeliveryScheduleReportDialog(QDialog):
                 repeated = merge_key == previous_merge_key
                 previous_merge_key = merge_key
 
-                child.setText(0, "")
-                child.setText(1, "")
-                child.setText(2, "" if repeated else row.delivery)
-                child.setText(3, "" if repeated else row.date_text)
-                child.setText(4, "" if repeated else row.owner)
-                child.setText(5, "" if repeated else row.user)
-                child.setText(6, "" if repeated else row.domestic)
-                child.setText(7, row.level)
-                child.setText(8, row.part)
-                child.setText(9, _fmt_amount(row.planned))
-                child.setText(10, _fmt_amount(row.delivered))
-                child.setText(11, _fmt_amount(row.remaining))
-                child.setText(12, row.config_type)
-                child.setText(13, row.note)
-                child.setText(14, row.status)
+                _safe_set(child, 0, "")
+                _safe_set(child, 1, "")
+                _safe_set(child, 2, "" if repeated else row.delivery)
+                _safe_set(child, 3, "" if repeated else row.date_text)
+                _safe_set(child, 4, "" if repeated else row.owner)
+                _safe_set(child, 5, "" if repeated else row.user)
+                _safe_set(child, 6, "" if repeated else row.domestic)
+                _safe_set(child, 7, row.level)
+                _safe_set(child, 8, row.part)
+                _safe_set(child, 9, _fmt_amount(row.planned))
+                _safe_set(child, 10, _fmt_amount(row.delivered))
+                _safe_set(child, 11, _fmt_amount(row.remaining))
+                _safe_set(child, 12, row.config_type)
+                _safe_set(child, 13, row.note)
+                _safe_set(child, 14, row.status)
 
                 bg_color = QColor("#ffffff") if i % 2 == 0 else QColor("#f4f9ff")
                 for col in range(self.delivery_tree.columnCount()):
                     child.setBackground(col, bg_color)
-                    child.setToolTip(col, child.text(col))
+                    tooltip_text = child.text(col)
+                    if col == 0:
+                        if not child.toolTip(0):
+                            child.setToolTip(0, tooltip_text)
+                    else:
+                        child.setToolTip(col, tooltip_text)
 
-                status_lower = row.status.lower()
+                status_lower = str(row.status or "").lower()
                 if "risk" in status_lower or "gecik" in status_lower:
                     child.setForeground(14, QColor(RED))
                 elif "tamam" in status_lower or "teslim" in status_lower:
