@@ -1319,6 +1319,9 @@ class DeliveryScheduleReportDialog(QDialog):
         hücre birleştirme görünümü uygulamada da okunur hale getirilir.
         """
         self.delivery_tree.clear()
+        header = self.delivery_tree.header()
+        header.setSectionResizeMode(0, QHeaderView.Interactive)
+        header.resizeSection(0, 180)
 
         if not rows:
             return
@@ -1348,8 +1351,13 @@ class DeliveryScheduleReportDialog(QDialog):
             delivered_total = sum(_safe_float(r.delivered) for r in group_rows)
             remaining_total = sum(_safe_float(r.remaining) for r in group_rows)
 
+            display_no = contract_no
+            if len(contract_no) > 22:
+                display_no = contract_no[:19] + "..."
+
             parent = QTreeWidgetItem(self.delivery_tree)
-            parent.setText(0, contract_no)
+            parent.setText(0, display_no)
+            parent.setData(0, Qt.ToolTipRole, contract_no)
             parent.setText(1, system_name)
             parent.setText(2, f"{len(deliveries)} teslimat · {len(group_rows)} satır" if deliveries else f"{len(group_rows)} satır")
             parent.setText(3, _short_join(dates, limit=2))
@@ -1367,7 +1375,8 @@ class DeliveryScheduleReportDialog(QDialog):
                 parent.setBackground(col, QColor("#dceafa"))
                 parent.setForeground(col, QColor("#002060"))
                 parent.setFont(col, bold_font)
-                parent.setToolTip(col, parent.text(col))
+                if col != 0:
+                    parent.setToolTip(col, parent.text(col))
 
             previous_merge_key: tuple[str, str, str, str, str] | None = None
             for i, row in enumerate(group_rows):
