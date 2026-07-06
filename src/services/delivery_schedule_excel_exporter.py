@@ -882,8 +882,7 @@ def _write_matrix(ws, rows: list[dict[str, Any]], report_date: str) -> None:
         for dt in dates:
             date_columns.append((user, dt))
 
-    last_col = len(fixed_headers) + len(date_columns) + 1
-    total_col = last_col
+    last_col = len(fixed_headers) + len(date_columns)
 
     # Title area: only fixed title band is merged. Dynamic user/date columns are separate.
     ws.Range(ws.Cells(1, 1), ws.Cells(1, len(fixed_headers))).Merge()
@@ -903,10 +902,7 @@ def _write_matrix(ws, rows: list[dict[str, Any]], report_date: str) -> None:
         ws.Cells(2, offset).NumberFormat = "@"
         ws.Cells(2, offset).Value = str(dt or "")
 
-    ws.Cells(1, total_col).Value = "TOPLAM"
-    ws.Cells(2, total_col).Value = ""
-
-    for col in range(start_dynamic_col, total_col + 1):
+    for col in range(start_dynamic_col, last_col + 1):
         top = ws.Cells(1, col)
         bottom = ws.Cells(2, col)
         for cell in (top, bottom):
@@ -931,6 +927,7 @@ def _write_matrix(ws, rows: list[dict[str, Any]], report_date: str) -> None:
 
     r = 3
     group_rows: list[int] = []
+    merge_blocks: list[tuple[int, int]] = []
     for contract, system in sorted(grouped.keys(), key=_group_sort_key):
         group_rows_data = grouped[(contract, system)]
         parts = sorted({str(row.get("Parça") or "-") for row in group_rows_data})
@@ -948,51 +945,59 @@ def _write_matrix(ws, rows: list[dict[str, Any]], report_date: str) -> None:
                 total += _safe_float(item.get("Sözleşme Adeti"))
             return total
 
-        group_rows.append(r)
+        group_start = r
+        group_rows.append(group_start)
+        level_values = [str(row.get("Seviye") or "").strip() for row in group_rows_data if str(row.get("Seviye") or "").strip()]
+        level_value = sorted(dict.fromkeys(level_values))[0] if level_values else "1"
         ws.Cells(r, 1).Value = contract
         ws.Cells(r, 2).Value = system
-        ws.Cells(r, 3).Value = ""
+        ws.Cells(r, 3).Value = level_value
         ws.Cells(r, 4).Value = ""
         ws.Cells(r, 5).Value = "Sistem Toplamı"
         ws.Cells(r, 6).NumberFormat = "@"
         ws.Cells(r, 6).Value = _compact(group_dates)
-        row_total = 0.0
-        for col, (user, dt) in enumerate(date_columns, start=start_dynamic_col):
-            value = _sum_for(None, user, dt)
-            row_total += value
-            ws.Cells(r, col).Value = _fmt_amount(value)
-        ws.Cells(r, total_col).Value = _fmt_amount(row_total)
+        # Parent/system summary rows intentionally do not display dynamic quantity totals.
+        for col in range(start_dynamic_col, last_col + 1):
+            ws.Cells(r, col).Value = ""
         r += 1
 
         for part in parts:
             part_dates = {str(row.get("Tarih") or "") for row in group_rows_data if str(row.get("Parça") or "-") == part and str(row.get("Tarih") or "").strip()}
             ws.Cells(r, 1).Value = ""
             ws.Cells(r, 2).Value = ""
-            ws.Cells(r, 3).Value = "1"
+            ws.Cells(r, 3).Value = ""
             ws.Cells(r, 4).Value = ""
             ws.Cells(r, 5).Value = part
             ws.Cells(r, 6).NumberFormat = "@"
             ws.Cells(r, 6).Value = _compact(part_dates)
-            row_total = 0.0
             for col, (user, dt) in enumerate(date_columns, start=start_dynamic_col):
                 value = _sum_for(part, user, dt)
-                row_total += value
                 ws.Cells(r, col).Value = _fmt_amount(value)
-            ws.Cells(r, total_col).Value = _fmt_amount(row_total)
             r += 1
 
+        group_end = r - 1
+        if group_end > group_start:
+            merge_blocks.append((group_start, group_end))
+
     last_row = max(r - 1, 3)
-    _format_table(ws, 1, 1, last_row, total_col, header_rows=2)
+    _format_table(ws, 1, 1, last_row, last_col, header_rows=2)
+
+    for group_start, group_end in merge_blocks:
+        for col in (1, 2, 3):
+            merge_rng = ws.Range(ws.Cells(group_start, col), ws.Cells(group_end, col))
+            merge_rng.Merge()
+            merge_rng.HorizontalAlignment = -4108
+            merge_rng.VerticalAlignment = -4108
 
     for row_idx in group_rows:
-        rng = ws.Range(ws.Cells(row_idx, 1), ws.Cells(row_idx, total_col))
+        rng = ws.Range(ws.Cells(row_idx, 1), ws.Cells(row_idx, last_col))
         rng.Interior.Color = 0xFFF4E8
         rng.Font.Bold = True
         rng.Font.Color = 0x79360B
         rng.HorizontalAlignment = -4108
         rng.VerticalAlignment = -4108
 
-    closing = ws.Range(ws.Cells(last_row, 1), ws.Cells(last_row, total_col))
+    closing = ws.Range(ws.Cells(last_row, 1), ws.Cells(last_row, last_col))
     closing.Borders(9).LineStyle = 1
     closing.Borders(9).Weight = 3
     closing.Borders(9).Color = 0x000000
