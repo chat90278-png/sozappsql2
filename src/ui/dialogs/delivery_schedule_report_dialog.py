@@ -390,7 +390,9 @@ class SimpleTableModel(QAbstractTableModel):
         if role == Qt.DisplayRole:
             return str(value)
         if role == Qt.TextAlignmentRole:
-            return Qt.AlignCenter if index.column() in {0, 6, 8, 9, 10} else Qt.AlignVCenter | Qt.AlignLeft
+            if index.column() >= 6:
+                return Qt.AlignCenter
+            return Qt.AlignCenter if index.column() == 0 else Qt.AlignVCenter | Qt.AlignLeft
         if role == Qt.BackgroundRole and index.row() % 2:
             return QColor("#f4f9ff")
         if role == Qt.ForegroundRole:
@@ -399,7 +401,7 @@ class SimpleTableModel(QAbstractTableModel):
                 return QColor(RED)
             if "tamam" in text:
                 return QColor(GREEN)
-        if role == Qt.FontRole and index.column() in {6, 8, 9, 10}:
+        if role == Qt.FontRole and index.column() >= 6 and str(value).strip():
             font = QFont(); font.setBold(True); return font
         return None
 
@@ -1463,7 +1465,7 @@ class DeliveryScheduleReportDialog(QDialog):
         headers = [
             "Sözleşme No", "Sistem / Paket", "Seviye", "Parça Numarası",
             "Parça", "Teslimat Zamanı",
-        ] + [f"{u}\n{', '.join(user_dates.get(u, [])[:2])}" for u in users] + ["TOPLAM"]
+        ] + [f"{u}\n{', '.join(user_dates.get(u, [])[:2])}" for u in users]
 
         by_system_part: dict[tuple[str, str, str], dict[str, float]] = defaultdict(lambda: defaultdict(float))
         system_dates: dict[tuple[str, str], set[str]] = defaultdict(set)
@@ -1479,25 +1481,27 @@ class DeliveryScheduleReportDialog(QDialog):
                 system_dates[system_key].add(row.date_text)
                 part_dates[part_key].add(row.date_text)
 
+        def _matrix_amount(value: object) -> str:
+            numeric = _safe_float(value)
+            return "" if numeric == 0 else _fmt_amount(numeric)
+
         matrix_rows: list[list[Any]] = []
         for contract_no, system_name in sorted(system_totals.keys(), key=lambda item: (item[0], item[1])):
             totals_by_user = system_totals[(contract_no, system_name)]
-            total_values = [_fmt_amount(totals_by_user.get(user, 0)) for user in users]
-            total = sum(totals_by_user.values())
+            total_values = [_matrix_amount(totals_by_user.get(user, 0)) for user in users]
             matrix_rows.append([
                 contract_no, system_name, "", "", "Sistem Toplamı",
                 ", ".join(sorted(system_dates[(contract_no, system_name)])[:3]),
-                *total_values, _fmt_amount(total),
+                *total_values,
             ])
 
             for _c, _s, part in sorted(k for k in by_system_part if k[0] == contract_no and k[1] == system_name):
                 values_by_user = by_system_part[(contract_no, system_name, part)]
-                values = [_fmt_amount(values_by_user.get(user, 0)) for user in users]
-                part_total = sum(values_by_user.values())
+                values = [_matrix_amount(values_by_user.get(user, 0)) for user in users]
                 matrix_rows.append([
                     "", "", "1", "", part,
                     ", ".join(sorted(part_dates[(contract_no, system_name, part)])[:3]),
-                    *values, _fmt_amount(part_total),
+                    *values,
                 ])
 
         return headers, matrix_rows
