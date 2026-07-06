@@ -95,13 +95,15 @@ def read_sts_schema_version(path: Path | str) -> int | None:
 
 def make_migration_backup_path(path: Path | str, from_version: int | None, to_version: int = CURRENT_SCHEMA_VERSION) -> Path:
     p = Path(path)
+    backup_dir = p.parent / "yedekler"
+    backup_dir.mkdir(parents=True, exist_ok=True)
     version_label = f"v{from_version}" if from_version is not None else "legacy"
     stamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
-    base = p.with_name(f"{p.stem}__backup_before_migration_{version_label}_to_v{to_version}__{stamp}{p.suffix}")
+    base = backup_dir / f"{p.stem}__backup_before_migration_{version_label}_to_v{to_version}__{stamp}{p.suffix}"
     candidate = base
     counter = 2
     while candidate.exists():
-        candidate = p.with_name(f"{base.stem}__{counter}{base.suffix}")
+        candidate = backup_dir / f"{base.stem}__{counter}{base.suffix}"
         counter += 1
     return candidate
 
@@ -217,6 +219,10 @@ class STSDatabase:
         )
 
     def close(self):
+        try:
+            self.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        except Exception:
+            pass
         self.conn.close()
 
     @contextmanager
