@@ -1576,6 +1576,7 @@ class _YearVolumeDialog(QWidget):
     Ana takvim penceresi üzerinde dim overlay + merkezi beyaz kart.
     _MonthDetailDialog ile aynı backdrop/animasyon yapısını kullanır.
     """
+    closed = Signal()
 
     def __init__(self, volume_rows: list, year: int,
                  platform_filter: str = "", parent=None):
@@ -1585,7 +1586,7 @@ class _YearVolumeDialog(QWidget):
         self._pf = platform_filter
 
         self.setGeometry(parent.rect() if parent else self.geometry())
-        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setAttribute(Qt.WA_StyledBackground, False)
         self.setStyleSheet(_VOL_COMPONENT_STYLE)
         self._build()
         # Fade-in — _MonthDetailDialog ile aynı süre ve easing
@@ -1609,13 +1610,14 @@ class _YearVolumeDialog(QWidget):
             self._position_card()
         super().resizeEvent(event)
 
-    def paintEvent(self, event):
-        # _MonthDetailDialog.backdrop ile aynı renk: rgba(10,16,26,0.38) = alpha 97
-        from PySide6.QtGui import QPainter, QColor
-        p = QPainter(self)
-        p.fillRect(self.rect(), QColor(10, 16, 26, 97))
-
     def _build(self):
+        # Backdrop — _MonthDetailDialog ile aynı: tıklanınca kapat, takvim arkada görünür
+        self._backdrop = QWidget(self)
+        self._backdrop.setStyleSheet("QWidget{background:rgba(10,16,26,0.38);}")
+        self._backdrop.setGeometry(self.rect())
+        self._backdrop.lower()
+        self._backdrop.mousePressEvent = lambda e: self.close()
+
         agg = _aggregate_volume_for_year(
             self._volume_rows, self._year, self._pf
         )
@@ -1785,6 +1787,10 @@ class _YearVolumeDialog(QWidget):
         if event.key() == Qt.Key_Escape:
             self.close()
         super().keyPressEvent(event)
+
+    def closeEvent(self, event):
+        self.closed.emit()
+        super().closeEvent(event)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -4069,11 +4075,11 @@ class ContractCalendarWindow(QDialog):
         for month in range(12):
             evs     = self._for_month(self.current_year, month)
             unk_evs = self._for_month_unknown_day(self.current_year, month)
-            fu_evs  = self._for_fully_unknown()   # TBD kayıtlar her ay kartında gösterilir
+            # fully_unknown (TBD) kayıtlar ayı bilinmiyor → hiçbir ay kartına eklenmez,
+            # sadece "Tarihi belirsiz" butonunun açtığı _UnknownDatesDialog'da gösterilir.
             card = _MonthCard(
                 self.current_year, month, evs, self.today,
                 unknown_day_events=unk_evs,
-                fully_unknown_events=fu_evs,
             )
             card.clicked.connect(lambda m=month: self._open_month(m))
             self._year_grid.addWidget(card, month // 4, month % 4)
@@ -4110,7 +4116,8 @@ class ContractCalendarWindow(QDialog):
             platform_filter=self.platform_filter_value,
             parent=self,
         )
-        vol.show()
+        vol.closed.connect(lambda: setattr(self, "_active_detail", None))
+        self._active_detail = vol
 
     # ── Yıl geçişi ────────────────────────────────────────────────────────
     def _change_year(self, d: int):
