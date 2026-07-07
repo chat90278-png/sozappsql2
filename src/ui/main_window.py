@@ -116,7 +116,7 @@ from PySide6.QtWidgets import (
     QTreeWidget, QTreeWidgetItem, QDialog, QLineEdit, QComboBox, QDateEdit, QSpinBox, QDoubleSpinBox,
     QMessageBox, QFileDialog, QFrame, QScrollArea, QCheckBox, QHeaderView,
     QSizePolicy, QProgressBar, QProgressDialog, QStyledItemDelegate, QStyleOptionViewItem, QTextEdit,
-    QToolButton, QMenu, QInputDialog, QWidgetAction, QStackedWidget, QAbstractItemView, QStyle, QRadioButton, QButtonGroup, QTabWidget, QTabBar, QCalendarWidget
+    QToolButton, QMenu, QInputDialog, QWidgetAction, QStackedWidget, QAbstractItemView, QStyle, QRadioButton, QButtonGroup, QTabWidget, QTabBar, QCalendarWidget, QToolTip
 )
 from shiboken6 import isValid as _qt_is_valid
 
@@ -557,6 +557,13 @@ COL_REMAINING = 6
 COL_TAGS = 7
 COL_SUMMARY = 8
 PLATFORM_SELECTED_ROLE = Qt.UserRole + 100
+TAG_CHIP_HEIGHT = 16
+TAG_CHIP_MAX_WIDTH = 120
+TAG_CHIP_HPAD = 10
+TAG_CHIP_VPAD = 0
+TAG_CHIP_SPACING = 2
+TAG_CHIP_MARGIN_X = 5
+TAG_CHIP_MARGIN_Y = 3
 
 
 class ContractTableModel(QAbstractTableModel):
@@ -710,7 +717,22 @@ class ContractTagsDelegate(QStyledItemDelegate):
         if callable(self._row_height_fn):
             return int(self._row_height_fn(tag_count))
         n = int(tag_count or 0)
-        return max(36, n * 22 + max(0, n - 1) * 3 + 8) if n > 0 else 36
+        return max(36, n * TAG_CHIP_HEIGHT + max(0, n - 1) * TAG_CHIP_SPACING + 2 * TAG_CHIP_MARGIN_Y) if n > 0 else 36
+
+    def _chip_rects(self, option: QStyleOptionViewItem, tags_list: list, fm: QFontMetrics) -> list[tuple[QRect, str, str]]:
+        content_rect = option.rect.adjusted(TAG_CHIP_MARGIN_X, TAG_CHIP_MARGIN_Y, -TAG_CHIP_MARGIN_X, -TAG_CHIP_MARGIN_Y)
+        x = content_rect.left()
+        n = len(tags_list)
+        total_h = n * TAG_CHIP_HEIGHT + max(0, n - 1) * TAG_CHIP_SPACING
+        y = content_rect.top() + max(0, (content_rect.height() - total_h) // 2)
+        rects = []
+        for tag_name in tags_list:
+            tag_text = str(tag_name)
+            natural_w = fm.horizontalAdvance(tag_text) + 2 * TAG_CHIP_HPAD
+            chip_w = min(TAG_CHIP_MAX_WIDTH, natural_w)
+            rects.append((QRect(x, y, chip_w, TAG_CHIP_HEIGHT), tag_text, tag_text))
+            y += TAG_CHIP_HEIGHT + TAG_CHIP_SPACING
+        return rects
 
     def paint(self, painter: QPainter, option: QStyleOptionViewItem, index):
         _it, tags_list = self._tags_for_index(index)
@@ -724,41 +746,45 @@ class ContractTagsDelegate(QStyledItemDelegate):
         try:
             painter.setRenderHint(QPainter.Antialiasing, True)
             painter.setRenderHint(QPainter.TextAntialiasing, True)
-            margin_x = 5
-            margin_y = 4
-            chip_sp = 3
-            chip_h = 22
-            chip_pad_x = 8
-            radius = 9
+            radius = TAG_CHIP_HEIGHT // 2
 
             font = QFont(option.font)
-            font.setPointSize(11)
+            font.setPointSize(9)
             font.setBold(True)
             painter.setFont(font)
             fm = QFontMetrics(font)
 
-            x = option.rect.left() + margin_x
-            n = len(tags_list)
-            total_h = n * chip_h + max(0, n - 1) * chip_sp
-            y = option.rect.top() + max(margin_y, (option.rect.height() - total_h) // 2)
-            for tag_name in tags_list:
-                tag_text = str(tag_name)
+            for chip_rect, tag_text, full_text in self._chip_rects(option, tags_list, fm):
                 color = self._tag_color_fn(tag_text) if callable(self._tag_color_fn) else "#3B82F6"
                 base_rgb = _hex_to_rgb(color)
                 bg = _mix_rgb(base_rgb, (255, 255, 255), 0.78)
                 border_c = _mix_rgb(base_rgb, (255, 255, 255), 0.28)
                 txt_c = _mix_rgb(base_rgb, (15, 23, 42), 0.22)
+                text_rect = chip_rect.adjusted(TAG_CHIP_HPAD, 0, -TAG_CHIP_HPAD, 0)
+                display_text = fm.elidedText(full_text, Qt.ElideRight, max(0, text_rect.width()))
 
-                chip_w = fm.horizontalAdvance(tag_text) + 2 * chip_pad_x
-                chip_rect = QRect(x, y, chip_w, chip_h)
                 painter.setBrush(QColor(_rgb_to_hex(bg)))
                 painter.setPen(QColor(_rgb_to_hex(border_c)))
                 painter.drawRoundedRect(chip_rect, radius, radius)
                 painter.setPen(QColor(_rgb_to_hex(txt_c)))
-                painter.drawText(chip_rect.adjusted(chip_pad_x, 0, -chip_pad_x, 0), Qt.AlignCenter, tag_text)
-                y += chip_h + chip_sp
+                painter.drawText(text_rect, Qt.AlignCenter, display_text)
         finally:
             painter.restore()
+
+    def helpEvent(self, event, view, option, index) -> bool:
+        _it, tags_list = self._tags_for_index(index)
+        if _it is None or not tags_list:
+            return super().helpEvent(event, view, option, index)
+        font = QFont(option.font)
+        font.setPointSize(9)
+        font.setBold(True)
+        fm = QFontMetrics(font)
+        for chip_rect, _tag_text, full_text in self._chip_rects(option, tags_list, fm):
+            if chip_rect.contains(event.pos()):
+                QToolTip.showText(event.globalPos(), full_text, view, chip_rect)
+                return True
+        QToolTip.hideText()
+        return False
 
     def sizeHint(self, option: QStyleOptionViewItem, index) -> QSize:
         it = index.data(Qt.UserRole)
@@ -2317,31 +2343,36 @@ class MainWindow(QMainWindow):
     def _add_menu_action(self, menu: QMenu, title: str, callback):
         return menu.addAction(title, callback)
 
+    def _add_top_actions_submenu(self, menu: QMenu, title: str) -> QMenu:
+        submenu = menu.addMenu(title)
+        submenu.setObjectName("topActionsMenu")
+        return submenu
+
     def _build_top_actions_menu(self, parent) -> QMenu:
         menu = QMenu(parent)
         menu.setObjectName("topActionsMenu")
 
-        file_menu = menu.addMenu("Dosya İşlemleri")
+        file_menu = self._add_top_actions_submenu(menu, "Dosya İşlemleri")
         self._add_menu_action(file_menu, "STS Dosyasını Değiştir", self.open_file)
         self._add_menu_action(file_menu, "Excel’e Aktar", self.export_sts_to_excel)
 
-        reports_menu = menu.addMenu("Raporlar")
+        reports_menu = self._add_top_actions_submenu(menu, "Raporlar")
         self._add_menu_action(reports_menu, "Tahmini Teslimat Takvimi", self.open_delivery_schedule_report)
         self._add_menu_action(reports_menu, "Platform Teslimat Özeti", self.open_platform_delivery_report)
 
-        management_menu = menu.addMenu("Yönetim")
+        management_menu = self._add_top_actions_submenu(menu, "Yönetim")
         self.platform_component_action = self._add_menu_action(management_menu, "Platform / Bileşen Yönetimi", self.manage_platforms)
         self.user_management_action = self._add_menu_action(management_menu, "Kullanıcı Yönetimi", self.open_user_management)
         self.role_permissions_action = self._add_menu_action(management_menu, "Yetki Yönetimi", self.open_personnel_permissions)
         self.tag_management_action = self._add_menu_action(management_menu, "Etiket Yönetimi", self.manage_tags)
 
-        self.system_menu = menu.addMenu("Sistem")
+        self.system_menu = self._add_top_actions_submenu(menu, "Sistem")
         self.system_menu_action = self.system_menu.menuAction()
         self._add_menu_action(self.system_menu, "Veritabanı Yönetimi", self.open_database_management)
         self._add_menu_action(self.system_menu, "Performans İzleme", self.open_performance_tracking)
         self.activity_logs_action = self._add_menu_action(self.system_menu, "İşlem Geçmişi", self.open_activity_logs)
 
-        help_menu = menu.addMenu("Yardım")
+        help_menu = self._add_top_actions_submenu(menu, "Yardım")
         self._add_menu_action(help_menu, "Kullanım Kılavuzu", self.open_usage_guide)
 
         menu.aboutToShow.connect(self._refresh_permission_actions)
@@ -3753,7 +3784,7 @@ class MainWindow(QMainWindow):
 
     def _contract_row_height_for_tags(self, tag_count: int) -> int:
         n = int(tag_count or 0)
-        return max(36, n * 22 + max(0, n - 1) * 3 + 8) if n > 0 else 36
+        return max(36, n * TAG_CHIP_HEIGHT + max(0, n - 1) * TAG_CHIP_SPACING + 2 * TAG_CHIP_MARGIN_Y) if n > 0 else 36
 
 
     def apply_contract_filter(self):
@@ -3954,23 +3985,38 @@ class MainWindow(QMainWindow):
                             wrap = QWidget()
                             wrap.setStyleSheet("QWidget{background:transparent;border:0px;}")
                             wl = QVBoxLayout(wrap)
-                            wl.setContentsMargins(0, 3, 0, 3)
-                            wl.setSpacing(2)
+                            wl.setContentsMargins(TAG_CHIP_MARGIN_X, TAG_CHIP_MARGIN_Y, TAG_CHIP_MARGIN_X, TAG_CHIP_MARGIN_Y)
+                            wl.setSpacing(TAG_CHIP_SPACING)
                             wl.setAlignment(Qt.AlignCenter)
+                            wrap.setMinimumHeight(self._contract_row_height_for_tags(len(tags_list)))
                             for tag_name in tags_list:
                                 color = _tag_color_map.get(self.store._normalize_label(tag_name) if self.store else tag_name, "#3B82F6")
                                 base_rgb = _hex_to_rgb(color)
                                 bg = _mix_rgb(base_rgb, (255, 255, 255), 0.78)
                                 border_c = _mix_rgb(base_rgb, (255, 255, 255), 0.28)
                                 txt_c = _rgb_to_hex(_mix_rgb(base_rgb, (15, 23, 42), 0.22))
-                                chip = QLabel(tag_name)
+                                full_text = str(tag_name)
+                                chip = QLabel(full_text)
+                                chip_font = QFont(chip.font())
+                                chip_font.setPointSize(9)
+                                chip_font.setBold(True)
+                                chip.setFont(chip_font)
+                                chip_fm = QFontMetrics(chip_font)
+                                display_text = chip_fm.elidedText(
+                                    full_text,
+                                    Qt.ElideRight,
+                                    max(0, TAG_CHIP_MAX_WIDTH - 2 * TAG_CHIP_HPAD),
+                                )
+                                chip.setText(display_text)
+                                chip.setToolTip(full_text)
                                 chip.setAlignment(Qt.AlignCenter)
-                                chip.setFixedHeight(20)
+                                chip.setFixedHeight(TAG_CHIP_HEIGHT)
+                                chip.setMaximumWidth(TAG_CHIP_MAX_WIDTH)
                                 chip.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
                                 chip.setStyleSheet(
                                     f"QLabel{{background:{_rgb_to_hex(bg)};color:{txt_c};"
-                                    f"border:1px solid {_rgb_to_hex(border_c)};border-radius:10px;"
-                                    f"padding:1px 12px;font-size:10px;font-weight:700;}}"
+                                    f"border:1px solid {_rgb_to_hex(border_c)};border-radius:{TAG_CHIP_HEIGHT // 2}px;"
+                                    f"padding:{TAG_CHIP_VPAD}px {TAG_CHIP_HPAD}px;font-size:9px;font-weight:700;}}"
                                 )
                                 wl.addWidget(chip, 0, Qt.AlignHCenter)
                             placeholder = QTableWidgetItem("")
@@ -3978,7 +4024,8 @@ class MainWindow(QMainWindow):
                             self.contract_table.setItem(r, COL_TAGS, placeholder)
                             self.contract_table.setCellWidget(r, COL_TAGS, wrap)
                             # Satır yüksekliğini etiket sayısına göre ayarla
-                            row_h = max(34, len(tags_list) * 20 + max(0, len(tags_list)-1) * 2 + 8)
+                            row_h = self._contract_row_height_for_tags(len(tags_list))
+                            wrap.adjustSize()
                             self.contract_table.setRowHeight(r, max(self.contract_table.rowHeight(r), row_h))
                             continue
                         if c == COL_SUMMARY:
@@ -4236,5 +4283,3 @@ def open_share_contract_window(path: Path | str) -> Optional[ContractWorkWindow]
     win = ContractWorkWindow(store, ci, systems=systems, deliveries=deliveries)
     win.set_share_mode(str(meta.get("permission_mode") or "view"))
     return win
-
-

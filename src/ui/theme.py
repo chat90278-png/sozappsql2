@@ -74,6 +74,7 @@ QMenu#topActionsMenu {
 QMenu#topActionsMenu::item {
     padding:8px 14px;
     border-radius:6px;
+    background:transparent;
     color:#0f172a;
     font-weight:700;
 }
