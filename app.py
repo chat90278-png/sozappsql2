@@ -16,6 +16,8 @@ from src.ui.main_window import (
     open_share_contract_window,
     _share_metadata_from_path,
 )
+from src.services.share_package_service import validate_share_package
+
 from src.ui.dialogs.workbook_start import WorkbookStartDialog
 from src.config.app_config import DEFAULT_FILE, EXCEL_DATA_SOURCE_DISABLED_MESSAGE, APP_ID
 from src.core.crash_logger import install_crash_handlers
@@ -43,6 +45,10 @@ if __name__ == "__main__":
 
     cli_path = Path(sys.argv[1]).expanduser() if len(sys.argv) > 1 and str(sys.argv[1]).strip() else None
     if cli_path and _share_metadata_from_path(cli_path):
+        result = validate_share_package(cli_path)
+        if result.is_share_package and (not result.is_supported or not result.is_valid):
+            QMessageBox.critical(None, "Paylaşım paketi açılamadı", "\n".join(result.errors or ["Paylaşım paketi açılamadı."]))
+            sys.exit(1)
         try:
             win = open_share_contract_window(cli_path)
             if win is None:
@@ -66,6 +72,10 @@ if __name__ == "__main__":
             continue
         selected_path = candidate_path
     if _share_metadata_from_path(selected_path):
+        result = validate_share_package(selected_path)
+        if result.is_share_package and (not result.is_supported or not result.is_valid):
+            QMessageBox.critical(None, "Paylaşım paketi açılamadı", "\n".join(result.errors or ["Paylaşım paketi açılamadı."]))
+            sys.exit(1)
         try:
             win = open_share_contract_window(selected_path)
             if win is None:
