@@ -36,3 +36,4 @@ from .platform_tabs import (
     BadgeTabButton, ContractActionTabs, ContractSharePopover,
     UnitTrackingSlotCard, UnitTrackingSidePanel,
 )
+from .calendar_widget import CalendarWidget
