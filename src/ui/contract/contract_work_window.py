@@ -78,6 +78,7 @@ from src.ui.dialogs.platform_delivery_report_dialog import PlatformTeslimatDurum
 from src.ui.dialogs.contract_dialog import ContractDialog
 from src.ui.dialogs.contract_edit_dialog import ContractEditDialog
 from src.ui.dialogs.delivery_dialog import DeliveryDialog
+from src.ui.dialogs.share_merge_dialog import ShareMergeDialog
 from src.ui.dialogs.tag_manager_dialog import TagManagerDialog
 from src.ui.dialogs.system_dialog import SystemDialog
 from src.ui.dialogs.multi_system_dialog import MultiSystemDialog
@@ -512,7 +513,20 @@ from src.services.share_package_service import (
     build_base_snapshot_from_source, make_v2_metadata, read_share_metadata, validate_share_package,
     write_share_base_snapshot, write_share_metadata, utcish_now,
 )
-from src.models.share_models import SHARE_FORMAT_V2, SHARE_STATUS_OPEN, SharePackageRegistryEntry
+from src.services.share_merge_service import (
+    PackageRegistryMismatchError,
+    ShareMergePreparationError,
+    SharePackageStatusError,
+    ShareSourceMismatchError,
+    UnknownSharePackageError,
+    UnsupportedShareMergePackageError,
+    prepare_share_merge_plan,
+)
+from src.services.share_merge_apply_service import (
+    apply_resolved_share_merge,
+    preflight_resolved_share_merge,
+)
+from src.models.share_models import SHARE_FORMAT_V1, SHARE_FORMAT_V2, SHARE_STATUS_OPEN, SharePackageRegistryEntry
 from src import auth
 from src.workers import ContractSaveWorker, STSIndexWorker, STSLoadWorker
 
@@ -2670,6 +2684,169 @@ class ContractWorkWindow(QDialog):
             except Exception:
                 pass
             QMessageBox.warning(self, "Paylaşım dosyası oluşturulamadı.", str(exc))
+
+    def can_show_share_merge_action(self) -> bool:
+        return (
+            not bool(getattr(self, "share_mode_enabled", False))
+            and not bool(getattr(self, "is_new_contract", False))
+            and hasattr(getattr(self.store, "db", None), "conn")
+            and self.has_permission("edit_contracts")
+        )
+
+    def merge_returned_share_file(self):
+        if getattr(self, "share_mode_enabled", False):
+            return
+        if not self.require_permission_ui("edit_contracts", "Paylaşım Birleştirme"):
+            return
+        self._file_dialog_open = True
+        try:
+            selected, _ = QFileDialog.getOpenFileName(
+                self,
+                "Paylaşım Dosyasını Geri Al",
+                str(Path(getattr(self.store, "path", "") or ".").parent),
+                "STS Dosyası (*.sts)",
+            )
+        finally:
+            self._file_dialog_open = False
+        if not selected:
+            return
+        share_path = Path(selected)
+        validation = validate_share_package(share_path)
+        if not validation.is_share_package:
+            self._show_share_merge_error(
+                "Paylaşım dosyası birleştirilemedi",
+                "Seçilen dosya bir paylaşım STS dosyası değil.",
+                "Normal STS dosyaları bu akışta birleştirilemez.",
+            )
+            return
+        if validation.format_version == SHARE_FORMAT_V1:
+            self._show_share_merge_error(
+                "Paylaşım dosyası birleştirilemedi",
+                "Bu paylaşım dosyası eski formatta oluşturulmuş. Otomatik değişiklik birleştirme yalnızca V2 paylaşım dosyalarında destekleniyor.",
+                "",
+            )
+            return
+        if not validation.is_supported or not validation.is_valid or not validation.supports_merge or not validation.metadata:
+            self._show_share_merge_error(
+                "Paylaşım dosyası birleştirilemedi",
+                "Seçilen paylaşım dosyası otomatik birleştirme için uygun değil.",
+                "; ".join(validation.errors or validation.warnings or []),
+            )
+            return
+        current_merge_uid = str(getattr(self.ci, "merge_uid", "") or "").strip()
+        if current_merge_uid and validation.metadata.source_contract_merge_uid != current_merge_uid:
+            self._show_share_merge_error(
+                "Paylaşım dosyası birleştirilemedi",
+                "Seçilen paylaşım dosyası bu sözleşmeye ait değil.",
+                f"Beklenen: {current_merge_uid} / Dosya: {validation.metadata.source_contract_merge_uid}",
+            )
+            return
+        try:
+            self.set_busy_overlay(True, "Paylaşım dosyası analiz ediliyor...", 30)
+            plan = prepare_share_merge_plan(self.store, share_path)
+        except Exception as exc:
+            self._show_share_merge_exception(exc)
+            return
+        finally:
+            self.set_busy_overlay(False)
+
+        dialog = ShareMergeDialog(
+            merge_plan=plan,
+            share_path=share_path,
+            metadata=validation.metadata,
+            preflight_callback=lambda resolved, allow_partial: preflight_resolved_share_merge(
+                self.store,
+                share_path,
+                resolved,
+                allow_partial=allow_partial,
+            ),
+            apply_callback=lambda resolved, allow_partial: apply_resolved_share_merge(
+                self.store,
+                share_path,
+                resolved,
+                current_staff=self.current_staff,
+                allow_partial=allow_partial,
+            ),
+            success_callback=self._after_share_merge_success,
+            parent=self,
+        )
+        dialog.exec()
+
+    def _after_share_merge_success(self, result) -> None:
+        try:
+            self._reload_current_contract_from_db()
+            parent = self.parent()
+            if parent is not None and hasattr(parent, "request_refresh"):
+                parent.request_refresh(select_platform=str(self.ci.platform or ""), scope="all")
+        except Exception as exc:
+            _log.exception("Share merge sonrası sözleşme yenilenemedi")
+            QMessageBox.warning(
+                self,
+                "Birleştirme tamamlandı",
+                "Değişiklikler birleştirildi ancak ekran otomatik yenilenemedi. Sözleşmeyi yeniden açmanız gerekebilir.\n\n"
+                f"Teknik detay: {exc}",
+            )
+
+    def _reload_current_contract_from_db(self) -> None:
+        contract_id = int(getattr(self.ci, "entry_start_row", 0) or getattr(self.ci, "contract_id", 0) or getattr(self.ci, "id", 0) or 0)
+        if contract_id <= 0:
+            raise ValueError("Açık sözleşme ID'si bulunamadı.")
+        ci, systems, deliveries = self.store.load_contract_structure(
+            str(getattr(self.ci, "platform", "") or ""),
+            str(getattr(self.ci, "no", "") or ""),
+            start_row=contract_id,
+            contract_type=str(getattr(self.ci, "contract_type", "") or ""),
+            platform_id=int(getattr(self, "active_platform_id", 0) or getattr(self.ci, "platform_id", 0) or 0),
+        )
+        self.ci = ci
+        self.original_platform = str(ci.platform or "")
+        self.original_contract_no = str(ci.no or "")
+        self.original_contract_type = str(ci.contract_type or "")
+        self.original_entry_start_row = int(getattr(ci, "entry_start_row", 0) or 0)
+        self.active_platform_id = int(getattr(ci, "platform_id", 0) or getattr(ci, "primary_platform_id", 0) or 0)
+        self.systems = systems or []
+        self.deliveries = deliveries or {}
+        self.contract_tags = self.store.load_contract_tags(
+            self.original_platform,
+            self.original_contract_no,
+            self.original_contract_type,
+        )
+        self._context_cache.clear()
+        self.selected_system = self.systems[0].name if self.systems else None
+        self.expanded_delivery_index = None
+        self.refresh_contract_header()
+        self.render_contract_tags()
+        self.refresh()
+        self.update_side_meta_badges()
+        self._initial_snapshot = self._make_data_snapshot()
+        self._is_dirty = False
+        self._documents_changed = False
+
+    def _show_share_merge_exception(self, exc: Exception) -> None:
+        _log.exception("Share merge prepare failed")
+        self._show_share_merge_error("Paylaşım dosyası birleştirilemedi", self._share_merge_error_message(exc), str(exc))
+
+    def _show_share_merge_error(self, title: str, message: str, detail: str = "") -> None:
+        text = str(message or "Paylaşım dosyası birleştirilemedi.")
+        if detail:
+            text = f"{text}\n\nTeknik detay: {detail}"
+        QMessageBox.warning(self, title, text)
+
+    @staticmethod
+    def _share_merge_error_message(exc: Exception) -> str:
+        if isinstance(exc, ShareSourceMismatchError):
+            return "Seçilen paylaşım dosyası bu STS dosyasına ait değil."
+        if isinstance(exc, UnknownSharePackageError):
+            return "Bu paylaşım paketi ana STS kayıtlarında bulunamadı."
+        if isinstance(exc, PackageRegistryMismatchError):
+            return "Paylaşım paketi kayıt bilgileri ana STS ile uyuşmuyor."
+        if isinstance(exc, SharePackageStatusError):
+            return "Bu paylaşım paketinin durumu birleştirmeye kapalı."
+        if isinstance(exc, UnsupportedShareMergePackageError):
+            return "Seçilen dosya geçerli bir V2 paylaşım paketi değil."
+        if isinstance(exc, ShareMergePreparationError):
+            return "Paylaşım dosyası merge için hazırlanamadı."
+        return "Beklenmeyen bir hata nedeniyle paylaşım dosyası birleştirilemedi."
 
     def _make_card_scroll(self):
         scroll = QScrollArea(); scroll.setWidgetResizable(True); scroll.setFrameShape(QFrame.NoFrame)

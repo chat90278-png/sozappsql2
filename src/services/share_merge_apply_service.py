@@ -284,6 +284,23 @@ def apply_resolved_share_merge(
     )
 
 
+def preflight_resolved_share_merge(
+    source_store_or_conn: Any,
+    share_path: Path | str,
+    resolved_plan: ResolvedMergePlan,
+    *,
+    allow_partial: bool = False,
+) -> dict[str, Any]:
+    """Validate a ResolvedMergePlan before the UI asks for final confirmation.
+
+    This is intentionally a thin public wrapper around the same validation path
+    used by apply_resolved_share_merge, so preview/preflight and write behavior
+    cannot drift apart.
+    """
+    conn, _source_path = _source_conn_and_path(source_store_or_conn)
+    return _preflight_validate(conn, source_store_or_conn, Path(share_path), resolved_plan, allow_partial=allow_partial)
+
+
 def _source_conn_and_path(source_store_or_conn: Any) -> tuple[sqlite3.Connection, Path]:
     conn = getattr(getattr(source_store_or_conn, "db", None), "conn", None)
     path = getattr(getattr(source_store_or_conn, "db", None), "path", None) or getattr(source_store_or_conn, "path", None)

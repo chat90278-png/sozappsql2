@@ -751,7 +751,14 @@ class ContractSharePopover(QFrame):
         btn.clicked.connect(self.create_share_file)
         lay.addWidget(btn, 0, Qt.AlignRight)
 
+        self._merge_btn = QPushButton("Paylaşım Değişikliklerini Birleştir")
+        self._merge_btn.setObjectName("shareCreateButton")
+        self._merge_btn.setToolTip("Geri gelen V2 paylaşım .sts dosyasındaki değişiklikleri bu STS ile birleştir.")
+        self._merge_btn.clicked.connect(self.merge_share_file)
+        lay.addWidget(self._merge_btn, 0, Qt.AlignRight)
+
         self._set_mode("goruntule")
+        self.refresh_actions()
 
     def _set_mode(self, mode: str):
         self._share_mode_value = mode
@@ -777,6 +784,17 @@ class ContractSharePopover(QFrame):
 
     def create_share_file(self):
         self.owner.create_contract_share_file(self.share_mode(), self.filename())
+
+    def refresh_actions(self):
+        checker = getattr(self.owner, "can_show_share_merge_action", None)
+        can_show = bool(checker()) if callable(checker) else True
+        self._merge_btn.setVisible(can_show)
+        self._merge_btn.setEnabled(can_show)
+
+    def merge_share_file(self):
+        handler = getattr(self.owner, "merge_returned_share_file", None)
+        if callable(handler):
+            handler()
 
 
 class BadgeTabButton(QFrame):
