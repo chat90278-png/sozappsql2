@@ -991,6 +991,8 @@ QPushButton#dangerButton {{ background:#FFF5F5; color:#DC2626; border:1px solid 
                 if callable(save):
                     save()
                     return
+            event.accept()
+            return
         if event.key() == Qt.Key_Escape:
             if self.popover and self.popover.isVisible():
                 self._hide_popover()
