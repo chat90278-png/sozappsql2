@@ -1800,7 +1800,7 @@ class MainWindow(QMainWindow):
         if not qt_obj_alive(chip) or str(chip.property("stale") or "false") != "true":
             return False
         # Manager/edit-heavy windows should not auto-refresh because they may have unsaved edits.
-        if str(key or "").startswith("manager:"):
+        if str(key or "").startswith(("manager:", "contract:")):
             return False
         widget = getattr(self, "_tool_windows_by_key", {}).get(key)
         if not self._tool_window_alive(widget):
@@ -3478,16 +3478,76 @@ class MainWindow(QMainWindow):
             factory,
         )
 
+    def _contract_tool_window_key(self, ci: ContractInfo) -> str:
+        contract_id = int(getattr(ci, "contract_id", 0) or getattr(ci, "id", 0) or getattr(ci, "entry_start_row", 0) or 0)
+        if contract_id > 0:
+            return f"contract:{contract_id}"
+        platform_id = int(getattr(ci, "platform_id", 0) or getattr(ci, "primary_platform_id", 0) or 0)
+        no = str(getattr(ci, "no", "") or "").strip()
+        contract_type = str(getattr(ci, "contract_type", "") or "").strip()
+        if platform_id > 0:
+            return f"contract:{platform_id}:{contract_type}:{no}"
+        platform = str(getattr(ci, "platform", "") or "").strip()
+        return f"contract:{platform}:{contract_type}:{no}"
+
+    def _contract_tool_window_title(self, ci: ContractInfo) -> str:
+        no = str(getattr(ci, "no", "") or "").strip() or "Sözleşme"
+        platform = str(getattr(ci, "platform", "") or "").strip() or "Platform"
+        return f"{no} · {platform}"
+
+    def _open_or_raise_contract_window(
+        self,
+        ci: ContractInfo,
+        systems: Optional[List[SystemInfo]],
+        deliveries: Optional[Dict[str, List[DeliveryInfo]]],
+        *,
+        on_accepted: Optional[Callable[[ContractWorkWindow], None]] = None,
+    ) -> ContractWorkWindow:
+        key = self._contract_tool_window_key(ci)
+        existing = getattr(self, "_tool_windows_by_key", {}).get(key)
+        if self._tool_window_alive(existing):
+            self.raise_tool_window(key)
+            return existing  # type: ignore[return-value]
+
+        chip_title = self._contract_tool_window_title(ci)
+
+        def factory() -> QWidget:
+            work = ContractWorkWindow(self.store, ci, self, systems=systems, deliveries=deliveries)
+            work.setWindowTitle(f"{chip_title} - Sözleşme Detayı - STS")
+            if on_accepted is not None:
+                work.accepted.connect(lambda w=work: on_accepted(w))
+            return work
+
+        return self.open_or_raise_tool_window(key, chip_title, factory)  # type: ignore[return-value]
+
     def open_calendar_event_detail(self, ev: dict) -> bool:
         platform = str(ev.get("platform", "") or "")
         no = str(ev.get("no", "") or "")
-        row = int(ev.get("row", 0) or 0)
-        ci, systems, deliveries = self.store.load_contract_structure(platform, no, start_row=row if row > 0 else None)
+        row = int(ev.get("row", 0) or ev.get("row_id", 0) or ev.get("id", 0) or 0)
+        contract_type = str(ev.get("type", "") or ev.get("contract_type", "") or "")
+        try:
+            ci, systems, deliveries = self.store.load_contract_structure(
+                platform,
+                no,
+                start_row=row if row > 0 else None,
+                contract_type=contract_type or None,
+            )
+        except Exception:
+            traceback.print_exc()
+            QMessageBox.warning(self, "Bulunamadı", "Sözleşme detayları okunamadı.")
+            return False
         if not ci:
             QMessageBox.warning(self, "Bulunamadı", "Sözleşme detayları okunamadı.")
             return False
-        work = ContractWorkWindow(self.store, ci, self, systems=systems, deliveries=deliveries)
-        return bool(work.exec())
+        self._open_or_raise_contract_window(
+            ci, systems, deliveries,
+            on_accepted=lambda work: self.request_refresh(
+                select_platform=str(getattr(work.ci, "platform", "") or platform),
+                scope="platform",
+                platform=str(getattr(work.ci, "platform", "") or platform),
+            ),
+        )
+        return True
 
     def new_contract(self):
         if not self.require_permission_ui("create_contracts", "Sözleşme Ekleme"):
@@ -3519,13 +3579,14 @@ class MainWindow(QMainWindow):
                 traceback.print_exc()
                 QMessageBox.critical(self, "Sözleşme Kaydedilemedi", f"Yeni sözleşme kaydedilemedi:\n{exc}")
                 return
-            work=ContractWorkWindow(self.store,ci,self,systems=systems,deliveries=deliveries)
-            if work.exec():
-                self.request_refresh(
-                    select_platform=ci.platform,
+            self._open_or_raise_contract_window(
+                ci, systems, deliveries,
+                on_accepted=lambda work: self.request_refresh(
+                    select_platform=str(getattr(work.ci, "platform", "") or ci.platform),
                     scope="platform",
-                    platform=ci.platform,
-                )
+                    platform=str(getattr(work.ci, "platform", "") or ci.platform),
+                ),
+            )
 
     def refresh(self, rebuild_index: bool = True):
         if not self.store:
@@ -4091,22 +4152,9 @@ class MainWindow(QMainWindow):
             if not ci:
                 QMessageBox.warning(self, "Bulunamadı", "Sözleşme detayları okunamadı.")
                 return
-            try:
-                work = ContractWorkWindow(self.store, ci, self, systems=systems, deliveries=deliveries)
-            except Exception as exc:
-                traceback.print_exc()
-                _log.exception("ContractWorkWindow açılamadı")
-                QMessageBox.critical(
-                    self,
-                    "Sözleşme detayı açılamadı",
-                    f"Sözleşme detay ekranı açılırken hata oluştu:\n\n{exc}",
-                )
-                return
-            if work.exec():
+            def _after_contract_accepted(work: ContractWorkWindow) -> None:
                 deleted_info = getattr(work, "deleted_contract_info", None)
                 if deleted_info:
-                    # Silme sonrası tam excel indeksini yeniden kurmak (binlerce satırda)
-                    # gereksiz uzun sürüyor. Mevcut indeksi yerinde güncelleriz.
                     self.set_busy_overlay(True, "Liste güncelleniyor...", 82)
                     try:
                         self._apply_deleted_contract_to_index(deleted_info)
@@ -4133,6 +4181,18 @@ class MainWindow(QMainWindow):
                     else:
                         target = new_platform or old_platform
                         self.request_refresh(select_platform=target, scope="platform", platform=target)
+
+            try:
+                self._open_or_raise_contract_window(ci, systems, deliveries, on_accepted=_after_contract_accepted)
+            except Exception as exc:
+                traceback.print_exc()
+                _log.exception("ContractWorkWindow açılamadı")
+                QMessageBox.critical(
+                    self,
+                    "Sözleşme detayı açılamadı",
+                    f"Sözleşme detay ekranı açılırken hata oluştu:\n\n{exc}",
+                )
+                return
         finally:
             self.contract_table.setEnabled(True)
             self._opening_contract = False
