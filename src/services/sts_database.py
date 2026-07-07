@@ -4,6 +4,7 @@ import sqlite3
 import platform as platform_module
 import re
 import shutil
+import uuid
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
@@ -53,7 +54,7 @@ def quote_identifier(identifier: str) -> str:
 LEGACY_CONTRACT_PARENT_NO_COLUMN = "parent_contract_" "no"
 LEGACY_CONTRACT_USERS_COLUMN = "user_" "names"
 LEGACY_DELIVERY_SYSTEM_LABEL_COLUMN = "system_" "name"
-CURRENT_SCHEMA_VERSION = 13
+CURRENT_SCHEMA_VERSION = 14
 
 
 class STSMigrationError(RuntimeError):
@@ -597,16 +598,16 @@ CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT 
 CREATE TABLE IF NOT EXISTS components(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT UNIQUE NOT NULL,version TEXT,unit TEXT DEFAULT 'Adet',active INTEGER DEFAULT 1,usage REAL DEFAULT 1,note TEXT,display_order INTEGER,payload_json TEXT,created_at TEXT,updated_at TEXT);
 CREATE TABLE IF NOT EXISTS component_platforms(id INTEGER PRIMARY KEY AUTOINCREMENT,component_id INTEGER NOT NULL,platform_id INTEGER NOT NULL,enabled INTEGER DEFAULT 1,UNIQUE(component_id,platform_id),FOREIGN KEY(component_id) REFERENCES components(id) ON DELETE CASCADE,FOREIGN KEY(platform_id) REFERENCES platforms(id) ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS tags(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT UNIQUE NOT NULL,color TEXT,kind TEXT DEFAULT 'contract',created_at TEXT,updated_at TEXT);
-CREATE TABLE IF NOT EXISTS contracts(id INTEGER PRIMARY KEY AUTOINCREMENT,platform_id INTEGER NOT NULL,contract_no TEXT NOT NULL,yi_yd TEXT,contract_type TEXT,type_display TEXT,link_type TEXT,status TEXT,signed_date TEXT,t0_date TEXT,t0_months INTEGER,completion_date TEXT,acceptance_date TEXT,content TEXT,note TEXT,is_main INTEGER DEFAULT 1,parent_contract_id INTEGER,search_text TEXT,payload_json TEXT,created_at TEXT,updated_at TEXT,UNIQUE(platform_id,contract_no,contract_type),FOREIGN KEY(platform_id) REFERENCES platforms(id) ON DELETE RESTRICT,FOREIGN KEY(parent_contract_id) REFERENCES contracts(id) ON DELETE SET NULL);
+CREATE TABLE IF NOT EXISTS contracts(id INTEGER PRIMARY KEY AUTOINCREMENT,platform_id INTEGER NOT NULL,merge_uid TEXT NOT NULL DEFAULT '',revision INTEGER NOT NULL DEFAULT 1,contract_no TEXT NOT NULL,yi_yd TEXT,contract_type TEXT,type_display TEXT,link_type TEXT,status TEXT,signed_date TEXT,t0_date TEXT,t0_months INTEGER,completion_date TEXT,acceptance_date TEXT,content TEXT,note TEXT,is_main INTEGER DEFAULT 1,parent_contract_id INTEGER,search_text TEXT,payload_json TEXT,created_at TEXT,updated_at TEXT,UNIQUE(platform_id,contract_no,contract_type),FOREIGN KEY(platform_id) REFERENCES platforms(id) ON DELETE RESTRICT,FOREIGN KEY(parent_contract_id) REFERENCES contracts(id) ON DELETE SET NULL);
 CREATE TABLE IF NOT EXISTS contract_users(contract_id INTEGER NOT NULL REFERENCES contracts(id) ON DELETE CASCADE,user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,PRIMARY KEY(contract_id,user_id));
 CREATE TABLE IF NOT EXISTS contract_platforms(id INTEGER PRIMARY KEY AUTOINCREMENT,contract_id INTEGER NOT NULL,platform_id INTEGER NOT NULL,sort_order INTEGER DEFAULT 0,is_primary INTEGER DEFAULT 0,created_at TEXT DEFAULT CURRENT_TIMESTAMP,FOREIGN KEY(contract_id) REFERENCES contracts(id) ON DELETE CASCADE,FOREIGN KEY(platform_id) REFERENCES platforms(id) ON DELETE CASCADE,UNIQUE(contract_id,platform_id));
-CREATE TABLE IF NOT EXISTS systems(id INTEGER PRIMARY KEY AUTOINCREMENT,contract_id INTEGER NOT NULL,platform_id INTEGER,name TEXT NOT NULL,status TEXT,completion_date TEXT,acceptance_date TEXT,note TEXT,sort_order INTEGER DEFAULT 0,payload_json TEXT,FOREIGN KEY(contract_id) REFERENCES contracts(id) ON DELETE CASCADE);
+CREATE TABLE IF NOT EXISTS systems(id INTEGER PRIMARY KEY AUTOINCREMENT,contract_id INTEGER NOT NULL,merge_uid TEXT NOT NULL DEFAULT '',platform_id INTEGER,name TEXT NOT NULL,status TEXT,completion_date TEXT,acceptance_date TEXT,note TEXT,sort_order INTEGER DEFAULT 0,payload_json TEXT,FOREIGN KEY(contract_id) REFERENCES contracts(id) ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS system_components(id INTEGER PRIMARY KEY AUTOINCREMENT,system_id INTEGER NOT NULL,component_id INTEGER NOT NULL,qty REAL DEFAULT 0,note TEXT,UNIQUE(system_id,component_id),FOREIGN KEY(system_id) REFERENCES systems(id) ON DELETE CASCADE,FOREIGN KEY(component_id) REFERENCES components(id) ON DELETE CASCADE);
-CREATE TABLE IF NOT EXISTS deliveries(id INTEGER PRIMARY KEY AUTOINCREMENT,contract_id INTEGER NOT NULL,system_id INTEGER NOT NULL,delivery_user_id INTEGER,name TEXT NOT NULL,status TEXT,planned_acceptance_date TEXT DEFAULT '',acceptance_date TEXT,note TEXT,sort_order INTEGER DEFAULT 0,payload_json TEXT,FOREIGN KEY(contract_id) REFERENCES contracts(id) ON DELETE CASCADE,FOREIGN KEY(system_id) REFERENCES systems(id) ON DELETE CASCADE,FOREIGN KEY(delivery_user_id) REFERENCES users(id) ON DELETE SET NULL);
+CREATE TABLE IF NOT EXISTS deliveries(id INTEGER PRIMARY KEY AUTOINCREMENT,contract_id INTEGER NOT NULL,merge_uid TEXT NOT NULL DEFAULT '',system_id INTEGER NOT NULL,delivery_user_id INTEGER,name TEXT NOT NULL,status TEXT,planned_acceptance_date TEXT DEFAULT '',acceptance_date TEXT,note TEXT,sort_order INTEGER DEFAULT 0,payload_json TEXT,FOREIGN KEY(contract_id) REFERENCES contracts(id) ON DELETE CASCADE,FOREIGN KEY(system_id) REFERENCES systems(id) ON DELETE CASCADE,FOREIGN KEY(delivery_user_id) REFERENCES users(id) ON DELETE SET NULL);
 CREATE TABLE IF NOT EXISTS delivery_components(id INTEGER PRIMARY KEY AUTOINCREMENT,delivery_id INTEGER NOT NULL,component_id INTEGER NOT NULL,planned REAL DEFAULT 0,delivered REAL DEFAULT 0,UNIQUE(delivery_id,component_id),FOREIGN KEY(delivery_id) REFERENCES deliveries(id) ON DELETE CASCADE,FOREIGN KEY(component_id) REFERENCES components(id) ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS contract_tags(id INTEGER PRIMARY KEY AUTOINCREMENT,contract_id INTEGER NOT NULL,tag_id INTEGER NOT NULL,UNIQUE(contract_id,tag_id),FOREIGN KEY(contract_id) REFERENCES contracts(id) ON DELETE CASCADE,FOREIGN KEY(tag_id) REFERENCES tags(id) ON DELETE CASCADE);
-CREATE TABLE IF NOT EXISTS contract_file_folders(id INTEGER PRIMARY KEY AUTOINCREMENT,contract_id INTEGER NOT NULL,parent_id INTEGER,name TEXT NOT NULL,created_at TEXT,updated_at TEXT,UNIQUE(contract_id,parent_id,name),FOREIGN KEY(contract_id) REFERENCES contracts(id) ON DELETE CASCADE,FOREIGN KEY(parent_id) REFERENCES contract_file_folders(id) ON DELETE CASCADE);
-CREATE TABLE IF NOT EXISTS contract_files(id INTEGER PRIMARY KEY AUTOINCREMENT,contract_id INTEGER NOT NULL,folder_id INTEGER,filename TEXT NOT NULL,original_path TEXT,file_ext TEXT,mime_type TEXT,size_bytes INTEGER NOT NULL DEFAULT 0,sha256 TEXT DEFAULT '',content_blob BLOB NOT NULL,note TEXT,created_at TEXT,updated_at TEXT,FOREIGN KEY(contract_id) REFERENCES contracts(id) ON DELETE CASCADE,FOREIGN KEY(folder_id) REFERENCES contract_file_folders(id) ON DELETE SET NULL);
+CREATE TABLE IF NOT EXISTS contract_file_folders(id INTEGER PRIMARY KEY AUTOINCREMENT,contract_id INTEGER NOT NULL,merge_uid TEXT NOT NULL DEFAULT '',parent_id INTEGER,name TEXT NOT NULL,created_at TEXT,updated_at TEXT,UNIQUE(contract_id,parent_id,name),FOREIGN KEY(contract_id) REFERENCES contracts(id) ON DELETE CASCADE,FOREIGN KEY(parent_id) REFERENCES contract_file_folders(id) ON DELETE CASCADE);
+CREATE TABLE IF NOT EXISTS contract_files(id INTEGER PRIMARY KEY AUTOINCREMENT,contract_id INTEGER NOT NULL,merge_uid TEXT NOT NULL DEFAULT '',folder_id INTEGER,filename TEXT NOT NULL,original_path TEXT,file_ext TEXT,mime_type TEXT,size_bytes INTEGER NOT NULL DEFAULT 0,sha256 TEXT DEFAULT '',content_blob BLOB NOT NULL,note TEXT,created_at TEXT,updated_at TEXT,FOREIGN KEY(contract_id) REFERENCES contracts(id) ON DELETE CASCADE,FOREIGN KEY(folder_id) REFERENCES contract_file_folders(id) ON DELETE SET NULL);
 CREATE TABLE IF NOT EXISTS activity_logs(id INTEGER PRIMARY KEY AUTOINCREMENT,created_at TEXT NOT NULL,actor TEXT,source TEXT,device_name TEXT,action TEXT NOT NULL,entity_type TEXT,entity_id TEXT,entity_key TEXT,platform_id INTEGER,contract_no TEXT,message TEXT,before_json TEXT,after_json TEXT,payload_json TEXT,FOREIGN KEY(platform_id) REFERENCES platforms(id) ON DELETE SET NULL);
             """
         )
@@ -922,6 +923,27 @@ CREATE TABLE IF NOT EXISTS activity_logs(id INTEGER PRIMARY KEY AUTOINCREMENT,cr
             """, (group[0], group[1], group[2], group[3], group[4])).fetchall()
             for row in rows[1:]:
                 self.conn.execute("UPDATE platform_delivery_report_lines SET serial_key=? WHERE id=?", (f"{group[4]}#ROW-{row[0]}", row[0]))
+
+        # --- Schema v14: STS identity, merge UIDs and contract revision foundation ---
+        self.conn.execute("CREATE TABLE IF NOT EXISTS sts_metadata(key TEXT PRIMARY KEY, value TEXT)")
+        row = self.conn.execute("SELECT value FROM sts_metadata WHERE key='sts_instance_id'").fetchone()
+        if not row or not str(row[0] or '').strip():
+            generated_instance_id = str(uuid.uuid4())
+            self.conn.execute("INSERT OR IGNORE INTO sts_metadata(key,value) VALUES('sts_instance_id',?)", (generated_instance_id,))
+            self.conn.execute("UPDATE sts_metadata SET value=? WHERE key='sts_instance_id' AND (value IS NULL OR TRIM(value)='')", (generated_instance_id,))
+            migrated.append("sts_metadata.sts_instance_id")
+        for table in ("contracts", "systems", "deliveries", "contract_file_folders", "contract_files"):
+            if self._ensure_column(table, "merge_uid", "TEXT NOT NULL DEFAULT ''"):
+                migrated.append(f"{table}.merge_uid")
+        if self._ensure_column("contracts", "revision", "INTEGER NOT NULL DEFAULT 1"):
+            migrated.append("contracts.revision")
+        for table in ("contracts", "systems", "deliveries", "contract_file_folders", "contract_files"):
+            rows = self.conn.execute(f"SELECT id FROM {table} WHERE merge_uid IS NULL OR TRIM(merge_uid)='' ").fetchall()
+            if rows:
+                self.conn.executemany(f"UPDATE {table} SET merge_uid=? WHERE id=?", [(str(uuid.uuid4()), int(r[0])) for r in rows])
+                migrated.append(f"{table}.merge_uid.backfill")
+            self.conn.execute(f"CREATE UNIQUE INDEX IF NOT EXISTS ux_{table}_merge_uid ON {table}(merge_uid) WHERE merge_uid IS NOT NULL AND merge_uid<>''")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_contracts_revision ON contracts(revision)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_pdr_summary_scope ON platform_delivery_report_summary(platform_id,user_id,contract_id)")
         self.conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_pdr_lines_serial_key ON platform_delivery_report_lines(platform_id,user_id,contract_id,component_id,serial_key)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_pdr_lines_scope ON platform_delivery_report_lines(platform_id,user_id,contract_id,component_id,serial_key)")
