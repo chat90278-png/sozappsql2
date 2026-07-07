@@ -64,6 +64,7 @@ from src.config.app_config import (
 from src.models.app_models import ComponentDef, ContractInfo, SystemInfo, DeliveryInfo, TagDef
 from src.domain.contract_timing import contract_timing, is_completed_status
 from src.domain.delivery_coverage import acceptance_coverage_issues
+from src.domain.calendar_timing import build_calendar_summary_from_sources, fetch_calendar_event_sources
 from src.domain.flexible_date import flexible_or_blank, is_exact_date, is_tbd_contract_no, parse_flexible_date, validate_flexible_date, format_flexible_date
 from src.core.crash_logger import install_crash_handlers
 from src.ui.widgets import stat_card, set_card_value, CalendarWidget
@@ -2690,12 +2691,12 @@ class MainWindow(QMainWindow):
 
     def _apply_platform_selection(self):
         self.normalize_platform_selection_state()
+        self._prepare_contract_index_cache()
         selected = set(self.selected_platforms)
         self.all_contract_rows = [
             dict(it) for it in self.contract_index
             if not selected or str(it.get("platform", "")) in selected
         ]
-        self._prepare_contract_row_cache(self.all_contract_rows)
         self._refresh_query_filters()
         if not selected:
             self.right_title.setText("Sözleşme Sorgulama")
@@ -2790,6 +2791,7 @@ class MainWindow(QMainWindow):
                 w.deleteLater()
 
     def update_alert_strip(self):
+        self._prepare_contract_index_cache()
         today = date.today()
         self.today_num.setText(str(today.day))
         self.today_info.setText(f"{TR_MONTHS[today.month - 1].upper()}\n{today.year}")
@@ -2834,32 +2836,23 @@ class MainWindow(QMainWindow):
 
         # ── _CalendarWidget güncelle ──────────────────────────────────────
         if hasattr(self, "_cal_widget"):
-            # Yaklaşan/geciken sözleşmelerin gün bazlı haritası
-            events_by_day: Dict[int, str] = {}
-            for it, _ in overdue:
-                date_txt = self._contract_health(it)[3]
-                try:
-                    dt = date.fromisoformat(str(date_txt)) if date_txt else None
-                except (ValueError, TypeError):
-                    dt = None
-                if dt and dt.year == today.year and dt.month == today.month:
-                    events_by_day[dt.day] = "geciken"
-            for it, _ in critical:
-                date_txt = self._contract_health(it)[3]
-                try:
-                    dt = date.fromisoformat(str(date_txt)) if date_txt else None
-                except (ValueError, TypeError):
-                    dt = None
-                if dt and dt.year == today.year and dt.month == today.month:
-                    if dt.day not in events_by_day:
-                        events_by_day[dt.day] = "kritik"
-            counts = {
-                "geciken":    len(overdue),
-                "kritik":     len(critical),
-                "tamamlandi": delivered,
-                "belirsiz":   0,
-            }
+            counts, events_by_day = self._calendar_widget_summary(today)
             self._cal_widget.refresh(counts, events_by_day, today.year, today.month)
+
+    def _calendar_widget_summary(self, today: date) -> tuple[Dict[str, int], Dict[int, str]]:
+        counts = {"geciken": 0, "kritik": 0, "tamamlandi": 0, "belirsiz": 0}
+        try:
+            conn = getattr(getattr(self.store, "db", None), "conn", None)
+            if conn is None:
+                return counts, {}
+            contract_events, system_events = fetch_calendar_event_sources(conn, today.year, today.year, "")
+            counts, events_by_day, _events = build_calendar_summary_from_sources(
+                contract_events, system_events, today, today.year
+            )
+            return counts, events_by_day
+        except Exception:
+            _log.exception("Mini takvim özeti hazırlanamadı")
+            return counts, {}
 
     def set_empty_state(self):
         self.platform_list.clear()
@@ -3620,7 +3613,7 @@ class MainWindow(QMainWindow):
             for items in (deliveries or {}).values():
                 for delivery in items or []:
                     raw = str(getattr(delivery, "planned_acceptance_date", "") or "").strip()
-                    if not raw:
+                    if not raw or raw in {"-", "—"}:
                         continue
                     parsed = parse_flexible_date(raw)
                     if parsed:
@@ -3648,9 +3641,10 @@ class MainWindow(QMainWindow):
                 exacts = []
                 has_flexible = False
                 for text in date_list:
-                    if not text:
+                    raw = str(text or "").strip()
+                    if not raw or raw in {"-", "—"}:
                         continue
-                    parsed = parse_flexible_date(text)
+                    parsed = parse_flexible_date(raw)
                     if parsed:
                         exacts.append(parsed)
                     else:
@@ -3671,8 +3665,19 @@ class MainWindow(QMainWindow):
                 out[cid] = ("", "", None)
         return out
 
+    def _prepare_contract_index_cache(self):
+        today_iso = date.today().isoformat()
+        required = {"_completion_obj", "_completion_ord", "_near_delivery_txt", "_near_delivery_days", "_day_num"}
+        rows = getattr(self, "contract_index", []) or []
+        if (
+            getattr(self, "_contract_index_cache_date", None) == today_iso
+            and all(required.issubset(it.keys()) for it in rows)
+        ):
+            return
+        self._prepare_contract_row_cache(rows)
+        self._contract_index_cache_date = today_iso
+
     def _prepare_contract_row_cache(self, rows: List[dict]):
-        today = date.today()
         delivery_summary = self._delivery_summary_map(rows)
         for it in rows:
             cid = int(it.get("row") or it.get("entry_start_row") or 0)
