@@ -3,9 +3,8 @@ from __future__ import annotations
 
 import calendar
 import logging
-import re
 import sqlite3
-from datetime import date, datetime
+from datetime import date
 from typing import Callable, Dict, List, Optional, Tuple
 
 from PySide6.QtCore import Qt, QObject, QPropertyAnimation, QEasingCurve, QThread, QTimer, Signal
@@ -18,6 +17,11 @@ from PySide6.QtWidgets import (
 
 from src.config.app_config import APP_TITLE, TR_MONTHS
 from src.services.excel_store import ExcelStore
+from src.domain.calendar_timing import (
+    annotate_calendar_events, calendar_date_kind, calendar_effective_date_raw,
+    calendar_month_tbd_parts, calendar_year_tbd_part, classify_calendar_event,
+    fetch_calendar_event_sources, parse_calendar_date,
+)
 from src.ui.theme import STYLE
 
 _log = logging.getLogger("STS.calendar")
@@ -55,138 +59,8 @@ class CalendarDataWorker(QObject):
             pf = self._platform_filter
             pc = "AND p.name = ?" if pf else ""
 
-            self.progress.emit(15, "Sozlesme tarihleri okunuyor...")
-            c_params = [yf, yt, yf, yt]
-            if pf:
-                c_params.append(pf)
-            c_rows = conn.execute(
-                "SELECT c.id AS row_id, p.name AS platform,"
-                " c.contract_no AS no, c.contract_type AS type,"
-                " c.status, c.completion_date, c.acceptance_date,"
-                " c.note AS content"
-                " FROM contracts c"
-                " JOIN contract_platforms cp ON cp.contract_id = c.id"
-                " JOIN platforms p           ON p.id = cp.platform_id"
-                " WHERE ("
-                "   (c.completion_date IS NOT NULL AND c.completion_date != ''  AND ("
-                "       SUBSTR(c.completion_date,1,4) BETWEEN ? AND ?"
-                "       OR c.completion_date = 'TBD'"
-                "       OR c.completion_date LIKE '%-TBD-TBD'"
-                "       OR c.completion_date LIKE '%-TBD'))"
-                "   OR"
-                "   (c.acceptance_date IS NOT NULL AND c.acceptance_date != '' AND ("
-                "       SUBSTR(c.acceptance_date,1,4) BETWEEN ? AND ?"
-                "       OR c.acceptance_date = 'TBD'"
-                "       OR c.acceptance_date LIKE '%-TBD-TBD'"
-                "       OR c.acceptance_date LIKE '%-TBD'))"
-                " ) " + pc +
-                " ORDER BY p.name, c.contract_no",
-                c_params
-            ).fetchall()
-
-            contract_events = [
-                {
-                    "row": int(r["row_id"]),
-                    "platform": str(r["platform"] or ""),
-                    "no": str(r["no"] or ""),
-                    "type": str(r["type"] or ""),
-                    "status": str(r["status"] or ""),
-                    "completion_date": str(r["completion_date"] or ""),
-                    "acceptance_date": str(r["acceptance_date"] or ""),
-                    "planned_acceptance_date": "",
-                    "content": str(r["content"] or ""),
-                    "user": "",
-                }
-                for r in c_rows
-            ]
-
-            self.progress.emit(40, "Sistem termini okunuyor...")
-            s_params = [yf, yt]
-            if pf:
-                s_params.append(pf)
-            s_rows = conn.execute(
-                "SELECT c.id AS contract_row, p.name AS platform,"
-                " c.contract_no AS no, s.name AS system_name,"
-                " s.status, s.completion_date, s.acceptance_date"
-                " FROM systems s"
-                " JOIN contracts c           ON c.id = s.contract_id"
-                " JOIN contract_platforms cp ON cp.contract_id = c.id"
-                " JOIN platforms p           ON p.id = cp.platform_id"
-                " WHERE s.completion_date IS NOT NULL AND s.completion_date != '' AND ("
-                "   SUBSTR(s.completion_date,1,4) BETWEEN ? AND ?"
-                "   OR s.completion_date = 'TBD'"
-                "   OR s.completion_date LIKE '%-TBD-TBD'"
-                "   OR s.completion_date LIKE '%-TBD'"
-                " ) " + pc +
-                " ORDER BY p.name, c.contract_no, s.name",
-                s_params
-            ).fetchall()
-
-            self.progress.emit(65, "Teslimat tarihleri okunuyor...")
-            d_params = [yf, yt, yf, yt]
-            if pf:
-                d_params.append(pf)
-            d_rows = conn.execute(
-                "SELECT c.id AS contract_row, d.id AS delivery_id, p.name AS platform,"
-                " c.contract_no AS no,"
-                " s.name AS system_name, d.name AS delivery_name,"
-                " d.status, d.acceptance_date, d.planned_acceptance_date"
-                " FROM deliveries d"
-                " JOIN systems  s  ON s.id  = d.system_id"
-                " JOIN contracts c ON c.id  = d.contract_id"
-                " JOIN contract_platforms cp ON cp.contract_id = c.id"
-                " JOIN platforms p ON p.id  = cp.platform_id"
-                " WHERE ("
-                "   (d.acceptance_date IS NOT NULL AND d.acceptance_date != '' AND ("
-                "       SUBSTR(d.acceptance_date,1,4) BETWEEN ? AND ?"
-                "       OR d.acceptance_date = 'TBD'"
-                "       OR d.acceptance_date LIKE '%-TBD-TBD'"
-                "       OR d.acceptance_date LIKE '%-TBD'))"
-                "   OR"
-                "   (d.planned_acceptance_date IS NOT NULL AND d.planned_acceptance_date != '' AND ("
-                "       SUBSTR(d.planned_acceptance_date,1,4) BETWEEN ? AND ?"
-                "       OR d.planned_acceptance_date = 'TBD'"
-                "       OR d.planned_acceptance_date LIKE '%-TBD-TBD'"
-                "       OR d.planned_acceptance_date LIKE '%-TBD'))"
-                " ) " + pc +
-                " ORDER BY p.name, c.contract_no, s.name, d.sort_order, d.id",
-                d_params
-            ).fetchall()
-
-            system_events: list = []
-            for r in s_rows:
-                sname = str(r["system_name"] or "")
-                no    = str(r["no"] or "")
-                system_events.append({
-                    "row": int(r["contract_row"]),
-                    "platform": str(r["platform"] or ""),
-                    "no": no, "type": "Sistem",
-                    "system_label": sname,
-                    "title": f"{no} · {sname}" if sname else no,
-                    "status": str(r["status"] or ""),
-                    "completion_date": str(r["completion_date"] or ""),
-                    "acceptance_date": str(r["acceptance_date"] or ""),
-                    "planned_acceptance_date": "",
-                    "user": "",
-                })
-            for r in d_rows:
-                sname = str(r["system_name"] or "")
-                dname = str(r["delivery_name"] or "")
-                no    = str(r["no"] or "")
-                label = f"{no} · {sname} / {dname}" if sname else f"{no} / {dname}"
-                system_events.append({
-                    "row": int(r["contract_row"]),
-                    "delivery_id": int(r["delivery_id"]),
-                    "platform": str(r["platform"] or ""),
-                    "no": no, "type": "Teslimat",
-                    "system_label": sname,
-                    "title": label,
-                    "status": str(r["status"] or ""),
-                    "completion_date": "",
-                    "acceptance_date": str(r["acceptance_date"] or ""),
-                    "planned_acceptance_date": str(r["planned_acceptance_date"] or ""),
-                    "user": "",
-                })
+            self.progress.emit(15, "Takvim kayıtları okunuyor...")
+            contract_events, system_events = fetch_calendar_event_sources(conn, self._year_from, self._year_to, pf)
 
             self.progress.emit(90, "Veri hazirlanıyor...")
 
@@ -390,92 +264,27 @@ _DAY_HEADER_HEIGHT = 34
 _SIDE_HEADER_HEIGHT = _DETAIL_TOPBAR_HEIGHT + _DAY_HEADER_HEIGHT
 
 
-_EXACT_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-_MONTH_TBD_RE = re.compile(r"^(\d{4})-(\d{2})-TBD$")
-_YEAR_TBD_RE = re.compile(r"^(\d{4})-TBD-TBD$")
-
-# Esnek tarih tipleri:
-#   exact              -> YYYY-MM-DD, gerçek date objesine çevrilebilir
-#   month_unknown_day  -> YYYY-MM-TBD, yıl+ay belli
-#   year_only          -> YYYY-TBD-TBD, sadece yıl belli
-#   fully_unknown      -> TBD, hiçbir şey belli değil
-#   na                 -> "-", boş veya tanınmayan değer (tarih uygulanmıyor)
-
-
 def _date_kind(text: str) -> str:
-    t = (text or "").strip()
-    if not t or t == "-":
-        return "na"
-    if t == "TBD":
-        return "fully_unknown"
-    if _EXACT_RE.match(t):
-        return "exact"
-    if _MONTH_TBD_RE.match(t):
-        return "month_unknown_day"
-    if _YEAR_TBD_RE.match(t):
-        return "year_only"
-    return "na"
+    return calendar_date_kind(text)
 
 
 def _parse_date(text: str) -> Optional[date]:
-    t = (text or "").strip()
-    if not t:
-        return None
-    try:
-        return datetime.strptime(t, "%Y-%m-%d").date()
-    except ValueError:
-        return None
+    return parse_calendar_date(text)
 
 
 def _month_tbd_parts(text: str) -> Optional[Tuple[int, int]]:
-    """'YYYY-MM-TBD' -> (year, month) ; month 1-indexed."""
-    m = _MONTH_TBD_RE.match((text or "").strip())
-    if not m:
-        return None
-    return int(m.group(1)), int(m.group(2))
+    return calendar_month_tbd_parts(text)
 
 
 def _year_tbd_parts(text: str) -> Optional[int]:
-    """'YYYY-TBD-TBD' -> year."""
-    m = _YEAR_TBD_RE.match((text or "").strip())
-    if not m:
-        return None
-    return int(m.group(1))
+    return calendar_year_tbd_part(text)
 
 
 def _effective_date_raw(item: dict) -> str:
-    """
-    Tarih kaynağı kayıt tipine göre belirlenir:
-
-    Sözleşme kaydı  -> completion_date (termin tarihi)
-    Sistem kaydı    -> completion_date (termin tarihi)
-    Teslimat kaydı  -> acceptance_date > planned_acceptance_date > ""
-
-    "Teslimat" tip kontrolü: CalendarDataWorker type="Teslimat" olarak set eder.
-    Sözleşme ve sistem kayıtları completion_date üzerinden takip edilir.
-
-    ÖNEMLİ: acceptance_date alanı boş DEĞİL ama "-" (tarih uygulanmıyor)
-    olabilir — bu, "henüz teslim alınmadı, planlanan tarihe bak" anlamına
-    gelir, "uygulanmıyor" anlamına DEĞİL. "-" sadece tek başına, hiçbir
-    alanda alternatif yoksa anlamlıdır. Bu yüzden acceptance_date "-" ise
-    (gerçek bir tarih/TBD-varyantı taşımıyorsa) planned_acceptance_date'e
-    düşülür; "-" hiçbir zaman doğrudan kullanılmaz.
-    Ham string döner; format ayrımı _date_kind ile yapılır.
-    """
-    ctype = str(item.get("type") or "").lower()
-    # Sadece "Teslimat" type'ı acceptance_date/planned_acceptance_date kullanır.
-    # "Sözleşme", "Ana Sözleşme", "SD-*", "Sistem" → completion_date.
-    if "teslimat" in ctype:
-        acc = str(item.get("acceptance_date") or "").strip()
-        if acc and acc != "-":
-            return acc
-        return str(item.get("planned_acceptance_date") or "").strip()
-    # Sözleşme veya Sistem: completion_date
-    return str(item.get("completion_date") or "").strip()
+    return calendar_effective_date_raw(item)
 
 
 def _effective_date(item: dict) -> Optional[date]:
-    """Geriye dönük uyumluluk: sadece exact tarihlerde date döner."""
     raw = _effective_date_raw(item)
     if _date_kind(raw) != "exact":
         return None
@@ -483,22 +292,7 @@ def _effective_date(item: dict) -> Optional[date]:
 
 
 def _classify(item: dict, eff: Optional[date], today: date, date_kind: str = "exact") -> str:
-    s = str(item.get("status") or "").lower()
-    # Gerçek teslimat tarihi varsa → tamamlandı (gerçekleşen tarih her zaman
-    # exact olmak zorunda). "-" placeholder'ı "henüz teslim edilmedi" demektir,
-    # acceptance_date dolu sayılmaz — aksi halde her "-" kayıt yanlışlıkla
-    # "tamamlandı/teslim edildi" sınıfına düşerdi.
-    acc_raw = str(item.get("acceptance_date") or "").strip()
-    if (acc_raw and acc_raw != "-") or "tamam" in s or "teslim" in s:
-        return "tamamlandi"
-    if date_kind != "exact" or eff is None:
-        return "belirsiz"
-    # planned_acceptance_date kullanılıyorsa normal sınıflandırma
-    delta = (eff - today).days
-    if delta < 0:  return "geciken"
-    if delta <= 60: return "kritik"
-    return "normal"
-
+    return classify_calendar_event(item, eff, today, date_kind)
 
 def _first_col(year: int, month1: int) -> int:
     """Pazartesi=0 … Pazar=6 (month1 is 1-indexed)."""
@@ -3823,70 +3617,8 @@ class ContractCalendarWindow(QDialog):
 
     # ── Veri ──────────────────────────────────────────────────────────────
     def _annotate_events(self, raw_items: list) -> List[dict]:
-        """
-        Ham DB satırlarını takvim event dict'e çevirir (saf hesaplama).
-
-        Tarih formatı esnek tarih standardına göre değerlendirilir:
-          YYYY-MM-DD      -> exact              (_eff_date dolu, hesaplamaya girer)
-          YYYY-MM-TBD     -> month_unknown_day  (_eff_year/_eff_month dolu, gün yok)
-          YYYY-TBD-TBD    -> year_only          (_eff_year dolu)
-          TBD             -> fully_unknown      (hiçbir zaman bilgisi yok)
-          "-" / boş       -> na                 (tarih uygulanmıyor, kayıt atlanır)
-
-        "-" / boş dışındaki tüm formatlar event listesinde kalır; sadece
-        hesaplama (kalan gün, takvim yerleşimi) "exact" olanlarda yapılır.
-        """
-        today = self.today
-        out: List[dict] = []
-        for item in raw_items:
-            raw = _effective_date_raw(item)
-            kind = _date_kind(raw)
-            if kind == "na":
-                continue
-
-            eff: Optional[date] = None
-            eff_year: Optional[int] = None
-            eff_month: Optional[int] = None  # 1-indexed
-
-            if kind == "exact":
-                eff = _parse_date(raw)
-                if eff is None:
-                    continue
-                eff_year, eff_month = eff.year, eff.month
-            elif kind == "month_unknown_day":
-                parts = _month_tbd_parts(raw)
-                if parts is None:
-                    continue
-                eff_year, eff_month = parts
-            elif kind == "year_only":
-                eff_year = _year_tbd_parts(raw)
-                if eff_year is None:
-                    continue
-            # fully_unknown: eff_year/eff_month None kalır
-
-            cls = _classify(item, eff, today, kind)
-            no    = str(item.get("no") or "")
-            ctype = str(item.get("type") or item.get("contract_type") or "")
-            title = str(item.get("title") or item.get("content") or item.get("note") or "")
-            if not title:
-                title = f"{no} · {ctype}" if ctype else no
-            out.append({
-                "_eff_date": eff, "_cls": cls,
-                "_date_kind": kind,
-                "_eff_year": eff_year, "_eff_month": eff_month,
-                "_eff_raw": raw,
-                "row":       int(item.get("row") or 0),
-                "delivery_id": item.get("delivery_id"),  # sadece Teslimat tipinde dolu
-                "platform":  str(item.get("platform") or ""),
-                "no": no,    "user": str(item.get("user") or ""),
-                "type": ctype, "title": title,
-                "system_label": str(item.get("system_label") or ""),
-                "status":           str(item.get("status") or ""),
-                "acceptance_date":  str(item.get("acceptance_date") or ""),
-                "planned_acceptance_date": str(item.get("planned_acceptance_date") or ""),
-                "completion_date":  str(item.get("completion_date") or ""),
-            })
-        return out
+        """Ham DB satırlarını ortak takvim sınıflandırmasıyla event dict'e çevirir."""
+        return annotate_calendar_events(raw_items, self.today)
 
     def _db_path(self):
         """STSStore'un db dosya yolunu döndürür; ExcelStore ise None."""
