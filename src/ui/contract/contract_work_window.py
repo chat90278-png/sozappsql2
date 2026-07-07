@@ -1689,7 +1689,11 @@ class ContractWorkWindow(QDialog):
                 button.clicked.connect(lambda _checked=False, ctl=tabs_controller: ctl.open_share())
             else:
                 button.clicked.connect(lambda _checked=False, name=panel: self.toggle_side_meta_popover(name))
-            bar_layout.addWidget(button, 0, Qt.AlignVCenter)
+            # Keep the tab body flush with the overlay host's top edge.  The host
+            # is a transparent sibling overlay (not a child of the header), so any
+            # vertical slack above the first tab is painted by the dialog/root
+            # background rather than by the navy header underneath.
+            bar_layout.addWidget(button, 0, Qt.AlignTop)
 
         bar_layout.addStretch(1)
 
