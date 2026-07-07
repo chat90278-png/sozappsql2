@@ -66,7 +66,7 @@ from src.domain.contract_timing import contract_timing, is_completed_status
 from src.domain.delivery_coverage import acceptance_coverage_issues
 from src.domain.flexible_date import flexible_or_blank, is_exact_date, is_tbd_contract_no, parse_flexible_date, validate_flexible_date, format_flexible_date
 from src.core.crash_logger import install_crash_handlers
-from src.ui.widgets import stat_card, set_card_value
+from src.ui.widgets import stat_card, set_card_value, CalendarWidget
 from src.ui.theme import STYLE
 from src.ui.tarih import ContractCalendarWindow
 from src.ui.ozet import ContractSummaryDialog
@@ -1499,7 +1499,8 @@ class MainWindow(QMainWindow):
         self.upcoming_scroll.setWidget(self.upcoming_host)
         sl.addWidget(self.upcoming_scroll, 1)
 
-        calb=QPushButton("🗓 Takvim Görünümü"); calb.clicked.connect(self.open_calendar_tracking); sl.addWidget(calb, 0)
+        self._cal_widget = CalendarWidget(self.open_calendar_tracking)
+        sl.addWidget(self._cal_widget, 0)
         # The alert strip belongs to the real main layout; there is no embedded workspace container here.
         main.addWidget(strip, 0)
 
@@ -1509,7 +1510,7 @@ class MainWindow(QMainWindow):
         platform_head = QWidget(); ph = QHBoxLayout(platform_head); ph.setContentsMargins(12, 8, 12, 8); ph.setSpacing(6)
         h=QLabel("Platformlar"); h.setObjectName("panelTitle"); ph.addWidget(h); ph.addStretch(1)
         self.platform_selection_badge = QLabel(""); self.platform_selection_badge.setObjectName("platformSelectionBadge")
-        self.platform_selection_badge.setStyleSheet("QLabel{background:#dbeafe;color:#1d4ed8;border-radius:9px;padding:2px 7px;font-size:11px;font-weight:800;}")
+        self.platform_selection_badge.setStyleSheet("QLabel{background:#dbeafe;color:#1d4ed8;border-radius:10px;padding:2px 7px;font-size:10px;font-weight:800;}")
         self.platform_selection_badge.hide(); ph.addWidget(self.platform_selection_badge)
         lv.addWidget(platform_head)
         self.platform_list=QListWidget(); self.platform_list.setObjectName("mainPlatformList"); self.platform_list.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -1520,7 +1521,7 @@ class MainWindow(QMainWindow):
         self.platform_list.setItemDelegate(self._platform_list_delegate)
         lv.addWidget(self.platform_list,1)
         self.platform_info_bar = QFrame(); self.platform_info_bar.setObjectName("platformInfoBar")
-        self.platform_info_bar.setStyleSheet("QFrame#platformInfoBar{background:#f8fbff;border-top:1px solid #dbe7f5;} QLabel{color:#64748b;font-size:11px;} QPushButton{background:transparent;border:0;color:#1d4ed8;font-size:11px;font-weight:800;padding:2px 4px;}")
+        self.platform_info_bar.setStyleSheet("QFrame#platformInfoBar{background:#f8fbff;border-top:1px solid #dbe7f5;} QLabel{color:#64748b;font-size:10px;} QPushButton{background:transparent;border:0;color:#1d4ed8;font-size:10px;font-weight:800;padding:2px 4px;}")
         pi = QHBoxLayout(self.platform_info_bar); pi.setContentsMargins(10, 4, 8, 4); pi.setSpacing(4)
         self.platform_info_label = QLabel(""); pi.addWidget(self.platform_info_label); pi.addStretch(1)
         clear_platforms = QPushButton("temizle"); clear_platforms.clicked.connect(self.clear_platform_selection); pi.addWidget(clear_platforms)
@@ -2795,6 +2796,7 @@ class MainWindow(QMainWindow):
 
         overdue = []
         critical = []
+        delivered = 0
         for it in self.contract_index:
             ctype = self._norm_tr(str(it.get("type", "") or ""))
             if ctype != self._norm_tr("Ana Sözleşme"):
@@ -2804,6 +2806,8 @@ class MainWindow(QMainWindow):
                 overdue.append((it, kgun))
             elif cls == "kritik":
                 critical.append((it, kgun))
+            elif cls == "tamamlandi":
+                delivered += 1
         self.overdue_count.setText(str(len(overdue)))
         self.critical_count.setText(str(len(critical)))
 
@@ -2827,6 +2831,35 @@ class MainWindow(QMainWindow):
             b.clicked.connect(lambda _=False, item=dict(it): self.open_contract_item(item))
             self.upcoming_layout.addWidget(b)
         self.upcoming_layout.addStretch()
+
+        # ── _CalendarWidget güncelle ──────────────────────────────────────
+        if hasattr(self, "_cal_widget"):
+            # Yaklaşan/geciken sözleşmelerin gün bazlı haritası
+            events_by_day: Dict[int, str] = {}
+            for it, _ in overdue:
+                date_txt = self._contract_health(it)[3]
+                try:
+                    dt = date.fromisoformat(str(date_txt)) if date_txt else None
+                except (ValueError, TypeError):
+                    dt = None
+                if dt and dt.year == today.year and dt.month == today.month:
+                    events_by_day[dt.day] = "geciken"
+            for it, _ in critical:
+                date_txt = self._contract_health(it)[3]
+                try:
+                    dt = date.fromisoformat(str(date_txt)) if date_txt else None
+                except (ValueError, TypeError):
+                    dt = None
+                if dt and dt.year == today.year and dt.month == today.month:
+                    if dt.day not in events_by_day:
+                        events_by_day[dt.day] = "kritik"
+            counts = {
+                "geciken":    len(overdue),
+                "kritik":     len(critical),
+                "tamamlandi": delivered,
+                "belirsiz":   0,
+            }
+            self._cal_widget.refresh(counts, events_by_day, today.year, today.month)
 
     def set_empty_state(self):
         self.platform_list.clear()
@@ -3911,9 +3944,9 @@ class MainWindow(QMainWindow):
                             wrap = QWidget()
                             wrap.setStyleSheet("QWidget{background:transparent;border:0px;}")
                             wl = QVBoxLayout(wrap)
-                            wl.setContentsMargins(5, 3, 5, 3)
-                            wl.setSpacing(3)
-                            wl.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
+                            wl.setContentsMargins(0, 3, 0, 3)
+                            wl.setSpacing(2)
+                            wl.setAlignment(Qt.AlignCenter)
                             for tag_name in tags_list:
                                 color = _tag_color_map.get(self.store._normalize_label(tag_name) if self.store else tag_name, "#3B82F6")
                                 base_rgb = _hex_to_rgb(color)
@@ -3921,19 +3954,21 @@ class MainWindow(QMainWindow):
                                 border_c = _mix_rgb(base_rgb, (255, 255, 255), 0.28)
                                 txt_c = _rgb_to_hex(_mix_rgb(base_rgb, (15, 23, 42), 0.22))
                                 chip = QLabel(tag_name)
-                                chip.setFixedHeight(22)
+                                chip.setAlignment(Qt.AlignCenter)
+                                chip.setFixedHeight(20)
+                                chip.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
                                 chip.setStyleSheet(
                                     f"QLabel{{background:{_rgb_to_hex(bg)};color:{txt_c};"
-                                    f"border:1px solid {_rgb_to_hex(border_c)};border-radius:9px;"
-                                    f"padding:2px 8px;font-size:11px;font-weight:700;}}"
+                                    f"border:1px solid {_rgb_to_hex(border_c)};border-radius:10px;"
+                                    f"padding:1px 12px;font-size:10px;font-weight:700;}}"
                                 )
-                                wl.addWidget(chip)
+                                wl.addWidget(chip, 0, Qt.AlignHCenter)
                             placeholder = QTableWidgetItem("")
                             placeholder.setData(Qt.UserRole, payload)
                             self.contract_table.setItem(r, COL_TAGS, placeholder)
                             self.contract_table.setCellWidget(r, COL_TAGS, wrap)
                             # Satır yüksekliğini etiket sayısına göre ayarla
-                            row_h = self._contract_row_height_for_tags(len(tags_list))
+                            row_h = max(34, len(tags_list) * 20 + max(0, len(tags_list)-1) * 2 + 8)
                             self.contract_table.setRowHeight(r, max(self.contract_table.rowHeight(r), row_h))
                             continue
                         if c == COL_SUMMARY:
