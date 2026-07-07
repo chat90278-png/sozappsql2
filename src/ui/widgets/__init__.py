@@ -32,7 +32,7 @@ from .user_select import (
     MultiStaffSelectWidget, MultiPlatformSelectWidget,
 )
 from .platform_tabs import (
-    PlatformTabsWidget, HeaderUserPopup, FixedContractTypeField,
+    PlatformTabsWidget, FixedContractTypeField,
     BadgeTabButton, ContractActionTabs, ContractSharePopover,
     UnitTrackingSlotCard, UnitTrackingSidePanel,
 )

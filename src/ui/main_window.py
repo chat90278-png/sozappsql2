@@ -102,7 +102,7 @@ from src.ui.widgets.user_select import (
     MultiStaffSelectWidget, MultiPlatformSelectWidget,
 )
 from src.ui.widgets.platform_tabs import (
-    PlatformTabsWidget, HeaderUserPopup, FixedContractTypeField,
+    PlatformTabsWidget, FixedContractTypeField,
     BadgeTabButton, ContractActionTabs, ContractSharePopover,
     UnitTrackingSlotCard, UnitTrackingSidePanel,
 )
