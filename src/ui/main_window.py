@@ -2799,6 +2799,7 @@ class MainWindow(QMainWindow):
         overdue = []
         critical = []
         delivered = 0
+        unknown = 0
         for it in self.contract_index:
             ctype = self._norm_tr(str(it.get("type", "") or ""))
             if ctype != self._norm_tr("Ana Sözleşme"):
@@ -2810,6 +2811,8 @@ class MainWindow(QMainWindow):
                 critical.append((it, kgun))
             elif cls == "tamamlandi":
                 delivered += 1
+            elif it.get("_near_delivery_unknown"):
+                unknown += 1
         self.overdue_count.setText(str(len(overdue)))
         self.critical_count.setText(str(len(critical)))
 
@@ -3603,7 +3606,7 @@ class MainWindow(QMainWindow):
             return (0, int(day_num))
         return (1, 99999999)
 
-    def _contract_delivery_dates(self, it: dict) -> tuple[str, str, Optional[int]]:
+    def _contract_delivery_dates(self, it: dict) -> tuple[str, str, Optional[int], bool]:
         exact_plans = []
         has_flexible = False
         try:
@@ -3621,16 +3624,16 @@ class MainWindow(QMainWindow):
                     else:
                         has_flexible = True
         except Exception:
-            return "", "", None
+            return "", "", None, False
         if exact_plans:
             near = min(exact_plans)
             diff = (near - date.today()).days
-            return near.isoformat(), (f"{diff} gün" if diff >= 0 else f"{abs(diff)} gün gecikti"), diff
+            return near.isoformat(), (f"{diff} gün" if diff >= 0 else f"{abs(diff)} gün gecikti"), diff, False
         if has_flexible:
-            return "", "", None
-        return "", "", None
+            return "", "", None, True
+        return "", "", None, False
 
-    def _delivery_summary_map(self, rows: List[dict]) -> Dict[int, tuple[str, str, Optional[int]]]:
+    def _delivery_summary_map(self, rows: List[dict]) -> Dict[int, tuple[str, str, Optional[int], bool]]:
         ids = [int(r.get("row") or r.get("entry_start_row") or 0) for r in rows if int(r.get("row") or r.get("entry_start_row") or 0)]
         if not ids or not getattr(getattr(self.store, "db", None), "conn", None):
             return {}
@@ -3652,17 +3655,17 @@ class MainWindow(QMainWindow):
                 summary[int(cid)] = (exacts, has_flexible)
         except Exception:
             return {}
-        out: Dict[int, tuple[str, str, Optional[int]]] = {}
+        out: Dict[int, tuple[str, str, Optional[int], bool]] = {}
         today = date.today()
         for cid, (exacts, has_flexible) in summary.items():
             if exacts:
                 near = min(exacts)
                 diff = (near - today).days
-                out[cid] = (near.isoformat(), f"{diff} gün" if diff >= 0 else f"{abs(diff)} gün gecikti", diff)
+                out[cid] = (near.isoformat(), f"{diff} gün" if diff >= 0 else f"{abs(diff)} gün gecikti", diff, False)
             elif has_flexible:
-                out[cid] = ("", "", None)
+                out[cid] = ("", "", None, True)
             else:
-                out[cid] = ("", "", None)
+                out[cid] = ("", "", None, False)
         return out
 
     def _prepare_contract_index_cache(self):
@@ -3681,11 +3684,12 @@ class MainWindow(QMainWindow):
         delivery_summary = self._delivery_summary_map(rows)
         for it in rows:
             cid = int(it.get("row") or it.get("entry_start_row") or 0)
-            delivery_txt, delivery_days, day_num = delivery_summary.get(cid) or self._contract_delivery_dates(it)
+            delivery_txt, delivery_days, day_num, delivery_unknown = delivery_summary.get(cid) or self._contract_delivery_dates(it)
             if str(delivery_txt or "").strip().lower() in {"belirsiz", "-"}:
                 delivery_txt = ""
                 delivery_days = ""
                 day_num = None
+                delivery_unknown = False
             if not str(delivery_txt or "").strip():
                 delivery_days = ""
                 day_num = None
@@ -3695,6 +3699,7 @@ class MainWindow(QMainWindow):
             it["_near_delivery_txt"] = delivery_txt
             it["_near_delivery_days"] = delivery_days
             it["_day_num"] = day_num
+            it["_near_delivery_unknown"] = bool(delivery_unknown and not delivery_txt)
             tags_list = list(it.get("tags", []) or [])
             it["_tags_str"] = ", ".join(tags_list) if tags_list else ""
             hay = it.get("search") or " ".join(str(it.get(k, "")) for k in ["platform", "no", "user", "status", "completion_date", "content"]).lower()
