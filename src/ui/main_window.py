@@ -2343,31 +2343,36 @@ class MainWindow(QMainWindow):
     def _add_menu_action(self, menu: QMenu, title: str, callback):
         return menu.addAction(title, callback)
 
+    def _add_top_actions_submenu(self, menu: QMenu, title: str) -> QMenu:
+        submenu = menu.addMenu(title)
+        submenu.setObjectName("topActionsMenu")
+        return submenu
+
     def _build_top_actions_menu(self, parent) -> QMenu:
         menu = QMenu(parent)
         menu.setObjectName("topActionsMenu")
 
-        file_menu = menu.addMenu("Dosya İşlemleri")
+        file_menu = self._add_top_actions_submenu(menu, "Dosya İşlemleri")
         self._add_menu_action(file_menu, "STS Dosyasını Değiştir", self.open_file)
         self._add_menu_action(file_menu, "Excel’e Aktar", self.export_sts_to_excel)
 
-        reports_menu = menu.addMenu("Raporlar")
+        reports_menu = self._add_top_actions_submenu(menu, "Raporlar")
         self._add_menu_action(reports_menu, "Tahmini Teslimat Takvimi", self.open_delivery_schedule_report)
         self._add_menu_action(reports_menu, "Platform Teslimat Özeti", self.open_platform_delivery_report)
 
-        management_menu = menu.addMenu("Yönetim")
+        management_menu = self._add_top_actions_submenu(menu, "Yönetim")
         self.platform_component_action = self._add_menu_action(management_menu, "Platform / Bileşen Yönetimi", self.manage_platforms)
         self.user_management_action = self._add_menu_action(management_menu, "Kullanıcı Yönetimi", self.open_user_management)
         self.role_permissions_action = self._add_menu_action(management_menu, "Yetki Yönetimi", self.open_personnel_permissions)
         self.tag_management_action = self._add_menu_action(management_menu, "Etiket Yönetimi", self.manage_tags)
 
-        self.system_menu = menu.addMenu("Sistem")
+        self.system_menu = self._add_top_actions_submenu(menu, "Sistem")
         self.system_menu_action = self.system_menu.menuAction()
         self._add_menu_action(self.system_menu, "Veritabanı Yönetimi", self.open_database_management)
         self._add_menu_action(self.system_menu, "Performans İzleme", self.open_performance_tracking)
         self.activity_logs_action = self._add_menu_action(self.system_menu, "İşlem Geçmişi", self.open_activity_logs)
 
-        help_menu = menu.addMenu("Yardım")
+        help_menu = self._add_top_actions_submenu(menu, "Yardım")
         self._add_menu_action(help_menu, "Kullanım Kılavuzu", self.open_usage_guide)
 
         menu.aboutToShow.connect(self._refresh_permission_actions)
