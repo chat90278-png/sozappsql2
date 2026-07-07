@@ -4766,7 +4766,7 @@ class ContractWorkWindow(QDialog):
 
         # Seçili değilse siyah, seçiliyse beyaz.
         name.setStyleSheet(
-            "background: transparent; color: #0f172a; font-weight: 900; font-size: 12px;"
+            "background: transparent; color: #FFFFFF; font-weight: 900; font-size: 12px;"
             if selected else
             "background: transparent; color: #0f172a; font-weight: 900; font-size: 12px;"
         )
