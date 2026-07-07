@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from src.config.app_config import MAX_CONTRACT_FILE_SIZE_BYTES
 from src.models.app_models import ComponentDef, ContractInfo, DeliveryInfo, SystemInfo, TagDef
+from src.models.share_models import SHARE_STATUS_OPEN, SHARE_PACKAGE_STATUSES, SharePackageRegistryEntry
 from src.domain.flexible_date import is_tbd_contract_no
 from src.domain.contract_snapshot import build_contract_snapshot, hash_contract_snapshot
 from src.services.sts_database import STSDatabase, now_iso
@@ -238,6 +239,71 @@ class STSStore:
 
     def supports_activity_logs(self):
         return True
+
+    def sts_instance_id(self) -> str:
+        row = self.db.conn.execute("SELECT value FROM sts_metadata WHERE key='sts_instance_id'").fetchone()
+        return str(row[0] or "") if row else ""
+
+    def register_share_package(self, entry: SharePackageRegistryEntry) -> int:
+        if str(entry.status or "") not in SHARE_PACKAGE_STATUSES:
+            raise ValueError("Geçersiz paylaşım paket durumu.")
+        values = entry.as_db_values()
+        existing = self.db.conn.execute("SELECT * FROM share_packages WHERE share_package_id=?", (entry.share_package_id,)).fetchone()
+        comparable_keys = [
+            "share_package_id", "contract_id", "contract_merge_uid", "source_contract_revision",
+            "permission_mode", "share_format_version", "snapshot_format_version", "base_snapshot_sha256",
+            "created_at", "created_by_staff_id", "created_by_username", "created_by_full_name",
+            "exported_filename", "status", "last_remote_snapshot_sha256", "merge_result_sha256", "return_count",
+        ]
+        if existing:
+            mismatches = []
+            for key in comparable_keys:
+                expected = values.get(key)
+                actual = existing[key]
+                if key in {"contract_id", "source_contract_revision", "share_format_version", "snapshot_format_version", "created_by_staff_id", "return_count"}:
+                    if int(actual or 0) != int(expected or 0):
+                        mismatches.append(key)
+                elif str(actual or "") != str(expected or ""):
+                    mismatches.append(key)
+            if mismatches:
+                raise ValueError(f"Aynı share_package_id farklı registry verisiyle kaydedilemez: {', '.join(mismatches)}")
+            return int(existing["id"])
+        with self.db.tx():
+            cur = self.db.conn.execute(
+                """
+                INSERT INTO share_packages(
+                    share_package_id,contract_id,contract_merge_uid,source_contract_revision,permission_mode,
+                    share_format_version,snapshot_format_version,base_snapshot_sha256,created_at,
+                    created_by_staff_id,created_by_username,created_by_full_name,exported_filename,status,
+                    last_imported_at,last_imported_by_staff_id,last_remote_snapshot_sha256,merge_result_sha256,return_count
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    entry.share_package_id, int(entry.contract_id), entry.contract_merge_uid, int(entry.source_contract_revision),
+                    entry.permission_mode, int(entry.share_format_version), int(entry.snapshot_format_version), entry.base_snapshot_sha256,
+                    entry.created_at, int(entry.created_by_staff_id or 0) or None, entry.created_by_username, entry.created_by_full_name,
+                    entry.exported_filename, entry.status or SHARE_STATUS_OPEN, entry.last_imported_at or None,
+                    int(entry.last_imported_by_staff_id or 0) or None, entry.last_remote_snapshot_sha256, entry.merge_result_sha256, int(entry.return_count or 0),
+                ),
+            )
+            return int(cur.lastrowid)
+
+    def get_share_package(self, share_package_id: str) -> dict | None:
+        row = self.db.conn.execute("SELECT * FROM share_packages WHERE share_package_id=?", (str(share_package_id or ""),)).fetchone()
+        return dict(row) if row else None
+
+    def list_contract_share_packages(self, contract_merge_uid: str, status: str | None = None) -> list[dict]:
+        if status:
+            rows = self.db.conn.execute(
+                "SELECT * FROM share_packages WHERE contract_merge_uid=? AND status=? ORDER BY created_at DESC,id DESC",
+                (str(contract_merge_uid or ""), str(status)),
+            ).fetchall()
+        else:
+            rows = self.db.conn.execute(
+                "SELECT * FROM share_packages WHERE contract_merge_uid=? ORDER BY created_at DESC,id DESC",
+                (str(contract_merge_uid or ""),),
+            ).fetchall()
+        return [dict(r) for r in rows]
 
 
 

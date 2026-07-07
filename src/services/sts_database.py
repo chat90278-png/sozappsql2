@@ -54,7 +54,7 @@ def quote_identifier(identifier: str) -> str:
 LEGACY_CONTRACT_PARENT_NO_COLUMN = "parent_contract_" "no"
 LEGACY_CONTRACT_USERS_COLUMN = "user_" "names"
 LEGACY_DELIVERY_SYSTEM_LABEL_COLUMN = "system_" "name"
-CURRENT_SCHEMA_VERSION = 14
+CURRENT_SCHEMA_VERSION = 15
 
 
 class STSMigrationError(RuntimeError):
@@ -947,6 +947,35 @@ CREATE TABLE IF NOT EXISTS activity_logs(id INTEGER PRIMARY KEY AUTOINCREMENT,cr
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_pdr_summary_scope ON platform_delivery_report_summary(platform_id,user_id,contract_id)")
         self.conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_pdr_lines_serial_key ON platform_delivery_report_lines(platform_id,user_id,contract_id,component_id,serial_key)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_pdr_lines_scope ON platform_delivery_report_lines(platform_id,user_id,contract_id,component_id,serial_key)")
+
+        # --- Schema v15: share package registry for future return/merge tracking ---
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS share_packages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                share_package_id TEXT NOT NULL UNIQUE,
+                contract_id INTEGER NOT NULL,
+                contract_merge_uid TEXT NOT NULL,
+                source_contract_revision INTEGER NOT NULL,
+                permission_mode TEXT NOT NULL,
+                share_format_version INTEGER NOT NULL,
+                snapshot_format_version INTEGER NOT NULL,
+                base_snapshot_sha256 TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                created_by_staff_id INTEGER,
+                created_by_username TEXT NOT NULL DEFAULT '',
+                created_by_full_name TEXT NOT NULL DEFAULT '',
+                exported_filename TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'OPEN',
+                last_imported_at TEXT,
+                last_imported_by_staff_id INTEGER,
+                last_remote_snapshot_sha256 TEXT NOT NULL DEFAULT '',
+                merge_result_sha256 TEXT NOT NULL DEFAULT '',
+                return_count INTEGER NOT NULL DEFAULT 0
+            )
+        """)
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_share_packages_contract_merge_uid ON share_packages(contract_merge_uid)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_share_packages_contract_status ON share_packages(contract_merge_uid,status)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_share_packages_created_at ON share_packages(created_at)")
         self.conn.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version',?)", (str(CURRENT_SCHEMA_VERSION),))
         self.conn.commit()
         return migrated

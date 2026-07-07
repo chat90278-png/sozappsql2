@@ -30,6 +30,7 @@ EXPECTED_COLUMNS = {
     "delivery_component_units": ["id", "delivery_component_id", "slot_no", "identifier", "is_delivered", "note", "created_at", "updated_at"],
     "document_locks": ["id", "contract_id", "is_locked", "locked_by_staff_id", "locked_by_device_name", "locked_by_full_name", "locked_at", "updated_at"],
     "activity_logs": ["id", "created_at", "actor", "source", "device_name", "action", "entity_type", "entity_id", "entity_key", "platform_id", "contract_no", "message", "before_json", "after_json", "payload_json"],
+    "share_packages": ["id", "share_package_id", "contract_id", "contract_merge_uid", "source_contract_revision", "permission_mode", "share_format_version", "snapshot_format_version", "base_snapshot_sha256", "created_at", "created_by_staff_id", "created_by_username", "created_by_full_name", "exported_filename", "status", "last_imported_at", "last_imported_by_staff_id", "last_remote_snapshot_sha256", "merge_result_sha256", "return_count"],
 }
 
 with TemporaryDirectory() as td:

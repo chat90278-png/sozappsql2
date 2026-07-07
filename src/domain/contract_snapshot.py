@@ -5,6 +5,8 @@ import json
 from decimal import Decimal
 from typing import Any
 
+CONTRACT_SNAPSHOT_FORMAT_VERSION = 1
+
 
 def _scalar(value: Any) -> Any:
     if value is None:
