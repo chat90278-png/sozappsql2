@@ -557,12 +557,13 @@ COL_REMAINING = 6
 COL_TAGS = 7
 COL_SUMMARY = 8
 PLATFORM_SELECTED_ROLE = Qt.UserRole + 100
-TAG_CHIP_HEIGHT = 20
+TAG_CHIP_HEIGHT = 19
 TAG_CHIP_MAX_WIDTH = 140
 TAG_CHIP_HPAD = 12
 TAG_CHIP_VPAD = 1
-TAG_CHIP_SPACING = 2
-TAG_CHIP_MARGIN_Y = 3
+TAG_CHIP_SPACING = 3
+TAG_CHIP_MARGIN_X = 5
+TAG_CHIP_MARGIN_Y = 4
 
 
 class ContractTableModel(QAbstractTableModel):
@@ -719,10 +720,11 @@ class ContractTagsDelegate(QStyledItemDelegate):
         return max(36, n * TAG_CHIP_HEIGHT + max(0, n - 1) * TAG_CHIP_SPACING + 2 * TAG_CHIP_MARGIN_Y) if n > 0 else 36
 
     def _chip_rects(self, option: QStyleOptionViewItem, tags_list: list, fm: QFontMetrics) -> list[tuple[QRect, str, str]]:
-        x = option.rect.left() + 5
+        content_rect = option.rect.adjusted(TAG_CHIP_MARGIN_X, TAG_CHIP_MARGIN_Y, -TAG_CHIP_MARGIN_X, -TAG_CHIP_MARGIN_Y)
+        x = content_rect.left()
         n = len(tags_list)
         total_h = n * TAG_CHIP_HEIGHT + max(0, n - 1) * TAG_CHIP_SPACING
-        y = option.rect.top() + max(TAG_CHIP_MARGIN_Y, (option.rect.height() - total_h) // 2)
+        y = content_rect.top() + max(0, (content_rect.height() - total_h) // 2)
         rects = []
         for tag_name in tags_list:
             tag_text = str(tag_name)
@@ -3978,9 +3980,10 @@ class MainWindow(QMainWindow):
                             wrap = QWidget()
                             wrap.setStyleSheet("QWidget{background:transparent;border:0px;}")
                             wl = QVBoxLayout(wrap)
-                            wl.setContentsMargins(0, TAG_CHIP_MARGIN_Y, 0, TAG_CHIP_MARGIN_Y)
+                            wl.setContentsMargins(TAG_CHIP_MARGIN_X, TAG_CHIP_MARGIN_Y, TAG_CHIP_MARGIN_X, TAG_CHIP_MARGIN_Y)
                             wl.setSpacing(TAG_CHIP_SPACING)
                             wl.setAlignment(Qt.AlignCenter)
+                            wrap.setMinimumHeight(self._contract_row_height_for_tags(len(tags_list)))
                             for tag_name in tags_list:
                                 color = _tag_color_map.get(self.store._normalize_label(tag_name) if self.store else tag_name, "#3B82F6")
                                 base_rgb = _hex_to_rgb(color)
@@ -4017,6 +4020,7 @@ class MainWindow(QMainWindow):
                             self.contract_table.setCellWidget(r, COL_TAGS, wrap)
                             # Satır yüksekliğini etiket sayısına göre ayarla
                             row_h = self._contract_row_height_for_tags(len(tags_list))
+                            wrap.adjustSize()
                             self.contract_table.setRowHeight(r, max(self.contract_table.rowHeight(r), row_h))
                             continue
                         if c == COL_SUMMARY:
