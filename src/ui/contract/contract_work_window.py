@@ -2527,6 +2527,8 @@ class ContractWorkWindow(QDialog):
                     name=str(folder.get("name") or "Klasör"),
                 )
                 folder_id_map[int(folder.get("id"))] = int(created.get("id") or 0)
+                if str(folder.get("merge_uid") or "").strip():
+                    share_store.db.conn.execute("UPDATE contract_file_folders SET merge_uid=? WHERE id=?", (str(folder.get("merge_uid") or ""), int(created.get("id") or 0)))
                 pending.remove(folder)
                 progressed = True
             if not progressed:
@@ -2549,7 +2551,7 @@ class ContractWorkWindow(QDialog):
                 tmp_file.write_bytes(content)
                 old_folder_id = item.get("folder_id")
                 new_folder_id = folder_id_map.get(int(old_folder_id)) if old_folder_id not in (None, "", 0) else None
-                share_store.add_contract_file(
+                new_file_id = share_store.add_contract_file(
                     str(share_ci.platform or ""),
                     str(share_ci.no or ""),
                     tmp_file,
@@ -2557,6 +2559,8 @@ class ContractWorkWindow(QDialog):
                     note=str(item.get("note") or ""),
                     folder_id=new_folder_id,
                 )
+                if str(item.get("merge_uid") or "").strip():
+                    share_store.db.conn.execute("UPDATE contract_files SET merge_uid=? WHERE id=?", (str(item.get("merge_uid") or ""), int(new_file_id or 0)))
                 copied += 1
                 total += len(content)
         return copied, total
