@@ -747,8 +747,12 @@ class PlatformComponentManagerDialog(QDialog):
         brand = QLabel("STS", objectName="pcBrand")
         file_name = QLabel(Path(str(getattr(self.store, "path", ""))).name or str(getattr(self.store, "path", "")), objectName="pcFile")
         add_component = QPushButton("+ Bileşen", objectName="pcTopButton")
+        add_component.setDefault(False)
+        add_component.setAutoDefault(False)
         add_component.clicked.connect(lambda: self._open_component_popover(None))
         add_platform = QPushButton("+ Platform", objectName="pcTopButton")
+        add_platform.setDefault(False)
+        add_platform.setAutoDefault(False)
         add_platform.clicked.connect(lambda: self._open_platform_popover(None))
         top.addWidget(brand)
         top.addWidget(file_name, 1)
@@ -987,6 +991,8 @@ QPushButton#dangerButton {{ background:#FFF5F5; color:#DC2626; border:1px solid 
                 if callable(save):
                     save()
                     return
+            event.accept()
+            return
         if event.key() == Qt.Key_Escape:
             if self.popover and self.popover.isVisible():
                 self._hide_popover()
