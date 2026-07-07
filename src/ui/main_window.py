@@ -557,13 +557,15 @@ COL_REMAINING = 6
 COL_TAGS = 7
 COL_SUMMARY = 8
 PLATFORM_SELECTED_ROLE = Qt.UserRole + 100
-TAG_CHIP_HEIGHT = 15
-TAG_CHIP_MAX_WIDTH = 110
-TAG_CHIP_HPAD = 10
+TAG_CHIP_HEIGHT = 20
+TAG_CHIP_MAX_WIDTH = 82
+TAG_CHIP_HPAD = 8
 TAG_CHIP_VPAD = 0
-TAG_CHIP_SPACING = 2
-TAG_CHIP_MARGIN_X = 5
-TAG_CHIP_MARGIN_Y = 2
+TAG_CHIP_SPACING = 3
+TAG_CHIP_MARGIN_X = 4
+TAG_CHIP_MARGIN_Y = 4
+TAG_CHIP_VISIBLE_LIMIT = 2
+TAG_CHIP_ROW_HEIGHT = 38
 
 
 class ContractTableModel(QAbstractTableModel):
@@ -714,24 +716,31 @@ class ContractTagsDelegate(QStyledItemDelegate):
         return it, tags_list
 
     def _row_height_for_tags(self, tag_count: int) -> int:
-        if callable(self._row_height_fn):
-            return int(self._row_height_fn(tag_count))
-        n = int(tag_count or 0)
-        return max(36, n * TAG_CHIP_HEIGHT + max(0, n - 1) * TAG_CHIP_SPACING + 2 * TAG_CHIP_MARGIN_Y) if n > 0 else 36
+        return TAG_CHIP_ROW_HEIGHT
+
+    @staticmethod
+    def _visible_tag_entries(tags_list: list) -> list[tuple[str, str, bool]]:
+        tags = [str(tag or "").strip() for tag in tags_list if str(tag or "").strip()]
+        visible = [(tag, tag, False) for tag in tags[:TAG_CHIP_VISIBLE_LIMIT]]
+        remaining = len(tags) - TAG_CHIP_VISIBLE_LIMIT
+        if remaining > 0:
+            visible.append((f"+{remaining}", ", ".join(tags), True))
+        return visible
 
     def _chip_rects(self, option: QStyleOptionViewItem, tags_list: list, fm: QFontMetrics) -> list[tuple[QRect, str, str]]:
         content_rect = option.rect.adjusted(TAG_CHIP_MARGIN_X, TAG_CHIP_MARGIN_Y, -TAG_CHIP_MARGIN_X, -TAG_CHIP_MARGIN_Y)
-        x = content_rect.left()
-        n = len(tags_list)
-        total_h = n * TAG_CHIP_HEIGHT + max(0, n - 1) * TAG_CHIP_SPACING
-        y = content_rect.top() + max(0, (content_rect.height() - total_h) // 2)
-        rects = []
-        for tag_name in tags_list:
-            tag_text = str(tag_name)
+        entries = self._visible_tag_entries(tags_list)
+        widths = []
+        for tag_text, _full_text, is_overflow in entries:
             natural_w = fm.horizontalAdvance(tag_text) + 2 * TAG_CHIP_HPAD
-            chip_w = min(TAG_CHIP_MAX_WIDTH, natural_w)
-            rects.append((QRect(x, y, chip_w, TAG_CHIP_HEIGHT), tag_text, tag_text))
-            y += TAG_CHIP_HEIGHT + TAG_CHIP_SPACING
+            widths.append(min(42 if is_overflow else TAG_CHIP_MAX_WIDTH, natural_w))
+        total_w = sum(widths) + max(0, len(widths) - 1) * TAG_CHIP_SPACING
+        x = content_rect.left() + max(0, (content_rect.width() - total_w) // 2)
+        y = content_rect.top() + max(0, (content_rect.height() - TAG_CHIP_HEIGHT) // 2)
+        rects = []
+        for (tag_text, full_text, _is_overflow), chip_w in zip(entries, widths):
+            rects.append((QRect(x, y, chip_w, TAG_CHIP_HEIGHT), tag_text, full_text))
+            x += chip_w + TAG_CHIP_SPACING
         return rects
 
     def paint(self, painter: QPainter, option: QStyleOptionViewItem, index):
@@ -749,7 +758,7 @@ class ContractTagsDelegate(QStyledItemDelegate):
             radius = TAG_CHIP_HEIGHT // 2
 
             font = QFont(option.font)
-            font.setPointSize(8)
+            font.setPointSize(9)
             font.setBold(True)
             painter.setFont(font)
             fm = QFontMetrics(font)
@@ -776,7 +785,7 @@ class ContractTagsDelegate(QStyledItemDelegate):
         if _it is None or not tags_list:
             return super().helpEvent(event, view, option, index)
         font = QFont(option.font)
-        font.setPointSize(8)
+        font.setPointSize(9)
         font.setBold(True)
         fm = QFontMetrics(font)
         for chip_rect, _tag_text, full_text in self._chip_rects(option, tags_list, fm):
@@ -3844,8 +3853,7 @@ class MainWindow(QMainWindow):
         return list(it.get("tags", []) or [])
 
     def _contract_row_height_for_tags(self, tag_count: int) -> int:
-        n = int(tag_count or 0)
-        return max(36, n * TAG_CHIP_HEIGHT + max(0, n - 1) * TAG_CHIP_SPACING + 2 * TAG_CHIP_MARGIN_Y) if n > 0 else 36
+        return TAG_CHIP_ROW_HEIGHT
 
 
     def apply_contract_filter(self):
@@ -4034,23 +4042,25 @@ class MainWindow(QMainWindow):
                     ]
                     for c,v in enumerate(vals):
                         if c == COL_TAGS:
-                            # Etiketler: dikey sıralı renkli chip'ler
+                            # Etiketleri hücre içinde tek satırda tut: ilk iki etiket + kalan adet.
                             tags_list = self._contract_tags_for_row(it, _tag_color_map)
                             if not tags_list:
                                 empty = QTableWidgetItem("")
                                 empty.setFlags(empty.flags() & ~Qt.ItemIsEditable)
                                 empty.setData(Qt.UserRole, payload)
                                 self.contract_table.setItem(r, COL_TAGS, empty)
-                                self.contract_table.setRowHeight(r, max(self.contract_table.rowHeight(r), 36))
+                                self.contract_table.setRowHeight(r, TAG_CHIP_ROW_HEIGHT)
                                 continue
                             wrap = QWidget()
                             wrap.setStyleSheet("QWidget{background:transparent;border:0px;}")
-                            wl = QVBoxLayout(wrap)
+                            wl = QHBoxLayout(wrap)
                             wl.setContentsMargins(TAG_CHIP_MARGIN_X, TAG_CHIP_MARGIN_Y, TAG_CHIP_MARGIN_X, TAG_CHIP_MARGIN_Y)
                             wl.setSpacing(TAG_CHIP_SPACING)
-                            wl.setAlignment(Qt.AlignCenter)
-                            wrap.setMinimumHeight(self._contract_row_height_for_tags(len(tags_list)))
-                            for tag_name in tags_list:
+                            wl.setAlignment(Qt.AlignHCenter | Qt.AlignVCenter)
+                            wrap.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+                            visible_tags = list(tags_list[:TAG_CHIP_VISIBLE_LIMIT])
+                            hidden_count = max(0, len(tags_list) - TAG_CHIP_VISIBLE_LIMIT)
+                            for tag_name in visible_tags:
                                 color = _tag_color_map.get(self.store._normalize_label(tag_name) if self.store else tag_name, "#3B82F6")
                                 base_rgb = _hex_to_rgb(color)
                                 bg = _mix_rgb(base_rgb, (255, 255, 255), 0.78)
@@ -4059,15 +4069,11 @@ class MainWindow(QMainWindow):
                                 full_text = str(tag_name)
                                 chip = QLabel(full_text)
                                 chip_font = QFont(chip.font())
-                                chip_font.setPointSize(8)
+                                chip_font.setPointSize(9)
                                 chip_font.setBold(True)
                                 chip.setFont(chip_font)
                                 chip_fm = QFontMetrics(chip_font)
-                                display_text = chip_fm.elidedText(
-                                    full_text,
-                                    Qt.ElideRight,
-                                    max(0, TAG_CHIP_MAX_WIDTH - 2 * TAG_CHIP_HPAD),
-                                )
+                                display_text = chip_fm.elidedText(full_text, Qt.ElideRight, max(0, TAG_CHIP_MAX_WIDTH - 2 * TAG_CHIP_HPAD))
                                 chip.setText(display_text)
                                 chip.setToolTip(full_text)
                                 chip.setAlignment(Qt.AlignCenter)
@@ -4077,17 +4083,25 @@ class MainWindow(QMainWindow):
                                 chip.setStyleSheet(
                                     f"QLabel{{background:{_rgb_to_hex(bg)};color:{txt_c};"
                                     f"border:1px solid {_rgb_to_hex(border_c)};border-radius:{TAG_CHIP_HEIGHT // 2}px;"
-                                    f"padding:{TAG_CHIP_VPAD}px {TAG_CHIP_HPAD}px;font-size:8px;font-weight:700;}}"
+                                    f"padding:{TAG_CHIP_VPAD}px {TAG_CHIP_HPAD}px;font-size:9px;font-weight:700;}}"
                                 )
                                 wl.addWidget(chip, 0, Qt.AlignHCenter)
+                            if hidden_count:
+                                more_chip = QLabel(f"+{hidden_count}")
+                                more_chip.setAlignment(Qt.AlignCenter)
+                                more_chip.setToolTip(", ".join(str(tag) for tag in tags_list))
+                                more_chip.setFixedSize(38, TAG_CHIP_HEIGHT)
+                                more_chip.setStyleSheet(
+                                    f"QLabel{{background:#F1F5F9;color:#475569;"
+                                    f"border:1px solid #CBD5E1;border-radius:{TAG_CHIP_HEIGHT // 2}px;"
+                                    f"padding:0px 6px;font-size:9px;font-weight:700;}}"
+                                )
+                                wl.addWidget(more_chip, 0, Qt.AlignHCenter)
                             placeholder = QTableWidgetItem("")
                             placeholder.setData(Qt.UserRole, payload)
                             self.contract_table.setItem(r, COL_TAGS, placeholder)
                             self.contract_table.setCellWidget(r, COL_TAGS, wrap)
-                            # Satır yüksekliğini etiket sayısına göre ayarla
-                            row_h = self._contract_row_height_for_tags(len(tags_list))
-                            wrap.adjustSize()
-                            self.contract_table.setRowHeight(r, max(self.contract_table.rowHeight(r), row_h))
+                            self.contract_table.setRowHeight(r, TAG_CHIP_ROW_HEIGHT)
                             continue
                         if c == COL_SUMMARY:
                             lbl = QLabel("\U0001F50D")
