@@ -22,15 +22,15 @@ class PlatformTabsWidget(QWidget):
     Not: Önceki sürümde QScrollArea yüksekliği, host yüksekliği ve buton
     yüksekliği birbirine çok yakın hesaplandığı için aktif mavi chip rail
     çerçevesine tam oturmuyor gibi görünüyordu. Bu sürümde ölçüler sabit ve
-    simetriktir: rail 32px, iç boşluk 3px, buton 26px.
+    simetriktir: rail 32px, iç boşluk 0px, buton 30px; sağ uçta 2px güvenlik payı vardır.
     """
 
     activePlatformChanged = Signal(int)
 
     DEFAULT_RAIL_HEIGHT = 32
-    INNER_PAD = 3
-    BUTTON_HEIGHT = 26
-    BUTTON_SPACING = 2
+    INNER_PAD = 0
+    BUTTON_HEIGHT = 30
+    BUTTON_SPACING = 0
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -81,7 +81,7 @@ class PlatformTabsWidget(QWidget):
         self._apply_rail_style()
 
     def _rail_padding_width(self) -> int:
-        return self.INNER_PAD * 2
+        return self.INNER_PAD * 2 + 2
 
     def _button_height(self) -> int:
         return self.BUTTON_HEIGHT
@@ -155,7 +155,7 @@ class PlatformTabsWidget(QWidget):
             btn.setProperty("platform_id", pid)
             btn.setCheckable(True)
             btn.setCursor(Qt.PointingHandCursor)
-            chip_width = min(168, max(92 if single else 84, metrics.horizontalAdvance(name) + (42 if single else 38)))
+            chip_width = min(168, max(92 if single else 84, metrics.horizontalAdvance(name) + (32 if single else 34)))
             btn.setFixedSize(chip_width, self._button_height())
             btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
             btn.setToolTip(name)
@@ -169,10 +169,10 @@ class PlatformTabsWidget(QWidget):
                     font-weight: 900;
                     font-size: 11px;
                     letter-spacing: 0.45px;
-                    padding: 0px 12px;
-                    min-height: 26px;
-                    max-height: 26px;
-                    border-radius: 13px;
+                    padding: 0px 10px;
+                    min-height: 30px;
+                    max-height: 30px;
+                    border-radius: 15px;
                     text-align: center;
                 }
                 QPushButton#PlatformTabButton[active="true"] {
@@ -220,7 +220,7 @@ class PlatformTabsWidget(QWidget):
         else:
             rail_width = min(rail_width, self._max_width)
         rail_width = max(80, rail_width)
-        scroll_width = max(1, rail_width - self._rail_padding_width())
+        scroll_width = max(1, rail_width - self._rail_padding_width() + 2)
 
         self.setMinimumWidth(rail_width)
         self.setMaximumWidth(self._max_width)
