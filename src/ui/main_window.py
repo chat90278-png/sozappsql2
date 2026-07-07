@@ -2690,12 +2690,12 @@ class MainWindow(QMainWindow):
 
     def _apply_platform_selection(self):
         self.normalize_platform_selection_state()
+        self._prepare_contract_index_cache()
         selected = set(self.selected_platforms)
         self.all_contract_rows = [
             dict(it) for it in self.contract_index
             if not selected or str(it.get("platform", "")) in selected
         ]
-        self._prepare_contract_row_cache(self.all_contract_rows)
         self._refresh_query_filters()
         if not selected:
             self.right_title.setText("Sözleşme Sorgulama")
@@ -2790,6 +2790,7 @@ class MainWindow(QMainWindow):
                 w.deleteLater()
 
     def update_alert_strip(self):
+        self._prepare_contract_index_cache()
         today = date.today()
         self.today_num.setText(str(today.day))
         self.today_info.setText(f"{TR_MONTHS[today.month - 1].upper()}\n{today.year}")
@@ -2797,6 +2798,7 @@ class MainWindow(QMainWindow):
         overdue = []
         critical = []
         delivered = 0
+        unknown = 0
         for it in self.contract_index:
             ctype = self._norm_tr(str(it.get("type", "") or ""))
             if ctype != self._norm_tr("Ana Sözleşme"):
@@ -2808,6 +2810,8 @@ class MainWindow(QMainWindow):
                 critical.append((it, kgun))
             elif cls == "tamamlandi":
                 delivered += 1
+            elif it.get("_near_delivery_unknown"):
+                unknown += 1
         self.overdue_count.setText(str(len(overdue)))
         self.critical_count.setText(str(len(critical)))
 
@@ -2857,7 +2861,7 @@ class MainWindow(QMainWindow):
                 "geciken":    len(overdue),
                 "kritik":     len(critical),
                 "tamamlandi": delivered,
-                "belirsiz":   0,
+                "belirsiz":   unknown,
             }
             self._cal_widget.refresh(counts, events_by_day, today.year, today.month)
 
@@ -3610,7 +3614,7 @@ class MainWindow(QMainWindow):
             return (0, int(day_num))
         return (1, 99999999)
 
-    def _contract_delivery_dates(self, it: dict) -> tuple[str, str, Optional[int]]:
+    def _contract_delivery_dates(self, it: dict) -> tuple[str, str, Optional[int], bool]:
         exact_plans = []
         has_flexible = False
         try:
@@ -3620,7 +3624,7 @@ class MainWindow(QMainWindow):
             for items in (deliveries or {}).values():
                 for delivery in items or []:
                     raw = str(getattr(delivery, "planned_acceptance_date", "") or "").strip()
-                    if not raw:
+                    if not raw or raw in {"-", "—"}:
                         continue
                     parsed = parse_flexible_date(raw)
                     if parsed:
@@ -3628,16 +3632,16 @@ class MainWindow(QMainWindow):
                     else:
                         has_flexible = True
         except Exception:
-            return "", "", None
+            return "", "", None, False
         if exact_plans:
             near = min(exact_plans)
             diff = (near - date.today()).days
-            return near.isoformat(), (f"{diff} gün" if diff >= 0 else f"{abs(diff)} gün gecikti"), diff
+            return near.isoformat(), (f"{diff} gün" if diff >= 0 else f"{abs(diff)} gün gecikti"), diff, False
         if has_flexible:
-            return "", "", None
-        return "", "", None
+            return "", "", None, True
+        return "", "", None, False
 
-    def _delivery_summary_map(self, rows: List[dict]) -> Dict[int, tuple[str, str, Optional[int]]]:
+    def _delivery_summary_map(self, rows: List[dict]) -> Dict[int, tuple[str, str, Optional[int], bool]]:
         ids = [int(r.get("row") or r.get("entry_start_row") or 0) for r in rows if int(r.get("row") or r.get("entry_start_row") or 0)]
         if not ids or not getattr(getattr(self.store, "db", None), "conn", None):
             return {}
@@ -3648,9 +3652,10 @@ class MainWindow(QMainWindow):
                 exacts = []
                 has_flexible = False
                 for text in date_list:
-                    if not text:
+                    raw = str(text or "").strip()
+                    if not raw or raw in {"-", "—"}:
                         continue
-                    parsed = parse_flexible_date(text)
+                    parsed = parse_flexible_date(raw)
                     if parsed:
                         exacts.append(parsed)
                     else:
@@ -3658,29 +3663,41 @@ class MainWindow(QMainWindow):
                 summary[int(cid)] = (exacts, has_flexible)
         except Exception:
             return {}
-        out: Dict[int, tuple[str, str, Optional[int]]] = {}
+        out: Dict[int, tuple[str, str, Optional[int], bool]] = {}
         today = date.today()
         for cid, (exacts, has_flexible) in summary.items():
             if exacts:
                 near = min(exacts)
                 diff = (near - today).days
-                out[cid] = (near.isoformat(), f"{diff} gün" if diff >= 0 else f"{abs(diff)} gün gecikti", diff)
+                out[cid] = (near.isoformat(), f"{diff} gün" if diff >= 0 else f"{abs(diff)} gün gecikti", diff, False)
             elif has_flexible:
-                out[cid] = ("", "", None)
+                out[cid] = ("", "", None, True)
             else:
-                out[cid] = ("", "", None)
+                out[cid] = ("", "", None, False)
         return out
 
+    def _prepare_contract_index_cache(self):
+        today_iso = date.today().isoformat()
+        required = {"_completion_obj", "_completion_ord", "_near_delivery_txt", "_near_delivery_days", "_day_num", "_near_delivery_unknown"}
+        rows = getattr(self, "contract_index", []) or []
+        if (
+            getattr(self, "_contract_index_cache_date", None) == today_iso
+            and all(required.issubset(it.keys()) for it in rows)
+        ):
+            return
+        self._prepare_contract_row_cache(rows)
+        self._contract_index_cache_date = today_iso
+
     def _prepare_contract_row_cache(self, rows: List[dict]):
-        today = date.today()
         delivery_summary = self._delivery_summary_map(rows)
         for it in rows:
             cid = int(it.get("row") or it.get("entry_start_row") or 0)
-            delivery_txt, delivery_days, day_num = delivery_summary.get(cid) or self._contract_delivery_dates(it)
+            delivery_txt, delivery_days, day_num, delivery_unknown = delivery_summary.get(cid) or self._contract_delivery_dates(it)
             if str(delivery_txt or "").strip().lower() in {"belirsiz", "-"}:
                 delivery_txt = ""
                 delivery_days = ""
                 day_num = None
+                delivery_unknown = False
             if not str(delivery_txt or "").strip():
                 delivery_days = ""
                 day_num = None
@@ -3690,6 +3707,7 @@ class MainWindow(QMainWindow):
             it["_near_delivery_txt"] = delivery_txt
             it["_near_delivery_days"] = delivery_days
             it["_day_num"] = day_num
+            it["_near_delivery_unknown"] = bool(delivery_unknown and not delivery_txt)
             tags_list = list(it.get("tags", []) or [])
             it["_tags_str"] = ", ".join(tags_list) if tags_list else ""
             hay = it.get("search") or " ".join(str(it.get(k, "")) for k in ["platform", "no", "user", "status", "completion_date", "content"]).lower()
