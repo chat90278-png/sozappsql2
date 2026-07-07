@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from PySide6.QtCore import Qt, QRectF, QTimer
+from PySide6.QtCore import Qt, QRectF, QTimer, QSignalBlocker
 from PySide6.QtGui import QColor, QPen, QPainter, QCursor, QFontMetrics, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QComboBox,
@@ -48,6 +48,7 @@ from src.ui.dialogs.database_access import (
     visible_table_names,
 )
 from src.services.sts_database import should_audit_sql, sql_operation
+from src.ui.dialogs.database_management_filters import filter_table_metadata
 from src.ui.dialogs.schema_relationships import (
     compact_relationship_text,
     filter_relationship_groups,
@@ -57,6 +58,7 @@ from src.ui.dialogs.schema_relationships import (
     relationship_key,
     relationship_text,
 )
+
 
 class SchemaView(QGraphicsView):
     def __init__(self, dialog, parent=None):
@@ -204,6 +206,7 @@ class DatabaseManagementDialog(QDialog):
 
         self.stats: Dict = {}
         self.table_names: List[str] = []
+        self._visible_table_cache: List[str] = []
         self.active_table: Optional[str] = None
         self._current_rows: List[dict] = []
         self._current_columns: List[str] = []
@@ -215,6 +218,11 @@ class DatabaseManagementDialog(QDialog):
         self.selected_schema_table: str = ""
         self.selected_relationship = None
         self._schema_rendering = False
+        self._pending_table_search_text = ""
+        self._table_search_timer = QTimer(self)
+        self._table_search_timer.setSingleShot(True)
+        self._table_search_timer.setInterval(200)
+        self._table_search_timer.timeout.connect(self._apply_pending_table_search)
 
         self.setStyleSheet(STYLE + self._local_style())
         self._build()
@@ -472,7 +480,7 @@ QLabel#sqlHint { color:#94a3b8; font-size:11px; }
         sh_lay = QVBoxLayout(sidebar_head); sh_lay.setContentsMargins(14, 12, 14, 8); sh_lay.setSpacing(6)
         sidebar_title = QLabel("TABLOLAR"); sidebar_title.setStyleSheet("color:#475569; font-size:10px; font-weight:800; letter-spacing:1px; background:transparent;")
         sh_lay.addWidget(sidebar_title)
-        self.table_search = QLineEdit(); self.table_search.setPlaceholderText("Tablo ara..."); self.table_search.textChanged.connect(self._refresh_sidebar)
+        self.table_search = QLineEdit(); self.table_search.setPlaceholderText("Tablo ara..."); self.table_search.textChanged.connect(self._on_table_search_changed)
         sh_lay.addWidget(self.table_search)
         slay.addWidget(sidebar_head)
         self.table_list = QListWidget(); self.table_list.setObjectName("tableList"); self.table_list.itemSelectionChanged.connect(self._on_table_selected); slay.addWidget(self.table_list, 1)
@@ -588,47 +596,59 @@ QLabel#sqlHint { color:#94a3b8; font-size:11px; }
     def refresh_all(self):
         self.stats = self.store.database_stats()
         self.table_names = sorted(list((self.stats.get("table_counts") or {}).keys()))
-        visible_tables = self._visible_table_names()
-        if self.active_table not in visible_tables:
-            self.active_table = visible_tables[0] if visible_tables else None
-        self._refresh_sidebar()
+        self._visible_table_cache = self._visible_table_names()
+        if self.active_table not in self._visible_table_cache:
+            self.active_table = self._visible_table_cache[0] if self._visible_table_cache else None
+        self._refresh_sidebar(load_active_table=False)
         self._refresh_active_table()
         self._render_schema()
 
-    def _refresh_sidebar(self):
-        q = self.table_search.text().strip().lower()
+    def _on_table_search_changed(self, text: str):
+        self._pending_table_search_text = str(text or "")
+        self._table_search_timer.start()
+
+    def _apply_pending_table_search(self):
+        self._refresh_sidebar(query=self._pending_table_search_text, load_active_table=False)
+
+    def _refresh_sidebar(self, query: Optional[str] = None, load_active_table: bool = False):
+        q = self.table_search.text() if query is None else query
         counts = self.stats.get("table_counts") or {}
-        self.table_list.clear()
-        visible_tables = self._visible_table_names()
-        if self.active_table not in visible_tables:
+        visible_tables = self._visible_table_cache or self._visible_table_names()
+        if load_active_table and self.active_table not in visible_tables:
             self.active_table = visible_tables[0] if visible_tables else None
-        shown = 0
-        for t in visible_tables:
-            desc = TABLE_INFO.get(t) or ""
-            if q and q not in t.lower() and q not in desc.lower():
-                continue
-            cnt = counts.get(t, 0)
-            label = f"{t}  ·  {cnt}"
-            if desc:
-                label += f"\n{desc}"
-            item = QListWidgetItem(label)
-            item.setData(Qt.UserRole, t)
-            item.setToolTip(f"{t}\n{desc}\nKayıt: {cnt}")
-            self.table_list.addItem(item)
-            shown += 1
-            if t == self.active_table:
-                item.setSelected(True)
-        if shown == 0:
-            text = "Bu ekrana erişim yetkiniz yok" if not visible_tables else "Arama ile eşleşen tablo yok"
-            item = QListWidgetItem(text)
-            item.setFlags(item.flags() & ~Qt.ItemIsSelectable & ~Qt.ItemIsEnabled)
-            self.table_list.addItem(item)
+        shown_tables = filter_table_metadata(visible_tables, q, TABLE_INFO)
+        selected_table = self.active_table if self.active_table in shown_tables else None
+        blocker = QSignalBlocker(self.table_list)
+        try:
+            self.table_list.clear()
+            for t in shown_tables:
+                desc = TABLE_INFO.get(t) or ""
+                cnt = counts.get(t, 0)
+                label = f"{t}  ·  {cnt}"
+                if desc:
+                    label += f"\n{desc}"
+                item = QListWidgetItem(label)
+                item.setData(Qt.UserRole, t)
+                item.setToolTip(f"{t}\n{desc}\nKayıt: {cnt}")
+                self.table_list.addItem(item)
+                if t == selected_table:
+                    item.setSelected(True)
+            if not shown_tables:
+                text = "Bu ekrana erişim yetkiniz yok" if not visible_tables else "Arama ile eşleşen tablo yok"
+                item = QListWidgetItem(text)
+                item.setFlags(item.flags() & ~Qt.ItemIsSelectable & ~Qt.ItemIsEnabled)
+                self.table_list.addItem(item)
+        finally:
+            del blocker
 
     def _on_table_selected(self):
         items = self.table_list.selectedItems()
         if not items:
             return
-        self.active_table = str(items[0].data(Qt.UserRole) or "")
+        selected_table = str(items[0].data(Qt.UserRole) or "")
+        if not selected_table or selected_table == self.active_table:
+            return
+        self.active_table = selected_table
         self._refresh_active_table()
         self._highlight_schema()
 
@@ -703,15 +723,26 @@ QLabel#sqlHint { color:#94a3b8; font-size:11px; }
         self._apply_table_filters()
 
     def _fill_table_grid(self, rows: List[dict], cols: List[str]):
-        self.grid.setRowCount(len(rows))
-        self.grid.setColumnCount(len(cols))
-        self.grid.setHorizontalHeaderLabels(cols)
-        for r, row in enumerate(rows):
-            for c, col in enumerate(cols):
-                txt = str(row.get(col, ""))
-                it = QTableWidgetItem(txt)
-                it.setToolTip(txt)
-                self.grid.setItem(r, c, it)
+        self.grid.setUpdatesEnabled(False)
+        blocker = QSignalBlocker(self.grid)
+        try:
+            self.grid.setRowCount(len(rows))
+            self.grid.setColumnCount(len(cols))
+            self.grid.setHorizontalHeaderLabels(cols)
+            for r, row in enumerate(rows):
+                for c, col in enumerate(cols):
+                    txt = str(row.get(col, ""))
+                    it = QTableWidgetItem(txt)
+                    it.setToolTip(txt)
+                    self.grid.setItem(r, c, it)
+        finally:
+            del blocker
+            self.grid.setUpdatesEnabled(True)
+
+    def closeEvent(self, event):
+        if hasattr(self, "_table_search_timer"):
+            self._table_search_timer.stop()
+        super().closeEvent(event)
 
     @staticmethod
     def _sorted_rows(rows: List[dict], column: str, ascending: bool) -> List[dict]:
