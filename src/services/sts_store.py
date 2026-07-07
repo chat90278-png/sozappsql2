@@ -3,12 +3,15 @@ import hashlib
 import json
 import mimetypes
 import os
+import uuid
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from src.config.app_config import MAX_CONTRACT_FILE_SIZE_BYTES
 from src.models.app_models import ComponentDef, ContractInfo, DeliveryInfo, SystemInfo, TagDef
+from src.models.share_models import SHARE_STATUS_OPEN, SHARE_PACKAGE_STATUSES, SharePackageRegistryEntry
 from src.domain.flexible_date import is_tbd_contract_no
+from src.domain.contract_snapshot import build_contract_snapshot, hash_contract_snapshot
 from src.services.sts_database import STSDatabase, now_iso
 from src.services import perf_tracker
 from src import auth
@@ -236,6 +239,71 @@ class STSStore:
 
     def supports_activity_logs(self):
         return True
+
+    def sts_instance_id(self) -> str:
+        row = self.db.conn.execute("SELECT value FROM sts_metadata WHERE key='sts_instance_id'").fetchone()
+        return str(row[0] or "") if row else ""
+
+    def register_share_package(self, entry: SharePackageRegistryEntry) -> int:
+        if str(entry.status or "") not in SHARE_PACKAGE_STATUSES:
+            raise ValueError("Geçersiz paylaşım paket durumu.")
+        values = entry.as_db_values()
+        existing = self.db.conn.execute("SELECT * FROM share_packages WHERE share_package_id=?", (entry.share_package_id,)).fetchone()
+        comparable_keys = [
+            "share_package_id", "contract_id", "contract_merge_uid", "source_contract_revision",
+            "permission_mode", "share_format_version", "snapshot_format_version", "base_snapshot_sha256",
+            "created_at", "created_by_staff_id", "created_by_username", "created_by_full_name",
+            "exported_filename", "status", "last_remote_snapshot_sha256", "merge_result_sha256", "return_count",
+        ]
+        if existing:
+            mismatches = []
+            for key in comparable_keys:
+                expected = values.get(key)
+                actual = existing[key]
+                if key in {"contract_id", "source_contract_revision", "share_format_version", "snapshot_format_version", "created_by_staff_id", "return_count"}:
+                    if int(actual or 0) != int(expected or 0):
+                        mismatches.append(key)
+                elif str(actual or "") != str(expected or ""):
+                    mismatches.append(key)
+            if mismatches:
+                raise ValueError(f"Aynı share_package_id farklı registry verisiyle kaydedilemez: {', '.join(mismatches)}")
+            return int(existing["id"])
+        with self.db.tx():
+            cur = self.db.conn.execute(
+                """
+                INSERT INTO share_packages(
+                    share_package_id,contract_id,contract_merge_uid,source_contract_revision,permission_mode,
+                    share_format_version,snapshot_format_version,base_snapshot_sha256,created_at,
+                    created_by_staff_id,created_by_username,created_by_full_name,exported_filename,status,
+                    last_imported_at,last_imported_by_staff_id,last_remote_snapshot_sha256,merge_result_sha256,return_count
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    entry.share_package_id, int(entry.contract_id), entry.contract_merge_uid, int(entry.source_contract_revision),
+                    entry.permission_mode, int(entry.share_format_version), int(entry.snapshot_format_version), entry.base_snapshot_sha256,
+                    entry.created_at, int(entry.created_by_staff_id or 0) or None, entry.created_by_username, entry.created_by_full_name,
+                    entry.exported_filename, entry.status or SHARE_STATUS_OPEN, entry.last_imported_at or None,
+                    int(entry.last_imported_by_staff_id or 0) or None, entry.last_remote_snapshot_sha256, entry.merge_result_sha256, int(entry.return_count or 0),
+                ),
+            )
+            return int(cur.lastrowid)
+
+    def get_share_package(self, share_package_id: str) -> dict | None:
+        row = self.db.conn.execute("SELECT * FROM share_packages WHERE share_package_id=?", (str(share_package_id or ""),)).fetchone()
+        return dict(row) if row else None
+
+    def list_contract_share_packages(self, contract_merge_uid: str, status: str | None = None) -> list[dict]:
+        if status:
+            rows = self.db.conn.execute(
+                "SELECT * FROM share_packages WHERE contract_merge_uid=? AND status=? ORDER BY created_at DESC,id DESC",
+                (str(contract_merge_uid or ""), str(status)),
+            ).fetchall()
+        else:
+            rows = self.db.conn.execute(
+                "SELECT * FROM share_packages WHERE contract_merge_uid=? ORDER BY created_at DESC,id DESC",
+                (str(contract_merge_uid or ""),),
+            ).fetchall()
+        return [dict(r) for r in rows]
 
 
 
@@ -853,7 +921,7 @@ class STSStore:
 
     def _contract_folder_rows(self, contract_id: int) -> list[dict]:
         rows = self.db.conn.execute(
-            "SELECT id,contract_id,parent_id,name,created_at,updated_at FROM contract_file_folders WHERE contract_id=? ORDER BY parent_id,name COLLATE NOCASE,id",
+            "SELECT id,contract_id,merge_uid,parent_id,name,created_at,updated_at FROM contract_file_folders WHERE contract_id=? ORDER BY parent_id,name COLLATE NOCASE,id",
             (int(contract_id),),
         ).fetchall()
         data = [dict(row) for row in rows]
@@ -921,8 +989,8 @@ class STSStore:
         ts = now_iso()
         with self.db.tx():
             self.db.conn.execute(
-                "INSERT INTO contract_file_folders(contract_id,parent_id,name,created_at,updated_at) VALUES(?,?,?,?,?)",
-                (cid, parent_id, folder_name, ts, ts),
+                "INSERT INTO contract_file_folders(contract_id,merge_uid,parent_id,name,created_at,updated_at) VALUES(?,?,?,?,?,?)",
+                (cid, str(uuid.uuid4()), parent_id, folder_name, ts, ts),
             )
             folder_id = int(self.db.conn.execute("SELECT last_insert_rowid()").fetchone()[0])
         folders = {int(row["id"]): row for row in self._contract_folder_rows(cid)}
@@ -940,7 +1008,7 @@ class STSStore:
 
     def rename_contract_file_folder(self, folder_id, new_name: str):
         row = self.db.conn.execute(
-            "SELECT id,contract_id,parent_id,name,created_at,updated_at FROM contract_file_folders WHERE id=?",
+            "SELECT id,contract_id,merge_uid,parent_id,name,created_at,updated_at FROM contract_file_folders WHERE id=?",
             (int(folder_id),),
         ).fetchone()
         if not row:
@@ -974,7 +1042,7 @@ class STSStore:
         folder_rows = self._contract_folder_rows(cid)
         folders = {int(row["id"]): row for row in folder_rows}
         rows = self.db.conn.execute(
-            "SELECT id,folder_id,filename,file_ext,mime_type,size_bytes,created_at,note FROM contract_files WHERE contract_id=? ORDER BY folder_id,filename COLLATE NOCASE,created_at,id",
+            "SELECT id,merge_uid,folder_id,filename,file_ext,mime_type,size_bytes,sha256,created_at,note FROM contract_files WHERE contract_id=? ORDER BY folder_id,filename COLLATE NOCASE,created_at,id",
             (cid,),
         ).fetchall()
         out = []
@@ -1035,8 +1103,8 @@ class STSStore:
         ts = now_iso()
         with self.db.tx():
             self.db.conn.execute(
-                "INSERT INTO contract_files(contract_id,folder_id,filename,original_path,file_ext,mime_type,size_bytes,sha256,content_blob,note,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
-                (cid, folder_id, source.name, stored_path, ext, mime_type, size, file_hash, content, str(note or ""), ts, ts),
+                "INSERT INTO contract_files(contract_id,merge_uid,folder_id,filename,original_path,file_ext,mime_type,size_bytes,sha256,content_blob,note,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (cid, str(uuid.uuid4()), folder_id, source.name, stored_path, ext, mime_type, size, file_hash, content, str(note or ""), ts, ts),
             )
             file_id = int(self.db.conn.execute("SELECT last_insert_rowid()").fetchone()[0])
         self._log(
@@ -1670,9 +1738,10 @@ class STSStore:
         ci.responsible_engineer_name = responsible_engineer_name
         row = None
         if int(getattr(ci, "entry_start_row", 0) or 0):
-            row = self.db.conn.execute("SELECT id,status,note,completion_date,acceptance_date FROM contracts WHERE id=?", (int(getattr(ci, "entry_start_row", 0) or 0),)).fetchone()
+            row = self.db.conn.execute("SELECT id,status,note,completion_date,acceptance_date,revision,merge_uid FROM contracts WHERE id=?", (int(getattr(ci, "entry_start_row", 0) or 0),)).fetchone()
         if not row:
-            row=self.db.conn.execute("SELECT id,status,note,completion_date,acceptance_date FROM contracts WHERE platform_id=? AND contract_no=? AND contract_type=?",(platform_id,ci.no,ctype)).fetchone()
+            row=self.db.conn.execute("SELECT id,status,note,completion_date,acceptance_date,revision,merge_uid FROM contracts WHERE platform_id=? AND contract_no=? AND contract_type=?",(platform_id,ci.no,ctype)).fetchone()
+        before_snapshot_hash = hash_contract_snapshot(build_contract_snapshot(self.db.conn, int(row[0]))) if row else ""
         before_contract = {"status": row[1] or "", "note": row[2] or "", "completion_date": row[3] or "", "acceptance_date": row[4] or ""} if row else None
         old_systems = {}
         old_deliveries = {}
@@ -1686,9 +1755,9 @@ class STSStore:
         with self.db.tx():
             if row:
                 cid=row[0]
-                self.db.conn.execute("UPDATE contracts SET yi_yd=?,status=?,signed_date=?,t0_date=?,t0_months=?,completion_date=?,acceptance_date=?,note=?,content=?,search_text=?,responsible_engineer_id=?,updated_at=? WHERE id=?",(ci.yi_yd,ci.status,ci.signature_date,ci.t0_date,int(ci.t0_months or 0),ci.completion_date,ci.acceptance_date,ci.note,ci.note,search_text,responsible_engineer_id or None,ts,cid))
+                self.db.conn.execute("UPDATE contracts SET merge_uid=COALESCE(NULLIF(?,''), merge_uid),yi_yd=?,status=?,signed_date=?,t0_date=?,t0_months=?,completion_date=?,acceptance_date=?,note=?,content=?,search_text=?,responsible_engineer_id=?,updated_at=? WHERE id=?",(str(getattr(ci, "merge_uid", "") or ""),ci.yi_yd,ci.status,ci.signature_date,ci.t0_date,int(ci.t0_months or 0),ci.completion_date,ci.acceptance_date,ci.note,ci.note,search_text,responsible_engineer_id or None,ts,cid))
             else:
-                cursor = self.db.conn.execute("INSERT INTO contracts(platform_id,contract_no,yi_yd,contract_type,type_display,link_type,status,signed_date,t0_date,t0_months,completion_date,acceptance_date,content,note,is_main,search_text,responsible_engineer_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(platform_id,ci.no,ci.yi_yd,ctype,ctype,"",ci.status,ci.signature_date,ci.t0_date,int(ci.t0_months or 0),ci.completion_date,ci.acceptance_date,ci.note,ci.note,1 if self._normalize_label(ctype)==self._normalize_label('Ana Sözleşme') else 0,search_text,responsible_engineer_id or None,ts,ts))
+                cursor = self.db.conn.execute("INSERT INTO contracts(platform_id,merge_uid,revision,contract_no,yi_yd,contract_type,type_display,link_type,status,signed_date,t0_date,t0_months,completion_date,acceptance_date,content,note,is_main,search_text,responsible_engineer_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(platform_id,str(getattr(ci, "merge_uid", "") or str(uuid.uuid4())),int(getattr(ci, "revision", 1) or 1),ci.no,ci.yi_yd,ctype,ctype,"",ci.status,ci.signature_date,ci.t0_date,int(ci.t0_months or 0),ci.completion_date,ci.acceptance_date,ci.note,ci.note,1 if self._normalize_label(ctype)==self._normalize_label('Ana Sözleşme') else 0,search_text,responsible_engineer_id or None,ts,ts))
                 cid=cursor.lastrowid
             self._replace_contract_users(int(cid), users)
             self.set_contract_platforms(int(cid), selected_platform_ids or [platform_id], primary_platform_id=platform_id)
@@ -1707,10 +1776,10 @@ class STSStore:
                 payload=json.dumps({"t0_date":system.t0_date,"t0_months":system.t0_months})
                 sid=existing_systems.get(str(system.name))
                 if sid is None:
-                    self.db.conn.execute("INSERT INTO systems(contract_id,platform_id,name,status,completion_date,acceptance_date,note,sort_order,payload_json) VALUES(?,?,?,?,?,?,?,?,?)",(cid,platform_id,system.name,system.status,system.completion_date,system.acceptance_date,"",i,payload))
+                    self.db.conn.execute("INSERT INTO systems(contract_id,merge_uid,platform_id,name,status,completion_date,acceptance_date,note,sort_order,payload_json) VALUES(?,?,?,?,?,?,?,?,?,?)",(cid,str(getattr(system, "merge_uid", "") or str(uuid.uuid4())),platform_id,system.name,system.status,system.completion_date,system.acceptance_date,"",i,payload))
                     sid=self.db.conn.execute("SELECT last_insert_rowid()").fetchone()[0]
                 else:
-                    self.db.conn.execute("UPDATE systems SET platform_id=?,name=?,status=?,completion_date=?,acceptance_date=?,sort_order=?,payload_json=? WHERE id=?",(platform_id,system.name,system.status,system.completion_date,system.acceptance_date,i,payload,sid))
+                    self.db.conn.execute("UPDATE systems SET merge_uid=COALESCE(NULLIF(?,''), merge_uid),platform_id=?,name=?,status=?,completion_date=?,acceptance_date=?,sort_order=?,payload_json=? WHERE id=?",(str(getattr(system, "merge_uid", "") or ""),platform_id,system.name,system.status,system.completion_date,system.acceptance_date,i,payload,sid))
                 system_ids[system.name]=sid
                 existing_components = {int(item[0]): int(item[1]) for item in self.db.conn.execute("SELECT component_id,id FROM system_components WHERE system_id=?", (sid,))}
                 desired_component_ids = set()
@@ -1738,10 +1807,10 @@ class STSStore:
                     payload=json.dumps({"t0_date":delivery.t0_date,"t0_months":delivery.t0_months,"completion_date":delivery.completion_date})
                     did=existing_deliveries.get((str(sys_name), str(delivery.name)))
                     if did is None:
-                        self.db.conn.execute("INSERT INTO deliveries(contract_id,system_id,delivery_user_id,name,status,planned_acceptance_date,acceptance_date,note,sort_order,payload_json) VALUES(?,?,?,?,?,?,?,?,?,?)",(cid,system_ids.get(sys_name),delivery_user_id,delivery.name,delivery.status,getattr(delivery,"planned_acceptance_date","") or "",delivery.acceptance_date,delivery.note,i,payload))
+                        self.db.conn.execute("INSERT INTO deliveries(contract_id,merge_uid,system_id,delivery_user_id,name,status,planned_acceptance_date,acceptance_date,note,sort_order,payload_json) VALUES(?,?,?,?,?,?,?,?,?,?,?)",(cid,str(getattr(delivery, "merge_uid", "") or str(uuid.uuid4())),system_ids.get(sys_name),delivery_user_id,delivery.name,delivery.status,getattr(delivery,"planned_acceptance_date","") or "",delivery.acceptance_date,delivery.note,i,payload))
                         did=self.db.conn.execute("SELECT last_insert_rowid()").fetchone()[0]
                     else:
-                        self.db.conn.execute("UPDATE deliveries SET system_id=?,delivery_user_id=?,name=?,status=?,planned_acceptance_date=?,acceptance_date=?,note=?,sort_order=?,payload_json=? WHERE id=?",(system_ids.get(sys_name),delivery_user_id,delivery.name,delivery.status,getattr(delivery,"planned_acceptance_date","") or "",delivery.acceptance_date,delivery.note,i,payload,did))
+                        self.db.conn.execute("UPDATE deliveries SET merge_uid=COALESCE(NULLIF(?,''), merge_uid),system_id=?,delivery_user_id=?,name=?,status=?,planned_acceptance_date=?,acceptance_date=?,note=?,sort_order=?,payload_json=? WHERE id=?",(str(getattr(delivery, "merge_uid", "") or ""),system_ids.get(sys_name),delivery_user_id,delivery.name,delivery.status,getattr(delivery,"planned_acceptance_date","") or "",delivery.acceptance_date,delivery.note,i,payload,did))
                     existing_components = {int(item[0]): int(item[1]) for item in self.db.conn.execute("SELECT component_id,id FROM delivery_components WHERE delivery_id=?", (did,))}
                     desired_component_ids = set()
                     names=set((delivery.planned or {})) | set((delivery.delivered or {}))
@@ -1821,6 +1890,12 @@ class STSStore:
                                     "INSERT OR IGNORE INTO delivery_component_units(delivery_component_id,slot_no,identifier,is_delivered,note,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",
                                     (dc_id, sn, "", 0, "", ts_now, ts_now)
                                 )
+        after_snapshot_hash = hash_contract_snapshot(build_contract_snapshot(self.db.conn, int(cid or 0)))
+        if row and before_snapshot_hash and after_snapshot_hash != before_snapshot_hash:
+            self.db.conn.execute("UPDATE contracts SET revision=COALESCE(revision,1)+1,updated_at=? WHERE id=?", (ts, int(cid)))
+        current = self.db.conn.execute("SELECT merge_uid,revision FROM contracts WHERE id=?", (int(cid),)).fetchone()
+        if current:
+            setattr(ci, "merge_uid", str(current[0] or "")); setattr(ci, "revision", int(current[1] or 1))
         ci.entry_start_row = int(cid or 0)
         setattr(ci, "id", int(cid or 0))
         setattr(ci, "contract_id", int(cid or 0))
@@ -1892,7 +1967,7 @@ class STSStore:
             t0_date = t0_date or "TBD"
             t0_months = 0
             completion_date = completion_date or "TBD"
-        ci=ContractInfo(no=r['contract_no'],platform=active_platform_name,user=user_display,yi_yd=r['yi_yd'] or "Yİ",contract_type=r['contract_type'] or "",signature_date=signature_date,t0_date=t0_date,t0_months=t0_months,completion_date=completion_date,status=r['status'] or "PLAN",note=r['note'] or "",acceptance_date=r['acceptance_date'] or "",entry_start_row=int(r['id']),id=int(r['id']),contract_id=int(r['id']),users=users, platform_id=active_platform_id or int(r['platform_id'] or 0), primary_platform_id=int(r['platform_id'] or 0), primary_platform=r['platform'] or '', platforms=platform_rows, platform_names=[x['platform_name'] for x in platform_rows], platform_ids=[int(x['platform_id']) for x in platform_rows], responsible_engineer_id=responsible_engineer_id, responsible_engineer_name=responsible_engineer_name)
+        ci=ContractInfo(no=r['contract_no'],platform=active_platform_name,user=user_display,yi_yd=r['yi_yd'] or "Yİ",contract_type=r['contract_type'] or "",signature_date=signature_date,t0_date=t0_date,t0_months=t0_months,completion_date=completion_date,status=r['status'] or "PLAN",note=r['note'] or "",acceptance_date=r['acceptance_date'] or "",entry_start_row=int(r['id']),id=int(r['id']),contract_id=int(r['id']),users=users, platform_id=active_platform_id or int(r['platform_id'] or 0), primary_platform_id=int(r['platform_id'] or 0), primary_platform=r['platform'] or '', platforms=platform_rows, platform_names=[x['platform_name'] for x in platform_rows], platform_ids=[int(x['platform_id']) for x in platform_rows], responsible_engineer_id=responsible_engineer_id, responsible_engineer_name=responsible_engineer_name, merge_uid=r["merge_uid"] if "merge_uid" in r.keys() else "", revision=int(r["revision"] if "revision" in r.keys() else 1 or 1))
         responsible_engineers = ([{"staff_id": responsible_engineer_id, "id": responsible_engineer_id, "full_name": responsible_engineer_name}] if responsible_engineer_id else self.get_contract_responsible_engineers(contract_id=int(r['id'])))
         if responsible_engineers and not responsible_engineer_id:
             responsible_engineer_id = int(responsible_engineers[0]["staff_id"])
@@ -1908,7 +1983,7 @@ class STSStore:
             comps={x[0]:float(x[1] or 0) for x in component_rows}
             component_notes={x[0]:str(x[2] or "") for x in component_rows if str(x[2] or "")}
             payload=json.loads(s['payload_json'] or "{}")
-            si=SystemInfo(name=s['name'],components=comps,component_notes=component_notes,t0_date=payload.get('t0_date',''),t0_months=int(payload.get('t0_months',0) or 0),completion_date=s['completion_date'] or "",status=s['status'] or "Başlanmadı",acceptance_date=s['acceptance_date'] or "")
+            si=SystemInfo(name=s['name'],components=comps,component_notes=component_notes,t0_date=payload.get('t0_date',''),t0_months=int(payload.get('t0_months',0) or 0),completion_date=s['completion_date'] or "",status=s['status'] or "Başlanmadı",acceptance_date=s['acceptance_date'] or "", merge_uid=s["merge_uid"] if "merge_uid" in s.keys() else "")
             systems.append(si)
         for d in self.db.conn.execute("SELECT d.*,s.name AS delivery_system,u.name AS delivery_user FROM deliveries d JOIN systems s ON s.id=d.system_id LEFT JOIN users u ON u.id=d.delivery_user_id WHERE d.contract_id=? AND COALESCE(s.platform_id, ?) = ? ORDER BY s.name,d.sort_order,d.id",(r['id'], active_platform_id, active_platform_id)):
             payload=json.loads(d['payload_json'] or "{}")
@@ -1929,7 +2004,7 @@ class STSStore:
                             {"slot_no": int(u[0]), "identifier": str(u[1] or ""), "is_delivered": int(u[2] or 0), "note": str(u[3] or "")}
                             for u in unit_rows
                         ]
-            di=DeliveryInfo(name=d['name'],status=d['status'] or "",acceptance_date=d['acceptance_date'] or "",note=d['note'] or "",planned_acceptance_date=d['planned_acceptance_date'] or "",planned=planned,delivered=delivered,t0_date=payload.get('t0_date',''),t0_months=int(payload.get('t0_months',0) or 0),completion_date=payload.get('completion_date',''),delivery_user=d['delivery_user'] or "",component_units=component_units)
+            di=DeliveryInfo(name=d['name'],status=d['status'] or "",acceptance_date=d['acceptance_date'] or "",note=d['note'] or "",planned_acceptance_date=d['planned_acceptance_date'] or "",planned=planned,delivered=delivered,t0_date=payload.get('t0_date',''),t0_months=int(payload.get('t0_months',0) or 0),completion_date=payload.get('completion_date',''),delivery_user=d['delivery_user'] or "",component_units=component_units, merge_uid=d["merge_uid"] if "merge_uid" in d.keys() else "")
             deliveries.setdefault(d['delivery_system'],[]).append(di)
         return ci, systems, deliveries
 

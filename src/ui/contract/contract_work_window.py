@@ -13,13 +13,14 @@ import time
 import traceback
 import tempfile
 import zipfile
-import sqlite3
+import uuid
 import unicodedata
 import logging
 from pathlib import Path
 from datetime import date, datetime, timedelta
 from typing import Callable, Dict, List, Optional, Protocol, Tuple
 from src.ui.dialogs.auto_accept_dialog import open_auto_accept_dialog
+from src.services.share_package_service import read_share_metadata, write_share_metadata
 
 
 from src.domain.constants import (
@@ -142,41 +143,13 @@ def normalized_tag_key(value: str) -> str:
 
 
 def _share_metadata_from_path(path: Path | str) -> dict:
-    """Return share metadata for STS share packages; empty dict for normal files."""
-    try:
-        p = Path(path)
-        if not p.exists() or p.suffix.lower() != ".sts":
-            return {}
-        conn = sqlite3.connect(str(p))
-        conn.row_factory = sqlite3.Row
-        try:
-            row = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='share_metadata'").fetchone()
-            if not row:
-                return {}
-            rows = conn.execute("SELECT key,value FROM share_metadata").fetchall()
-            meta = {str(r["key"]): str(r["value"] or "") for r in rows}
-            return meta if str(meta.get("share_mode", "")).lower() == "true" else {}
-        finally:
-            conn.close()
-    except Exception:
-        return {}
+    """Compatibility wrapper; share package implementation lives in share_package_service."""
+    return read_share_metadata(path)
 
 
 def _write_share_metadata(path: Path | str, metadata: dict) -> None:
-    conn = sqlite3.connect(str(path))
-    try:
-        conn.execute("CREATE TABLE IF NOT EXISTS share_metadata(key TEXT PRIMARY KEY, value TEXT)")
-        for key, value in dict(metadata or {}).items():
-            conn.execute(
-                "INSERT INTO share_metadata(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                (str(key), str(value)),
-            )
-        conn.commit()
-    finally:
-        conn.close()
-
-
-
+    """Compatibility wrapper; share package implementation lives in share_package_service."""
+    write_share_metadata(path, metadata)
 
 
 def app_icon_path() -> Path:
@@ -535,6 +508,11 @@ def tag_chip_style(color: str, selected: bool = False) -> str:
 from src.services.excel_store import ExcelStore
 from src.services.sts_store import STSStore
 from src.services.sts_database import CURRENT_SCHEMA_VERSION, STSMigrationError, read_sts_schema_version
+from src.services.share_package_service import (
+    build_base_snapshot_from_source, make_v2_metadata, read_share_metadata, validate_share_package,
+    write_share_base_snapshot, write_share_metadata, utcish_now,
+)
+from src.models.share_models import SHARE_FORMAT_V2, SHARE_STATUS_OPEN, SharePackageRegistryEntry
 from src import auth
 from src.workers import ContractSaveWorker, STSIndexWorker, STSLoadWorker
 
@@ -781,10 +759,9 @@ class ContractWorkWindow(QDialog):
                 if view_only:
                     widget.setToolTip("Paylaşım görüntüleme modunda bu işlem kapalıdır.")
         if hasattr(self, "delete_contract_btn"):
-            self.delete_contract_btn.setVisible(not view_only)
-            self.delete_contract_btn.setEnabled(not view_only)
-            if view_only:
-                self.delete_contract_btn.setToolTip("Paylaşım görüntüleme modunda bu işlem kapalıdır.")
+            self.delete_contract_btn.setVisible(False)
+            self.delete_contract_btn.setEnabled(False)
+            self.delete_contract_btn.setToolTip("Paylaşım paketinde sözleşme silme Aşama 2'de kapalıdır.")
         header_edit = getattr(self, "header_edit_btn", None)
         if header_edit is not None:
             header_edit.setEnabled(not view_only)
@@ -2527,6 +2504,8 @@ class ContractWorkWindow(QDialog):
                     name=str(folder.get("name") or "Klasör"),
                 )
                 folder_id_map[int(folder.get("id"))] = int(created.get("id") or 0)
+                if str(folder.get("merge_uid") or "").strip():
+                    share_store.db.conn.execute("UPDATE contract_file_folders SET merge_uid=? WHERE id=?", (str(folder.get("merge_uid") or ""), int(created.get("id") or 0)))
                 pending.remove(folder)
                 progressed = True
             if not progressed:
@@ -2549,7 +2528,7 @@ class ContractWorkWindow(QDialog):
                 tmp_file.write_bytes(content)
                 old_folder_id = item.get("folder_id")
                 new_folder_id = folder_id_map.get(int(old_folder_id)) if old_folder_id not in (None, "", 0) else None
-                share_store.add_contract_file(
+                new_file_id = share_store.add_contract_file(
                     str(share_ci.platform or ""),
                     str(share_ci.no or ""),
                     tmp_file,
@@ -2557,12 +2536,14 @@ class ContractWorkWindow(QDialog):
                     note=str(item.get("note") or ""),
                     folder_id=new_folder_id,
                 )
+                if str(item.get("merge_uid") or "").strip():
+                    share_store.db.conn.execute("UPDATE contract_files SET merge_uid=? WHERE id=?", (str(item.get("merge_uid") or ""), int(new_file_id or 0)))
                 copied += 1
                 total += len(content)
         return copied, total
 
     def create_contract_share_file(self, permission: str, default_filename: str):
-        """Create a real single-contract STS share file with share metadata."""
+        """Create a V2 single-contract STS share file with immutable base snapshot metadata."""
         if not self.require_permission_ui("export_data", "Sözleşme Paylaşımı"):
             return
         doc_count, doc_bytes = self._contract_document_share_stats()
@@ -2578,10 +2559,26 @@ class ContractWorkWindow(QDialog):
         if not str(target).lower().endswith(".sts"):
             target += ".sts"
         target_path = Path(target)
+        temp_path = target_path.with_name(f".{target_path.name}.creating-{uuid.uuid4().hex}.sts")
+        backup_path = None
+        replaced_existing = False
         try:
-            if target_path.exists():
-                target_path.unlink()
-            share_store = STSStore(target_path, actor="Sözleşme Paylaşımı")
+            source_contract_id = int(getattr(self.ci, "contract_id", 0) or getattr(self.ci, "id", 0) or getattr(self.ci, "entry_start_row", 0) or 0)
+            if source_contract_id <= 0:
+                raise ValueError("Paylaşım için kaynak sözleşme kimliği bulunamadı.")
+            created_at = utcish_now()
+            base_snapshot = build_base_snapshot_from_source(self.store.db.conn, source_contract_id, created_at=created_at)
+            if not base_snapshot.contract_merge_uid:
+                raise ValueError("Paylaşım için kaynak sözleşme merge UID değeri bulunamadı.")
+            share_package_id = str(uuid.uuid4())
+            staff = self.current_staff or {}
+            created_by_staff_id = int(staff.get("id") or 0) if not bool(staff.get("is_admin")) else 0
+            created_by_username = str(staff.get("username") or staff.get("device_name") or "")
+            created_by_full_name = str(staff.get("full_name") or staff.get("admin_name") or "")
+
+            if temp_path.exists():
+                temp_path.unlink()
+            share_store = STSStore(temp_path, actor="Sözleşme Paylaşımı")
             share_ci = copy.deepcopy(self.ci)
             share_ci.entry_start_row = 0
             setattr(share_ci, "id", 0)
@@ -2602,22 +2599,76 @@ class ContractWorkWindow(QDialog):
                 actor="Sözleşme Paylaşımı",
             )
             copied_docs, copied_doc_bytes = self._copy_contract_documents_to_share(share_store, share_ci)
+            share_store.save()
             try:
-                share_store.db.conn.commit()
                 share_store.db.close()
             except Exception:
                 pass
-            _write_share_metadata(target_path, {
-                "share_mode": "true",
-                "contract_id": contract_id,
-                "permission_mode": "edit" if permission == "duzenle" else "view",
-                "source_contract_no": str(getattr(self.ci, "no", "") or ""),
-                "created_at": datetime.now().isoformat(timespec="seconds"),
-                "document_count": copied_docs,
-                "document_bytes": copied_doc_bytes,
-            })
+
+            metadata = make_v2_metadata(
+                share_package_id=share_package_id,
+                permission_mode="edit" if permission == "duzenle" else "view",
+                source_sts_instance_id=self.store.sts_instance_id(),
+                source_schema_version=CURRENT_SCHEMA_VERSION,
+                source_contract_id=source_contract_id,
+                source_contract_merge_uid=base_snapshot.contract_merge_uid,
+                source_contract_no=str(getattr(self.ci, "no", "") or ""),
+                base_revision=int(getattr(self.ci, "revision", 1) or 1),
+                base_snapshot_sha256=base_snapshot.snapshot_sha256,
+                created_at=created_at,
+                created_by_staff_id=created_by_staff_id,
+                created_by_username=created_by_username,
+                created_by_full_name=created_by_full_name,
+                document_count=copied_docs,
+                document_bytes=copied_doc_bytes,
+            )
+            metadata["contract_id"] = str(contract_id)  # package-local legacy/open fallback
+            write_share_metadata(temp_path, metadata)
+            write_share_base_snapshot(temp_path, base_snapshot)
+            validation = validate_share_package(temp_path)
+            if not validation.is_valid:
+                raise ValueError("Paylaşım paketi doğrulanamadı: " + "; ".join(validation.errors))
+
+            if target_path.exists():
+                backup_path = target_path.with_name(f".{target_path.name}.backup-{uuid.uuid4().hex}.sts")
+                target_path.replace(backup_path)
+                replaced_existing = True
+            temp_path.replace(target_path)
+            registry_entry = SharePackageRegistryEntry(
+                share_package_id=share_package_id,
+                contract_id=source_contract_id,
+                contract_merge_uid=base_snapshot.contract_merge_uid,
+                source_contract_revision=int(getattr(self.ci, "revision", 1) or 1),
+                permission_mode="edit" if permission == "duzenle" else "view",
+                share_format_version=SHARE_FORMAT_V2,
+                snapshot_format_version=base_snapshot.snapshot_format_version,
+                base_snapshot_sha256=base_snapshot.snapshot_sha256,
+                created_at=created_at,
+                created_by_staff_id=created_by_staff_id,
+                created_by_username=created_by_username,
+                created_by_full_name=created_by_full_name,
+                exported_filename=target_path.name,
+                status=SHARE_STATUS_OPEN,
+            )
+            try:
+                self.store.register_share_package(registry_entry)
+            except Exception:
+                if target_path.exists():
+                    target_path.unlink()
+                if replaced_existing and backup_path and backup_path.exists():
+                    backup_path.replace(target_path)
+                raise
+            if backup_path and backup_path.exists():
+                backup_path.unlink()
             QMessageBox.information(self, "Paylaşım", "Paylaşım STS dosyası oluşturuldu.")
         except Exception as exc:
+            try:
+                if temp_path.exists():
+                    temp_path.unlink()
+                if replaced_existing and backup_path and backup_path.exists() and not target_path.exists():
+                    backup_path.replace(target_path)
+            except Exception:
+                pass
             QMessageBox.warning(self, "Paylaşım dosyası oluşturulamadı.", str(exc))
 
     def _make_card_scroll(self):

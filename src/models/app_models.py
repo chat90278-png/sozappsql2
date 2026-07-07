@@ -43,6 +43,8 @@ class ContractInfo:
     platform_ids: list[int] = field(default_factory=list)
     responsible_engineer_id: int = 0
     responsible_engineer_name: str = ""
+    merge_uid: str = ""
+    revision: int = 1
 
 
 @dataclass
@@ -56,6 +58,7 @@ class SystemInfo:
     status: str = "Başlanmadı"
     acceptance_date: str = ""
     platform_id: int = 0
+    merge_uid: str = ""
 
     def __post_init__(self) -> None:
         # Preserve the legacy positional constructor contract from before
@@ -89,6 +92,7 @@ class DeliveryInfo:
     planned_acceptance_date: str = ""
     # Kuyruk no / seri no takibi: {comp_name: [{"slot_no": 1, "identifier": "TC-001", "is_delivered": 0, "note": ""}, ...]}
     component_units: Dict[str, list] = field(default_factory=dict)
+    merge_uid: str = ""
 
 
 @dataclass

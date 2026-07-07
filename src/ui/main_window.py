@@ -13,13 +13,13 @@ import time
 import traceback
 import tempfile
 import zipfile
-import sqlite3
 import unicodedata
 import logging
 from pathlib import Path
 from datetime import date, datetime, timedelta
 from typing import Callable, Dict, List, Optional, Protocol, Tuple
 from src.ui.dialogs.auto_accept_dialog import open_auto_accept_dialog
+from src.services.share_package_service import read_share_metadata, write_share_metadata, validate_share_package
 from src.services import perf_tracker
 
 
@@ -145,41 +145,13 @@ def normalized_tag_key(value: str) -> str:
 
 
 def _share_metadata_from_path(path: Path | str) -> dict:
-    """Return share metadata for STS share packages; empty dict for normal files."""
-    try:
-        p = Path(path)
-        if not p.exists() or p.suffix.lower() != ".sts":
-            return {}
-        conn = sqlite3.connect(str(p))
-        conn.row_factory = sqlite3.Row
-        try:
-            row = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='share_metadata'").fetchone()
-            if not row:
-                return {}
-            rows = conn.execute("SELECT key,value FROM share_metadata").fetchall()
-            meta = {str(r["key"]): str(r["value"] or "") for r in rows}
-            return meta if str(meta.get("share_mode", "")).lower() == "true" else {}
-        finally:
-            conn.close()
-    except Exception:
-        return {}
+    """Compatibility wrapper; share package implementation lives in share_package_service."""
+    return read_share_metadata(path)
 
 
 def _write_share_metadata(path: Path | str, metadata: dict) -> None:
-    conn = sqlite3.connect(str(path))
-    try:
-        conn.execute("CREATE TABLE IF NOT EXISTS share_metadata(key TEXT PRIMARY KEY, value TEXT)")
-        for key, value in dict(metadata or {}).items():
-            conn.execute(
-                "INSERT INTO share_metadata(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                (str(key), str(value)),
-            )
-        conn.commit()
-    finally:
-        conn.close()
-
-
-
+    """Compatibility wrapper; share package implementation lives in share_package_service."""
+    write_share_metadata(path, metadata)
 
 
 def app_icon_path() -> Path:
@@ -4321,18 +4293,34 @@ def open_share_contract_window(path: Path | str) -> Optional[ContractWorkWindow]
     meta = _share_metadata_from_path(path)
     if not meta:
         return None
+    validation = validate_share_package(path)
+    if not validation.is_supported or not validation.is_valid:
+        raise ValueError("\n".join(validation.errors or ["Paylaşım paketi açılamadı."]))
+    parsed_meta = validation.metadata
     store = STSStore(Path(path), actor="Paylaşım")
     rows = store.build_contract_index()
     if not rows:
         raise ValueError("Paylaşım dosyasında sözleşme bulunamadı.")
-    source_no = str(meta.get("source_contract_no") or "").strip()
     selected = None
-    if source_no:
-        selected = next((r for r in rows if str(r.get("no") or "").strip() == source_no), None)
-    if selected is None:
-        contract_id = int(meta.get("contract_id") or 0)
-        selected = next((r for r in rows if int(r.get("row") or 0) == contract_id), None) if contract_id else None
-    selected = selected or rows[0]
+    if parsed_meta and parsed_meta.format_version >= 2:
+        merge_uid = str(parsed_meta.source_contract_merge_uid or "").strip()
+        if merge_uid:
+            row = store.db.conn.execute("SELECT id FROM contracts WHERE merge_uid=?", (merge_uid,)).fetchone()
+            if row:
+                selected = next((r for r in rows if int(r.get("row") or 0) == int(row[0])), None)
+        package_contract_id = int(meta.get("contract_id") or 0)
+        if selected is None and package_contract_id:
+            selected = next((r for r in rows if int(r.get("row") or 0) == package_contract_id), None)
+        if selected is None:
+            raise ValueError("Paylaşım paketindeki kaynak sözleşme kimliği bulunamadı.")
+    else:
+        source_no = str(meta.get("source_contract_no") or "").strip()
+        if source_no:
+            selected = next((r for r in rows if str(r.get("no") or "").strip() == source_no), None)
+        if selected is None:
+            contract_id = int(meta.get("contract_id") or 0)
+            selected = next((r for r in rows if int(r.get("row") or 0) == contract_id), None) if contract_id else None
+        selected = selected or rows[0]
     contract_id = int(selected.get("row") or meta.get("contract_id") or 0)
     if contract_id <= 0:
         raise ValueError("Paylaşım sözleşmesi bulunamadı.")
@@ -4346,14 +4334,19 @@ def open_share_contract_window(path: Path | str) -> Optional[ContractWorkWindow]
         contract_type=str(row["contract_type"] or ""),
         platform_id=int(row["platform_id"] or 0),
     )
+    permission_mode = str((parsed_meta.permission_mode if parsed_meta else meta.get("permission_mode")) or "view")
+    perms = {"view_contracts", "export_data"}
+    if permission_mode == "edit":
+        perms.update({"edit_contracts", "manage_labels", "lock_documents", "unlock_own_documents"})
     auth.current_staff = {
         "id": 0,
         "full_name": "Paylaşım Kullanıcısı",
         "username": "share",
         "is_active": 1,
-        "is_admin": True,
-        "permissions": {"view_contracts", "edit_contracts", "export_data", "manage_labels"},
+        "is_admin": False,
+        "is_share_user": True,
+        "permissions": perms,
     }
     win = ContractWorkWindow(store, ci, systems=systems, deliveries=deliveries)
-    win.set_share_mode(str(meta.get("permission_mode") or "view"))
+    win.set_share_mode(permission_mode)
     return win
