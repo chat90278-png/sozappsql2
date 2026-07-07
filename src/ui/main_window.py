@@ -557,13 +557,13 @@ COL_REMAINING = 6
 COL_TAGS = 7
 COL_SUMMARY = 8
 PLATFORM_SELECTED_ROLE = Qt.UserRole + 100
-TAG_CHIP_HEIGHT = 19
-TAG_CHIP_MAX_WIDTH = 140
-TAG_CHIP_HPAD = 12
-TAG_CHIP_VPAD = 1
-TAG_CHIP_SPACING = 3
+TAG_CHIP_HEIGHT = 16
+TAG_CHIP_MAX_WIDTH = 120
+TAG_CHIP_HPAD = 10
+TAG_CHIP_VPAD = 0
+TAG_CHIP_SPACING = 2
 TAG_CHIP_MARGIN_X = 5
-TAG_CHIP_MARGIN_Y = 4
+TAG_CHIP_MARGIN_Y = 3
 
 
 class ContractTableModel(QAbstractTableModel):
@@ -749,7 +749,7 @@ class ContractTagsDelegate(QStyledItemDelegate):
             radius = TAG_CHIP_HEIGHT // 2
 
             font = QFont(option.font)
-            font.setPointSize(10)
+            font.setPointSize(9)
             font.setBold(True)
             painter.setFont(font)
             fm = QFontMetrics(font)
@@ -776,7 +776,7 @@ class ContractTagsDelegate(QStyledItemDelegate):
         if _it is None or not tags_list:
             return super().helpEvent(event, view, option, index)
         font = QFont(option.font)
-        font.setPointSize(10)
+        font.setPointSize(9)
         font.setBold(True)
         fm = QFontMetrics(font)
         for chip_rect, _tag_text, full_text in self._chip_rects(option, tags_list, fm):
@@ -3993,7 +3993,7 @@ class MainWindow(QMainWindow):
                                 full_text = str(tag_name)
                                 chip = QLabel(full_text)
                                 chip_font = QFont(chip.font())
-                                chip_font.setPointSize(10)
+                                chip_font.setPointSize(9)
                                 chip_font.setBold(True)
                                 chip.setFont(chip_font)
                                 chip_fm = QFontMetrics(chip_font)
@@ -4011,7 +4011,7 @@ class MainWindow(QMainWindow):
                                 chip.setStyleSheet(
                                     f"QLabel{{background:{_rgb_to_hex(bg)};color:{txt_c};"
                                     f"border:1px solid {_rgb_to_hex(border_c)};border-radius:{TAG_CHIP_HEIGHT // 2}px;"
-                                    f"padding:{TAG_CHIP_VPAD}px {TAG_CHIP_HPAD}px;font-size:10px;font-weight:700;}}"
+                                    f"padding:{TAG_CHIP_VPAD}px {TAG_CHIP_HPAD}px;font-size:9px;font-weight:700;}}"
                                 )
                                 wl.addWidget(chip, 0, Qt.AlignHCenter)
                             placeholder = QTableWidgetItem("")
