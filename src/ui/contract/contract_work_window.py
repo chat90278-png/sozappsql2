@@ -100,13 +100,13 @@ from src.ui.widgets.user_select import (
     MultiStaffSelectWidget, MultiPlatformSelectWidget,
 )
 from src.ui.widgets.platform_tabs import (
-    PlatformTabsWidget, HeaderUserPopup, FixedContractTypeField,
+    PlatformTabsWidget, FixedContractTypeField,
     BadgeTabButton, ContractActionTabs, ContractSharePopover,
     UnitTrackingSlotCard, UnitTrackingSidePanel,
 )
 
 from PySide6.QtCore import Qt, QDate, QObject, QThread, Signal, QTimer, QPoint, QSize, QRect, QEvent, QPropertyAnimation, QEasingCurve, QUrl
-from PySide6.QtGui import QFont, QFontMetrics, QColor, QPixmap, QIcon, QPainter, QAction, QCursor, QCloseEvent, QDesktopServices, QKeySequence, QShortcut, QTextCharFormat
+from PySide6.QtGui import QFont, QFontMetrics, QColor, QPixmap, QIcon, QPainter, QAction, QCloseEvent, QDesktopServices, QKeySequence, QShortcut, QTextCharFormat
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget,QGraphicsOpacityEffect, QGraphicsDropShadowEffect, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QPushButton, QListWidget, QListWidgetItem, QTableWidget, QTableWidgetItem,
@@ -897,10 +897,6 @@ class ContractWorkWindow(QDialog):
 
         self.meta_values: Dict[str, QLabel] = {}
         self.user_tooltip_text = ""
-        self.user_popup_users: List[str] = []
-        self.user_summary_container: Optional[QWidget] = None
-        self._user_tooltip_widgets: set[QWidget] = set()
-        self._user_popup: Optional[HeaderUserPopup] = None
         self.platform_tabs_widget: Optional[PlatformTabsWidget] = None
 
         def meta_cell(key, label_text, value_text, *, min_w=70, max_w=None, value_widget=None, tooltip: str = ""):
@@ -911,9 +907,6 @@ class ContractWorkWindow(QDialog):
             cell.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
             if tooltip:
                 cell.setToolTip(tooltip)
-                cell.setMouseTracking(True)
-                if key == "user":
-                    self._register_user_tooltip_widget(cell)
             cl = QVBoxLayout(cell); cl.setContentsMargins(10, 0, 10, 0); cl.setSpacing(2)
             lbl = QLabel(label_text.upper()); lbl.setObjectName("metaHeaderLabel")
             if value_widget is None:
@@ -923,9 +916,6 @@ class ContractWorkWindow(QDialog):
                 val = value_widget
             if tooltip and hasattr(val, "setToolTip"):
                 val.setToolTip(tooltip)
-                val.setMouseTracking(True)
-                if key == "user" and isinstance(val, QWidget):
-                    self._register_user_tooltip_widget(val)
             cl.addWidget(lbl); cl.addWidget(val)
             div = QFrame(); div.setObjectName("metaHeaderDiv")
             div.setFixedSize(1, 32)
@@ -948,13 +938,8 @@ class ContractWorkWindow(QDialog):
             icon.setStyleSheet("QLabel#headerUserIcon{background:transparent;border:0;padding:0;margin:0;}")
             val = ElidedValueLabel(text if text else "-"); val.setObjectName("metaHeaderValue")
             if tooltip:
-                if object_name == "user":
-                    self.user_summary_container = wrap
                 for widget in (wrap, icon, val):
                     widget.setToolTip(tooltip)
-                    widget.setMouseTracking(True)
-                    if object_name == "user":
-                        self._register_user_tooltip_widget(widget)
             self.meta_values[object_name] = val
             row.addWidget(icon, 0, Qt.AlignVCenter)
             row.addWidget(val, 1, Qt.AlignVCenter)
@@ -978,7 +963,6 @@ class ContractWorkWindow(QDialog):
                 responsible_name = str(responsible_items[0].get("full_name") or responsible_items[0].get("name") or "").strip()
         responsible_text = responsible_name or "-"
         self.user_tooltip_text = user_tip
-        self.user_popup_users = [u.strip() for u in user_tip.splitlines() if u.strip()]
         user_svg = b"""<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' width='16' height='16'>
           <circle cx='8' cy='5.35' r='2.45' fill='none' stroke='#c8e2ff' stroke-width='1.35'/>
           <path d='M3.15 13.35c.48-2.75 2.18-4.15 4.85-4.15s4.37 1.4 4.85 4.15'
@@ -1291,23 +1275,6 @@ class ContractWorkWindow(QDialog):
             except Exception:
                 return False
 
-            user_tooltip_widgets = getattr(self, "_user_tooltip_widgets", set())
-            if obj in user_tooltip_widgets:
-                if etype == QEvent.Enter:
-                    self._show_user_popup_now(obj)
-                    return False
-                if etype == QEvent.Leave:
-                    self._schedule_user_popup_hide()
-                    return False
-
-            popup = getattr(self, "_user_popup", None)
-            if obj is popup:
-                if etype == QEvent.Enter:
-                    return False
-                if etype == QEvent.Leave:
-                    self._schedule_user_popup_hide()
-                    return False
-
             side_host = getattr(self, "side_meta_host", None)
             if obj is side_host and etype in (QEvent.Resize, QEvent.Show):
                 self.position_side_meta_popover()
@@ -1347,73 +1314,6 @@ class ContractWorkWindow(QDialog):
 
         return False
 
-
-    def _register_user_tooltip_widget(self, widget):
-        if not isinstance(widget, QWidget):
-            return
-        anchor = getattr(self, "user_summary_container", None)
-        if isinstance(anchor, QWidget) and widget is not anchor:
-            return
-        widget.installEventFilter(self)
-        widget.setMouseTracking(True)
-        self._user_tooltip_widgets.add(widget)
-
-    def _show_user_popup_now(self, obj):
-        users = [str(u).strip() for u in getattr(self, "user_popup_users", []) if str(u).strip()]
-        if not users:
-            return
-        anchor = getattr(self, "user_summary_container", None)
-        if not isinstance(anchor, QWidget) or not qt_obj_alive(anchor):
-            anchor = obj if isinstance(obj, QWidget) else None
-        if not isinstance(anchor, QWidget) or not qt_obj_alive(anchor):
-            return
-        popup = getattr(self, "_user_popup", None)
-        if not isinstance(popup, HeaderUserPopup) or not qt_obj_alive(popup):
-            popup = HeaderUserPopup(None)
-            popup.installEventFilter(self)
-            popup.setMouseTracking(True)
-            self._user_popup = popup
-        popup.set_users(users)
-        popup.adjustSize()
-        hint = popup.sizeHint().expandedTo(QSize(220, 80))
-        popup.resize(hint)
-        pos = anchor.mapToGlobal(QPoint(0, anchor.height() + 6))
-        screen = QApplication.screenAt(pos) or QApplication.primaryScreen()
-        if screen:
-            available = screen.availableGeometry()
-            if pos.x() + popup.width() > available.right():
-                pos.setX(max(available.left(), available.right() - popup.width() - 8))
-            if pos.y() + popup.height() > available.bottom():
-                pos.setY(max(available.top(), anchor.mapToGlobal(QPoint(0, -popup.height() - 6)).y()))
-        if popup.isVisible():
-            if popup.pos() != pos:
-                popup.move(pos)
-            return
-        popup.move(pos)
-        popup.show()
-        popup.raise_()
-
-    def _schedule_user_popup_hide(self):
-        QTimer.singleShot(120, self._hide_user_popup_if_outside)
-
-    def _hide_user_popup_if_outside(self):
-        popup = getattr(self, "_user_popup", None)
-        if not isinstance(popup, HeaderUserPopup) or not qt_obj_alive(popup) or not popup.isVisible():
-            return
-        pos = QCursor.pos()
-        if popup.geometry().contains(pos):
-            return
-        anchor = getattr(self, "user_summary_container", None)
-        if isinstance(anchor, QWidget) and qt_obj_alive(anchor):
-            rect = anchor.rect()
-            if rect.isValid() and rect.contains(anchor.mapFromGlobal(pos)):
-                return
-        popup.hide()
-
-    def _hide_user_tooltip_now(self):
-        popup = getattr(self, "_user_popup", None)
-        if isinstance(popup, HeaderUserPopup) and qt_obj_alive(popup):
-            popup.hide()
 
     def configure_summary_columns(self):
         header = self.summary.horizontalHeader()
