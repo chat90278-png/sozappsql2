@@ -13,6 +13,7 @@ from src.models.share_models import (
     SHARE_STATUS_RETURNED,
 )
 from src.services.share_history_service import ShareHistoryRecord
+from src.services.share_lifecycle_service import share_lifecycle_decision
 
 
 @dataclass(frozen=True)
@@ -20,6 +21,9 @@ class ShareHistoryStatusPresentation:
     raw_status: str
     label: str
     role: str
+    is_active: bool = False
+    can_cancel: bool = False
+    cancel_label: str = "Paylaşımı İptal Et"
 
 
 @dataclass(frozen=True)
@@ -42,6 +46,7 @@ class ShareHistorySummary:
     cancelled_count: int
     rejected_count: int
     returned_count: int
+    active_count: int
 
 
 _STATUS_LABELS = {
@@ -66,7 +71,8 @@ _PERMISSION_LABELS = {
 def present_share_status(status: str) -> ShareHistoryStatusPresentation:
     raw = str(status or "").strip()
     label, role = _STATUS_LABELS.get(raw, ("Bilinmeyen Durum", "neutral"))
-    return ShareHistoryStatusPresentation(raw, label, role)
+    decision = share_lifecycle_decision(raw)
+    return ShareHistoryStatusPresentation(raw, label, role, decision.is_active, decision.can_cancel, decision.cancel_label)
 
 
 def present_share_permission(permission_mode: str) -> str:
@@ -142,4 +148,5 @@ def summarize_share_history(records: Iterable[ShareHistoryRecord]) -> ShareHisto
         cancelled_count=by_status.get(SHARE_STATUS_CANCELLED, 0),
         rejected_count=by_status.get(SHARE_STATUS_REJECTED, 0),
         returned_count=by_status.get(SHARE_STATUS_RETURNED, 0),
+        active_count=by_status.get(SHARE_STATUS_OPEN, 0) + by_status.get(SHARE_STATUS_RETURNED, 0),
     )

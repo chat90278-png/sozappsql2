@@ -149,3 +149,27 @@ def test_merge_result_presenter_handles_timestamp_independently_from_counts():
     shown = present_merge_result(malformed_timestamp)
     assert shown.recorded is True
     assert shown.merged_at_label == "not-a-date"
+
+
+def test_lifecycle_decision_marks_active_and_cancelable_statuses():
+    expected = {
+        SHARE_STATUS_OPEN: (True, True),
+        SHARE_STATUS_RETURNED: (True, True),
+        SHARE_STATUS_MERGED: (False, False),
+        SHARE_STATUS_PARTIALLY_MERGED: (False, False),
+        SHARE_STATUS_CANCELLED: (False, False),
+        SHARE_STATUS_REJECTED: (False, False),
+    }
+    for status, flags in expected.items():
+        presented = present_share_status(status)
+        assert (presented.is_active, presented.can_cancel) == flags
+
+
+def test_summary_includes_active_count_from_open_and_returned_only():
+    summary = summarize_share_history([
+        _record(SHARE_STATUS_OPEN),
+        _record(SHARE_STATUS_RETURNED),
+        _record(SHARE_STATUS_CANCELLED),
+        _record(SHARE_STATUS_MERGED),
+    ])
+    assert summary.active_count == 2
