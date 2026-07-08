@@ -132,3 +132,20 @@ def test_merge_result_presenter_ignores_non_final_statuses_and_malformed_counts(
     shown = present_merge_result(malformed)
     assert shown.visible is True
     assert shown.recorded is False
+
+
+def test_merge_result_presenter_handles_timestamp_independently_from_counts():
+    missing_timestamp = _record(SHARE_STATUS_MERGED)
+    object.__setattr__(missing_timestamp, "merge_result_operations_applied", 2)
+    object.__setattr__(missing_timestamp, "merge_result_operations_skipped", 0)
+    shown = present_merge_result(missing_timestamp)
+    assert shown.recorded is True
+    assert shown.merged_at_label == ""
+
+    malformed_timestamp = _record(SHARE_STATUS_MERGED)
+    object.__setattr__(malformed_timestamp, "merge_result_operations_applied", 2)
+    object.__setattr__(malformed_timestamp, "merge_result_operations_skipped", 1)
+    object.__setattr__(malformed_timestamp, "merged_at", "not-a-date")
+    shown = present_merge_result(malformed_timestamp)
+    assert shown.recorded is True
+    assert shown.merged_at_label == "not-a-date"

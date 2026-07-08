@@ -15,6 +15,7 @@ from src.models.share_models import (
     SharePackageRegistryEntry,
 )
 from src.services.share_history_service import list_contract_share_history
+from src.ui.presenters.share_history_presenter import present_merge_result
 from src.services.sts_store import STSStore
 
 
@@ -144,3 +145,56 @@ def test_history_service_treats_malformed_result_counts_as_unavailable(tmp_path)
 
     assert row.merge_result_operations_applied is None
     assert row.merge_result_operations_skipped is None
+
+
+def test_history_service_roundtrips_legacy_unknown_and_recorded_zero_results(tmp_path):
+    store = STSStore(tmp_path / "zero-vs-legacy.sts")
+    cid = store.write_contract(_contract("C-1"), [], {})
+    uid = store.db.conn.execute("SELECT merge_uid FROM contracts WHERE id=?", (cid,)).fetchone()[0]
+    _register(store, cid, uid, "pkg-legacy", "2026-07-07T00:00:00", SHARE_STATUS_MERGED)
+    _register(store, cid, uid, "pkg-zero", "2026-07-08T00:00:00", SHARE_STATUS_MERGED)
+    store.db.conn.execute(
+        "UPDATE share_packages SET merge_result_operations_applied=0, merge_result_operations_skipped=0, merged_at='2026-07-08 09:10:00' WHERE share_package_id='pkg-zero'"
+    )
+    store.db.conn.commit()
+    store.db.close()
+
+    reopened = STSStore(tmp_path / "zero-vs-legacy.sts")
+    rows = list_contract_share_history(reopened, uid)
+
+    legacy = next(r for r in rows if r.share_package_id == "pkg-legacy")
+    assert legacy.merge_result_operations_applied is None
+    assert legacy.merge_result_operations_skipped is None
+    assert present_merge_result(legacy).recorded is False
+
+    zero = next(r for r in rows if r.share_package_id == "pkg-zero")
+    assert zero.merge_result_operations_applied == 0
+    assert zero.merge_result_operations_skipped == 0
+    zero_presentation = present_merge_result(zero)
+    assert zero_presentation.recorded is True
+    assert "yeni değişiklik yoktu" in zero_presentation.summary_label
+
+
+def test_history_service_parses_numeric_strings_but_rejects_bad_count_values(tmp_path):
+    store = STSStore(tmp_path / "count-types.sts")
+    cid = store.write_contract(_contract("C-1"), [], {})
+    uid = store.db.conn.execute("SELECT merge_uid FROM contracts WHERE id=?", (cid,)).fetchone()[0]
+    _register(store, cid, uid, "pkg-string", "2026-07-08T00:00:00", SHARE_STATUS_MERGED)
+    _register(store, cid, uid, "pkg-null", "2026-07-07T00:00:00", SHARE_STATUS_MERGED)
+    _register(store, cid, uid, "pkg-bad", "2026-07-06T00:00:00", SHARE_STATUS_MERGED)
+    store.db.conn.execute("UPDATE share_packages SET merge_result_operations_applied='7', merge_result_operations_skipped='0' WHERE share_package_id='pkg-string'")
+    store.db.conn.execute("UPDATE share_packages SET merge_result_operations_applied=NULL, merge_result_operations_skipped=NULL WHERE share_package_id='pkg-null'")
+    store.db.conn.execute("UPDATE share_packages SET merge_result_operations_applied=-2, merge_result_operations_skipped='bad' WHERE share_package_id='pkg-bad'")
+    store.db.conn.commit()
+
+    rows = list_contract_share_history(store, uid)
+
+    string_row = next(r for r in rows if r.share_package_id == "pkg-string")
+    assert string_row.merge_result_operations_applied == 7
+    assert string_row.merge_result_operations_skipped == 0
+    null_row = next(r for r in rows if r.share_package_id == "pkg-null")
+    assert null_row.merge_result_operations_applied is None
+    assert null_row.merge_result_operations_skipped is None
+    bad_row = next(r for r in rows if r.share_package_id == "pkg-bad")
+    assert bad_row.merge_result_operations_applied is None
+    assert bad_row.merge_result_operations_skipped is None
