@@ -74,3 +74,75 @@ def test_presenter_falls_back_to_snapshot_name_before_uid():
         remote_value={"merge_uid": "550e8400-e29b-41d4-a716-446655440000", "name": "Gerçek Sistem"},
     )
     assert present_item(item).title == "Gerçek Sistem > Miktar"
+
+import time
+
+from src.models.share_merge_models import MergeChange, MergePlan
+from src.ui.presenters.share_merge_presenter import ShareMergeDecisionController, grouped_presented_items
+
+
+def _large_change(kind: MergeEntityKind, idx: int, change_kind=MergeChangeKind.REMOTE_ONLY) -> MergeChange:
+    return MergeChange(
+        entity_kind=kind,
+        entity_uid=f"uid-{kind.value}-{idx:04d}",
+        entity_label=f"{kind.value} {idx}",
+        field_path=f"{kind.value.lower()}/{idx}/note",
+        field_name="note",
+        base_value="A",
+        local_value="A",
+        remote_value=f"R{idx}",
+        change_kind=change_kind,
+    )
+
+
+def test_decision_change_only_invokes_resolver_and_keeps_merge_plan_immutable():
+    from src.domain.share_merge_resolution import resolve_merge_plan
+
+    plan = MergePlan("contract-uid", "base", "local", "remote", changes=[_large_change(MergeEntityKind.CONTRACT, 1, MergeChangeKind.CONFLICT)], conflicts=[])
+    calls = {"resolve": 0}
+    seen_decisions = []
+
+    def resolver(merge_plan, decisions):
+        calls["resolve"] += 1
+        seen_decisions.append(list(decisions))
+        return resolve_merge_plan(merge_plan, decisions)
+
+    before = repr(plan)
+    controller = ShareMergeDecisionController(plan, resolver=resolver)
+    target_id = controller.resolved_plan.resolution_items[0].target.target_id
+    controller.set_decision(target_id, MergeDecisionKind.LOCAL_KEEP)
+    controller.set_decision(target_id, MergeDecisionKind.REMOTE_USE)
+
+    assert calls["resolve"] == 3
+    assert repr(plan) == before
+    assert controller.explicit_decisions == {target_id: MergeDecisionKind.REMOTE_USE}
+    assert seen_decisions[-1][0].target_id == target_id
+
+
+def test_large_presenter_grouping_and_lookup_scale_without_quadratic_thresholds():
+    changes = []
+    for i in range(100):
+        changes.append(_large_change(MergeEntityKind.SYSTEM, i))
+    for i in range(1000):
+        changes.append(_large_change(MergeEntityKind.DELIVERY, i))
+    for i in range(500):
+        changes.append(_large_change(MergeEntityKind.DOCUMENT_FILE, i))
+    for i in range(100):
+        changes.append(_large_change(MergeEntityKind.PLATFORM_RELATION, i))
+        changes.append(_large_change(MergeEntityKind.USER_RELATION, i))
+        changes.append(_large_change(MergeEntityKind.TAG_RELATION, i))
+    plan = MergePlan("contract-uid", "base", "local", "remote", changes=changes, conflicts=[])
+    controller = ShareMergeDecisionController(plan)
+    started = time.perf_counter()
+    grouped = grouped_presented_items(controller.resolved_plan.resolution_items)
+    elapsed = time.perf_counter() - started
+
+    assert len(controller.resolved_plan.resolution_items) == 1900
+    assert sum(len(items) for _group, items in grouped) == 1900
+    assert {group for group, _items in grouped} >= {"Sistemler", "Teslimatlar", "Belgeler", "Platformlar", "Kullanıcılar", "Etiketler"}
+    assert elapsed < 5.0
+
+
+def test_value_formatter_long_text_preview_is_bounded():
+    long_text = format_value("x" * 300)
+    assert long_text.endswith("…") and len(long_text) <= 160
