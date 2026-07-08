@@ -482,6 +482,9 @@ def _projected_graph_issues(items: list[ResolutionItem], decisions: list[MergeDe
             entity_data.setdefault((MergeEntityKind.DOCUMENT_FILE, op.entity_uid), {})["folder_merge_uid"] = op.value if op.value_present else ""
 
     issues: list[MergeResolutionIssue] = []
+    for op in operations:
+        if op.operation_kind == MergeOperationKind.SET_DELIVERY_FIELD and op.field_name == "system_merge_uid" and not str(op.value if op.value_present else "").strip():
+            issues.append(MergeResolutionIssue("ABSENT_DELIVERY_PARENT_SYSTEM", "Delivery target system final graph içinde yok.", (op.entity_uid,)))
     deleted_systems = {op.entity_uid for op in operations if op.operation_kind == MergeOperationKind.DELETE_SYSTEM}
     for uid in sorted(final_sets[MergeEntityKind.DELIVERY]):
         data = entity_data.get((MergeEntityKind.DELIVERY, uid), {})

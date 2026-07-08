@@ -15,6 +15,7 @@ from src.models.share_merge_models import MergeChangeKind
 from src.models.share_merge_resolution_models import MergeDecision, MergeDecisionKind, MergeOperationKind
 from src.services.share_merge_apply_service import (
     MergeSourceChangedError,
+    MergeOperationTargetNotFoundError,
     RemoteDocumentHashMismatchError,
     ShareMergeApplyValidationError,
     SharePackageAlreadyAppliedError,
@@ -182,3 +183,244 @@ def test_operations_hash_and_stale_plan_are_enforced(tmp_path):
     _edit_note(source, "LOCAL AFTER PLAN")
     with pytest.raises(MergeSourceChangedError):
         apply_resolved_share_merge(source, share.path, r1)
+
+
+def _snapshots(source, share, cid):
+    import json
+    from src.services.share_package_service import read_share_base_snapshot
+    base = json.loads(read_share_base_snapshot(share.path).snapshot_json)
+    remote_cid = share.db.conn.execute("SELECT id FROM contracts WHERE merge_uid=(SELECT merge_uid FROM contracts WHERE id=?)", (cid,)).fetchone()[0]
+    return base, build_contract_snapshot(source.db.conn, cid), build_contract_snapshot(share.db.conn, remote_cid)
+
+
+def _resolve_with_graph(source, share, cid):
+    base, local, remote = _snapshots(source, share, cid)
+    return resolve_merge_plan(prepare_share_merge_plan(source, share.path), base_snapshot=base, local_snapshot=local, remote_snapshot=remote)
+
+
+def _op_index(resolved, kind, uid=None):
+    for i, op in enumerate(resolved.operations):
+        if op.operation_kind == kind and (uid is None or op.entity_uid == uid):
+            return i
+    raise AssertionError(f"operation not found: {kind} {uid}")
+
+
+def test_remote_system_and_delivery_add_parent_first_and_persistent(tmp_path):
+    source, share, _ci, cid, _metadata = make_registered_share(tmp_path)
+    ci, systems, deliveries = share.load_contract_structure("AKINCI", "C-1", contract_type="Ana Sözleşme")
+    new_system = SystemInfo("SYS-REMOTE", {"C": 2})
+    systems.append(new_system)
+    deliveries["SYS-REMOTE"] = [DeliveryInfo("DEL-REMOTE", "PLAN", "", "", {"C": 2}, {"C": 0})]
+    share.write_contract(ci, systems, deliveries)
+
+    resolved = _resolve_with_graph(source, share, cid)
+    assert not resolved.has_unresolved_conflicts and not resolved.has_structural_issues
+    system_uid = next(op.entity_uid for op in resolved.operations if op.operation_kind == MergeOperationKind.ADD_SYSTEM and op.entity_label == "SYS-REMOTE")
+    delivery_uid = next(op.entity_uid for op in resolved.operations if op.operation_kind == MergeOperationKind.ADD_DELIVERY and op.entity_label == "DEL-REMOTE")
+    assert _op_index(resolved, MergeOperationKind.ADD_SYSTEM, system_uid) < _op_index(resolved, MergeOperationKind.ADD_DELIVERY, delivery_uid)
+    preflight_resolved_share_merge(source, share.path, resolved)
+    apply_resolved_share_merge(source, share.path, resolved)
+
+    row = source.db.conn.execute("SELECT id FROM systems WHERE contract_id=? AND name='SYS-REMOTE'", (cid,)).fetchone()
+    assert row is not None
+    drow = source.db.conn.execute("SELECT id FROM deliveries WHERE contract_id=? AND name='DEL-REMOTE' AND system_id=?", (cid, row[0])).fetchone()
+    assert drow is not None
+    source.db.close(); reopened = STSStore(source.path)
+    try:
+        assert reopened.db.conn.execute("SELECT 1 FROM deliveries d JOIN systems s ON s.id=d.system_id WHERE s.name='SYS-REMOTE' AND d.name='DEL-REMOTE'").fetchone()
+    finally:
+        reopened.db.close(); share.db.close()
+
+
+def test_remote_delivery_and_system_delete_child_first_and_persistent(tmp_path):
+    source, share, _ci, cid, _metadata = make_registered_share(tmp_path)
+    share.db.conn.execute("DELETE FROM deliveries WHERE name='DEL'")
+    share.db.conn.execute("DELETE FROM systems WHERE name='SYS'")
+    share.db.conn.commit()
+    resolved = _resolve_with_graph(source, share, cid)
+    assert not resolved.has_unresolved_conflicts and not resolved.has_structural_issues
+    assert _op_index(resolved, MergeOperationKind.DELETE_DELIVERY) < _op_index(resolved, MergeOperationKind.DELETE_SYSTEM)
+    apply_resolved_share_merge(source, share.path, resolved)
+    assert source.db.conn.execute("SELECT COUNT(*) FROM deliveries WHERE contract_id=?", (cid,)).fetchone()[0] == 0
+    assert source.db.conn.execute("SELECT COUNT(*) FROM systems WHERE contract_id=?", (cid,)).fetchone()[0] == 0
+    source.db.close(); reopened = STSStore(source.path)
+    try:
+        assert reopened.db.conn.execute("SELECT COUNT(*) FROM systems").fetchone()[0] == 0
+    finally:
+        reopened.db.close(); share.db.close()
+
+
+def test_invalid_projected_graph_parent_delete_child_keep_fails_closed(tmp_path):
+    source, share, _ci, cid, metadata = make_registered_share(tmp_path)
+    local_delivery_id = source.db.conn.execute("SELECT id FROM deliveries WHERE contract_id=?", (cid,)).fetchone()[0]
+    source.db.conn.execute("UPDATE deliveries SET note=? WHERE id=?", ("LOCAL CHILD", local_delivery_id))
+    source.db.conn.commit()
+    share.db.conn.execute("PRAGMA foreign_keys=OFF")
+    share.db.conn.execute("DELETE FROM systems WHERE name='SYS'")
+    share.db.conn.commit()
+    resolved = _resolve_with_graph(source, share, cid)
+    assert any(issue.code in {"PARENT_DELETE_CHILD_KEEP_CONFLICT", "ABSENT_DELIVERY_PARENT_SYSTEM"} for issue in resolved.issues)
+    before = hash_contract_snapshot(build_contract_snapshot(source.db.conn, cid))
+    with pytest.raises(ShareMergeApplyValidationError):
+        apply_resolved_share_merge(source, share.path, resolved, allow_partial=True)
+    assert hash_contract_snapshot(build_contract_snapshot(source.db.conn, cid)) == before
+    assert source.db.conn.execute("SELECT note FROM deliveries WHERE id=?", (local_delivery_id,)).fetchone()[0] == "LOCAL CHILD"
+    assert source.get_share_package(metadata["share_package_id"])["status"] == SHARE_STATUS_OPEN
+
+
+def test_graph_operation_ordering_is_deterministic(tmp_path):
+    source, share, _ci, cid, _metadata = make_registered_share(tmp_path)
+    ci, systems, deliveries = share.load_contract_structure("AKINCI", "C-1", contract_type="Ana Sözleşme")
+    systems.extend([SystemInfo("B-SYS", {"C": 1}), SystemInfo("A-SYS", {"C": 1})])
+    deliveries["A-SYS"] = [DeliveryInfo("A-DEL", "PLAN", "", "", {"C": 1}, {"C": 0})]
+    deliveries["B-SYS"] = [DeliveryInfo("B-DEL", "PLAN", "", "", {"C": 1}, {"C": 0})]
+    share.write_contract(ci, systems, deliveries)
+    r1 = _resolve_with_graph(source, share, cid)
+    r2 = _resolve_with_graph(source, share, cid)
+    assert [(op.operation_kind, op.entity_uid) for op in r1.operations] == [(op.operation_kind, op.entity_uid) for op in r2.operations]
+    assert r1.operations_hash == r2.operations_hash
+
+
+def _prepare_keep_both_conflict(tmp_path, existing_names=()):
+    source, share, ci, cid, metadata = make_registered_share(tmp_path)
+    folder = source.create_contract_file_folder("AKINCI", ci.no, ci.contract_type, name="F")
+    p = tmp_path / "Rapor.pdf"; p.write_bytes(b"A")
+    fid = source.add_contract_file("AKINCI", ci.no, p, ci.contract_type, folder_id=folder["id"])
+    base = build_base_snapshot_from_source(source.db.conn, cid, created_at="2026-07-07T00:00:00")
+    meta = dict(metadata); meta["base_snapshot_sha256"] = base.snapshot_sha256
+    write_share_metadata(share.path, meta)
+    share.db.conn.execute("DELETE FROM share_base_snapshot"); share.db.conn.commit(); write_share_base_snapshot(share.path, base)
+    source.db.conn.execute("UPDATE share_packages SET base_snapshot_sha256=? WHERE share_package_id=?", (base.snapshot_sha256, meta["share_package_id"]))
+    src_folder = source.db.conn.execute("SELECT * FROM contract_file_folders WHERE id=?", (folder["id"],)).fetchone()
+    share.db.conn.execute("INSERT INTO contract_file_folders(contract_id,merge_uid,parent_id,name,created_at,updated_at) VALUES(?,?,?,?,?,?)", (1, src_folder["merge_uid"], None, "F", src_folder["created_at"], src_folder["updated_at"]))
+    row = source.db.conn.execute("SELECT * FROM contract_files WHERE id=?", (fid,)).fetchone()
+    share_folder_id = share.db.conn.execute("SELECT id FROM contract_file_folders WHERE merge_uid=?", (src_folder["merge_uid"],)).fetchone()[0]
+    share.db.conn.execute("INSERT INTO contract_files(contract_id,merge_uid,folder_id,filename,original_path,file_ext,mime_type,size_bytes,sha256,content_blob,note,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)", (1, row["merge_uid"], share_folder_id, row["filename"], "", row["file_ext"], row["mime_type"], 1, hashlib.sha256(b"C").hexdigest(), b"C", row["note"], row["created_at"], row["updated_at"]))
+    source.db.conn.execute("UPDATE contract_files SET size_bytes=?,sha256=?,content_blob=? WHERE id=?", (1, hashlib.sha256(b"B").hexdigest(), b"B", fid))
+    for name in existing_names:
+        source.db.conn.execute("INSERT INTO contract_files(contract_id,merge_uid,folder_id,filename,original_path,file_ext,mime_type,size_bytes,sha256,content_blob,note,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)", (cid, str(uuid.uuid4()), folder["id"], name, "", Path(name).suffix.lower().lstrip('.'), "application/pdf", 1, hashlib.sha256(name.encode()).hexdigest(), name.encode(), "", row["created_at"], row["updated_at"]))
+    source.db.conn.commit(); share.db.conn.commit()
+    return source, share, cid, fid, metadata
+
+
+@pytest.mark.parametrize("existing, expected", [([], "Rapor (2).pdf"), (["Rapor (2).pdf"], "Rapor (3).pdf"), (["Rapor (2).pdf", "Rapor (3).pdf", "Rapor (4).pdf"], "Rapor (5).pdf")])
+def test_document_keep_both_collision_matrix(tmp_path, existing, expected):
+    source, share, cid, fid, _metadata = _prepare_keep_both_conflict(tmp_path, existing)
+    plan = prepare_share_merge_plan(source, share.path)
+    unresolved = resolve_merge_plan(plan)
+    item = next(i for i in unresolved.resolution_items if i.target.field_name == "sha256" and i.is_conflict)
+    assert MergeDecisionKind.DOCUMENT_KEEP_BOTH in item.allowed_decisions
+    resolved = resolve_merge_plan(plan, {i.target.target_id: (MergeDecisionKind.DOCUMENT_KEEP_BOTH if MergeDecisionKind.DOCUMENT_KEEP_BOTH in i.allowed_decisions else MergeDecisionKind.LOCAL_KEEP) for i in unresolved.resolution_items if i.is_conflict})
+    apply_resolved_share_merge(source, share.path, resolved)
+    rows = source.db.conn.execute("SELECT filename,merge_uid,sha256,content_blob FROM contract_files WHERE contract_id=? ORDER BY filename", (cid,)).fetchall()
+    by_name = {r["filename"]: r for r in rows}
+    assert bytes(by_name["Rapor.pdf"]["content_blob"]) == b"B"
+    assert bytes(by_name[expected]["content_blob"]) == b"C"
+    assert by_name["Rapor.pdf"]["merge_uid"] != by_name[expected]["merge_uid"]
+    assert by_name[expected]["sha256"] == hashlib.sha256(b"C").hexdigest()
+
+
+def test_keep_both_insert_failure_rolls_back(monkeypatch, tmp_path):
+    import src.services.share_merge_apply_service as apply_service
+    source, share, cid, _fid, metadata = _prepare_keep_both_conflict(tmp_path)
+    plan = prepare_share_merge_plan(source, share.path)
+    unresolved = resolve_merge_plan(plan)
+    item = next(i for i in unresolved.resolution_items if i.target.field_name == "sha256" and i.is_conflict)
+    resolved = resolve_merge_plan(plan, {i.target.target_id: (MergeDecisionKind.DOCUMENT_KEEP_BOTH if MergeDecisionKind.DOCUMENT_KEEP_BOTH in i.allowed_decisions else MergeDecisionKind.LOCAL_KEEP) for i in unresolved.resolution_items if i.is_conflict})
+    before = hash_contract_snapshot(build_contract_snapshot(source.db.conn, cid))
+    original = apply_service._keep_both_file
+    def boom(ctx, op):
+        original(ctx, op)
+        raise RuntimeError("fault after keep-both insert")
+    monkeypatch.setattr(apply_service, "_keep_both_file", boom)
+    apply_service._HANDLERS[MergeOperationKind.KEEP_BOTH_DOCUMENT_FILE] = boom
+    with pytest.raises(RuntimeError):
+        apply_resolved_share_merge(source, share.path, resolved)
+    apply_service._HANDLERS[MergeOperationKind.KEEP_BOTH_DOCUMENT_FILE] = original
+    assert hash_contract_snapshot(build_contract_snapshot(source.db.conn, cid)) == before
+    assert source.db.conn.execute("SELECT COUNT(*) FROM contract_files WHERE contract_id=?", (cid,)).fetchone()[0] == 1
+    assert source.get_share_package(metadata["share_package_id"])["status"] == SHARE_STATUS_OPEN
+
+
+def test_mid_operation_and_registry_finalize_failures_roll_back(monkeypatch, tmp_path):
+    import src.services.share_merge_apply_service as apply_service
+    source, share, _ci, cid, metadata = make_registered_share(tmp_path)
+    _edit_note(share, "REMOTE NOTE")
+    ci, systems, deliveries = share.load_contract_structure("AKINCI", "C-1", contract_type="Ana Sözleşme")
+    systems.append(SystemInfo("REMOTE-SYS", {"C": 1}))
+    deliveries["REMOTE-SYS"] = [DeliveryInfo("REMOTE-DEL", "PLAN", "", "", {"C": 1}, {"C": 0})]
+    share.write_contract(ci, systems, deliveries)
+    resolved = _resolve_with_graph(source, share, cid)
+    before = hash_contract_snapshot(build_contract_snapshot(source.db.conn, cid))
+    revision_before = source.db.conn.execute("SELECT revision FROM contracts WHERE id=?", (cid,)).fetchone()[0]
+    original_apply_op = apply_service._apply_operation
+    calls = {"n": 0}
+    def fail_third(ctx, op):
+        calls["n"] += 1
+        if calls["n"] == 3:
+            raise RuntimeError("fault at third operation")
+        return original_apply_op(ctx, op)
+    monkeypatch.setattr(apply_service, "_apply_operation", fail_third)
+    with pytest.raises(RuntimeError):
+        apply_resolved_share_merge(source, share.path, resolved)
+    assert hash_contract_snapshot(build_contract_snapshot(source.db.conn, cid)) == before
+    assert source.db.conn.execute("SELECT revision FROM contracts WHERE id=?", (cid,)).fetchone()[0] == revision_before
+    assert source.get_share_package(metadata["share_package_id"])["status"] == SHARE_STATUS_OPEN
+    monkeypatch.setattr(apply_service, "_apply_operation", original_apply_op)
+    original_update = apply_service._update_registry
+    def fail_registry(*args, **kwargs):
+        raise RuntimeError("fault at registry finalize")
+    monkeypatch.setattr(apply_service, "_update_registry", fail_registry)
+    with pytest.raises(RuntimeError):
+        apply_resolved_share_merge(source, share.path, resolved)
+    assert hash_contract_snapshot(build_contract_snapshot(source.db.conn, cid)) == before
+    assert source.get_share_package(metadata["share_package_id"])["status"] == SHARE_STATUS_OPEN
+    monkeypatch.setattr(apply_service, "_update_registry", original_update)
+
+
+def test_relation_add_remove_and_missing_target_fail_closed(tmp_path):
+    source, share, _ci, cid, metadata = make_registered_share(tmp_path)
+    # target-present add for user, responsible engineer, tag; platform relation already has primary platform.
+    source.db.conn.execute("INSERT INTO users(name,yi_yd) VALUES('REMOTEUSER','Yİ')")
+    share.db.conn.execute("INSERT INTO users(name,yi_yd) VALUES('REMOTEUSER','Yİ')")
+    source.db.conn.execute("INSERT INTO staff(device_name,full_name,password_hash,role,is_active) VALUES('dev','Remote Engineer','x','user',1)")
+    share.db.conn.execute("INSERT INTO staff(device_name,full_name,password_hash,role,is_active) VALUES('dev','Remote Engineer','x','user',1)")
+    source.db.conn.execute("INSERT INTO tags(name,color,kind) VALUES('RemoteTag','#111','contract')")
+    share.db.conn.execute("INSERT INTO tags(name,color,kind) VALUES('RemoteTag','#111','contract')")
+    share.db.conn.execute("INSERT INTO contract_users(contract_id,user_id) SELECT 1,id FROM users WHERE name='REMOTEUSER'")
+    share.db.conn.execute("INSERT INTO contract_responsible_engineers(contract_id,staff_id,sort_order,is_primary) SELECT 1,id,0,1 FROM staff WHERE full_name='Remote Engineer'")
+    share.db.conn.execute("INSERT INTO contract_tags(contract_id,tag_id) SELECT 1,id FROM tags WHERE name='RemoteTag'")
+    source.db.conn.commit(); share.db.conn.commit()
+    apply_resolved_share_merge(source, share.path, resolve_merge_plan(prepare_share_merge_plan(source, share.path)))
+    assert source.db.conn.execute("SELECT 1 FROM contract_users cu JOIN users u ON u.id=cu.user_id WHERE u.name='REMOTEUSER'").fetchone()
+    assert source.db.conn.execute("SELECT 1 FROM contract_responsible_engineers cre JOIN staff s ON s.id=cre.staff_id WHERE s.full_name='Remote Engineer'").fetchone()
+    assert source.db.conn.execute("SELECT 1 FROM contract_tags ct JOIN tags t ON t.id=ct.tag_id WHERE t.name='RemoteTag'").fetchone()
+    assert source.db.conn.execute("SELECT COUNT(*) FROM users WHERE name='REMOTEUSER'").fetchone()[0] == 1
+
+    # target-missing on a fresh package fails closed and does not auto-create master data.
+    source2, share2, _ci2, cid2, metadata2 = make_registered_share(tmp_path)
+    share2.db.conn.execute("INSERT INTO users(name,yi_yd) VALUES('MISSINGUSER','Yİ')")
+    share2.db.conn.execute("INSERT INTO contract_users(contract_id,user_id) SELECT 1,id FROM users WHERE name='MISSINGUSER'")
+    share2.db.conn.commit()
+    resolved = resolve_merge_plan(prepare_share_merge_plan(source2, share2.path))
+    with pytest.raises(MergeOperationTargetNotFoundError):
+        apply_resolved_share_merge(source2, share2.path, resolved)
+    assert source2.db.conn.execute("SELECT COUNT(*) FROM users WHERE name='MISSINGUSER'").fetchone()[0] == 0
+    assert source2.get_share_package(metadata2["share_package_id"])["status"] == SHARE_STATUS_OPEN
+
+
+def test_document_revision_snapshot_matrix(tmp_path):
+    source, _share, ci, cid, _metadata = make_registered_share(tmp_path)
+    def state():
+        return source.db.conn.execute("SELECT revision FROM contracts WHERE id=?", (cid,)).fetchone()[0], hash_contract_snapshot(build_contract_snapshot(source.db.conn, cid))
+    matrix = {}
+    rev0, hash0 = state()
+    p = tmp_path / "matrix.txt"; p.write_bytes(b"A")
+    fid = source.add_contract_file("AKINCI", ci.no, p, ci.contract_type)
+    matrix["add"] = (state()[0] != rev0, state()[1] != hash0)
+    rev1, hash1 = state(); source.db.conn.execute("UPDATE contract_files SET filename='matrix-renamed.txt', file_ext='txt' WHERE id=?", (fid,)); source.db.conn.commit(); matrix["rename"] = (state()[0] != rev1, state()[1] != hash1)
+    folder = source.create_contract_file_folder("AKINCI", ci.no, ci.contract_type, name="MoveTarget")
+    rev2, hash2 = state(); source.move_contract_file(fid, folder["id"]); matrix["move"] = (state()[0] != rev2, state()[1] != hash2)
+    rev3, hash3 = state(); source.db.conn.execute("UPDATE contract_files SET content_blob=?,size_bytes=?,sha256=? WHERE id=?", (b"B", 1, hashlib.sha256(b"B").hexdigest(), fid)); source.db.conn.commit(); matrix["content_replace"] = (state()[0] != rev3, state()[1] != hash3)
+    rev4, hash4 = state(); source.delete_contract_file(fid); matrix["delete"] = (state()[0] != rev4, state()[1] != hash4)
+    assert all(changed for _rev_changed, changed in matrix.values()), matrix
