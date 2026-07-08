@@ -595,3 +595,52 @@ def test_platform_relation_add_remove_primary_and_missing_target(tmp_path):
     assert hash_contract_snapshot(build_contract_snapshot(source4.db.conn, cid4)) == before
     assert source4.db.conn.execute("SELECT COUNT(*) FROM platforms WHERE name='MISSING-PLATFORM'").fetchone()[0] == 0
     assert source4.get_share_package(metadata4["share_package_id"])["status"] == SHARE_STATUS_OPEN
+
+
+def test_cancelled_exported_package_prepare_rejected_and_registry_only(tmp_path):
+    from src.models.share_models import SHARE_STATUS_CANCELLED
+    from src.services.share_lifecycle_service import cancel_share_package
+    from src.services.share_merge_service import SharePackageStatusError
+
+    source, share, _ci, cid, metadata = make_registered_share(tmp_path)
+    _edit_note(share, "REMOTE-CANCELLED")
+    before_hash = hash_contract_snapshot(build_contract_snapshot(source.db.conn, cid))
+    before_revision = source.db.conn.execute("SELECT revision FROM contracts WHERE id=?", (cid,)).fetchone()[0]
+    cancel_share_package(source, metadata["source_contract_merge_uid"], metadata["share_package_id"], current_staff={"is_admin": True, "is_active": 1})
+
+    with pytest.raises(SharePackageStatusError):
+        prepare_share_merge_plan(source, share.path)
+
+    registry = source.get_share_package(metadata["share_package_id"])
+    assert registry["status"] == SHARE_STATUS_CANCELLED
+    assert hash_contract_snapshot(build_contract_snapshot(source.db.conn, cid)) == before_hash
+    assert source.db.conn.execute("SELECT revision FROM contracts WHERE id=?", (cid,)).fetchone()[0] == before_revision
+    assert registry["merge_result_operations_applied"] is None
+    assert registry["merge_result_operations_skipped"] is None
+    assert not registry["merged_at"]
+    assert not registry["merge_result_sha256"]
+
+
+def test_prepared_plan_cancelled_before_apply_is_rejected_without_mutation(tmp_path):
+    from src.models.share_models import SHARE_STATUS_CANCELLED
+    from src.services.share_lifecycle_service import cancel_share_package
+
+    source, share, _ci, cid, metadata = make_registered_share(tmp_path)
+    _edit_note(share, "REMOTE-RACE")
+    plan = prepare_share_merge_plan(source, share.path)
+    resolved = resolve_merge_plan(plan)
+    before_hash = hash_contract_snapshot(build_contract_snapshot(source.db.conn, cid))
+    before_revision = source.db.conn.execute("SELECT revision FROM contracts WHERE id=?", (cid,)).fetchone()[0]
+    cancel_share_package(source, metadata["source_contract_merge_uid"], metadata["share_package_id"], current_staff={"is_admin": True, "is_active": 1})
+
+    with pytest.raises(ShareMergeApplyValidationError):
+        apply_resolved_share_merge(source, share.path, resolved, require_backup=False)
+
+    registry = source.get_share_package(metadata["share_package_id"])
+    assert registry["status"] == SHARE_STATUS_CANCELLED
+    assert hash_contract_snapshot(build_contract_snapshot(source.db.conn, cid)) == before_hash
+    assert source.db.conn.execute("SELECT revision FROM contracts WHERE id=?", (cid,)).fetchone()[0] == before_revision
+    assert registry["merge_result_operations_applied"] is None
+    assert registry["merge_result_operations_skipped"] is None
+    assert not registry["merged_at"]
+    assert not registry["merge_result_sha256"]

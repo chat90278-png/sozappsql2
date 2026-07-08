@@ -212,6 +212,13 @@ def apply_resolved_share_merge(
             raise MergeTransactionError("BEGIN IMMEDIATE başlatılamadı.") from exc
 
         try:
+            current_registry = _one(conn, "SELECT status FROM share_packages WHERE share_package_id=?", (metadata.share_package_id,), "Paylaşım paketi registry içinde bulunamadı.", "Paylaşım paketi registry içinde belirsiz.")
+            current_status = str(current_registry["status"] or "")
+            if current_status in {SHARE_STATUS_CANCELLED, SHARE_STATUS_REJECTED}:
+                raise ShareMergeApplyValidationError("Paylaşım paketi durumu apply için kapalı.")
+            if current_status not in {SHARE_STATUS_OPEN, SHARE_STATUS_RETURNED, SHARE_STATUS_MERGED, SHARE_STATUS_PARTIALLY_MERGED}:
+                raise ShareMergeApplyValidationError(f"Bilinmeyen paylaşım paket durumu: {current_status}")
+
             for operation in resolved_plan.operations:
                 result = _apply_operation(ctx, operation)
                 operation_results.append(result)

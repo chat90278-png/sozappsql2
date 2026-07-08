@@ -122,3 +122,46 @@ def test_history_dialog_refresh_reloads_records_and_result_summary(app):
     assert "Birleştirildi" in joined
     assert "2 değişiklik uygulandı" in joined
     assert "Birleştirme: 08.07.2026 12:34" in joined
+
+
+def _button_texts(dialog: ShareHistoryDialog) -> list[str]:
+    from PySide6.QtWidgets import QPushButton
+    return [w.text() for w in dialog.findChildren(QPushButton)]
+
+
+def test_history_dialog_cancel_action_visible_only_for_authorized_cancelable_rows(app):
+    dialog = ShareHistoryDialog(
+        "C-1",
+        [_record(SHARE_STATUS_OPEN, "open.sts", "pkg-open"), _record(SHARE_STATUS_MERGED, "merged.sts", "pkg-merged")],
+        cancel_callback=lambda _record: None,
+        can_cancel=True,
+        parent=None,
+    )
+    assert _button_texts(dialog).count("Paylaşımı İptal Et") == 1
+
+    unauthorized = ShareHistoryDialog(
+        "C-1",
+        [_record(SHARE_STATUS_OPEN, "open.sts", "pkg-open")],
+        cancel_callback=lambda _record: None,
+        can_cancel=False,
+        parent=None,
+    )
+    assert "Paylaşımı İptal Et" not in _button_texts(unauthorized)
+
+
+def test_history_dialog_active_summary_decrements_after_cancel_refresh(app):
+    states = [
+        [_record(SHARE_STATUS_OPEN, "open.sts", "pkg-open")],
+        [_record("CANCELLED", "open.sts", "pkg-open")],
+    ]
+    calls = {"n": 0}
+
+    def refresh_records():
+        calls["n"] += 1
+        return states[min(calls["n"], 1)]
+
+    dialog = ShareHistoryDialog("C-1", states[0], refresh_callback=refresh_records, can_cancel=True, parent=None)
+    assert "1 aktif" in dialog._summary_label.text()
+    dialog.refresh()
+    assert "1 aktif" not in dialog._summary_label.text()
+    assert "iptal" in dialog._summary_label.text()
