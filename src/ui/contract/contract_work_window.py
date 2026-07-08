@@ -530,6 +530,7 @@ from src.services.share_merge_apply_service import (
     preflight_resolved_share_merge,
 )
 from src.models.share_models import SHARE_FORMAT_V1, SHARE_FORMAT_V2, SHARE_STATUS_OPEN, SharePackageRegistryEntry
+from src.services.share_lifecycle_service import cancel_share_package, list_active_share_packages
 from src import auth
 from src.workers import ContractSaveWorker, STSIndexWorker, STSLoadWorker
 
@@ -2559,9 +2560,46 @@ class ContractWorkWindow(QDialog):
                 total += len(content)
         return copied, total
 
+
+    def _confirm_active_share_creation(self) -> bool:
+        try:
+            active = list_active_share_packages(self.store, self._current_contract_merge_uid())
+        except Exception:
+            QMessageBox.warning(
+                self,
+                "Aktif Paylaşım Kontrolü",
+                "Aktif paylaşım durumu kontrol edilemedi. Paylaşım oluşturma işlemi başlatılmadı.",
+            )
+            return False
+        if not active:
+            return True
+        count = len(active)
+        message = (
+            f"Bu sözleşme için {count} aktif paylaşım bulunuyor.\n\n"
+            "Yeni paylaşım oluşturabilirsiniz. Eski açık paylaşımlar geri döndüğünde ayrı paketler olarak işlenecektir."
+        )
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Warning)
+        box.setWindowTitle("Aktif Paylaşım Var")
+        box.setText(message)
+        continue_button = box.addButton("Yine de Paylaşım Oluştur", QMessageBox.AcceptRole)
+        history_button = box.addButton("Paylaşım Geçmişini Aç", QMessageBox.ActionRole)
+        box.addButton("Vazgeç", QMessageBox.RejectRole)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked == continue_button:
+            return True
+        if clicked == history_button:
+            self.show_share_history()
+        return False
+
     def create_contract_share_file(self, permission: str, default_filename: str):
         """Create a V2 single-contract STS share file with immutable base snapshot metadata."""
+        if bool(getattr(self, "share_mode_enabled", False)):
+            return
         if not self.require_permission_ui("export_data", "Sözleşme Paylaşımı"):
+            return
+        if not self._confirm_active_share_creation():
             return
         doc_count, doc_bytes = self._contract_document_share_stats()
         if doc_count > 0:
@@ -2701,6 +2739,9 @@ class ContractWorkWindow(QDialog):
     def _load_share_history_records(self):
         return list_contract_share_history(self.store, self._current_contract_merge_uid())
 
+    def _cancel_share_history_record(self, record):
+        cancel_share_package(self.store, self._current_contract_merge_uid(), record.share_package_id, current_staff=self.current_staff)
+
     def show_share_history(self):
         if not self.can_show_share_history_action():
             return
@@ -2709,6 +2750,8 @@ class ContractWorkWindow(QDialog):
             contract_title=contract_title,
             records=self._load_share_history_records(),
             refresh_callback=self._load_share_history_records,
+            cancel_callback=self._cancel_share_history_record,
+            can_cancel=self.has_permission("edit_contracts"),
             parent=self,
         )
         dialog.exec()

@@ -37,11 +37,13 @@ _ROLE_QSS = {
 class ShareHistoryDialog(QDialog):
     """Read-only contract share package lifecycle history."""
 
-    def __init__(self, contract_title: str, records: list[ShareHistoryRecord], refresh_callback=None, parent=None):
+    def __init__(self, contract_title: str, records: list[ShareHistoryRecord], refresh_callback=None, cancel_callback=None, can_cancel: bool = False, parent=None):
         super().__init__(parent)
         self._contract_title = str(contract_title or "Sözleşme")
         self._records = list(records or [])
         self._refresh_callback = refresh_callback
+        self._cancel_callback = cancel_callback
+        self._can_cancel = bool(can_cancel)
         self.setWindowTitle("Paylaşım Geçmişi")
         self.setMinimumSize(720, 520)
         self.setObjectName("shareHistoryDialog")
@@ -52,6 +54,8 @@ class ShareHistoryDialog(QDialog):
             "QFrame#historyEmpty{background:#FFFFFF;border:1px dashed #BFDBFE;border-radius:14px;}"
             "QPushButton#historyRefreshButton,QPushButton#historyCloseButton{background:#EFF6FF;color:#1D4ED8;border:1px solid #BFDBFE;border-radius:10px;padding:7px 14px;font-weight:800;}"
             "QPushButton#historyRefreshButton:hover,QPushButton#historyCloseButton:hover{background:#DBEAFE;border-color:#93C5FD;}"
+            "QPushButton#historyCancelButton{background:#FEF2F2;color:#B91C1C;border:1px solid #FECACA;border-radius:9px;padding:5px 10px;font-weight:900;}"
+            "QPushButton#historyCancelButton:hover{background:#FEE2E2;border-color:#FCA5A5;}"
         )
         self._build()
 
@@ -116,6 +120,8 @@ class ShareHistoryDialog(QDialog):
         parts = [f"{summary.total} paylaşım"]
         if summary.open_count:
             parts.append(f"{summary.open_count} açık")
+        if summary.active_count:
+            parts.append(f"{summary.active_count} aktif")
         if summary.returned_count:
             parts.append(f"{summary.returned_count} geri döndü")
         if summary.merged_count:
@@ -164,6 +170,11 @@ class ShareHistoryDialog(QDialog):
         bg, fg, border = _ROLE_QSS.get(status.role, _ROLE_QSS["neutral"])
         badge.setStyleSheet(f"background:{bg};color:{fg};border:1px solid {border};border-radius:10px;padding:3px 10px;font-size:11px;font-weight:900;")
         top.addWidget(badge, 0, Qt.AlignRight)
+        if self._can_cancel and self._cancel_callback is not None and status.can_cancel:
+            cancel = QPushButton(status.cancel_label)
+            cancel.setObjectName("historyCancelButton")
+            cancel.clicked.connect(lambda _checked=False, rec=record: self._confirm_cancel(rec))
+            top.addWidget(cancel, 0, Qt.AlignRight)
         lay.addLayout(top)
 
         meta = QLabel(
@@ -192,3 +203,26 @@ class ShareHistoryDialog(QDialog):
             detail.setStyleSheet("color:#94A3B8;font-size:10px;font-weight:700;")
             lay.addWidget(detail)
         return frame
+
+    def _confirm_cancel(self, record: ShareHistoryRecord) -> None:
+        if self._cancel_callback is None:
+            return
+        from PySide6.QtWidgets import QMessageBox
+
+        filename = display_share_filename(record)
+        permission = present_share_permission(record.permission_mode)
+        message = (
+            f"{filename} paylaşımını iptal etmek istiyor musunuz?\n\n"
+            "İptal edilen paylaşım dosyası daha sonra geri gönderilse bile bu sözleşmeyle birleştirilemez. "
+            "Dosya bilgisayarınızdan silinmez.\n\n"
+            f"Yetki: {permission}"
+        )
+        answer = QMessageBox.question(self, "Paylaşımı İptal Et", message, QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if answer != QMessageBox.Yes:
+            return
+        try:
+            self._cancel_callback(record)
+        except Exception as exc:
+            QMessageBox.warning(self, "Paylaşım iptal edilemedi", str(exc))
+            return
+        self.refresh()
