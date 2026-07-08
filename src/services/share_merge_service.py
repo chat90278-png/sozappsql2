@@ -8,7 +8,7 @@ from typing import Any
 
 from src.domain.contract_snapshot import build_contract_snapshot
 from src.domain.share_merge import build_merge_plan
-from src.models.share_models import SHARE_STATUS_CANCELLED, SHARE_STATUS_REJECTED
+from src.models.share_models import SHARE_STATUS_CANCELLED, SHARE_STATUS_OPEN, SHARE_STATUS_REJECTED, SHARE_STATUS_RETURNED
 from src.models.share_merge_models import MergePlan
 from src.services.share_package_service import read_share_base_snapshot, validate_share_package
 
@@ -73,7 +73,9 @@ def prepare_share_merge_plan(source_store_or_conn: Any, share_path: Path | str) 
 
     Validates package provenance, reads BASE from share_base_snapshot, builds LOCAL
     from the source STS DB, builds REMOTE from the share STS DB, and returns a
-    pure MergePlan. This function does not mutate source/share databases.
+    pure MergePlan. After validation succeeds, the source registry is advanced
+    from OPEN to RETURNED as lifecycle audit metadata without touching business
+    data, revisions, snapshots, or merge result fields.
     """
     validation = validate_share_package(share_path)
     if not validation.is_share_package or not validation.is_supported or not validation.is_valid or not validation.supports_merge or not validation.metadata:
@@ -126,6 +128,7 @@ def prepare_share_merge_plan(source_store_or_conn: Any, share_path: Path | str) 
         share_conn.close()
 
     plan = build_merge_plan(base_snapshot, local_snapshot, remote_snapshot)
+    _mark_package_returned_if_open(conn, metadata.share_package_id, metadata.source_contract_merge_uid)
     _log.debug(
         "Prepared share merge plan package=%s contract=%s base=%s local=%s remote=%s conflicts=%s safe_remote=%s",
         metadata.share_package_id,
@@ -137,3 +140,26 @@ def prepare_share_merge_plan(source_store_or_conn: Any, share_path: Path | str) 
         plan.safe_remote_change_count,
     )
     return plan
+
+
+def _mark_package_returned_if_open(conn: sqlite3.Connection, share_package_id: str, contract_merge_uid: str) -> None:
+    """Record that a valid returned share package reached prepare success.
+
+    This intentionally updates only the lifecycle status and only for OPEN
+    packages. RETURNED is idempotent; final statuses remain immutable here.
+    """
+    package_id = str(share_package_id or "").strip()
+    uid = str(contract_merge_uid or "").strip()
+    if not package_id or not uid:
+        return
+    was_in_transaction = conn.in_transaction
+    conn.execute(
+        """
+        UPDATE share_packages
+        SET status=?
+        WHERE share_package_id=? AND contract_merge_uid=? AND status=?
+        """,
+        (SHARE_STATUS_RETURNED, package_id, uid, SHARE_STATUS_OPEN),
+    )
+    if not was_in_transaction:
+        conn.commit()

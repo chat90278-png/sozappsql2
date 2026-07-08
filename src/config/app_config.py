@@ -1,4 +1,6 @@
 # -*- coding: utf-8 -*-
+import base64
+import tempfile
 from pathlib import Path
 
 from src.domain.constants import MAIN_COLUMN_HEADERS
@@ -7,6 +9,7 @@ APP_TITLE = "KONFİGÜRASYON YÖNETİMİ SÖZLEŞME TAKİP SİSTEMİ"
 DEFAULT_FILE = "sozlesme_takip_data.xlsx"
 APP_ICON_PATH = Path(__file__).resolve().parents[1] / "ui" / "assets" / "sts_logo.svg"
 APP_ICON_ICO_PATH = Path(__file__).resolve().parents[1] / "ui" / "assets" / "sts_icon.ico"
+APP_ICON_ICO_B64_PATH = Path(__file__).resolve().parents[1] / "ui" / "assets" / "sts_icon.ico.b64"
 APP_ID = "Baykar.STS.ContractTracking"
 COMP_SHEET = "Sistem Bileşenleri"
 USERS_SHEET = "Kullanıcılar"
@@ -16,6 +19,32 @@ TAG_KIND_DEF = "ETIKET"
 TAG_KIND_ASSIGN = "ATAMA"
 LOG_FOLDER_NAME = "sozlesme_takip_sistemi_log"
 MAX_CONTRACT_FILE_SIZE_BYTES = 120 * 1024 * 1024
+
+
+def materialized_app_icon_ico_path() -> Path | None:
+    """Return a filesystem .ico path generated from the text icon source.
+
+    Binary assets are not tracked in the repository.  The base64 icon source is
+    decoded into a temp/cache directory so Qt and Windows APIs that require a
+    real file path can still use the native icon.
+    """
+    if APP_ICON_ICO_PATH.exists():
+        return APP_ICON_ICO_PATH
+    if not APP_ICON_ICO_B64_PATH.exists():
+        return None
+    try:
+        data = base64.b64decode("".join(APP_ICON_ICO_B64_PATH.read_text(encoding="ascii").split()), validate=True)
+    except Exception:
+        return None
+    cache_dir = Path(tempfile.gettempdir()) / "baykar_sts"
+    try:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        target = cache_dir / "sts_icon.ico"
+        if not target.exists() or target.read_bytes() != data:
+            target.write_bytes(data)
+        return target
+    except Exception:
+        return None
 
 NAVY = "002060"
 LIGHT = "E8EEF5"
