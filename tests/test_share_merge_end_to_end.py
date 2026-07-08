@@ -25,6 +25,8 @@ from src.services.share_merge_apply_service import (
 from src.services.share_merge_service import prepare_share_merge_plan
 from src.services.share_package_service import build_base_snapshot_from_source, make_v2_metadata, write_share_base_snapshot, write_share_metadata
 from src.services.sts_database import CURRENT_SCHEMA_VERSION
+from src.services.share_history_service import list_contract_share_history
+from src.ui.presenters.share_history_presenter import present_merge_result
 from src.services.sts_store import STSStore
 
 
@@ -90,11 +92,34 @@ def test_local_only_merge_is_noop_and_keeps_local_value(tmp_path):
     plan = prepare_share_merge_plan(source, share.path)
     assert any(c.change_kind == MergeChangeKind.LOCAL_ONLY and c.field_name == "note" for c in plan.changes)
     resolved = resolve_merge_plan(plan)
-    assert all(op.operation_kind != MergeOperationKind.SET_CONTRACT_FIELD for op in resolved.operations)
+    assert resolved.operations == []
     result = apply_resolved_share_merge(source, share.path, resolved)
-    assert _note(source, cid) == "LOCAL"
+    assert result.success
+    assert result.operations_requested == 0
     assert result.operations_applied == 0
-    assert source.get_share_package(metadata["share_package_id"])["status"] == SHARE_STATUS_MERGED
+    assert result.operations_skipped == 0
+    assert _note(source, cid) == "LOCAL"
+    registry = source.get_share_package(metadata["share_package_id"])
+    assert registry["status"] == SHARE_STATUS_MERGED
+    assert registry["merge_result_sha256"] == result.post_apply_snapshot_hash
+    assert registry["merge_result_operations_applied"] == 0
+    assert registry["merge_result_operations_skipped"] == 0
+    assert registry["merged_at"]
+    source.db.close()
+    reopened = STSStore(source.path)
+    try:
+        reopened_registry = reopened.get_share_package(metadata["share_package_id"])
+        assert reopened_registry["merge_result_operations_applied"] == 0
+        assert reopened_registry["merge_result_operations_skipped"] == 0
+        rows = list_contract_share_history(reopened, metadata["source_contract_merge_uid"])
+        record = next(r for r in rows if r.share_package_id == metadata["share_package_id"])
+        assert record.merge_result_operations_applied == 0
+        assert record.merge_result_operations_skipped == 0
+        presentation = present_merge_result(record)
+        assert presentation.recorded is True
+        assert "yeni değişiklik yoktu" in presentation.summary_label
+    finally:
+        reopened.db.close(); share.db.close()
 
 
 def test_parallel_safe_contract_and_system_changes_are_preserved(tmp_path):
@@ -123,7 +148,13 @@ def test_field_conflict_requires_explicit_decision(tmp_path, decision, expected,
     result = apply_resolved_share_merge(source, share.path, resolved, allow_partial=decision == MergeDecisionKind.SKIP)
     assert _note(source, cid) == expected
     assert result.registry_status == status
-    assert source.get_share_package(metadata["share_package_id"])["status"] == status
+    registry = source.get_share_package(metadata["share_package_id"])
+    assert registry["status"] == status
+    assert registry["merge_result_operations_applied"] == result.operations_applied
+    assert registry["merge_result_operations_skipped"] == result.operations_skipped
+    assert registry["merged_at"]
+    if status == SHARE_STATUS_PARTIALLY_MERGED:
+        assert result.operations_skipped == len(resolved.operations) - result.operations_applied
 
 
 def test_document_replace_validates_real_blob_bytes_and_replay(tmp_path):
@@ -265,7 +296,11 @@ def test_invalid_projected_graph_parent_delete_child_keep_fails_closed(tmp_path)
         apply_resolved_share_merge(source, share.path, resolved, allow_partial=True)
     assert hash_contract_snapshot(build_contract_snapshot(source.db.conn, cid)) == before
     assert source.db.conn.execute("SELECT note FROM deliveries WHERE id=?", (local_delivery_id,)).fetchone()[0] == "LOCAL CHILD"
-    assert source.get_share_package(metadata["share_package_id"])["status"] == SHARE_STATUS_OPEN
+    registry = source.get_share_package(metadata["share_package_id"])
+    assert registry["status"] == SHARE_STATUS_OPEN
+    assert registry["merge_result_operations_applied"] is None
+    assert registry["merge_result_operations_skipped"] is None
+    assert registry["merged_at"] is None
 
 
 def test_graph_operation_ordering_is_deterministic(tmp_path):
@@ -353,6 +388,7 @@ def test_mid_operation_and_registry_finalize_failures_roll_back(monkeypatch, tmp
     resolved = _resolve_with_graph(source, share, cid)
     before = hash_contract_snapshot(build_contract_snapshot(source.db.conn, cid))
     revision_before = source.db.conn.execute("SELECT revision FROM contracts WHERE id=?", (cid,)).fetchone()[0]
+    registry_before = dict(source.get_share_package(metadata["share_package_id"]))
     original_apply_op = apply_service._apply_operation
     calls = {"n": 0}
     def fail_third(ctx, op):
@@ -365,16 +401,34 @@ def test_mid_operation_and_registry_finalize_failures_roll_back(monkeypatch, tmp
         apply_resolved_share_merge(source, share.path, resolved)
     assert hash_contract_snapshot(build_contract_snapshot(source.db.conn, cid)) == before
     assert source.db.conn.execute("SELECT revision FROM contracts WHERE id=?", (cid,)).fetchone()[0] == revision_before
-    assert source.get_share_package(metadata["share_package_id"])["status"] == SHARE_STATUS_OPEN
+    mid_registry = source.get_share_package(metadata["share_package_id"])
+    assert mid_registry["status"] == SHARE_STATUS_OPEN
+    assert mid_registry["merge_result_operations_applied"] is None
+    assert mid_registry["merge_result_operations_skipped"] is None
+    assert mid_registry["merged_at"] is None
+    assert mid_registry["merge_result_sha256"] == registry_before["merge_result_sha256"]
     monkeypatch.setattr(apply_service, "_apply_operation", original_apply_op)
     original_update = apply_service._update_registry
+    registry_apply_calls = {"n": 0}
+    def count_apply(ctx, op):
+        registry_apply_calls["n"] += 1
+        return original_apply_op(ctx, op)
     def fail_registry(*args, **kwargs):
         raise RuntimeError("fault at registry finalize")
+    monkeypatch.setattr(apply_service, "_apply_operation", count_apply)
     monkeypatch.setattr(apply_service, "_update_registry", fail_registry)
     with pytest.raises(RuntimeError):
         apply_resolved_share_merge(source, share.path, resolved)
+    assert registry_apply_calls["n"] > 0
     assert hash_contract_snapshot(build_contract_snapshot(source.db.conn, cid)) == before
-    assert source.get_share_package(metadata["share_package_id"])["status"] == SHARE_STATUS_OPEN
+    assert source.db.conn.execute("SELECT revision FROM contracts WHERE id=?", (cid,)).fetchone()[0] == revision_before
+    final_registry = source.get_share_package(metadata["share_package_id"])
+    assert final_registry["status"] == registry_before["status"] == SHARE_STATUS_OPEN
+    assert final_registry["merge_result_operations_applied"] is None
+    assert final_registry["merge_result_operations_skipped"] is None
+    assert final_registry["merged_at"] is None
+    assert final_registry["merge_result_sha256"] == registry_before["merge_result_sha256"]
+    monkeypatch.setattr(apply_service, "_apply_operation", original_apply_op)
     monkeypatch.setattr(apply_service, "_update_registry", original_update)
 
 

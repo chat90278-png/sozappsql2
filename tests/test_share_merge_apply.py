@@ -1,5 +1,6 @@
 import uuid
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -9,10 +10,12 @@ from src.models.app_models import ContractInfo, DeliveryInfo, SystemInfo
 from src.models.share_models import SHARE_FORMAT_V2, SHARE_STATUS_MERGED, SHARE_STATUS_OPEN, SharePackageRegistryEntry
 from src.models.share_merge_resolution_models import MergeOperationKind
 from src.services.share_merge_apply_service import (
+    MergeRegistryUpdateError,
     MergeSourceChangedError,
     SharePackageAlreadyAppliedError,
     apply_resolved_share_merge,
 )
+import src.services.share_merge_apply_service as apply_service
 from src.services.share_merge_service import prepare_share_merge_plan
 from src.services.share_package_service import build_base_snapshot_from_source, make_v2_metadata, write_share_base_snapshot, write_share_metadata
 from src.services.sts_database import CURRENT_SCHEMA_VERSION
@@ -120,6 +123,15 @@ def test_apply_contract_field_keeps_local_only_data_and_updates_registry_backup_
     assert registry["status"] == SHARE_STATUS_MERGED
     assert registry["last_remote_snapshot_sha256"] == result.remote_snapshot_hash
     assert registry["merge_result_sha256"] == result.post_apply_snapshot_hash
+    assert registry["merge_result_operations_applied"] == result.operations_applied
+    assert registry["merge_result_operations_skipped"] == result.operations_skipped
+    assert registry["merged_at"]
+    source.db.close()
+    reopened = STSStore(source.path)
+    reopened_registry = reopened.get_share_package(metadata["share_package_id"])
+    assert reopened_registry["merge_result_operations_applied"] == result.operations_applied
+    assert reopened_registry["merge_result_operations_skipped"] == result.operations_skipped
+    assert reopened_registry["merged_at"] == registry["merged_at"]
     assert Path(result.backup_path).exists()
     assert result.operations_applied == len(resolved.operations)
 
@@ -156,3 +168,15 @@ def test_apply_adds_remote_document_blob_and_rejects_duplicate_full_merge(tmp_pa
     assert result.registry_status == SHARE_STATUS_MERGED
     with pytest.raises(SharePackageAlreadyAppliedError):
         apply_resolved_share_merge(source, share.path, resolved)
+
+
+def test_registry_update_rejects_negative_result_counts_without_writing(tmp_path):
+    source, _share, _ci, _cid, metadata = make_registered_share(tmp_path)
+    before = dict(source.get_share_package(metadata["share_package_id"]))
+    ctx = SimpleNamespace(source=source.db.conn, current_staff_id=42, share_package_id=metadata["share_package_id"])
+
+    with pytest.raises(MergeRegistryUpdateError):
+        apply_service._update_registry(ctx, SHARE_STATUS_MERGED, "remote", "post", -1, 0)
+
+    after = dict(source.get_share_package(metadata["share_package_id"]))
+    assert after == before
