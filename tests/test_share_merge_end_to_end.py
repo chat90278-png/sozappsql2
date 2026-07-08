@@ -464,3 +464,80 @@ def test_relation_remove_preserves_master_rows_and_other_contract_relations(tmp_
     assert source.db.conn.execute("SELECT COUNT(*) FROM contract_users cu JOIN users u ON u.id=cu.user_id WHERE cu.contract_id=? AND u.name='REMOVEUSER'", (other_id,)).fetchone()[0] == 1
     assert source.db.conn.execute("SELECT COUNT(*) FROM contract_tags WHERE contract_id=?", (other_id,)).fetchone()[0] == 1
     assert source.db.conn.execute("SELECT COUNT(*) FROM contract_responsible_engineers WHERE contract_id=?", (other_id,)).fetchone()[0] == 1
+
+
+def _platform_id(conn, name: str) -> int:
+    row = conn.execute("SELECT id FROM platforms WHERE name=?", (name,)).fetchone()
+    if row:
+        return int(row[0])
+    conn.execute("INSERT INTO platforms(name,display_name,is_active) VALUES(?,?,1)", (name, name))
+    return int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
+
+
+def test_platform_relation_add_remove_primary_and_missing_target(tmp_path):
+    # Remote add: source has master platform, remote adds relation with attributes.
+    source, share, _ci, cid, _metadata = make_registered_share(tmp_path)
+    source_platform_id = _platform_id(source.db.conn, "TB2")
+    share_platform_id = _platform_id(share.db.conn, "TB2")
+    share.db.conn.execute("INSERT INTO contract_platforms(contract_id,platform_id,sort_order,is_primary) VALUES(?,?,?,0)", (1, share_platform_id, 7))
+    source.db.conn.commit(); share.db.conn.commit()
+    resolved = resolve_merge_plan(prepare_share_merge_plan(source, share.path))
+    assert any(op.operation_kind == MergeOperationKind.ADD_PLATFORM_RELATION for op in resolved.operations)
+    apply_resolved_share_merge(source, share.path, resolved)
+    assert tuple(source.db.conn.execute("SELECT sort_order,is_primary FROM contract_platforms WHERE contract_id=? AND platform_id=?", (cid, source_platform_id)).fetchone()) == (7, 0)
+    assert source.db.conn.execute("SELECT COUNT(*) FROM platforms WHERE name='TB2'").fetchone()[0] == 1
+    source.db.close(); reopened = STSStore(source.path)
+    try:
+        assert reopened.db.conn.execute("SELECT 1 FROM contract_platforms cp JOIN platforms p ON p.id=cp.platform_id WHERE p.name='TB2'").fetchone()
+    finally:
+        reopened.db.close(); share.db.close()
+
+    # Remote remove: only the package contract relation is removed; master and another contract relation survive.
+    source2, share2, _ci2, cid2, metadata2 = make_registered_share(tmp_path)
+    other = _contract(note="platform-other"); other.no = "C-PLAT-OTHER"
+    other_id = source2.write_contract(other, [SystemInfo("OTHER", {"C": 1})], {"OTHER": []})
+    src_pid = _platform_id(source2.db.conn, "HURKUS")
+    share_pid = _platform_id(share2.db.conn, "HURKUS")
+    for contract_id in (cid2, other_id):
+        source2.db.conn.execute("INSERT INTO contract_platforms(contract_id,platform_id,sort_order,is_primary) VALUES(?,?,?,0)", (contract_id, src_pid, 3))
+    share2.db.conn.commit()
+    base = build_base_snapshot_from_source(source2.db.conn, cid2, created_at="2026-07-07T00:00:00")
+    meta = dict(metadata2); meta["base_snapshot_sha256"] = base.snapshot_sha256
+    write_share_metadata(share2.path, meta)
+    share2.db.conn.execute("DELETE FROM share_base_snapshot"); share2.db.conn.commit(); write_share_base_snapshot(share2.path, base)
+    source2.db.conn.execute("UPDATE share_packages SET base_snapshot_sha256=? WHERE share_package_id=?", (base.snapshot_sha256, meta["share_package_id"]))
+    # Master exists in share, relation intentionally absent to represent remote remove.
+    source2.db.conn.commit(); share2.db.conn.commit()
+    resolved2 = resolve_merge_plan(prepare_share_merge_plan(source2, share2.path))
+    assert any(op.operation_kind == MergeOperationKind.DELETE_PLATFORM_RELATION for op in resolved2.operations)
+    apply_resolved_share_merge(source2, share2.path, resolved2)
+    assert source2.db.conn.execute("SELECT COUNT(*) FROM contract_platforms WHERE contract_id=? AND platform_id=?", (cid2, src_pid)).fetchone()[0] == 0
+    assert source2.db.conn.execute("SELECT COUNT(*) FROM platforms WHERE name='HURKUS'").fetchone()[0] == 1
+    assert source2.db.conn.execute("SELECT COUNT(*) FROM contract_platforms WHERE contract_id=? AND platform_id=?", (other_id, src_pid)).fetchone()[0] == 1
+
+    # Remote primary/attribute update for existing relation.
+    source3, share3, _ci3, cid3, _metadata3 = make_registered_share(tmp_path)
+    src_pid3 = _platform_id(source3.db.conn, "KIZILELMA")
+    share_pid3 = _platform_id(share3.db.conn, "KIZILELMA")
+    source3.db.conn.execute("INSERT INTO contract_platforms(contract_id,platform_id,sort_order,is_primary) VALUES(?,?,?,0)", (cid3, src_pid3, 1))
+    share3.db.conn.execute("INSERT INTO contract_platforms(contract_id,platform_id,sort_order,is_primary) VALUES(?,?,?,1)", (1, share_pid3, 9))
+    share3.db.conn.commit()
+    base3 = build_base_snapshot_from_source(source3.db.conn, cid3, created_at="2026-07-07T00:00:00")
+    meta3 = make_v2_metadata(share_package_id=_metadata3["share_package_id"], permission_mode="edit", source_sts_instance_id=source3.sts_instance_id(), source_schema_version=CURRENT_SCHEMA_VERSION, source_contract_id=cid3, source_contract_merge_uid=base3.contract_merge_uid, source_contract_no="C-1", base_revision=1, base_snapshot_sha256=base3.snapshot_sha256, created_at="2026-07-07T00:00:00", created_by_staff_id=42, created_by_username="tester", created_by_full_name="Test User", document_count=0, document_bytes=0)
+    meta3["contract_id"] = "1"; write_share_metadata(share3.path, meta3); share3.db.conn.execute("DELETE FROM share_base_snapshot"); share3.db.conn.commit(); write_share_base_snapshot(share3.path, base3)
+    source3.db.conn.execute("UPDATE share_packages SET base_snapshot_sha256=? WHERE share_package_id=?", (base3.snapshot_sha256, meta3["share_package_id"])); source3.db.conn.commit(); share3.db.conn.commit()
+    resolved3 = resolve_merge_plan(prepare_share_merge_plan(source3, share3.path))
+    assert any(op.operation_kind == MergeOperationKind.SET_PLATFORM_RELATION_FIELD for op in resolved3.operations)
+    apply_resolved_share_merge(source3, share3.path, resolved3)
+    assert tuple(source3.db.conn.execute("SELECT sort_order,is_primary FROM contract_platforms WHERE contract_id=? AND platform_id=?", (cid3, src_pid3)).fetchone()) == (9, 1)
+
+    # Missing source master target fails closed.
+    source4, share4, _ci4, cid4, metadata4 = make_registered_share(tmp_path)
+    missing_pid = _platform_id(share4.db.conn, "MISSING-PLATFORM")
+    share4.db.conn.execute("INSERT INTO contract_platforms(contract_id,platform_id,sort_order,is_primary) VALUES(?,?,?,0)", (1, missing_pid, 1)); share4.db.conn.commit()
+    before = hash_contract_snapshot(build_contract_snapshot(source4.db.conn, cid4))
+    with pytest.raises(MergeOperationTargetNotFoundError):
+        apply_resolved_share_merge(source4, share4.path, resolve_merge_plan(prepare_share_merge_plan(source4, share4.path)))
+    assert hash_contract_snapshot(build_contract_snapshot(source4.db.conn, cid4)) == before
+    assert source4.db.conn.execute("SELECT COUNT(*) FROM platforms WHERE name='MISSING-PLATFORM'").fetchone()[0] == 0
+    assert source4.get_share_package(metadata4["share_package_id"])["status"] == SHARE_STATUS_OPEN
