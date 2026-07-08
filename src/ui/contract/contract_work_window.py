@@ -79,7 +79,9 @@ from src.ui.dialogs.contract_dialog import ContractDialog
 from src.ui.dialogs.contract_edit_dialog import ContractEditDialog
 from src.ui.dialogs.delivery_dialog import DeliveryDialog
 from src.ui.dialogs.share_merge_dialog import ShareMergeDialog
+from src.ui.dialogs.share_history_dialog import ShareHistoryDialog
 from src.ui.presenters.share_merge_error_presenter import present_share_merge_error
+from src.services.share_history_service import list_contract_share_history
 from src.ui.dialogs.tag_manager_dialog import TagManagerDialog
 from src.ui.dialogs.system_dialog import SystemDialog
 from src.ui.dialogs.multi_system_dialog import MultiSystemDialog
@@ -2685,6 +2687,31 @@ class ContractWorkWindow(QDialog):
             except Exception:
                 pass
             QMessageBox.warning(self, "Paylaşım dosyası oluşturulamadı.", str(exc))
+
+    def can_show_share_history_action(self) -> bool:
+        return (
+            not bool(getattr(self, "share_mode_enabled", False))
+            and not bool(getattr(self, "is_new_contract", False))
+            and hasattr(getattr(self.store, "db", None), "conn")
+        )
+
+    def _current_contract_merge_uid(self) -> str:
+        return str(getattr(self.ci, "merge_uid", "") or "").strip()
+
+    def _load_share_history_records(self):
+        return list_contract_share_history(self.store, self._current_contract_merge_uid())
+
+    def show_share_history(self):
+        if not self.can_show_share_history_action():
+            return
+        contract_title = str(getattr(self.ci, "no", "") or "Sözleşme")
+        dialog = ShareHistoryDialog(
+            contract_title=contract_title,
+            records=self._load_share_history_records(),
+            refresh_callback=self._load_share_history_records,
+            parent=self,
+        )
+        dialog.exec()
 
     def can_show_share_merge_action(self) -> bool:
         return (
