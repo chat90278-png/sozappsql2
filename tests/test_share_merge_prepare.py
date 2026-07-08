@@ -6,7 +6,7 @@ import pytest
 
 from src.domain.contract_snapshot import CONTRACT_SNAPSHOT_FORMAT_VERSION, build_contract_snapshot, hash_contract_snapshot
 from src.models.app_models import ContractInfo, DeliveryInfo, SystemInfo
-from src.models.share_models import SHARE_FORMAT_V2, SHARE_STATUS_CANCELLED, SHARE_STATUS_OPEN, SharePackageRegistryEntry
+from src.models.share_models import SHARE_FORMAT_V2, SHARE_STATUS_CANCELLED, SHARE_STATUS_MERGED, SHARE_STATUS_OPEN, SHARE_STATUS_PARTIALLY_MERGED, SHARE_STATUS_REJECTED, SHARE_STATUS_RETURNED, SharePackageRegistryEntry
 from src.models.share_merge_models import MergeChangeKind
 from src.services.share_merge_service import (
     PackageRegistryMismatchError,
@@ -98,7 +98,7 @@ def change(plan, path):
     return next(c for c in plan.changes if c.field_path == path)
 
 
-def test_prepare_v2_open_package_builds_read_only_plan(tmp_path):
+def test_prepare_v2_open_package_records_returned_and_builds_plan(tmp_path):
     source, share, ci, cid, base, metadata = make_registered_share(tmp_path)
     local_ci, local_systems, local_deliveries = source.load_contract_structure("AKINCI", ci.no, contract_type=ci.contract_type)
     local_ci.status = "LOCAL"
@@ -116,9 +116,66 @@ def test_prepare_v2_open_package_builds_read_only_plan(tmp_path):
     assert change(plan, "contract.status").change_kind == MergeChangeKind.LOCAL_ONLY
     assert change(plan, "contract.note").change_kind == MergeChangeKind.REMOTE_ONLY
     assert not plan.conflicts
-    assert before_source_packages == after_source_packages
     assert before_share_metadata == after_share_metadata
+    before = before_source_packages[0]
+    after = after_source_packages[0]
+    changed = {key for key in before if before[key] != after[key]}
+    assert changed == {"status"}
+    assert before["status"] == SHARE_STATUS_OPEN
+    assert after["status"] == SHARE_STATUS_RETURNED
 
+
+
+def test_prepare_returned_transition_is_durable_and_idempotent_without_business_mutation(tmp_path):
+    source, share, ci, cid, base, metadata = make_registered_share(tmp_path)
+    before_hash = hash_contract_snapshot(build_contract_snapshot(source.db.conn, cid))
+    before_revision = source.db.conn.execute("SELECT revision FROM contracts WHERE id=?", (cid,)).fetchone()[0]
+
+    prepare_share_merge_plan(source, share.path)
+    prepare_share_merge_plan(source, share.path)
+
+    registry = source.get_share_package(metadata["share_package_id"])
+    assert registry["status"] == SHARE_STATUS_RETURNED
+    assert hash_contract_snapshot(build_contract_snapshot(source.db.conn, cid)) == before_hash
+    assert source.db.conn.execute("SELECT revision FROM contracts WHERE id=?", (cid,)).fetchone()[0] == before_revision
+    assert registry["merge_result_operations_applied"] is None
+    assert registry["merge_result_operations_skipped"] is None
+    assert not registry["merged_at"]
+    assert not registry["merge_result_sha256"]
+
+    source.db.close()
+    reopened = STSStore(source.path)
+    try:
+        assert reopened.get_share_package(metadata["share_package_id"])["status"] == SHARE_STATUS_RETURNED
+    finally:
+        reopened.db.close()
+
+
+def test_prepare_invalid_package_does_not_record_returned_or_rejected(tmp_path):
+    source, share, ci, cid, base, metadata = make_registered_share(tmp_path)
+    conn = sqlite3.connect(share.path)
+    conn.execute("UPDATE share_base_snapshot SET snapshot_json=? WHERE id=1", ('{"tampered": true}',))
+    conn.commit(); conn.close()
+
+    with pytest.raises(UnsupportedShareMergePackageError):
+        prepare_share_merge_plan(source, share.path)
+
+    assert source.get_share_package(metadata["share_package_id"])["status"] == SHARE_STATUS_OPEN
+
+
+def test_prepare_final_packages_are_not_marked_returned(tmp_path):
+    for idx, status in enumerate([SHARE_STATUS_MERGED, SHARE_STATUS_PARTIALLY_MERGED, SHARE_STATUS_REJECTED]):
+        source, share, ci, cid, base, metadata = make_registered_share(tmp_path / str(idx))
+        source.db.conn.execute("UPDATE share_packages SET status=? WHERE share_package_id=?", (status, metadata["share_package_id"]))
+        source.db.conn.commit()
+
+        if status == SHARE_STATUS_REJECTED:
+            with pytest.raises(SharePackageStatusError):
+                prepare_share_merge_plan(source, share.path)
+        else:
+            prepare_share_merge_plan(source, share.path)
+
+        assert source.get_share_package(metadata["share_package_id"])["status"] == status
 
 def test_prepare_fails_closed_for_source_mismatch(tmp_path):
     source, share, ci, cid, base, metadata = make_registered_share(tmp_path / "a")
