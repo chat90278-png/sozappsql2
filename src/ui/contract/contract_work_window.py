@@ -2562,7 +2562,15 @@ class ContractWorkWindow(QDialog):
 
 
     def _confirm_active_share_creation(self) -> bool:
-        active = list_active_share_packages(self.store, self._current_contract_merge_uid())
+        try:
+            active = list_active_share_packages(self.store, self._current_contract_merge_uid())
+        except Exception:
+            QMessageBox.warning(
+                self,
+                "Aktif Paylaşım Kontrolü",
+                "Aktif paylaşım durumu kontrol edilemedi. Paylaşım oluşturma işlemi başlatılmadı.",
+            )
+            return False
         if not active:
             return True
         count = len(active)
@@ -2587,6 +2595,8 @@ class ContractWorkWindow(QDialog):
 
     def create_contract_share_file(self, permission: str, default_filename: str):
         """Create a V2 single-contract STS share file with immutable base snapshot metadata."""
+        if bool(getattr(self, "share_mode_enabled", False)):
+            return
         if not self.require_permission_ui("export_data", "Sözleşme Paylaşımı"):
             return
         if not self._confirm_active_share_creation():

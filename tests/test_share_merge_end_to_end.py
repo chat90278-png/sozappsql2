@@ -621,7 +621,7 @@ def test_cancelled_exported_package_prepare_rejected_and_registry_only(tmp_path)
     assert not registry["merge_result_sha256"]
 
 
-def test_prepared_plan_cancelled_before_apply_is_rejected_without_mutation(tmp_path):
+def test_prepared_plan_cancelled_before_apply_is_rejected_without_mutation(tmp_path, monkeypatch):
     from src.models.share_models import SHARE_STATUS_CANCELLED
     from src.services.share_lifecycle_service import cancel_share_package
 
@@ -632,9 +632,18 @@ def test_prepared_plan_cancelled_before_apply_is_rejected_without_mutation(tmp_p
     before_hash = hash_contract_snapshot(build_contract_snapshot(source.db.conn, cid))
     before_revision = source.db.conn.execute("SELECT revision FROM contracts WHERE id=?", (cid,)).fetchone()[0]
     cancel_share_package(source, metadata["source_contract_merge_uid"], metadata["share_package_id"], current_staff={"is_admin": True, "is_active": 1})
+    apply_calls = []
+
+    def fail_if_operation_starts(*args, **kwargs):
+        apply_calls.append((args, kwargs))
+        raise AssertionError("operation apply should not start after cancellation")
+
+    monkeypatch.setattr("src.services.share_merge_apply_service._apply_operation", fail_if_operation_starts)
 
     with pytest.raises(ShareMergeApplyValidationError):
         apply_resolved_share_merge(source, share.path, resolved, require_backup=False)
+
+    assert apply_calls == []
 
     registry = source.get_share_package(metadata["share_package_id"])
     assert registry["status"] == SHARE_STATUS_CANCELLED
