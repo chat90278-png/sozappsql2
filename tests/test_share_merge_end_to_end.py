@@ -424,3 +424,43 @@ def test_document_revision_snapshot_matrix(tmp_path):
     rev3, hash3 = state(); source.db.conn.execute("UPDATE contract_files SET content_blob=?,size_bytes=?,sha256=? WHERE id=?", (b"B", 1, hashlib.sha256(b"B").hexdigest(), fid)); source.db.conn.commit(); matrix["content_replace"] = (state()[0] != rev3, state()[1] != hash3)
     rev4, hash4 = state(); source.delete_contract_file(fid); matrix["delete"] = (state()[0] != rev4, state()[1] != hash4)
     assert all(changed for _rev_changed, changed in matrix.values()), matrix
+
+
+def test_relation_remove_preserves_master_rows_and_other_contract_relations(tmp_path):
+    source, share, _ci, cid, _metadata = make_registered_share(tmp_path)
+    other = _contract(note="other")
+    other.no = "C-OTHER"
+    other_id = source.write_contract(other, [SystemInfo("OTHER-SYS", {"C": 1})], {"OTHER-SYS": []})
+    source.db.conn.execute("INSERT INTO users(name,yi_yd) VALUES('REMOVEUSER','Yİ')")
+    source.db.conn.execute("INSERT INTO tags(name,color,kind) VALUES('RemoveTag','#222','contract')")
+    source.db.conn.execute("INSERT INTO staff(device_name,full_name,password_hash,role,is_active) VALUES('dev2','Remove Engineer','x','user',1)")
+    for contract_id in (cid, other_id):
+        source.db.conn.execute("INSERT INTO contract_users(contract_id,user_id) SELECT ?,id FROM users WHERE name='REMOVEUSER'", (contract_id,))
+        source.db.conn.execute("INSERT INTO contract_tags(contract_id,tag_id) SELECT ?,id FROM tags WHERE name='RemoveTag'", (contract_id,))
+        source.db.conn.execute("INSERT INTO contract_responsible_engineers(contract_id,staff_id,sort_order,is_primary) SELECT ?,id,0,1 FROM staff WHERE full_name='Remove Engineer'", (contract_id,))
+    base = build_base_snapshot_from_source(source.db.conn, cid, created_at="2026-07-07T00:00:00")
+    meta = dict(_metadata); meta["base_snapshot_sha256"] = base.snapshot_sha256
+    write_share_metadata(share.path, meta)
+    share.db.conn.execute("DELETE FROM share_base_snapshot"); share.db.conn.commit(); write_share_base_snapshot(share.path, base)
+    source.db.conn.execute("UPDATE share_packages SET base_snapshot_sha256=? WHERE share_package_id=?", (base.snapshot_sha256, meta["share_package_id"]))
+    # Mirror master rows into the share but intentionally leave contract relations absent: remote removed them.
+    share.db.conn.execute("INSERT INTO users(name,yi_yd) VALUES('REMOVEUSER','Yİ')")
+    share.db.conn.execute("INSERT INTO tags(name,color,kind) VALUES('RemoveTag','#222','contract')")
+    share.db.conn.execute("INSERT INTO staff(device_name,full_name,password_hash,role,is_active) VALUES('dev2','Remove Engineer','x','user',1)")
+    source.db.conn.commit(); share.db.conn.commit()
+
+    resolved = resolve_merge_plan(prepare_share_merge_plan(source, share.path))
+    assert any(op.operation_kind.name.startswith("DELETE_USER_RELATION") for op in resolved.operations)
+    assert any(op.operation_kind.name.startswith("DELETE_TAG_RELATION") for op in resolved.operations)
+    assert any(op.operation_kind.name.startswith("DELETE_RESPONSIBLE_ENGINEER_RELATION") for op in resolved.operations)
+    apply_resolved_share_merge(source, share.path, resolved)
+
+    assert source.db.conn.execute("SELECT COUNT(*) FROM contract_users cu JOIN users u ON u.id=cu.user_id WHERE cu.contract_id=? AND u.name='REMOVEUSER'", (cid,)).fetchone()[0] == 0
+    assert source.db.conn.execute("SELECT COUNT(*) FROM contract_tags WHERE contract_id=?", (cid,)).fetchone()[0] == 0
+    assert source.db.conn.execute("SELECT COUNT(*) FROM contract_responsible_engineers WHERE contract_id=?", (cid,)).fetchone()[0] == 0
+    assert source.db.conn.execute("SELECT COUNT(*) FROM users WHERE name='REMOVEUSER'").fetchone()[0] == 1
+    assert source.db.conn.execute("SELECT COUNT(*) FROM tags WHERE name='RemoveTag'").fetchone()[0] == 1
+    assert source.db.conn.execute("SELECT COUNT(*) FROM staff WHERE full_name='Remove Engineer'").fetchone()[0] == 1
+    assert source.db.conn.execute("SELECT COUNT(*) FROM contract_users cu JOIN users u ON u.id=cu.user_id WHERE cu.contract_id=? AND u.name='REMOVEUSER'", (other_id,)).fetchone()[0] == 1
+    assert source.db.conn.execute("SELECT COUNT(*) FROM contract_tags WHERE contract_id=?", (other_id,)).fetchone()[0] == 1
+    assert source.db.conn.execute("SELECT COUNT(*) FROM contract_responsible_engineers WHERE contract_id=?", (other_id,)).fetchone()[0] == 1

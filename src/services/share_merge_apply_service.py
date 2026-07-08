@@ -926,7 +926,7 @@ def _add_responsible_relation(ctx: _ApplyContext, op: MergeOperation) -> None:
 def _delete_responsible_relation(ctx: _ApplyContext, op: MergeOperation) -> None:
     staff = _global_row(ctx, "staff", "full_name", _relation_name(op))
     ctx.source.execute("DELETE FROM contract_responsible_engineers WHERE contract_id=? AND staff_id=?", (ctx.contract_id, int(staff["id"])))
-    row = ctx.source.execute("SELECT staff_id,id FROM contract_responsible_engineers WHERE contract_id=? ORDER BY is_primary DESC,sort_order,id LIMIT 1", (ctx.contract_id,)).fetchone()
+    row = ctx.source.execute("SELECT staff_id FROM contract_responsible_engineers WHERE contract_id=? ORDER BY is_primary DESC,sort_order,staff_id LIMIT 1", (ctx.contract_id,)).fetchone()
     ctx.source.execute("UPDATE contracts SET responsible_engineer_id=? WHERE id=?", (int(row["staff_id"]) if row else None, ctx.contract_id))
 
 

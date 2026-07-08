@@ -25,6 +25,7 @@ from src.models.share_models import SharePackageMetadata
 from src.models.share_merge_models import MergePlan
 from src.models.share_merge_apply_models import ShareMergeApplyResult
 from src.models.share_merge_resolution_models import MergeDecisionKind, ResolvedMergePlan
+from src.ui.presenters.share_merge_error_presenter import present_share_merge_error
 from src.ui.presenters.share_merge_presenter import (
     ShareMergeDecisionController,
     decision_label,
@@ -306,7 +307,8 @@ class ShareMergeDialog(QDialog):
         except Exception as exc:
             self._set_busy(False)
             _log.exception("Share merge apply failed")
-            _show_warning_with_detail(self, "Paylaşım dosyası birleştirilemedi", _friendly_error(exc), str(exc))
+            presentation = present_share_merge_error(exc)
+            _show_warning_with_detail(self, presentation.title, presentation.message, presentation.detail)
 
     def _confirm_apply(self, resolved: ResolvedMergePlan) -> bool:
         summary = self.controller.live_summary()
