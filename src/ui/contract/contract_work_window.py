@@ -79,6 +79,7 @@ from src.ui.dialogs.contract_dialog import ContractDialog
 from src.ui.dialogs.contract_edit_dialog import ContractEditDialog
 from src.ui.dialogs.delivery_dialog import DeliveryDialog
 from src.ui.dialogs.share_merge_dialog import ShareMergeDialog
+from src.ui.presenters.share_merge_error_presenter import present_share_merge_error
 from src.ui.dialogs.tag_manager_dialog import TagManagerDialog
 from src.ui.dialogs.system_dialog import SystemDialog
 from src.ui.dialogs.multi_system_dialog import MultiSystemDialog
@@ -2824,7 +2825,8 @@ class ContractWorkWindow(QDialog):
 
     def _show_share_merge_exception(self, exc: Exception) -> None:
         _log.exception("Share merge prepare failed")
-        self._show_share_merge_error("Paylaşım dosyası birleştirilemedi", self._share_merge_error_message(exc), str(exc))
+        presentation = present_share_merge_error(exc)
+        self._show_share_merge_error(presentation.title, presentation.message, presentation.detail)
 
     def _show_share_merge_error(self, title: str, message: str, detail: str = "") -> None:
         text = str(message or "Paylaşım dosyası birleştirilemedi.")
