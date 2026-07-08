@@ -11,6 +11,7 @@ from src.ui.presenters.share_history_presenter import (
     display_share_filename,
     format_share_history_datetime,
     present_share_permission,
+    present_merge_result,
     present_share_status,
     summarize_share_history,
 )
@@ -77,3 +78,57 @@ def test_summary_counts_statuses_without_mutating_records():
     assert summary.cancelled_count == 1
     assert summary.rejected_count == 1
     assert summary.returned_count == 1
+
+
+def test_merge_result_presenter_shows_recorded_merged_and_partial_counts():
+    merged = _record(SHARE_STATUS_MERGED)
+    object.__setattr__(merged, "merge_result_operations_applied", 18)
+    object.__setattr__(merged, "merge_result_operations_skipped", 0)
+    object.__setattr__(merged, "merged_at", "2026-07-08 09:10:00")
+    shown = present_merge_result(merged)
+    assert shown.visible is True
+    assert shown.recorded is True
+    assert "18" in shown.summary_label
+    assert "atlandı" not in shown.summary_label
+    assert shown.merged_at_label == "08.07.2026 09:10"
+
+    partial = _record(SHARE_STATUS_PARTIALLY_MERGED)
+    object.__setattr__(partial, "merge_result_operations_applied", 12)
+    object.__setattr__(partial, "merge_result_operations_skipped", 3)
+    shown = present_merge_result(partial)
+    assert shown.visible is True
+    assert shown.recorded is True
+    assert "12" in shown.summary_label
+    assert "3" in shown.summary_label
+
+
+def test_merge_result_presenter_distinguishes_legacy_unknown_from_zero_result():
+    legacy = _record(SHARE_STATUS_MERGED)
+    shown = present_merge_result(legacy)
+    assert shown.visible is True
+    assert shown.recorded is False
+    assert "eski sürüm" in shown.summary_label
+    assert "0 değişiklik uygulandı" not in shown.summary_label
+
+    zero = _record(SHARE_STATUS_MERGED)
+    object.__setattr__(zero, "merge_result_operations_applied", 0)
+    object.__setattr__(zero, "merge_result_operations_skipped", 0)
+    shown = present_merge_result(zero)
+    assert shown.visible is True
+    assert shown.recorded is True
+    assert "yeni değişiklik yoktu" in shown.summary_label
+
+
+def test_merge_result_presenter_ignores_non_final_statuses_and_malformed_counts():
+    for status in [SHARE_STATUS_OPEN, SHARE_STATUS_RETURNED, SHARE_STATUS_CANCELLED, SHARE_STATUS_REJECTED]:
+        record = _record(status)
+        object.__setattr__(record, "merge_result_operations_applied", 4)
+        object.__setattr__(record, "merge_result_operations_skipped", 1)
+        assert present_merge_result(record).visible is False
+
+    malformed = _record(SHARE_STATUS_PARTIALLY_MERGED)
+    object.__setattr__(malformed, "merge_result_operations_applied", -4)
+    object.__setattr__(malformed, "merge_result_operations_skipped", 1)
+    shown = present_merge_result(malformed)
+    assert shown.visible is True
+    assert shown.recorded is False

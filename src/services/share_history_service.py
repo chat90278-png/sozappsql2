@@ -25,6 +25,9 @@ class ShareHistoryRecord:
     last_imported_by_staff_id: int | None = None
     last_remote_snapshot_sha256: str = ""
     merge_result_sha256: str = ""
+    merge_result_operations_applied: int | None = None
+    merge_result_operations_skipped: int | None = None
+    merged_at: str = ""
     return_count: int = 0
 
 
@@ -38,6 +41,16 @@ def _int_or_none(value: Any) -> int | None:
     except (TypeError, ValueError):
         return None
     return parsed or None
+
+
+def _non_negative_int_or_none(value: Any) -> int | None:
+    if value in (None, ""):
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed >= 0 else None
 
 
 def _record_from_row(row: dict[str, Any]) -> ShareHistoryRecord:
@@ -61,6 +74,9 @@ def _record_from_row(row: dict[str, Any]) -> ShareHistoryRecord:
         last_imported_by_staff_id=_int_or_none(row.get("last_imported_by_staff_id")),
         last_remote_snapshot_sha256=str(row.get("last_remote_snapshot_sha256") or ""),
         merge_result_sha256=str(row.get("merge_result_sha256") or ""),
+        merge_result_operations_applied=_non_negative_int_or_none(row.get("merge_result_operations_applied")),
+        merge_result_operations_skipped=_non_negative_int_or_none(row.get("merge_result_operations_skipped")),
+        merged_at=str(row.get("merged_at") or ""),
         return_count=int(row.get("return_count") or 0),
     )
 
