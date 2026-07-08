@@ -12,12 +12,13 @@ from src.ui.presenters.share_history_presenter import (
     format_share_history_datetime,
     present_share_permission,
     present_merge_result,
+    present_cancellation_audit,
     present_share_status,
     summarize_share_history,
 )
 
 
-def _record(status=SHARE_STATUS_OPEN, filename="share.sts", package_id="abcdef123456"):
+def _record(status=SHARE_STATUS_OPEN, filename="share.sts", package_id="abcdef123456", **kwargs):
     return ShareHistoryRecord(
         id=1,
         share_package_id=package_id,
@@ -31,6 +32,7 @@ def _record(status=SHARE_STATUS_OPEN, filename="share.sts", package_id="abcdef12
         created_at="2026-07-08T09:10:00",
         exported_filename=filename,
         status=status,
+        **kwargs,
     )
 
 
@@ -173,3 +175,54 @@ def test_summary_includes_active_count_from_open_and_returned_only():
         _record(SHARE_STATUS_MERGED),
     ])
     assert summary.active_count == 2
+
+
+def test_cancellation_audit_presentation_recorded_full_name_and_username_fallback():
+    full = present_cancellation_audit(_record(
+        SHARE_STATUS_CANCELLED,
+        cancelled_at="2026-07-08 14:32:00",
+        cancelled_by_username="u.audit",
+        cancelled_by_full_name="Audit User",
+    ))
+    assert full.visible and full.recorded
+    assert "08.07.2026 14:32" in full.summary_label
+    assert "Audit User" in full.summary_label
+
+    username = present_cancellation_audit(_record(
+        SHARE_STATUS_CANCELLED,
+        cancelled_at="2026-07-08 15:00:00",
+        cancelled_by_username="u.only",
+    ))
+    assert username.visible and username.recorded
+    assert "u.only" in username.summary_label
+
+
+def test_cancellation_audit_presentation_legacy_and_partial_metadata():
+    legacy = present_cancellation_audit(_record(SHARE_STATUS_CANCELLED))
+    assert legacy.visible and not legacy.recorded
+    assert "eski sürüm" in legacy.summary_label
+
+    timestamp_only = present_cancellation_audit(_record(SHARE_STATUS_CANCELLED, cancelled_at="2026-07-08 16:00:00"))
+    assert timestamp_only.recorded
+    assert "16:00" in timestamp_only.summary_label
+    assert "İptal eden" not in timestamp_only.summary_label
+
+    actor_only = present_cancellation_audit(_record(SHARE_STATUS_CANCELLED, cancelled_by_full_name="Only Actor"))
+    assert actor_only.recorded
+    assert "Only Actor" in actor_only.summary_label
+
+
+def test_cancellation_audit_presentation_malformed_and_stale_statuses_hidden():
+    malformed = present_cancellation_audit(_record(
+        SHARE_STATUS_CANCELLED,
+        cancelled_at="not a date",
+        cancelled_by_username="valid.user",
+    ))
+    assert malformed.recorded
+    assert "not a date" not in malformed.summary_label
+    assert "valid.user" in malformed.summary_label
+
+    for status in [SHARE_STATUS_OPEN, SHARE_STATUS_MERGED, SHARE_STATUS_REJECTED]:
+        stale = present_cancellation_audit(_record(status, cancelled_at="2026-07-08 14:32:00", cancelled_by_full_name="Stale"))
+        assert not stale.visible
+        assert not stale.recorded

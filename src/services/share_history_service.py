@@ -29,6 +29,10 @@ class ShareHistoryRecord:
     merge_result_operations_skipped: int | None = None
     merged_at: str = ""
     return_count: int = 0
+    cancelled_at: str = ""
+    cancelled_by_staff_id: int | None = None
+    cancelled_by_username: str = ""
+    cancelled_by_full_name: str = ""
 
 
 class _ShareHistoryStore(Protocol):
@@ -78,6 +82,10 @@ def _record_from_row(row: dict[str, Any]) -> ShareHistoryRecord:
         merge_result_operations_skipped=_non_negative_int_or_none(row.get("merge_result_operations_skipped")),
         merged_at=str(row.get("merged_at") or ""),
         return_count=int(row.get("return_count") or 0),
+        cancelled_at=str(row.get("cancelled_at") or ""),
+        cancelled_by_staff_id=_int_or_none(row.get("cancelled_by_staff_id")),
+        cancelled_by_username=str(row.get("cancelled_by_username") or ""),
+        cancelled_by_full_name=str(row.get("cancelled_by_full_name") or ""),
     )
 
 

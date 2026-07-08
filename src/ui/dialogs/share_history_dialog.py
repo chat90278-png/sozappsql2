@@ -20,6 +20,7 @@ from src.ui.presenters.share_history_presenter import (
     present_share_permission,
     present_share_status,
     present_merge_result,
+    present_cancellation_audit,
     summarize_share_history,
 )
 
@@ -190,6 +191,13 @@ class ShareHistoryDialog(QDialog):
             result.setWordWrap(True)
             result.setStyleSheet("color:#166534;font-size:12px;font-weight:900;background:#F0FDF4;border:1px solid #BBF7D0;border-radius:8px;padding:5px 8px;")
             lay.addWidget(result)
+
+        cancellation = present_cancellation_audit(record)
+        if cancellation.visible and cancellation.summary_label:
+            audit = QLabel(cancellation.summary_label)
+            audit.setWordWrap(True)
+            audit.setStyleSheet("color:#475569;font-size:12px;font-weight:800;background:#F8FAFC;border:1px solid #E2E8F0;border-radius:8px;padding:5px 8px;")
+            lay.addWidget(audit)
 
         detail_parts = [f"Paket: {record.share_package_id[:8]}"] if record.share_package_id else []
         if record.source_contract_revision:

@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from src import auth
+from src.services.sts_database import now_iso
 from src.models.share_models import (
     SHARE_STATUS_CANCELLED,
     SHARE_STATUS_MERGED,
@@ -88,6 +89,21 @@ def _is_share_mode(store_or_conn: Any) -> bool:
     return False
 
 
+
+def _actor_metadata(current_staff: Any) -> tuple[int | None, str, str]:
+    if not isinstance(current_staff, dict):
+        return None, "", ""
+    staff_id = None
+    try:
+        parsed = int(current_staff.get("id") or 0)
+        if parsed > 0 and not bool(current_staff.get("is_admin")):
+            staff_id = parsed
+    except (TypeError, ValueError):
+        staff_id = None
+    username = str(current_staff.get("username") or current_staff.get("device_name") or "").strip()
+    full_name = str(current_staff.get("full_name") or current_staff.get("admin_name") or "").strip()
+    return staff_id, username, full_name
+
 def ensure_can_cancel_share_package(store_or_conn: Any, contract_merge_uid: str, share_package_id: str, *, current_staff: Any = None) -> dict[str, Any]:
     package_id = str(share_package_id or "").strip()
     uid = str(contract_merge_uid or "").strip()
@@ -125,9 +141,18 @@ def cancel_share_package(store_or_conn: Any, contract_merge_uid: str, share_pack
 
     def _write() -> dict[str, Any]:
         before = ensure_can_cancel_share_package(store_or_conn, contract_merge_uid, package_id, current_staff=current_staff)
+        cancelled_at = now_iso()
+        actor_staff_id, actor_username, actor_full_name = _actor_metadata(current_staff)
         cur = conn.execute(
-            "UPDATE share_packages SET status=? WHERE share_package_id=? AND contract_merge_uid=? AND status IN (?,?)",
-            (SHARE_STATUS_CANCELLED, package_id, str(contract_merge_uid or "").strip(), SHARE_STATUS_OPEN, SHARE_STATUS_RETURNED),
+            """
+            UPDATE share_packages
+            SET status=?,cancelled_at=?,cancelled_by_staff_id=?,cancelled_by_username=?,cancelled_by_full_name=?
+            WHERE share_package_id=? AND contract_merge_uid=? AND status IN (?,?)
+            """,
+            (
+                SHARE_STATUS_CANCELLED, cancelled_at, actor_staff_id, actor_username, actor_full_name,
+                package_id, str(contract_merge_uid or "").strip(), SHARE_STATUS_OPEN, SHARE_STATUS_RETURNED,
+            ),
         )
         if cur.rowcount != 1:
             raise SharePackageNotCancelableError("Paylaşım paketi iptal edilemedi; durum değişmiş olabilir.")
