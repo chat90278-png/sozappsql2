@@ -756,7 +756,9 @@ def _keep_both_file(ctx: _ApplyContext, op: MergeOperation) -> None:
     expected = str(op.metadata.get("remote_sha256") or "")
     remote = _remote_file(ctx, source_uid, expected)
     data = op.value if isinstance(op.value, dict) else {}
-    folder_id = _folder_id(ctx, str(data.get("folder_merge_uid") or op.metadata.get("remote_folder_merge_uid") or ""))
+    local_row = _resolve_by_uid(ctx, "contract_files", op.entity_uid)
+    remote_folder_uid = str(data.get("folder_merge_uid") or op.metadata.get("remote_folder_merge_uid") or "")
+    folder_id = _folder_id(ctx, remote_folder_uid) if remote_folder_uid else local_row["folder_id"]
     filename = _unique_filename(ctx, folder_id, str(remote["filename"] or op.metadata.get("remote_filename") or "remote-file"))
     ext = str(remote["file_ext"] or Path(filename).suffix.lower().lstrip("."))
     mime = str(remote["mime_type"] or mimetypes.guess_type(filename)[0] or "application/octet-stream")
@@ -924,7 +926,7 @@ def _add_responsible_relation(ctx: _ApplyContext, op: MergeOperation) -> None:
 def _delete_responsible_relation(ctx: _ApplyContext, op: MergeOperation) -> None:
     staff = _global_row(ctx, "staff", "full_name", _relation_name(op))
     ctx.source.execute("DELETE FROM contract_responsible_engineers WHERE contract_id=? AND staff_id=?", (ctx.contract_id, int(staff["id"])))
-    row = ctx.source.execute("SELECT staff_id,id FROM contract_responsible_engineers WHERE contract_id=? ORDER BY is_primary DESC,sort_order,id LIMIT 1", (ctx.contract_id,)).fetchone()
+    row = ctx.source.execute("SELECT staff_id FROM contract_responsible_engineers WHERE contract_id=? ORDER BY is_primary DESC,sort_order,staff_id LIMIT 1", (ctx.contract_id,)).fetchone()
     ctx.source.execute("UPDATE contracts SET responsible_engineer_id=? WHERE id=?", (int(row["staff_id"]) if row else None, ctx.contract_id))
 
 

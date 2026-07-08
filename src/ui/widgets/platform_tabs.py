@@ -700,6 +700,9 @@ class ContractSharePopover(QFrame):
             "QPushButton#shareCreateButton{background:#2563eb;color:#fff;border:0;border-radius:10px;"
             "padding:7px 16px;font-size:12px;font-weight:800;min-height:34px;}"
             "QPushButton#shareCreateButton:hover{background:#1d4ed8;}"
+            "QPushButton#shareHistoryButton{background:#EFF6FF;color:#1D4ED8;border:1px solid #BFDBFE;border-radius:10px;"
+            "padding:7px 16px;font-size:12px;font-weight:800;min-height:34px;}"
+            "QPushButton#shareHistoryButton:hover{background:#DBEAFE;border-color:#93C5FD;}"
             "QLabel#sharePreview{background:#ffffff;color:#1e3a8a;border:1px solid #bfdbfe;"
             "border-radius:9px;padding:8px 10px;font-family:Consolas,monospace;font-size:11px;}"
         )
@@ -751,6 +754,12 @@ class ContractSharePopover(QFrame):
         btn.clicked.connect(self.create_share_file)
         lay.addWidget(btn, 0, Qt.AlignRight)
 
+        self._history_btn = QPushButton("Paylaşım Geçmişi")
+        self._history_btn.setObjectName("shareHistoryButton")
+        self._history_btn.setToolTip("Bu sözleşme için oluşturulan paylaşım paketlerinin durumunu göster.")
+        self._history_btn.clicked.connect(self.show_history)
+        lay.addWidget(self._history_btn, 0, Qt.AlignRight)
+
         self._merge_btn = QPushButton("Paylaşım Değişikliklerini Birleştir")
         self._merge_btn.setObjectName("shareCreateButton")
         self._merge_btn.setToolTip("Geri gelen V2 paylaşım .sts dosyasındaki değişiklikleri bu STS ile birleştir.")
@@ -790,6 +799,15 @@ class ContractSharePopover(QFrame):
         can_show = bool(checker()) if callable(checker) else True
         self._merge_btn.setVisible(can_show)
         self._merge_btn.setEnabled(can_show)
+        history_checker = getattr(self.owner, "can_show_share_history_action", None)
+        can_history = bool(history_checker()) if callable(history_checker) else can_show
+        self._history_btn.setVisible(can_history)
+        self._history_btn.setEnabled(can_history)
+
+    def show_history(self):
+        handler = getattr(self.owner, "show_share_history", None)
+        if callable(handler):
+            handler()
 
     def merge_share_file(self):
         handler = getattr(self.owner, "merge_returned_share_file", None)
