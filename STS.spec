@@ -1,9 +1,14 @@
 # -*- mode: python ; coding: utf-8 -*-
+import base64
 from pathlib import Path
 from PyInstaller.utils.hooks import collect_submodules
 
 ROOT = Path(SPECPATH).resolve()
-ICON = ROOT / "src" / "ui" / "assets" / "sts_icon.ico"
+ICON_B64 = ROOT / "src" / "ui" / "assets" / "sts_icon.ico.b64"
+GENERATED_DIR = ROOT / "build" / "generated"
+GENERATED_DIR.mkdir(parents=True, exist_ok=True)
+ICON = GENERATED_DIR / "sts_icon.ico"
+ICON.write_bytes(base64.b64decode("".join(ICON_B64.read_text(encoding="ascii").split()), validate=True))
 
 block_cipher = None
 

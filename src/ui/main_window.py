@@ -33,8 +33,8 @@ from src.domain.constants import (
 from src.config.app_config import (
     APP_TITLE,
     APP_ICON_PATH,
-    APP_ICON_ICO_PATH,
     APP_ID,
+    materialized_app_icon_ico_path,
     DEFAULT_FILE,
     COMP_SHEET,
     USERS_SHEET,
@@ -155,9 +155,10 @@ def _write_share_metadata(path: Path | str, metadata: dict) -> None:
 
 
 def app_icon_path() -> Path:
-    """Return the native Windows icon when available, otherwise the SVG logo."""
-    if APP_ICON_ICO_PATH.exists():
-        return APP_ICON_ICO_PATH
+    """Return a materialized native icon when available, otherwise the SVG logo."""
+    icon_path = materialized_app_icon_ico_path()
+    if icon_path is not None and icon_path.exists():
+        return icon_path
     return APP_ICON_PATH
 
 
