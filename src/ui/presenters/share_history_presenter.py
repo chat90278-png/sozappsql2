@@ -13,6 +13,7 @@ from src.models.share_models import (
     SHARE_STATUS_RETURNED,
 )
 from src.services.share_history_service import ShareHistoryRecord
+from src.services.share_lifecycle_service import share_lifecycle_decision
 
 
 @dataclass(frozen=True)
@@ -20,6 +21,9 @@ class ShareHistoryStatusPresentation:
     raw_status: str
     label: str
     role: str
+    is_active: bool = False
+    can_cancel: bool = False
+    cancel_label: str = "Paylaşımı İptal Et"
 
 
 @dataclass(frozen=True)
@@ -33,6 +37,15 @@ class ShareMergeResultPresentation:
 
 
 @dataclass(frozen=True)
+class ShareCancellationPresentation:
+    visible: bool
+    recorded: bool
+    cancelled_at_label: str = ""
+    actor_label: str = ""
+    summary_label: str = ""
+
+
+@dataclass(frozen=True)
 class ShareHistorySummary:
     total: int
     by_status: dict[str, int]
@@ -42,6 +55,7 @@ class ShareHistorySummary:
     cancelled_count: int
     rejected_count: int
     returned_count: int
+    active_count: int
 
 
 _STATUS_LABELS = {
@@ -66,24 +80,60 @@ _PERMISSION_LABELS = {
 def present_share_status(status: str) -> ShareHistoryStatusPresentation:
     raw = str(status or "").strip()
     label, role = _STATUS_LABELS.get(raw, ("Bilinmeyen Durum", "neutral"))
-    return ShareHistoryStatusPresentation(raw, label, role)
+    decision = share_lifecycle_decision(raw)
+    return ShareHistoryStatusPresentation(raw, label, role, decision.is_active, decision.can_cancel, decision.cancel_label)
 
 
 def present_share_permission(permission_mode: str) -> str:
     return _PERMISSION_LABELS.get(str(permission_mode or "").strip(), "Bilinmeyen Yetki")
 
 
-def format_share_history_datetime(value: str) -> str:
+def _parse_share_history_datetime(value: str) -> datetime | None:
     text = str(value or "").strip()
     if not text:
-        return "Tarih bilgisi yok"
+        return None
     normalized = text[:-1] + "+00:00" if text.endswith("Z") else text
     try:
-        parsed = datetime.fromisoformat(normalized)
+        return datetime.fromisoformat(normalized)
     except ValueError:
-        return text
+        return None
+
+
+def format_share_history_datetime(value: str) -> str:
+    parsed = _parse_share_history_datetime(value)
+    if parsed is None:
+        return str(value or "").strip() or "Tarih bilgisi yok"
     return parsed.strftime("%d.%m.%Y %H:%M")
 
+
+def _valid_share_history_datetime_label(value: str) -> str:
+    parsed = _parse_share_history_datetime(value)
+    return parsed.strftime("%d.%m.%Y %H:%M") if parsed is not None else ""
+
+
+def present_cancellation_audit(record: ShareHistoryRecord) -> ShareCancellationPresentation:
+    if str(record.status or "").strip() != SHARE_STATUS_CANCELLED:
+        return ShareCancellationPresentation(visible=False, recorded=False)
+    cancelled_at = _valid_share_history_datetime_label(record.cancelled_at)
+    actor_name = str(record.cancelled_by_full_name or "").strip() or str(record.cancelled_by_username or "").strip()
+    if not cancelled_at and not actor_name:
+        return ShareCancellationPresentation(
+            visible=True,
+            recorded=False,
+            summary_label="İptal ayrıntısı eski sürümde kaydedilmemiş.",
+        )
+    parts = []
+    if cancelled_at:
+        parts.append(f"İptal: {cancelled_at}")
+    if actor_name:
+        parts.append(f"İptal eden: {actor_name}")
+    return ShareCancellationPresentation(
+        visible=True,
+        recorded=True,
+        cancelled_at_label=cancelled_at,
+        actor_label=actor_name,
+        summary_label=" · ".join(parts),
+    )
 
 
 def present_merge_result(record: ShareHistoryRecord) -> ShareMergeResultPresentation:
@@ -142,4 +192,5 @@ def summarize_share_history(records: Iterable[ShareHistoryRecord]) -> ShareHisto
         cancelled_count=by_status.get(SHARE_STATUS_CANCELLED, 0),
         rejected_count=by_status.get(SHARE_STATUS_REJECTED, 0),
         returned_count=by_status.get(SHARE_STATUS_RETURNED, 0),
+        active_count=by_status.get(SHARE_STATUS_OPEN, 0) + by_status.get(SHARE_STATUS_RETURNED, 0),
     )

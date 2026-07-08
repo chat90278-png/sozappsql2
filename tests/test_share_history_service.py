@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+import pytest
 
 from src.domain.contract_snapshot import build_contract_snapshot, hash_contract_snapshot
 from src.models.app_models import ContractInfo
@@ -198,3 +199,254 @@ def test_history_service_parses_numeric_strings_but_rejects_bad_count_values(tmp
     bad_row = next(r for r in rows if r.share_package_id == "pkg-bad")
     assert bad_row.merge_result_operations_applied is None
     assert bad_row.merge_result_operations_skipped is None
+
+from src.services.share_lifecycle_service import (
+    ShareLifecycleContextError,
+    ShareLifecyclePermissionError,
+    SharePackageContractMismatchError,
+    SharePackageNotCancelableError,
+    SharePackageNotFoundError,
+    cancel_share_package,
+    list_active_share_packages,
+)
+
+_ADMIN = {"is_admin": True, "is_active": 1, "id": 1, "username": "admin"}
+_DENIED = {"id": 999, "is_active": 1, "permissions": []}
+
+
+def test_cancel_open_share_package_is_registry_only_and_durable(tmp_path):
+    store = STSStore(tmp_path / "cancel-open.sts")
+    cid = store.write_contract(_contract("C-1"), [], {})
+    uid = store.db.conn.execute("SELECT merge_uid FROM contracts WHERE id=?", (cid,)).fetchone()[0]
+    _register(store, cid, uid, "pkg-open", "2026-07-08T00:00:00", SHARE_STATUS_OPEN)
+    before_snapshot = _snapshot_hash(store.db.conn, cid)
+    before_contract = dict(store.db.conn.execute("SELECT revision,updated_at FROM contracts WHERE id=?", (cid,)).fetchone())
+
+    row = cancel_share_package(store, uid, "pkg-open", current_staff=_ADMIN)
+
+    assert row["status"] == SHARE_STATUS_CANCELLED
+    assert _snapshot_hash(store.db.conn, cid) == before_snapshot
+    assert dict(store.db.conn.execute("SELECT revision,updated_at FROM contracts WHERE id=?", (cid,)).fetchone()) == before_contract
+    db_row = store.get_share_package("pkg-open")
+    assert db_row["merge_result_operations_applied"] is None
+    assert db_row["merge_result_operations_skipped"] is None
+    assert not db_row["merged_at"]
+    assert not db_row["merge_result_sha256"]
+    assert int(db_row["return_count"] or 0) == 0
+    store.db.close()
+    reopened = STSStore(tmp_path / "cancel-open.sts")
+    assert reopened.get_share_package("pkg-open")["status"] == SHARE_STATUS_CANCELLED
+
+
+def test_cancel_returned_allowed_but_final_and_repeated_rejected(tmp_path):
+    store = STSStore(tmp_path / "cancel-matrix.sts")
+    cid = store.write_contract(_contract("C-1"), [], {})
+    uid = store.db.conn.execute("SELECT merge_uid FROM contracts WHERE id=?", (cid,)).fetchone()[0]
+    _register(store, cid, uid, "pkg-returned", "2026-07-08T00:00:00", SHARE_STATUS_RETURNED)
+    cancel_share_package(store, uid, "pkg-returned", current_staff=_ADMIN)
+    with pytest.raises(SharePackageNotCancelableError):
+        cancel_share_package(store, uid, "pkg-returned", current_staff=_ADMIN)
+    for status in [SHARE_STATUS_MERGED, SHARE_STATUS_PARTIALLY_MERGED, SHARE_STATUS_REJECTED]:
+        package_id = f"pkg-{status.lower()}"
+        _register(store, cid, uid, package_id, "2026-07-08T01:00:00", status)
+        with pytest.raises(SharePackageNotCancelableError):
+            cancel_share_package(store, uid, package_id, current_staff=_ADMIN)
+        assert store.get_share_package(package_id)["status"] == status
+
+
+def test_cancel_unknown_wrong_contract_permission_and_share_mode_guards(tmp_path):
+    store = STSStore(tmp_path / "cancel-guards.sts")
+    cid1 = store.write_contract(_contract("C-1"), [], {})
+    cid2 = store.write_contract(_contract("C-2"), [], {})
+    uid1 = store.db.conn.execute("SELECT merge_uid FROM contracts WHERE id=?", (cid1,)).fetchone()[0]
+    uid2 = store.db.conn.execute("SELECT merge_uid FROM contracts WHERE id=?", (cid2,)).fetchone()[0]
+    _register(store, cid2, uid2, "pkg-b", "2026-07-08T00:00:00", SHARE_STATUS_OPEN)
+    with pytest.raises(SharePackageNotFoundError):
+        cancel_share_package(store, uid1, "missing", current_staff=_ADMIN)
+    with pytest.raises(SharePackageContractMismatchError):
+        cancel_share_package(store, uid1, "pkg-b", current_staff=_ADMIN)
+    with pytest.raises(ShareLifecyclePermissionError):
+        cancel_share_package(store, uid2, "pkg-b", current_staff=_DENIED)
+    setattr(store, "share_mode_enabled", True)
+    with pytest.raises(ShareLifecycleContextError):
+        cancel_share_package(store, uid2, "pkg-b", current_staff=_ADMIN)
+    assert store.get_share_package("pkg-b")["status"] == SHARE_STATUS_OPEN
+
+
+def test_active_share_packages_filter_current_contract_and_status_without_blob_reads(tmp_path, monkeypatch):
+    store = STSStore(tmp_path / "active.sts")
+    cid1 = store.write_contract(_contract("C-1"), [], {})
+    cid2 = store.write_contract(_contract("C-2"), [], {})
+    uid1 = store.db.conn.execute("SELECT merge_uid FROM contracts WHERE id=?", (cid1,)).fetchone()[0]
+    uid2 = store.db.conn.execute("SELECT merge_uid FROM contracts WHERE id=?", (cid2,)).fetchone()[0]
+    for status in [SHARE_STATUS_OPEN, SHARE_STATUS_RETURNED, SHARE_STATUS_MERGED, SHARE_STATUS_PARTIALLY_MERGED, SHARE_STATUS_CANCELLED, SHARE_STATUS_REJECTED]:
+        _register(store, cid1, uid1, f"pkg-{status}", f"2026-07-08T0{len(status)%10}:00:00", status)
+    _register(store, cid2, uid2, "pkg-other", "2026-07-09T00:00:00", SHARE_STATUS_OPEN)
+
+    rows = list_active_share_packages(store, uid1)
+
+    assert {row["status"] for row in rows} == {SHARE_STATUS_OPEN, SHARE_STATUS_RETURNED}
+    assert {row["contract_merge_uid"] for row in rows} == {uid1}
+    assert all("base_snapshot_sha256" not in row and "merge_result_sha256" not in row for row in rows)
+
+from src.ui.presenters.share_history_presenter import present_cancellation_audit
+
+_STAFF = {"id": 7, "is_admin": True, "is_active": 1, "username": "u.audit", "admin_name": "Audit User"}
+
+
+def _audit_values(store, package_id):
+    return dict(store.db.conn.execute(
+        "SELECT status,cancelled_at,cancelled_by_staff_id,cancelled_by_username,cancelled_by_full_name,"
+        "merge_result_operations_applied,merge_result_operations_skipped,merged_at,merge_result_sha256,return_count "
+        "FROM share_packages WHERE share_package_id=?",
+        (package_id,),
+    ).fetchone())
+
+
+def test_cancel_open_records_durable_timestamp_and_actor_metadata(tmp_path, monkeypatch):
+    monkeypatch.setattr("src.services.share_lifecycle_service.now_iso", lambda: "2026-07-08 14:32:00")
+    store = STSStore(tmp_path / "cancel-audit.sts")
+    cid = store.write_contract(_contract("C-1"), [], {})
+    uid = store.db.conn.execute("SELECT merge_uid FROM contracts WHERE id=?", (cid,)).fetchone()[0]
+    _register(store, cid, uid, "pkg-audit", "2026-07-08T00:00:00", SHARE_STATUS_OPEN)
+    before_snapshot = _snapshot_hash(store.db.conn, cid)
+    before_revision = store.db.conn.execute("SELECT revision FROM contracts WHERE id=?", (cid,)).fetchone()[0]
+
+    cancel_share_package(store, uid, "pkg-audit", current_staff=_STAFF)
+
+    row = _audit_values(store, "pkg-audit")
+    assert row["status"] == SHARE_STATUS_CANCELLED
+    assert row["cancelled_at"] == "2026-07-08 14:32:00"
+    assert row["cancelled_by_staff_id"] is None
+    assert row["cancelled_by_username"] == "u.audit"
+    assert row["cancelled_by_full_name"] == "Audit User"
+    assert row["merge_result_operations_applied"] is None
+    assert row["merge_result_operations_skipped"] is None
+    assert not row["merged_at"]
+    assert not row["merge_result_sha256"]
+    assert int(row["return_count"] or 0) == 0
+    assert _snapshot_hash(store.db.conn, cid) == before_snapshot
+    assert store.db.conn.execute("SELECT revision FROM contracts WHERE id=?", (cid,)).fetchone()[0] == before_revision
+    store.db.close()
+
+    reopened = STSStore(tmp_path / "cancel-audit.sts")
+    rows = list_contract_share_history(reopened, uid)
+    record = next(r for r in rows if r.share_package_id == "pkg-audit")
+    assert record.cancelled_at == "2026-07-08 14:32:00"
+    assert record.cancelled_by_staff_id is None
+    assert record.cancelled_by_username == "u.audit"
+    assert record.cancelled_by_full_name == "Audit User"
+    presentation = present_cancellation_audit(record)
+    assert presentation.recorded is True
+    assert "08.07.2026 14:32" in presentation.summary_label
+    assert "Audit User" in presentation.summary_label
+
+
+def test_cancel_returned_records_audit_and_missing_actor_is_nullable(tmp_path, monkeypatch):
+    monkeypatch.setattr("src.services.share_lifecycle_service.now_iso", lambda: "2026-07-08 15:00:00")
+    store = STSStore(tmp_path / "cancel-returned-audit.sts")
+    cid = store.write_contract(_contract("C-1"), [], {})
+    uid = store.db.conn.execute("SELECT merge_uid FROM contracts WHERE id=?", (cid,)).fetchone()[0]
+    _register(store, cid, uid, "pkg-returned-audit", "2026-07-08T00:00:00", SHARE_STATUS_RETURNED)
+
+    cancel_share_package(store, uid, "pkg-returned-audit", current_staff={"is_admin": True, "is_active": 1})
+
+    row = _audit_values(store, "pkg-returned-audit")
+    assert row["status"] == SHARE_STATUS_CANCELLED
+    assert row["cancelled_at"] == "2026-07-08 15:00:00"
+    assert row["cancelled_by_staff_id"] is None
+    assert row["cancelled_by_username"] == ""
+    assert row["cancelled_by_full_name"] == ""
+
+
+def test_legacy_cancelled_row_keeps_unknown_cancellation_audit(tmp_path):
+    store = STSStore(tmp_path / "legacy-cancelled-audit.sts")
+    cid = store.write_contract(_contract("C-1"), [], {})
+    uid = store.db.conn.execute("SELECT merge_uid FROM contracts WHERE id=?", (cid,)).fetchone()[0]
+    _register(store, cid, uid, "pkg-legacy-cancel", "2026-07-08T00:00:00", SHARE_STATUS_CANCELLED)
+
+    record = list_contract_share_history(store, uid)[0]
+    presentation = present_cancellation_audit(record)
+
+    assert record.cancelled_at == ""
+    assert record.cancelled_by_staff_id is None
+    assert presentation.visible is True
+    assert presentation.recorded is False
+    assert "eski sürüm" in presentation.summary_label
+
+
+def test_cancel_repeated_and_final_statuses_do_not_overwrite_audit_metadata(tmp_path, monkeypatch):
+    monkeypatch.setattr("src.services.share_lifecycle_service.now_iso", lambda: "2026-07-08 10:00:00")
+    store = STSStore(tmp_path / "cancel-audit-final.sts")
+    cid = store.write_contract(_contract("C-1"), [], {})
+    uid = store.db.conn.execute("SELECT merge_uid FROM contracts WHERE id=?", (cid,)).fetchone()[0]
+    _register(store, cid, uid, "pkg-repeat", "2026-07-08T00:00:00", SHARE_STATUS_OPEN)
+    cancel_share_package(store, uid, "pkg-repeat", current_staff=_STAFF)
+    first = _audit_values(store, "pkg-repeat")
+    monkeypatch.setattr("src.services.share_lifecycle_service.now_iso", lambda: "2026-07-08 11:00:00")
+    with pytest.raises(SharePackageNotCancelableError):
+        cancel_share_package(store, uid, "pkg-repeat", current_staff={"id": 8, "is_admin": True, "username": "other", "admin_name": "Other"})
+    assert _audit_values(store, "pkg-repeat") == first
+
+    for status in [SHARE_STATUS_MERGED, SHARE_STATUS_PARTIALLY_MERGED, SHARE_STATUS_REJECTED]:
+        package_id = f"pkg-final-audit-{status.lower()}"
+        _register(store, cid, uid, package_id, "2026-07-08T01:00:00", status)
+        before = _audit_values(store, package_id)
+        with pytest.raises(SharePackageNotCancelableError):
+            cancel_share_package(store, uid, package_id, current_staff=_STAFF)
+        assert _audit_values(store, package_id) == before
+        assert before["cancelled_at"] is None
+
+
+def test_cancel_guard_failures_write_no_audit_metadata(tmp_path):
+    store = STSStore(tmp_path / "cancel-audit-guards.sts")
+    cid1 = store.write_contract(_contract("C-1"), [], {})
+    cid2 = store.write_contract(_contract("C-2"), [], {})
+    uid1 = store.db.conn.execute("SELECT merge_uid FROM contracts WHERE id=?", (cid1,)).fetchone()[0]
+    uid2 = store.db.conn.execute("SELECT merge_uid FROM contracts WHERE id=?", (cid2,)).fetchone()[0]
+    _register(store, cid2, uid2, "pkg-guard", "2026-07-08T00:00:00", SHARE_STATUS_OPEN)
+    before = _audit_values(store, "pkg-guard")
+
+    with pytest.raises(SharePackageContractMismatchError):
+        cancel_share_package(store, uid1, "pkg-guard", current_staff=_ADMIN)
+    with pytest.raises(ShareLifecyclePermissionError):
+        cancel_share_package(store, uid2, "pkg-guard", current_staff=_DENIED)
+    with pytest.raises(SharePackageNotFoundError):
+        cancel_share_package(store, uid2, "missing", current_staff=_ADMIN)
+    setattr(store, "share_mode_enabled", True)
+    with pytest.raises(ShareLifecycleContextError):
+        cancel_share_package(store, uid2, "pkg-guard", current_staff=_ADMIN)
+
+    assert _audit_values(store, "pkg-guard") == before
+
+
+def test_cancel_audit_update_rolls_back_on_database_failure(tmp_path, monkeypatch):
+    monkeypatch.setattr("src.services.share_lifecycle_service.now_iso", lambda: "2026-07-08 12:00:00")
+    store = STSStore(tmp_path / "cancel-audit-rollback.sts")
+    cid = store.write_contract(_contract("C-1"), [], {})
+    uid = store.db.conn.execute("SELECT merge_uid FROM contracts WHERE id=?", (cid,)).fetchone()[0]
+    _register(store, cid, uid, "pkg-rollback", "2026-07-08T00:00:00", SHARE_STATUS_OPEN)
+    before_snapshot = _snapshot_hash(store.db.conn, cid)
+    before_revision = store.db.conn.execute("SELECT revision FROM contracts WHERE id=?", (cid,)).fetchone()[0]
+    store.db.conn.execute(
+        """
+        CREATE TRIGGER fail_cancel_audit BEFORE UPDATE OF status ON share_packages
+        WHEN NEW.status='CANCELLED'
+        BEGIN
+            SELECT RAISE(ABORT, 'injected cancel audit failure');
+        END
+        """
+    )
+    store.db.conn.commit()
+
+    with pytest.raises(Exception):
+        cancel_share_package(store, uid, "pkg-rollback", current_staff=_STAFF)
+
+    row = _audit_values(store, "pkg-rollback")
+    assert row["status"] == SHARE_STATUS_OPEN
+    assert row["cancelled_at"] is None
+    assert row["cancelled_by_staff_id"] is None
+    assert row["cancelled_by_username"] == ""
+    assert row["cancelled_by_full_name"] == ""
+    assert _snapshot_hash(store.db.conn, cid) == before_snapshot
+    assert store.db.conn.execute("SELECT revision FROM contracts WHERE id=?", (cid,)).fetchone()[0] == before_revision

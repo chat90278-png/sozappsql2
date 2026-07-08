@@ -54,7 +54,7 @@ def quote_identifier(identifier: str) -> str:
 LEGACY_CONTRACT_PARENT_NO_COLUMN = "parent_contract_" "no"
 LEGACY_CONTRACT_USERS_COLUMN = "user_" "names"
 LEGACY_DELIVERY_SYSTEM_LABEL_COLUMN = "system_" "name"
-CURRENT_SCHEMA_VERSION = 16
+CURRENT_SCHEMA_VERSION = 17
 
 
 class STSMigrationError(RuntimeError):
@@ -973,7 +973,11 @@ CREATE TABLE IF NOT EXISTS activity_logs(id INTEGER PRIMARY KEY AUTOINCREMENT,cr
                 merge_result_operations_applied INTEGER,
                 merge_result_operations_skipped INTEGER,
                 merged_at TEXT,
-                return_count INTEGER NOT NULL DEFAULT 0
+                return_count INTEGER NOT NULL DEFAULT 0,
+                cancelled_at TEXT,
+                cancelled_by_staff_id INTEGER,
+                cancelled_by_username TEXT NOT NULL DEFAULT '',
+                cancelled_by_full_name TEXT NOT NULL DEFAULT ''
             )
         """)
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_share_packages_contract_merge_uid ON share_packages(contract_merge_uid)")
@@ -984,6 +988,14 @@ CREATE TABLE IF NOT EXISTS activity_logs(id INTEGER PRIMARY KEY AUTOINCREMENT,cr
             migrated.append("share_packages.merge_result_operations_skipped")
         if self._ensure_column("share_packages", "merged_at", "TEXT"):
             migrated.append("share_packages.merged_at")
+        if self._ensure_column("share_packages", "cancelled_at", "TEXT"):
+            migrated.append("share_packages.cancelled_at")
+        if self._ensure_column("share_packages", "cancelled_by_staff_id", "INTEGER"):
+            migrated.append("share_packages.cancelled_by_staff_id")
+        if self._ensure_column("share_packages", "cancelled_by_username", "TEXT NOT NULL DEFAULT ''"):
+            migrated.append("share_packages.cancelled_by_username")
+        if self._ensure_column("share_packages", "cancelled_by_full_name", "TEXT NOT NULL DEFAULT ''"):
+            migrated.append("share_packages.cancelled_by_full_name")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_share_packages_created_at ON share_packages(created_at)")
         self.conn.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version',?)", (str(CURRENT_SCHEMA_VERSION),))
         self.conn.commit()
