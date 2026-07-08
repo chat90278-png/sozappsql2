@@ -23,6 +23,16 @@ class ShareHistoryStatusPresentation:
 
 
 @dataclass(frozen=True)
+class ShareMergeResultPresentation:
+    visible: bool
+    recorded: bool
+    summary_label: str = ""
+    applied_label: str = ""
+    skipped_label: str = ""
+    merged_at_label: str = ""
+
+
+@dataclass(frozen=True)
 class ShareHistorySummary:
     total: int
     by_status: dict[str, int]
@@ -74,6 +84,37 @@ def format_share_history_datetime(value: str) -> str:
         return text
     return parsed.strftime("%d.%m.%Y %H:%M")
 
+
+
+def present_merge_result(record: ShareHistoryRecord) -> ShareMergeResultPresentation:
+    status = str(record.status or "").strip()
+    if status not in {SHARE_STATUS_MERGED, SHARE_STATUS_PARTIALLY_MERGED}:
+        return ShareMergeResultPresentation(visible=False, recorded=False)
+    applied = record.merge_result_operations_applied
+    skipped = record.merge_result_operations_skipped
+    if applied is None or skipped is None or applied < 0 or skipped < 0:
+        return ShareMergeResultPresentation(
+            visible=True,
+            recorded=False,
+            summary_label="Birleştirme sonucu kaydı eski sürümde oluşturulmuş.",
+            merged_at_label=format_share_history_datetime(record.merged_at) if record.merged_at else "",
+        )
+    applied_label = f"{applied} değişiklik uygulandı"
+    skipped_label = f"{skipped} değişiklik atlandı"
+    if applied == 0 and skipped == 0:
+        summary = "Uygulanacak yeni değişiklik yoktu."
+    elif skipped > 0:
+        summary = f"{applied_label} · {skipped_label}"
+    else:
+        summary = applied_label
+    return ShareMergeResultPresentation(
+        visible=True,
+        recorded=True,
+        summary_label=summary,
+        applied_label=applied_label,
+        skipped_label=skipped_label,
+        merged_at_label=format_share_history_datetime(record.merged_at) if record.merged_at else "",
+    )
 
 def display_share_filename(record: ShareHistoryRecord) -> str:
     name = str(record.exported_filename or "").strip()

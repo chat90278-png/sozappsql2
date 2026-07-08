@@ -54,7 +54,7 @@ def quote_identifier(identifier: str) -> str:
 LEGACY_CONTRACT_PARENT_NO_COLUMN = "parent_contract_" "no"
 LEGACY_CONTRACT_USERS_COLUMN = "user_" "names"
 LEGACY_DELIVERY_SYSTEM_LABEL_COLUMN = "system_" "name"
-CURRENT_SCHEMA_VERSION = 15
+CURRENT_SCHEMA_VERSION = 16
 
 
 class STSMigrationError(RuntimeError):
@@ -970,11 +970,20 @@ CREATE TABLE IF NOT EXISTS activity_logs(id INTEGER PRIMARY KEY AUTOINCREMENT,cr
                 last_imported_by_staff_id INTEGER,
                 last_remote_snapshot_sha256 TEXT NOT NULL DEFAULT '',
                 merge_result_sha256 TEXT NOT NULL DEFAULT '',
+                merge_result_operations_applied INTEGER,
+                merge_result_operations_skipped INTEGER,
+                merged_at TEXT,
                 return_count INTEGER NOT NULL DEFAULT 0
             )
         """)
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_share_packages_contract_merge_uid ON share_packages(contract_merge_uid)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_share_packages_contract_status ON share_packages(contract_merge_uid,status)")
+        if self._ensure_column("share_packages", "merge_result_operations_applied", "INTEGER"):
+            migrated.append("share_packages.merge_result_operations_applied")
+        if self._ensure_column("share_packages", "merge_result_operations_skipped", "INTEGER"):
+            migrated.append("share_packages.merge_result_operations_skipped")
+        if self._ensure_column("share_packages", "merged_at", "TEXT"):
+            migrated.append("share_packages.merged_at")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_share_packages_created_at ON share_packages(created_at)")
         self.conn.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version',?)", (str(CURRENT_SCHEMA_VERSION),))
         self.conn.commit()

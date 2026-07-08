@@ -236,7 +236,7 @@ def apply_resolved_share_merge(
                 registry_status = SHARE_STATUS_MERGED
             else:
                 registry_status = SHARE_STATUS_MERGED
-            _update_registry(ctx, registry_status, current_remote_hash, post_hash)
+            _update_registry(ctx, registry_status, current_remote_hash, post_hash, len(applied_ids), len(resolved_plan.operations) - len(applied_ids))
             _insert_audit_log(ctx, registry_status, revision_before, revision_after, pre_hash, current_remote_hash, post_hash, len(resolved_plan.operations), len(applied_ids), str(backup_info.path if backup_info else ""))
             conn.commit()
         except Exception:
@@ -981,18 +981,25 @@ def _int_or_none(value: Any) -> int | None:
         return None
 
 
-def _update_registry(ctx: _ApplyContext, status: str, remote_hash: str, post_hash: str) -> None:
+def _update_registry(ctx: _ApplyContext, status: str, remote_hash: str, post_hash: str, operations_applied: int, operations_skipped: int) -> str:
     try:
-        ctx.source.execute(
+        applied = int(operations_applied)
+        skipped = int(operations_skipped)
+        if applied < 0 or skipped < 0:
+            raise MergeRegistryUpdateError("Registry result count negatif olamaz.")
+        merged_at = now_iso()
+        cur = ctx.source.execute(
             """
             UPDATE share_packages
-            SET status=?,last_imported_at=?,last_imported_by_staff_id=?,last_remote_snapshot_sha256=?,merge_result_sha256=?,return_count=COALESCE(return_count,0)+1
+            SET status=?,last_imported_at=?,last_imported_by_staff_id=?,last_remote_snapshot_sha256=?,merge_result_sha256=?,
+                merge_result_operations_applied=?,merge_result_operations_skipped=?,merged_at=?,return_count=COALESCE(return_count,0)+1
             WHERE share_package_id=?
             """,
-            (status, now_iso(), ctx.current_staff_id or None, remote_hash, post_hash, ctx.share_package_id),
+            (status, merged_at, ctx.current_staff_id or None, remote_hash, post_hash, applied, skipped, merged_at, ctx.share_package_id),
         )
-        if ctx.source.total_changes < 1:
+        if cur.rowcount < 1:
             raise MergeRegistryUpdateError("Registry update hiçbir satırı etkilemedi.")
+        return merged_at
     except MergeRegistryUpdateError:
         raise
     except Exception as exc:

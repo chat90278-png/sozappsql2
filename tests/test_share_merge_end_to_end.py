@@ -123,7 +123,13 @@ def test_field_conflict_requires_explicit_decision(tmp_path, decision, expected,
     result = apply_resolved_share_merge(source, share.path, resolved, allow_partial=decision == MergeDecisionKind.SKIP)
     assert _note(source, cid) == expected
     assert result.registry_status == status
-    assert source.get_share_package(metadata["share_package_id"])["status"] == status
+    registry = source.get_share_package(metadata["share_package_id"])
+    assert registry["status"] == status
+    assert registry["merge_result_operations_applied"] == result.operations_applied
+    assert registry["merge_result_operations_skipped"] == result.operations_skipped
+    assert registry["merged_at"]
+    if status == SHARE_STATUS_PARTIALLY_MERGED:
+        assert result.operations_skipped == len(resolved.operations) - result.operations_applied
 
 
 def test_document_replace_validates_real_blob_bytes_and_replay(tmp_path):
@@ -265,7 +271,11 @@ def test_invalid_projected_graph_parent_delete_child_keep_fails_closed(tmp_path)
         apply_resolved_share_merge(source, share.path, resolved, allow_partial=True)
     assert hash_contract_snapshot(build_contract_snapshot(source.db.conn, cid)) == before
     assert source.db.conn.execute("SELECT note FROM deliveries WHERE id=?", (local_delivery_id,)).fetchone()[0] == "LOCAL CHILD"
-    assert source.get_share_package(metadata["share_package_id"])["status"] == SHARE_STATUS_OPEN
+    registry = source.get_share_package(metadata["share_package_id"])
+    assert registry["status"] == SHARE_STATUS_OPEN
+    assert registry["merge_result_operations_applied"] is None
+    assert registry["merge_result_operations_skipped"] is None
+    assert registry["merged_at"] is None
 
 
 def test_graph_operation_ordering_is_deterministic(tmp_path):

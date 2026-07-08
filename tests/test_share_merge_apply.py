@@ -120,6 +120,15 @@ def test_apply_contract_field_keeps_local_only_data_and_updates_registry_backup_
     assert registry["status"] == SHARE_STATUS_MERGED
     assert registry["last_remote_snapshot_sha256"] == result.remote_snapshot_hash
     assert registry["merge_result_sha256"] == result.post_apply_snapshot_hash
+    assert registry["merge_result_operations_applied"] == result.operations_applied
+    assert registry["merge_result_operations_skipped"] == result.operations_skipped
+    assert registry["merged_at"]
+    source.db.close()
+    reopened = STSStore(source.path)
+    reopened_registry = reopened.get_share_package(metadata["share_package_id"])
+    assert reopened_registry["merge_result_operations_applied"] == result.operations_applied
+    assert reopened_registry["merge_result_operations_skipped"] == result.operations_skipped
+    assert reopened_registry["merged_at"] == registry["merged_at"]
     assert Path(result.backup_path).exists()
     assert result.operations_applied == len(resolved.operations)
 

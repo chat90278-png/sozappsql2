@@ -19,6 +19,7 @@ from src.ui.presenters.share_history_presenter import (
     format_share_history_datetime,
     present_share_permission,
     present_share_status,
+    present_merge_result,
     summarize_share_history,
 )
 
@@ -172,11 +173,20 @@ class ShareHistoryDialog(QDialog):
         meta.setStyleSheet("color:#475569;font-size:12px;font-weight:700;")
         lay.addWidget(meta)
 
+        merge_result = present_merge_result(record)
+        if merge_result.visible and merge_result.summary_label:
+            result = QLabel(merge_result.summary_label)
+            result.setWordWrap(True)
+            result.setStyleSheet("color:#166534;font-size:12px;font-weight:900;background:#F0FDF4;border:1px solid #BBF7D0;border-radius:8px;padding:5px 8px;")
+            lay.addWidget(result)
+
         detail_parts = [f"Paket: {record.share_package_id[:8]}"] if record.share_package_id else []
         if record.source_contract_revision:
             detail_parts.append(f"Base revizyon: {record.source_contract_revision}")
         if record.base_snapshot_sha256:
             detail_parts.append(f"Snapshot: {record.base_snapshot_sha256[:12]}")
+        if merge_result.visible and merge_result.merged_at_label:
+            detail_parts.append(f"Birleştirme: {merge_result.merged_at_label}")
         if detail_parts:
             detail = QLabel(" · ".join(detail_parts))
             detail.setStyleSheet("color:#94A3B8;font-size:10px;font-weight:700;")
