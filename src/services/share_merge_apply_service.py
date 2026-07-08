@@ -756,7 +756,9 @@ def _keep_both_file(ctx: _ApplyContext, op: MergeOperation) -> None:
     expected = str(op.metadata.get("remote_sha256") or "")
     remote = _remote_file(ctx, source_uid, expected)
     data = op.value if isinstance(op.value, dict) else {}
-    folder_id = _folder_id(ctx, str(data.get("folder_merge_uid") or op.metadata.get("remote_folder_merge_uid") or ""))
+    local_row = _resolve_by_uid(ctx, "contract_files", op.entity_uid)
+    remote_folder_uid = str(data.get("folder_merge_uid") or op.metadata.get("remote_folder_merge_uid") or "")
+    folder_id = _folder_id(ctx, remote_folder_uid) if remote_folder_uid else local_row["folder_id"]
     filename = _unique_filename(ctx, folder_id, str(remote["filename"] or op.metadata.get("remote_filename") or "remote-file"))
     ext = str(remote["file_ext"] or Path(filename).suffix.lower().lstrip("."))
     mime = str(remote["mime_type"] or mimetypes.guess_type(filename)[0] or "application/octet-stream")
