@@ -10,7 +10,7 @@ import pytest
 from src.domain.contract_snapshot import build_contract_snapshot, hash_contract_snapshot, CONTRACT_SNAPSHOT_FORMAT_VERSION
 from src.domain.share_merge_resolution import resolve_merge_plan, hash_merge_operations
 from src.models.app_models import ContractInfo, DeliveryInfo, SystemInfo
-from src.models.share_models import SHARE_FORMAT_V2, SHARE_STATUS_MERGED, SHARE_STATUS_OPEN, SHARE_STATUS_PARTIALLY_MERGED, SharePackageRegistryEntry
+from src.models.share_models import SHARE_FORMAT_V2, SHARE_STATUS_MERGED, SHARE_STATUS_OPEN, SHARE_STATUS_PARTIALLY_MERGED, SHARE_STATUS_RETURNED, SharePackageRegistryEntry
 from src.models.share_merge_models import MergeChangeKind
 from src.models.share_merge_resolution_models import MergeDecision, MergeDecisionKind, MergeOperationKind
 from src.services.share_merge_apply_service import (
@@ -297,7 +297,7 @@ def test_invalid_projected_graph_parent_delete_child_keep_fails_closed(tmp_path)
     assert hash_contract_snapshot(build_contract_snapshot(source.db.conn, cid)) == before
     assert source.db.conn.execute("SELECT note FROM deliveries WHERE id=?", (local_delivery_id,)).fetchone()[0] == "LOCAL CHILD"
     registry = source.get_share_package(metadata["share_package_id"])
-    assert registry["status"] == SHARE_STATUS_OPEN
+    assert registry["status"] == SHARE_STATUS_RETURNED
     assert registry["merge_result_operations_applied"] is None
     assert registry["merge_result_operations_skipped"] is None
     assert registry["merged_at"] is None
@@ -374,7 +374,7 @@ def test_keep_both_insert_failure_rolls_back(monkeypatch, tmp_path):
     apply_service._HANDLERS[MergeOperationKind.KEEP_BOTH_DOCUMENT_FILE] = original
     assert hash_contract_snapshot(build_contract_snapshot(source.db.conn, cid)) == before
     assert source.db.conn.execute("SELECT COUNT(*) FROM contract_files WHERE contract_id=?", (cid,)).fetchone()[0] == 1
-    assert source.get_share_package(metadata["share_package_id"])["status"] == SHARE_STATUS_OPEN
+    assert source.get_share_package(metadata["share_package_id"])["status"] == SHARE_STATUS_RETURNED
 
 
 def test_mid_operation_and_registry_finalize_failures_roll_back(monkeypatch, tmp_path):
@@ -402,7 +402,7 @@ def test_mid_operation_and_registry_finalize_failures_roll_back(monkeypatch, tmp
     assert hash_contract_snapshot(build_contract_snapshot(source.db.conn, cid)) == before
     assert source.db.conn.execute("SELECT revision FROM contracts WHERE id=?", (cid,)).fetchone()[0] == revision_before
     mid_registry = source.get_share_package(metadata["share_package_id"])
-    assert mid_registry["status"] == SHARE_STATUS_OPEN
+    assert mid_registry["status"] == SHARE_STATUS_RETURNED
     assert mid_registry["merge_result_operations_applied"] is None
     assert mid_registry["merge_result_operations_skipped"] is None
     assert mid_registry["merged_at"] is None
@@ -423,7 +423,7 @@ def test_mid_operation_and_registry_finalize_failures_roll_back(monkeypatch, tmp
     assert hash_contract_snapshot(build_contract_snapshot(source.db.conn, cid)) == before
     assert source.db.conn.execute("SELECT revision FROM contracts WHERE id=?", (cid,)).fetchone()[0] == revision_before
     final_registry = source.get_share_package(metadata["share_package_id"])
-    assert final_registry["status"] == registry_before["status"] == SHARE_STATUS_OPEN
+    assert final_registry["status"] == registry_before["status"] == SHARE_STATUS_RETURNED
     assert final_registry["merge_result_operations_applied"] is None
     assert final_registry["merge_result_operations_skipped"] is None
     assert final_registry["merged_at"] is None
@@ -460,7 +460,7 @@ def test_relation_add_remove_and_missing_target_fail_closed(tmp_path):
     with pytest.raises(MergeOperationTargetNotFoundError):
         apply_resolved_share_merge(source2, share2.path, resolved)
     assert source2.db.conn.execute("SELECT COUNT(*) FROM users WHERE name='MISSINGUSER'").fetchone()[0] == 0
-    assert source2.get_share_package(metadata2["share_package_id"])["status"] == SHARE_STATUS_OPEN
+    assert source2.get_share_package(metadata2["share_package_id"])["status"] == SHARE_STATUS_RETURNED
 
 
 def test_document_revision_snapshot_matrix(tmp_path):
@@ -594,7 +594,7 @@ def test_platform_relation_add_remove_primary_and_missing_target(tmp_path):
         apply_resolved_share_merge(source4, share4.path, resolve_merge_plan(prepare_share_merge_plan(source4, share4.path)))
     assert hash_contract_snapshot(build_contract_snapshot(source4.db.conn, cid4)) == before
     assert source4.db.conn.execute("SELECT COUNT(*) FROM platforms WHERE name='MISSING-PLATFORM'").fetchone()[0] == 0
-    assert source4.get_share_package(metadata4["share_package_id"])["status"] == SHARE_STATUS_OPEN
+    assert source4.get_share_package(metadata4["share_package_id"])["status"] == SHARE_STATUS_RETURNED
 
 
 def test_cancelled_exported_package_prepare_rejected_and_registry_only(tmp_path):
