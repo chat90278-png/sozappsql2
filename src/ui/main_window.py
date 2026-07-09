@@ -4337,8 +4337,6 @@ def open_share_contract_window(path: Path | str) -> Optional[ContractWorkWindow]
     )
     permission_mode = str((parsed_meta.permission_mode if parsed_meta else meta.get("permission_mode")) or "view")
     perms = {"view_contracts", "export_data"}
-    if permission_mode == "edit":
-        perms.update({"edit_contracts", "manage_labels", "lock_documents", "unlock_own_documents"})
     auth.current_staff = {
         "id": 0,
         "full_name": "Paylaşım Kullanıcısı",

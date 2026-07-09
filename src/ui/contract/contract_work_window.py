@@ -20,7 +20,9 @@ from pathlib import Path
 from datetime import date, datetime, timedelta
 from typing import Callable, Dict, List, Optional, Protocol, Tuple
 from src.ui.dialogs.auto_accept_dialog import open_auto_accept_dialog
-from src.services.share_package_service import read_share_metadata, write_share_metadata
+from src.services.share_package_service import parse_share_metadata, read_share_metadata, write_share_metadata
+from src.share_permissions import can_mutate_current_contract
+from src.contract_projection import component_display_keys
 
 
 from src.domain.constants import (
@@ -757,6 +759,7 @@ class ContractWorkWindow(QDialog):
     def set_share_mode(self, permission_mode: str = "view"):
         self.share_mode_enabled = True
         self.share_permission_mode = "edit" if str(permission_mode or "").lower() == "edit" else "view"
+        self.share_metadata = parse_share_metadata(read_share_metadata(getattr(self.store, "path", "")))
         self._apply_share_permissions()
 
     def _share_is_view_only(self) -> bool:
@@ -798,6 +801,14 @@ class ContractWorkWindow(QDialog):
         return True
 
     def has_permission(self, permission_code: str) -> bool:
+        if can_mutate_current_contract(
+            share_mode=bool(getattr(self, "share_mode_enabled", False)),
+            permission_mode=str(getattr(self, "share_permission_mode", "view")),
+            metadata=getattr(self, "share_metadata", None),
+            target_contract=getattr(self, "ci", None),
+            operation=permission_code,
+        ):
+            return True
         db_conn = getattr(getattr(self.store, "db", None), "conn", None)
         return auth.has_permission(self.current_staff, permission_code, db_conn)
 
@@ -5051,7 +5062,7 @@ class ContractWorkWindow(QDialog):
         """
         if not sys_info:
             return []
-        return list(sys_info.components.keys())
+        return component_display_keys(sys_info)
 
     def sync_summary_to_system(self):
         sys_info = self.current_system()
