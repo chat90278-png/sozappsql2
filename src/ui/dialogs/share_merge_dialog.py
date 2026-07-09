@@ -62,6 +62,7 @@ class ShareMergeDialog(QDialog):
         self.apply_result: ShareMergeApplyResult | None = None
 
         self.setWindowTitle("Paylaşım Değişikliklerini Birleştir")
+        self.setObjectName("shareMergeDialog")
         self.setModal(True)
         self.resize(980, 740)
         self.setStyleSheet(STYLE + self._dialog_style())
@@ -354,20 +355,20 @@ class ShareMergeDialog(QDialog):
         QLabel#shareMergeTitle{color:#0f2747;font-size:20px;font-weight:900;}
         QFrame#shareMergeSummary{background:#f8fbff;border:1px solid #c7d9ee;border-radius:10px;}
         QFrame#shareMergeSummaryCell{background:#ffffff;border:1px solid #e3edf8;border-radius:8px;}
-        QLabel#shareMergeSummaryLabel{color:#64748b;font-size:10px;font-weight:800;}
-        QLabel#shareMergeSummaryValue{color:#0f2747;font-size:12px;font-weight:800;}
+        QDialog#shareMergeDialog QLabel#shareMergeSummaryLabel{background:transparent;border:0;color:#64748b;font-size:10px;font-weight:800;}
+        QDialog#shareMergeDialog QLabel#shareMergeSummaryValue{background:transparent;border:0;color:#0f2747;font-size:12px;font-weight:800;}
         QFrame#shareMergeLive{background:#ffffff;border:1px solid #dbe7f5;border-radius:8px;}
         QLabel#shareMergePill{background:#eef6ff;color:#1d4ed8;border:1px solid #bfdbfe;border-radius:10px;padding:4px 10px;font-size:11px;font-weight:800;}
         QLabel#shareMergePartialWarning{background:#fff7ed;color:#9a3412;border:1px solid #fed7aa;border-radius:8px;padding:8px 10px;font-weight:700;}
         QLabel#shareMergeGroupTitle{color:#0f2747;font-size:14px;font-weight:900;padding:6px 2px 0 2px;}
         QFrame#shareMergeItemCard{background:#ffffff;border:1px solid #dbe7f5;border-radius:8px;}
         QFrame#shareMergeConflictCard{background:#fffdf7;border:1px solid #facc15;border-radius:8px;}
-        QLabel#shareMergeItemTitle{color:#10233d;font-size:13px;font-weight:900;}
-        QLabel#shareMergeSubtitle{color:#64748b;font-size:11px;}
+        QDialog#shareMergeDialog QLabel#shareMergeItemTitle{background:transparent;border:0;color:#10233d;font-size:13px;font-weight:900;}
+        QDialog#shareMergeDialog QLabel#shareMergeSubtitle{background:transparent;border:0;color:#64748b;font-size:11px;}
         QLabel#shareMergeChangeBadge{background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe;border-radius:10px;padding:3px 8px;font-size:10px;font-weight:800;}
         QLabel#shareMergeConflictBadge{background:#fef3c7;color:#92400e;border:1px solid #facc15;border-radius:10px;padding:3px 8px;font-size:10px;font-weight:900;}
-        QLabel#shareMergeValueCaption{color:#64748b;font-size:10px;font-weight:800;}
-        QLabel#shareMergeValue{background:#f8fbff;color:#0f2747;border:1px solid #e3edf8;border-radius:7px;padding:6px;font-size:11px;}
+        QDialog#shareMergeDialog QLabel#shareMergeValueCaption{background:transparent;border:0;color:#64748b;font-size:10px;font-weight:800;}
+        QDialog#shareMergeDialog QLabel#shareMergeValue{background:transparent;color:#0f2747;border:1px solid #e3edf8;border-radius:7px;padding:6px;font-size:11px;}
         QComboBox#shareMergeDecisionCombo{min-width:240px;min-height:30px;}
         QLabel#shareMergeStatus{color:#64748b;font-size:11px;font-weight:700;}
         QPushButton#shareMergeApply{background:#2563eb;color:#ffffff;border:0;border-radius:9px;padding:8px 16px;font-weight:900;}

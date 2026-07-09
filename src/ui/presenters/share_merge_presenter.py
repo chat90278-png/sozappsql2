@@ -1,6 +1,4 @@
 from __future__ import annotations
-
-import json
 import re
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -212,6 +210,8 @@ def field_label(field_name: str, field_path: str = "") -> str:
             return "Planlanan"
         if field == "delivered":
             return "Teslim Edilen"
+        if field == "units":
+            return "Kuyruk No / Seri No"
     return FIELD_LABELS.get(field, _humanize_token(field))
 
 
@@ -342,10 +342,84 @@ def _dict_summary(value: dict[str, Any]) -> str:
 
 
 def _detail_value(value: Any) -> str:
-    try:
-        return json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True, default=str)
-    except Exception:
-        return str(value)
+    return format_detail_value(value)
+
+
+def format_detail_value(value: Any) -> str:
+    if value is None:
+        return "Boş"
+    if isinstance(value, (str, int, float, bool, datetime, date)):
+        return format_value(value)
+    if isinstance(value, dict):
+        return _format_dict_detail(value)
+    if isinstance(value, (list, tuple)):
+        return _format_list_detail(list(value))
+    return format_value(value)
+
+
+def _format_dict_detail(value: dict[str, Any]) -> str:
+    lines: list[str] = []
+    title = str(value.get("name") or value.get("filename") or value.get("contract_no") or "").strip()
+    if title:
+        lines.append(title)
+    field_pairs = [
+        ("status", "Durum"),
+        ("planned_acceptance_date", "Planlanan Kabul"),
+        ("acceptance_date", "Kabul Tarihi"),
+        ("note", "Not"),
+    ]
+    for key, label in field_pairs:
+        if key in value:
+            shown = format_value(value.get(key))
+            lines.append(f"- {label}: {shown if shown != 'Boş' else '—'}")
+    components = value.get("components")
+    if isinstance(components, list) and components:
+        lines.append("- Bileşenler:")
+        for comp in components:
+            if not isinstance(comp, dict):
+                continue
+            name = str(comp.get("name") or "Bileşen").strip()
+            parts = []
+            if "qty" in comp:
+                parts.append(f"Miktar: {format_value(comp.get('qty'))}")
+            if "planned" in comp:
+                parts.append(f"Planlanan: {format_value(comp.get('planned'))}")
+            if "delivered" in comp:
+                parts.append(f"Teslim Edilen: {format_value(comp.get('delivered'))}")
+            units = comp.get("units")
+            if isinstance(units, list) and units:
+                parts.append(f"Kuyruk/Seri: {len(units)} kayıt")
+            lines.append(f"  - {name}" + (f" — {', '.join(parts)}" if parts else ""))
+    if lines:
+        return "\n".join(lines)
+    safe = []
+    for key, val in value.items():
+        text_key = str(key)
+        if text_key in {"id", "merge_uid", "stable_uid", "sha256", "payload_json"} or _looks_like_uid(str(val or "")):
+            continue
+        safe.append(f"- {FIELD_LABELS.get(text_key, _humanize_token(text_key))}: {format_value(val)}")
+    return "\n".join(safe) if safe else format_value(value)
+
+
+def _format_list_detail(values: list[Any]) -> str:
+    if not values:
+        return "Boş liste"
+    if all(isinstance(v, dict) and "slot_no" in v for v in values):
+        lines = ["Kuyruk No / Seri No:"]
+        for unit in sorted(values, key=lambda u: int((u or {}).get("slot_no", 0) or 0)):
+            if not isinstance(unit, dict):
+                continue
+            slot = int(unit.get("slot_no", 0) or 0)
+            ident = str(unit.get("identifier") or "").strip() or "—"
+            note = str(unit.get("note") or "").strip()
+            line = f"- #{slot:03d}: {ident}"
+            if note:
+                line += f" ({note})"
+            lines.append(line)
+        return "\n".join(lines)
+    if all(isinstance(v, dict) for v in values):
+        return "\n".join(_format_dict_detail(v) for v in values[:20])
+    return "\n".join(f"- {format_value(v)}" for v in values[:20])
 
 
 def _humanize_token(value: str) -> str:

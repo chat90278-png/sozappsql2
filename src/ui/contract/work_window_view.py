@@ -7,6 +7,7 @@ from PySide6.QtWidgets import QTableWidgetItem
 
 from src.domain.contract_timing import contract_timing
 from src.domain.flexible_date import is_tbd_contract_no, parse_flexible_date
+from src.contract_projection import system_component_projection
 from src.ui.contract.delivery_user_display import delivery_users_text
 
 
@@ -72,19 +73,16 @@ def refresh_right(self):
         return
     self.title.setText(sys_info.name)
     self.update_system_metric_cards(sys_info)
-    display_comps = self._component_display_keys(sys_info)
+    projection_rows = system_component_projection(sys_info, self.deliveries.get(sys_info.name, []))
 
     self._updating_summary = True
-    self.summary.setRowCount(len(display_comps))
+    self.summary.setRowCount(len(projection_rows))
     self.summary.setColumnCount(5)
     self.summary.setHorizontalHeaderLabels(["Bileşen", "Sözleşme Adedi", "Teslim Edilen", "Kalan", "Not"])
     if hasattr(self, "configure_summary_columns"):
         self.configure_summary_columns()
-    for r, comp in enumerate(display_comps):
-        qty = self._as_number(sys_info.components.get(comp, 0))
-        delivered = sum(d.delivered.get(comp, 0) for d in self.deliveries.get(sys_info.name, []))
-        note = str((getattr(sys_info, "component_notes", {}) or {}).get(comp, "") or "")
-        vals = [comp, qty, delivered, qty - delivered, note]
+    for r, row in enumerate(projection_rows):
+        vals = [row["component"], row["qty"], row["delivered"], row["remaining"], row["note"]]
         for c, v in enumerate(vals):
             it = QTableWidgetItem(self._fmt_num(v) if c in (1, 2, 3) else str(v))
             if c in (1, 4):

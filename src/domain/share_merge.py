@@ -328,7 +328,7 @@ def build_merge_plan(base_snapshot: dict, local_snapshot: dict, remote_snapshot:
     _compare_fields(changes, conflicts, summary, MergeEntityKind.CONTRACT, uid, label, "", base.get("contract") or {}, local.get("contract") or {}, remote.get("contract") or {}, {"merge_uid", "id", "contract_id", "revision"})
 
     _compare_collection(changes, conflicts, summary, "systems", MergeEntityKind.SYSTEM, "systems", base.get("systems") or [], local.get("systems") or [], remote.get("systems") or [], mapping_specs={"components": ("qty", "note")})
-    _compare_collection(changes, conflicts, summary, "deliveries", MergeEntityKind.DELIVERY, "deliveries", base.get("deliveries") or [], local.get("deliveries") or [], remote.get("deliveries") or [], mapping_specs={"components": ("planned", "delivered")})
+    _compare_collection(changes, conflicts, summary, "deliveries", MergeEntityKind.DELIVERY, "deliveries", base.get("deliveries") or [], local.get("deliveries") or [], remote.get("deliveries") or [], mapping_specs={"components": ("planned", "delivered", "units")})
     _compare_collection(changes, conflicts, summary, "folders", MergeEntityKind.DOCUMENT_FOLDER, "document_folders", base.get("folders") or [], local.get("folders") or [], remote.get("folders") or [])
     _compare_collection(changes, conflicts, summary, "files", MergeEntityKind.DOCUMENT_FILE, "document_files", base.get("files") or [], local.get("files") or [], remote.get("files") or [])
 

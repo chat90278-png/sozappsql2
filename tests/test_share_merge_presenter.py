@@ -146,3 +146,40 @@ def test_large_presenter_grouping_and_lookup_scale_without_quadratic_thresholds(
 def test_value_formatter_long_text_preview_is_bounded():
     long_text = format_value("x" * 300)
     assert long_text.endswith("…") and len(long_text) <= 160
+
+
+def test_detail_formatter_hides_raw_json_and_presents_delivery_semantics():
+    from src.ui.presenters.share_merge_presenter import format_detail_value
+
+    detail = format_detail_value({
+        "merge_uid": "550e8400-e29b-41d4-a716-446655440000",
+        "name": "Teslimat 1",
+        "status": "Başlanmadı",
+        "planned_acceptance_date": "TBD",
+        "payload_json": '{"raw": true}',
+        "components": [
+            {"name": "Hava Aracı", "planned": 3, "delivered": 0},
+            {"name": "YKİ", "planned": 1, "delivered": 0},
+            {"name": "YVT", "planned": 1, "delivered": 0},
+        ],
+        "note": "",
+    })
+    assert "Teslimat 1" in detail
+    assert "Durum" in detail
+    assert "Hava Aracı" in detail
+    assert "Planlanan: 3" in detail
+    assert "merge_uid" not in detail
+    assert "payload_json" not in detail
+    assert "{" not in detail and "}" not in detail
+
+
+def test_detail_formatter_presents_unit_slots_without_dict_repr():
+    from src.ui.presenters.share_merge_presenter import format_detail_value
+
+    detail = format_detail_value([
+        {"slot_no": 1, "identifier": "SER-1", "is_delivered": 0, "note": "QUEUE-1"},
+        {"slot_no": 2, "identifier": "SER-2", "is_delivered": 0, "note": ""},
+    ])
+    assert "Kuyruk No / Seri No" in detail
+    assert "#001" in detail and "SER-1" in detail
+    assert "{'" not in detail and '"slot_no"' not in detail
