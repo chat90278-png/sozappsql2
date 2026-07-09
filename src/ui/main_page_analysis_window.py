@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QMessageBox, QToolButton, QWidget
 
 from src.ui.main_page_final_window import MainWindow as CompactMainWindow
@@ -20,20 +21,38 @@ class MainWindow(CompactMainWindow):
     def build(self):
         super().build()
 
-        # Hotfix: the animated corner button had been switched to DelayedPopup
-        # and its clicked(bool) signal was wired to a manually positioned popup
-        # handler. On the packaged Windows/PySide6 runtime that click path can
-        # escape through sys.excepthook before the menu is shown. Keep the same
-        # animated button, QMenu instance, actions, permission refresh callbacks
-        # and aboutToShow/aboutToHide visual state; delegate popup opening back
-        # to QToolButton's proven native InstantPopup path.
-        btn = getattr(self, "top_actions_btn", None)
-        if isinstance(btn, QToolButton):
-            try:
-                btn.clicked.disconnect()
-            except (RuntimeError, TypeError):
-                pass
-            btn.setPopupMode(QToolButton.InstantPopup)
+        # Stability hotfix for packaged Windows/PySide6 builds.
+        # The animated corner button introduced a custom clicked -> popup path
+        # plus geometry/shadow animation while the QMenu was being shown. The
+        # crash dialog appears only on this interaction path. Replace only that
+        # surface with a plain native QToolButton and keep the exact same QMenu,
+        # actions, submenus and permission callbacks. Menu-open visual property
+        # handling remains connected through the existing QMenu signals.
+        animated_btn = getattr(self, "top_actions_btn", None)
+        menu = animated_btn.menu() if isinstance(animated_btn, QToolButton) else None
+        root = self.centralWidget()
+
+        if isinstance(animated_btn, QToolButton) and menu is not None and root is not None:
+            safe_btn = QToolButton(root)
+            safe_btn.setObjectName("cornerMenuBtn")
+            safe_btn.setText("☰")
+            safe_btn.setToolTip("Menü")
+            safe_btn.setToolButtonStyle(Qt.ToolButtonTextOnly)
+            safe_btn.setPopupMode(QToolButton.InstantPopup)
+            safe_btn.setFixedSize(72, 72)
+            safe_btn.setProperty("menuOpen", "false")
+
+            menu.setParent(safe_btn)
+            safe_btn.setMenu(menu)
+
+            animated_btn.hide()
+            animated_btn.setMenu(None)
+            animated_btn.deleteLater()
+
+            self.top_actions_btn = safe_btn
+            self.top_actions_menu = menu
+            safe_btn.show()
+            self.position_corner_menu()
 
     def _build_top_actions_menu(self, parent) -> object:
         menu = super()._build_top_actions_menu(parent)
