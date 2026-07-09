@@ -39,6 +39,14 @@ class MainWindow(CompactMainWindow):
         source_menu = experimental_btn.menu() if isinstance(experimental_btn, QToolButton) else None
 
         if root is not None and isinstance(experimental_btn, QToolButton) and source_menu is not None:
+            # Refresh QAction visibility while the legacy QToolButton/QMenu wiring
+            # is still intact. The overlay must not call this legacy refresh path
+            # after top_actions_btn is replaced by the custom painted QWidget.
+            try:
+                self._refresh_permission_actions()
+            except Exception:
+                _log.exception("Corner-menu permission refresh failed during overlay install")
+
             # The QMenu tree remains only an action/callback model. It is never
             # shown as a native popup. The overlay renders ordinary child widgets
             # and triggers the existing QAction objects directly.
@@ -50,7 +58,7 @@ class MainWindow(CompactMainWindow):
             self._corner_menu_overlay = CornerMenuOverlay(
                 host=root,
                 source_menu=source_menu,
-                before_open=self._refresh_permission_actions,
+                before_open=None,
                 parent=self,
             )
             self.top_actions_btn = self._corner_menu_overlay.button
