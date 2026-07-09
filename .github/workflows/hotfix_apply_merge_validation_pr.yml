@@ -5,7 +5,7 @@ on:
     branches:
       - main
     types:
-      - opened
+      - synchronize
 
 permissions:
   contents: write
@@ -46,24 +46,46 @@ jobs:
           runner_path = Path(os.environ["HOTFIX_RUNNER_PATH"])
           data = yaml.safe_load(runner_path.read_text(encoding="utf-8"))
           steps = data["jobs"]["apply-hotfix"]["steps"]
-          for step in steps:
-              command = step.get("run")
-              if not command:
-                  continue
-              name = step.get("name", "unnamed run step")
-              print(f"\n===== {name} =====", flush=True)
-              env = os.environ.copy()
-              env.update({str(k): str(v) for k, v in dict(step.get("env") or {}).items()})
-              subprocess.run(
-                  command,
-                  shell=True,
-                  check=True,
-                  executable="/bin/bash",
-                  env=env,
-              )
+          log_path = Path("/tmp/hotfix-driver.log")
+          with log_path.open("w", encoding="utf-8") as log:
+              for step in steps:
+                  command = step.get("run")
+                  if not command:
+                      continue
+                  name = step.get("name", "unnamed run step")
+                  header = f"\n===== {name} =====\n"
+                  print(header, flush=True)
+                  log.write(header)
+                  env = os.environ.copy()
+                  env.update({str(k): str(v) for k, v in dict(step.get("env") or {}).items()})
+                  proc = subprocess.run(
+                      command,
+                      shell=True,
+                      check=False,
+                      executable="/bin/bash",
+                      env=env,
+                      stdout=subprocess.PIPE,
+                      stderr=subprocess.STDOUT,
+                      text=True,
+                  )
+                  output = proc.stdout or ""
+                  print(output, flush=True)
+                  log.write(output)
+                  log.flush()
+                  if proc.returncode != 0:
+                      raise SystemExit(proc.returncode)
           PY
 
+      - name: Upload hotfix failure log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hotfix-driver-log
+          path: /tmp/hotfix-driver.log
+          if-no-files-found: error
+
       - name: Remove PR bootstrap runner
+        if: success()
         env:
           HOTFIX_BRANCH: ${{ github.head_ref }}
         run: |
