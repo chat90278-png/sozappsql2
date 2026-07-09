@@ -1,22 +1,20 @@
 # -*- coding: utf-8 -*-
-"""Animated corner menu overlay used by the compact STS main window.
+"""Safe animated corner-menu overlay for the compact STS main window.
 
-This implementation intentionally does not display QMenu.  Existing QAction
-and submenu trees remain the source of truth for callbacks and permissions, but
-normal child widgets render the approved quarter-circle button and attached
-panel.  This avoids native popup lifecycle/geometry coupling.
+Existing QAction/QMenu trees remain the source of truth for callbacks,
+submenus and permission visibility, but no QMenu is ever displayed.  The
+approved quarter-circle control and attached panel are ordinary child widgets.
 """
 from __future__ import annotations
 
 from typing import Callable, Optional
 
-from PySide6.QtCore import QEasingCurve, QObject, QPoint, Property, QPropertyAnimation, QRect, Qt, Signal
-from PySide6.QtGui import QColor, QMouseEvent, QPainter, QPainterPath, QPen
+from PySide6.QtCore import QEvent, QEasingCurve, QObject, QPoint, Property, QPropertyAnimation, QRect, Qt, Signal
+from PySide6.QtGui import QColor, QLinearGradient, QMouseEvent, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
     QGraphicsDropShadowEffect,
-    QGraphicsOpacityEffect,
     QHBoxLayout,
     QLabel,
     QMenu,
@@ -29,9 +27,90 @@ from PySide6.QtWidgets import (
 
 _ROOT_CAPTION = "STS MENÜ"
 
+_OVERLAY_STYLE = r"""
+QFrame#cornerMenuPanel {
+    background:#FFFFFF;
+    border:1px solid #CAD6E3;
+    border-radius:16px;
+    border-top-right-radius:0px;
+}
+QWidget#cornerMenuCaptionRow {
+    background:transparent;
+    border:0;
+}
+QLabel#cornerMenuCaption {
+    background:transparent;
+    color:#8B98A9;
+    border:0;
+    padding:0;
+    font-size:10px;
+    font-weight:700;
+}
+QPushButton#cornerMenuBack {
+    background:transparent;
+    color:#60758D;
+    border:0;
+    border-radius:8px;
+    font-size:20px;
+    font-weight:800;
+}
+QPushButton#cornerMenuBack:hover {
+    background:#EDF4FF;
+    color:#1849A2;
+}
+QPushButton#cornerMenuRow {
+    background:transparent;
+    border:0;
+    border-radius:10px;
+    padding:0;
+}
+QPushButton#cornerMenuRow[hovered="true"] {
+    background:#EDF4FF;
+}
+QPushButton#cornerMenuRow:pressed {
+    background:#E2ECFC;
+}
+QPushButton#cornerMenuRow:disabled {
+    background:transparent;
+}
+QLabel#cornerMenuRowTitle,
+QLabel#cornerMenuRowArrow {
+    background:transparent;
+    border:0;
+    color:#0F172A;
+    font-size:13px;
+    font-weight:800;
+}
+QLabel#cornerMenuRowArrow {
+    color:#6F8299;
+    font-size:16px;
+}
+QLabel#cornerMenuRowTitle[hovered="true"],
+QLabel#cornerMenuRowArrow[hovered="true"] {
+    color:#1849A2;
+}
+QLabel#cornerMenuRowTitle[disabled="true"],
+QLabel#cornerMenuRowArrow[disabled="true"] {
+    color:#94A3B8;
+}
+QFrame#cornerMenuSeparator {
+    background:#E3EAF2;
+    border:0;
+}
+"""
+
+
+def _repolish(widget: QWidget) -> None:
+    try:
+        widget.style().unpolish(widget)
+        widget.style().polish(widget)
+    except Exception:
+        pass
+    widget.update()
+
 
 class CornerMenuButton(QWidget):
-    """Single clickable quarter-circle surface with paint-only hover motion."""
+    """One painted quarter-circle surface; no inner button and no popup API."""
 
     clicked = Signal()
 
@@ -138,9 +217,14 @@ class CornerMenuButton(QWidget):
         path.quadTo(left, visual_size, self.width(), visual_size)
         path.closeSubpath()
 
-        idle = QColor("#22364A")
-        hover = QColor("#2B4055")
-        painter.fillPath(path, self._mix(idle, hover, p))
+        idle_start = QColor("#2A4056")
+        idle_end = QColor("#172A3B")
+        hover_start = QColor("#355169")
+        hover_end = QColor("#1C3145")
+        gradient = QLinearGradient(left, 0, self.width(), visual_size)
+        gradient.setColorAt(0.0, self._mix(idle_start, hover_start, p))
+        gradient.setColorAt(1.0, self._mix(idle_end, hover_end, p))
+        painter.fillPath(path, gradient)
 
         cx = self.width() - 28.0 - 2.0 * p
         cy = 35.0 + p
@@ -180,23 +264,46 @@ class CornerMenuRow(QPushButton):
         self.setMinimumHeight(42)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.setEnabled(bool(action.isEnabled()))
+        self.setProperty("hovered", "false")
         self.clicked.connect(lambda: self.requested.emit(self.action_ref))
 
         row = QHBoxLayout(self)
         row.setContentsMargins(13, 0, 10, 0)
         row.setSpacing(8)
 
-        title = QLabel(str(action.text() or "").replace("&", ""), self)
-        title.setObjectName("cornerMenuRowTitle")
-        title.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-        row.addWidget(title, 1)
+        self.title_label = QLabel(str(action.text() or "").replace("&", ""), self)
+        self.title_label.setObjectName("cornerMenuRowTitle")
+        self.title_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self.title_label.setProperty("hovered", "false")
+        self.title_label.setProperty("disabled", "true" if not action.isEnabled() else "false")
+        row.addWidget(self.title_label, 1)
 
-        arrow = QLabel("›" if action.menu() is not None else "", self)
-        arrow.setObjectName("cornerMenuRowArrow")
-        arrow.setAlignment(Qt.AlignCenter)
-        arrow.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-        arrow.setFixedWidth(14)
-        row.addWidget(arrow, 0)
+        self.arrow_label = QLabel("›" if action.menu() is not None else "", self)
+        self.arrow_label.setObjectName("cornerMenuRowArrow")
+        self.arrow_label.setAlignment(Qt.AlignCenter)
+        self.arrow_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self.arrow_label.setProperty("hovered", "false")
+        self.arrow_label.setProperty("disabled", "true" if not action.isEnabled() else "false")
+        self.arrow_label.setFixedWidth(14)
+        row.addWidget(self.arrow_label, 0)
+
+    def _set_hovered(self, hovered: bool) -> None:
+        value = "true" if hovered else "false"
+        self.setProperty("hovered", value)
+        self.title_label.setProperty("hovered", value)
+        self.arrow_label.setProperty("hovered", value)
+        _repolish(self)
+        _repolish(self.title_label)
+        _repolish(self.arrow_label)
+
+    def enterEvent(self, event) -> None:
+        if self.isEnabled():
+            self._set_hovered(True)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:
+        self._set_hovered(False)
+        super().leaveEvent(event)
 
 
 class CornerMenuPanel(QFrame):
@@ -209,6 +316,7 @@ class CornerMenuPanel(QFrame):
         self.setObjectName("cornerMenuPanel")
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.setFixedWidth(238)
+        self.setStyleSheet(_OVERLAY_STYLE)
 
         self._open_progress = 0.0
         self._target_rect = QRect()
@@ -219,13 +327,11 @@ class CornerMenuPanel(QFrame):
         self._animation.setEasingCurve(QEasingCurve.OutCubic)
         self._animation.finished.connect(self._on_animation_finished)
 
-        opacity = QGraphicsOpacityEffect(self)
-        opacity.setOpacity(1.0)
-        self.setGraphicsEffect(opacity)
-        self._opacity = opacity
-
-        shadow_host = QGraphicsDropShadowEffect()
-        _ = shadow_host  # QFrame can only own one graphics effect; visual shadow is approximated by border/QSS.
+        shadow = QGraphicsDropShadowEffect(self)
+        shadow.setBlurRadius(36)
+        shadow.setOffset(0, 12)
+        shadow.setColor(QColor(20, 43, 68, 70))
+        self.setGraphicsEffect(shadow)
 
         self._layout = QVBoxLayout(self)
         self._layout.setContentsMargins(10, 10, 10, 10)
@@ -239,7 +345,6 @@ class CornerMenuPanel(QFrame):
         self._open_progress = max(0.0, min(1.0, float(value)))
         if not self._target_rect.isValid():
             return
-
         p = self._open_progress
         scale = 0.97 + 0.03 * p
         width = max(1, round(self._target_rect.width() * scale))
@@ -247,7 +352,6 @@ class CornerMenuPanel(QFrame):
         x = self._target_rect.right() - width + 1
         y = self._target_rect.top() - round((1.0 - p) * 10.0)
         self.setGeometry(x, y, width, height)
-        self._opacity.setOpacity(p)
         self.update()
 
     openProgress = Property(float, get_open_progress, set_open_progress)
@@ -286,9 +390,8 @@ class CornerMenuPanel(QFrame):
         caption_layout.addWidget(caption_label, 1)
         self._layout.addWidget(caption_row)
 
-        visible_actions = [action for action in menu.actions() if action.isVisible()]
         pending_separator = False
-        for action in visible_actions:
+        for action in [item for item in menu.actions() if item.isVisible()]:
             if action.isSeparator():
                 pending_separator = True
                 continue
@@ -300,7 +403,6 @@ class CornerMenuPanel(QFrame):
                 self._layout.addWidget(separator)
                 self._layout.addSpacing(3)
                 pending_separator = False
-
             row = CornerMenuRow(action, self)
             row.requested.connect(self.actionRequested)
             self._layout.addWidget(row)
@@ -338,7 +440,7 @@ class CornerMenuPanel(QFrame):
 
 
 class CornerMenuOverlay(QObject):
-    """Controller that adapts an existing QMenu action tree to overlay widgets."""
+    """Adapts an existing QMenu action tree to the non-popup overlay widgets."""
 
     def __init__(
         self,
@@ -364,7 +466,6 @@ class CornerMenuOverlay(QObject):
         app = QApplication.instance()
         if app is not None:
             app.installEventFilter(self)
-
         self.reposition()
 
     def dispose(self) -> None:
@@ -377,7 +478,6 @@ class CornerMenuOverlay(QObject):
     def reposition(self) -> None:
         self.button.move(max(self.host.width() - self.button.width(), 0), 0)
         self.button.raise_()
-
         panel_height = max(1, self.panel.sizeHint().height())
         target = QRect(
             max(self.host.width() - self.panel.width() - 18, 0),
@@ -419,13 +519,8 @@ class CornerMenuOverlay(QObject):
         if not self._menu_stack:
             return
         menu = self._menu_stack[-1]
-        if len(self._menu_stack) == 1:
-            caption = _ROOT_CAPTION
-            allow_back = False
-        else:
-            caption = str(menu.title() or "MENÜ").replace("&", "").upper()
-            allow_back = True
-        self.panel.show_menu(menu, caption=caption, allow_back=allow_back)
+        caption = _ROOT_CAPTION if len(self._menu_stack) == 1 else str(menu.title() or "MENÜ").replace("&", "").upper()
+        self.panel.show_menu(menu, caption=caption, allow_back=len(self._menu_stack) > 1)
         self.reposition()
         if animated:
             self.panel.open_animated()
@@ -451,14 +546,12 @@ class CornerMenuOverlay(QObject):
         self._menu_stack.pop()
         self._show_current_menu(animated=False)
 
-    def eventFilter(self, obj, event) -> bool:
+    def eventFilter(self, _obj, event) -> bool:
         etype = event.type()
-        if etype == event.Type.KeyPress and self._open:
-            if event.key() == Qt.Key_Escape:
-                self.close()
-                return True
-
-        if etype == event.Type.MouseButtonPress and self._open:
+        if etype == QEvent.KeyPress and self._open and event.key() == Qt.Key_Escape:
+            self.close()
+            return True
+        if etype == QEvent.MouseButtonPress and self._open:
             try:
                 global_pos = event.globalPosition().toPoint()
             except Exception:
