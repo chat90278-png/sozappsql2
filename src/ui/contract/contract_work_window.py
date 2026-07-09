@@ -765,6 +765,12 @@ class ContractWorkWindow(QDialog):
     def _share_is_view_only(self) -> bool:
         return bool(getattr(self, "share_mode_enabled", False)) and str(getattr(self, "share_permission_mode", "view")) != "edit"
 
+    def _share_labels_disabled(self) -> bool:
+        return bool(getattr(self, "share_mode_enabled", False))
+
+    def _share_label_policy_message(self) -> str:
+        return "Etiket işlemleri paylaşım dosyasında desteklenmez. Ana STS dosyasında yapılmalıdır."
+
     def _apply_share_permissions(self):
         if not getattr(self, "share_mode_enabled", False):
             return
@@ -2239,7 +2245,9 @@ class ContractWorkWindow(QDialog):
             # + butonu scroll'dan önce değil, kart listesinin en üstünde kompakt satır
             add_row = QHBoxLayout(); add_row.setContentsMargins(0, 0, 0, 2); add_row.addStretch(1)
             add_btn = QPushButton("+ Etiket Ekle"); add_btn.setObjectName("sidePanelAddInline")
-            add_btn.setFixedHeight(26); add_btn.setEnabled(not self._share_is_view_only()); add_btn.clicked.connect(self.open_tag_assign_dialog)
+            add_btn.setFixedHeight(26); add_btn.setEnabled(not self._share_labels_disabled()); add_btn.clicked.connect(self.open_tag_assign_dialog)
+            if self._share_labels_disabled():
+                add_btn.setToolTip(self._share_label_policy_message())
             add_row.addWidget(add_btn); body.addLayout(add_row)
             scroll, cards = self._make_card_scroll(); body.addWidget(scroll, 1)
             ordered = self._ordered_contract_tags()
@@ -2958,9 +2966,9 @@ class ContractWorkWindow(QDialog):
         title = ElidedLabel(name); title.setMinimumWidth(0); title.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed); title.setToolTip(name); title.setStyleSheet("color:#10233d; font-size:12px; font-weight:900;")
         meta = QLabel("Sözleşmeye atanmış etiket"); meta.setStyleSheet("color:#64748b; font-size:10px;")
         column.addWidget(title); column.addWidget(meta)
-        remove = QPushButton("×"); remove.setObjectName("tagRemoveButton"); remove.setFixedSize(29, 29); remove.setToolTip("Etiketi kaldır"); remove.setEnabled(not self._share_is_view_only());
-        if self._share_is_view_only():
-            remove.setToolTip("Paylaşım görüntüleme modunda bu işlem kapalıdır.")
+        remove = QPushButton("×"); remove.setObjectName("tagRemoveButton"); remove.setFixedSize(29, 29); remove.setToolTip("Etiketi kaldır"); remove.setEnabled(not self._share_labels_disabled());
+        if self._share_labels_disabled():
+            remove.setToolTip(self._share_label_policy_message())
         remove.clicked.connect(lambda _=False, nm=name: self.remove_contract_tag(nm))
         row.addWidget(dot); row.addWidget(middle, 1); row.addWidget(remove)
         return card
@@ -4265,6 +4273,9 @@ class ContractWorkWindow(QDialog):
         menu.exec(button.mapToGlobal(QPoint(0, button.height())))
 
     def open_tag_assign_dialog(self):
+        if self._share_labels_disabled():
+            QMessageBox.information(self, "Etiketler", self._share_label_policy_message())
+            return
         if not self._ensure_share_can_edit("Etiketler"):
             return
         dlg = TagAssignDialog(self.store, self.contract_tags, self)
@@ -4285,6 +4296,9 @@ class ContractWorkWindow(QDialog):
         self.render_contract_tags()
 
     def remove_contract_tag(self, tag_name: str):
+        if self._share_labels_disabled():
+            QMessageBox.information(self, "Etiketler", self._share_label_policy_message())
+            return
         if not self._ensure_share_can_edit("Etiketler"):
             return
         key = self._tag_key(tag_name)

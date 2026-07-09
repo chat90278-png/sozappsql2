@@ -37,7 +37,7 @@ def test_view_share_system_edit_denied():
 
 
 def test_edit_share_correct_contract_scoped_actions_allowed():
-    for operation in ("edit_contracts", "manage_acceptances", "manage_terms", "manage_labels"):
+    for operation in ("edit_contracts", "manage_acceptances", "manage_terms"):
         assert can_mutate_current_contract(
             share_mode=True,
             permission_mode="edit",
@@ -66,7 +66,7 @@ def test_edit_share_wrong_contract_and_create_delete_denied():
 
 
 def test_edit_share_does_not_gain_admin_staff_sql_or_global_management():
-    for operation in ("manage_staff", "manage_roles", "open_sql_panel", "sql_write", "terminal_full_access", "manage_platforms", "manage_components"):
+    for operation in ("manage_staff", "manage_roles", "manage_labels", "open_sql_panel", "sql_write", "terminal_full_access", "manage_platforms", "manage_components"):
         assert not can_mutate_current_contract(
             share_mode=True,
             permission_mode="edit",

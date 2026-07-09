@@ -29,7 +29,7 @@ def _scalar(value: Any) -> Any:
 def normalize_contract_snapshot(data: Any) -> Any:
     if isinstance(data, dict):
         normalized = {str(k): normalize_contract_snapshot(v) for k, v in data.items()}
-        for key in ("systems", "deliveries", "folders", "files", "platforms", "users", "responsible_engineers", "tags"):
+        for key in ("systems", "deliveries", "folders", "files", "platforms", "users", "responsible_engineers", "tags", "units"):
             if isinstance(normalized.get(key), list):
                 normalized[key] = sorted(
                     normalized[key],
@@ -87,7 +87,13 @@ def build_contract_snapshot(conn, contract_id: int) -> dict:
     snap["deliveries"] = []
     for r in conn.execute("SELECT * FROM deliveries WHERE contract_id=?", (cid,)).fetchall():
         d = dict(r)
-        comps = [dict(x) for x in conn.execute("SELECT c.name,dc.planned,dc.delivered FROM delivery_components dc JOIN components c ON c.id=dc.component_id WHERE dc.delivery_id=?", (d["id"],)).fetchall()]
+        comps = []
+        for x in conn.execute("SELECT dc.id,c.name,dc.planned,dc.delivered FROM delivery_components dc JOIN components c ON c.id=dc.component_id WHERE dc.delivery_id=?", (d["id"],)).fetchall():
+            comp = {"name": x["name"], "planned": x["planned"], "delivered": x["delivered"]}
+            units = [dict(u) for u in conn.execute("SELECT slot_no,identifier,is_delivered,note FROM delivery_component_units WHERE delivery_component_id=? ORDER BY slot_no", (x["id"],)).fetchall()]
+            if units:
+                comp["units"] = units
+            comps.append(comp)
         snap["deliveries"].append({"merge_uid": d.get("merge_uid"), "system_merge_uid": system_uid.get(int(d.get("system_id") or 0), ""), "name": d.get("name"), "status": d.get("status"), "planned_acceptance_date": d.get("planned_acceptance_date"), "acceptance_date": d.get("acceptance_date"), "note": d.get("note"), "sort_order": d.get("sort_order"), "payload_json": d.get("payload_json"), "delivery_user_id": d.get("delivery_user_id"), "components": sorted(comps, key=lambda x: str(x.get("name") or "").casefold())})
     folders = [dict(r) for r in conn.execute("SELECT id,merge_uid,parent_id,name FROM contract_file_folders WHERE contract_id=?", (cid,)).fetchall()]
     folder_uid = {int(f["id"]): f.get("merge_uid") or "" for f in folders}

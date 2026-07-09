@@ -8,7 +8,6 @@ CONTRACT_SCOPED_SHARE_PERMISSIONS = frozenset({
     "edit_contracts",
     "manage_acceptances",
     "manage_terms",
-    "manage_labels",
     "lock_documents",
     "unlock_own_documents",
 })

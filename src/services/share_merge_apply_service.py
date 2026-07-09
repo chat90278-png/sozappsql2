@@ -616,11 +616,14 @@ def _add_delivery(ctx: _ApplyContext, op: MergeOperation) -> None:
     )
     delivery_id = int(ctx.source.execute("SELECT last_insert_rowid()").fetchone()[0])
     for component in data.get("components") or []:
-        _upsert_delivery_component(ctx, delivery_id, str(component.get("name") or ""), component.get("planned"), component.get("delivered"))
+        dc_id = _upsert_delivery_component(ctx, delivery_id, str(component.get("name") or ""), component.get("planned"), component.get("delivered"))
+        _replace_delivery_component_units(ctx, dc_id, component.get("units") or [])
 
 
 def _delete_delivery(ctx: _ApplyContext, op: MergeOperation) -> None:
     row = _resolve_by_uid(ctx, "deliveries", op.entity_uid)
+    for dc in ctx.source.execute("SELECT id FROM delivery_components WHERE delivery_id=?", (int(row["id"]),)).fetchall():
+        ctx.source.execute("DELETE FROM delivery_component_units WHERE delivery_component_id=?", (int(dc["id"]),))
     ctx.source.execute("DELETE FROM delivery_components WHERE delivery_id=?", (int(row["id"]),))
     ctx.source.execute("DELETE FROM deliveries WHERE id=?", (int(row["id"]),))
 
@@ -649,6 +652,10 @@ def _set_delivery_component(ctx: _ApplyContext, op: MergeOperation) -> None:
         planned = _value(op) or 0
     elif field == "delivered":
         delivered = _value(op) or 0
+    elif field == "units":
+        dc_id = _upsert_delivery_component(ctx, int(row["id"]), component_name, planned, delivered)
+        _replace_delivery_component_units(ctx, dc_id, _value(op) if op.value_present else [])
+        return
     else:
         raise MergeOperationApplyError(f"Delivery component field desteklenmiyor: {field}")
     _upsert_delivery_component(ctx, int(row["id"]), component_name, planned, delivered)
@@ -668,8 +675,40 @@ def _upsert_delivery_component(ctx: _ApplyContext, delivery_id: int, name: str, 
     d = float(delivered or 0)
     if existing:
         ctx.source.execute("UPDATE delivery_components SET planned=?,delivered=? WHERE id=?", (p, d, int(existing["id"])))
+        return int(existing["id"])
     else:
         ctx.source.execute("INSERT INTO delivery_components(delivery_id,component_id,planned,delivered) VALUES(?,?,?,?)", (delivery_id, cid, p, d))
+        return int(ctx.source.execute("SELECT last_insert_rowid()").fetchone()[0])
+
+
+def _replace_delivery_component_units(ctx: _ApplyContext, delivery_component_id: int, units: Any) -> None:
+    ts = now_iso()
+    ctx.source.execute("DELETE FROM delivery_component_units WHERE delivery_component_id=?", (int(delivery_component_id),))
+    if not isinstance(units, list):
+        return
+    seen_slots: set[int] = set()
+    for unit in units:
+        if not isinstance(unit, dict):
+            continue
+        try:
+            slot_no = int(unit.get("slot_no", 0) or 0)
+        except Exception:
+            slot_no = 0
+        if slot_no < 1 or slot_no in seen_slots:
+            continue
+        seen_slots.add(slot_no)
+        ctx.source.execute(
+            "INSERT INTO delivery_component_units(delivery_component_id,slot_no,identifier,is_delivered,note,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",
+            (
+                int(delivery_component_id),
+                slot_no,
+                str(unit.get("identifier") or "").strip(),
+                int(bool(unit.get("is_delivered", 0))),
+                str(unit.get("note") or ""),
+                ts,
+                ts,
+            ),
+        )
 
 
 def _add_folder(ctx: _ApplyContext, op: MergeOperation) -> None:
