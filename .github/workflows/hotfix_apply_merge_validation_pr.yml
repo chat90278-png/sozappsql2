@@ -5,16 +5,18 @@ on:
     branches:
       - main
     types:
+      - opened
       - synchronize
+      - reopened
 
 permissions:
   contents: write
 
 jobs:
   bootstrap-hotfix:
-    if: ${{ github.head_ref == 'hotfix/resolved-merge-validation-ui' && !contains(github.event.head_commit.message, '[hotfix-diagnostic]') }}
+    if: ${{ github.head_ref == 'hotfix/resolved-merge-validation-ui' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 40
     steps:
       - name: Checkout hotfix branch
         uses: actions/checkout@v4
@@ -22,19 +24,40 @@ jobs:
           ref: ${{ github.head_ref }}
           fetch-depth: 0
 
+      - name: Determine phase
+        id: phase
+        shell: bash
+        run: |
+          subject="$(git log -1 --pretty=%s)"
+          if [[ "$subject" == *"[hotfix-verified]"* ]]; then
+            echo "name=done" >> "$GITHUB_OUTPUT"
+          elif [[ "$subject" == *"[hotfix-diagnostic]"* ]]; then
+            echo "name=diagnostic" >> "$GITHUB_OUTPUT"
+          elif [[ "$subject" == *"[hotfix-patch]"* ]]; then
+            echo "name=verify" >> "$GITHUB_OUTPUT"
+          else
+            echo "name=patch" >> "$GITHUB_OUTPUT"
+          fi
+          echo "HEAD subject: $subject"
+
       - name: Set up Python
+        if: steps.phase.outputs.name == 'patch' || steps.phase.outputs.name == 'verify'
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
 
       - name: Install workflow parser
+        if: steps.phase.outputs.name == 'patch'
         run: python -m pip install pyyaml
 
-      - name: Execute verified hotfix runner steps
+      - name: Apply source and regression patch
+        if: steps.phase.outputs.name == 'patch'
         env:
           HOTFIX_RUNNER_PATH: .github/workflows/hotfix_apply_merge_validation.yml
+        shell: bash
         run: |
-          python - <<'PY'
+          set -o pipefail
+          python - <<'PY' | tee hotfix-patch.log
           from __future__ import annotations
 
           import os
@@ -46,59 +69,114 @@ jobs:
           runner_path = Path(os.environ["HOTFIX_RUNNER_PATH"])
           data = yaml.safe_load(runner_path.read_text(encoding="utf-8"))
           steps = data["jobs"]["apply-hotfix"]["steps"]
-          log_path = Path("/tmp/hotfix-driver.log")
-          with log_path.open("w", encoding="utf-8") as log:
-              for step in steps:
-                  command = step.get("run")
-                  if not command:
-                      continue
-                  name = step.get("name", "unnamed run step")
-                  header = f"\n===== {name} =====\n"
-                  print(header, flush=True)
-                  log.write(header)
-                  env = os.environ.copy()
-                  env.update({str(k): str(v) for k, v in dict(step.get("env") or {}).items()})
-                  proc = subprocess.run(
-                      command,
-                      shell=True,
-                      check=False,
-                      executable="/bin/bash",
-                      env=env,
-                      stdout=subprocess.PIPE,
-                      stderr=subprocess.STDOUT,
-                      text=True,
-                  )
-                  output = proc.stdout or ""
-                  print(output, flush=True)
-                  log.write(output)
-                  log.flush()
-                  if proc.returncode != 0:
-                      raise SystemExit(proc.returncode)
+          step = next(item for item in steps if item.get("name") == "Apply precise source and regression patch")
+          command = step["run"]
+          proc = subprocess.run(
+              command,
+              shell=True,
+              check=False,
+              executable="/bin/bash",
+              stdout=subprocess.PIPE,
+              stderr=subprocess.STDOUT,
+              text=True,
+          )
+          print(proc.stdout or "")
+          raise SystemExit(proc.returncode)
           PY
 
-      - name: Persist hotfix failure log without partial patch
-        if: failure()
+      - name: Commit patch for verification
+        if: steps.phase.outputs.name == 'patch' && success()
+        env:
+          HOTFIX_BRANCH: ${{ github.head_ref }}
+        run: |
+          rm -f hotfix-patch.log
+          git config user.name "STS Hotfix Runner"
+          git config user.email "actions@users.noreply.github.com"
+          git add src tests docs/stage_reports/HOTFIX_MERGE_PLAN_VALIDATION_UI.md
+          git diff --cached --check
+          git commit -m "Apply resolved merge validation hotfix [hotfix-patch]"
+          git push origin HEAD:${HOTFIX_BRANCH}
+
+      - name: Persist patch failure diagnostic
+        if: steps.phase.outputs.name == 'patch' && failure()
         env:
           HOTFIX_BRANCH: ${{ github.head_ref }}
         run: |
           git reset --hard HEAD
           mkdir -p docs/stage_reports
-          cp /tmp/hotfix-driver.log docs/stage_reports/HOTFIX_WORKFLOW_FAILURE.log
+          cp hotfix-patch.log docs/stage_reports/HOTFIX_WORKFLOW_FAILURE.log
           git config user.name "STS Hotfix Runner"
           git config user.email "actions@users.noreply.github.com"
           git add docs/stage_reports/HOTFIX_WORKFLOW_FAILURE.log
-          git commit -m "Record hotfix runner failure [hotfix-diagnostic]"
+          git commit -m "Record hotfix patch failure [hotfix-diagnostic]"
           git push origin HEAD:${HOTFIX_BRANCH}
 
-      - name: Remove PR bootstrap runner
-        if: success()
+      - name: Install dependencies
+        if: steps.phase.outputs.name == 'verify'
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Assignment regression
+        if: steps.phase.outputs.name == 'verify'
+        run: python -m pytest -q tests/test_share_assignment_merge.py
+
+      - name: Presenter regression
+        if: steps.phase.outputs.name == 'verify'
+        run: python -m pytest -q tests/test_share_merge_presenter.py
+
+      - name: Core merge regression
+        if: steps.phase.outputs.name == 'verify'
+        run: python -m pytest -q tests/test_share_merge_apply.py tests/test_share_merge_prepare.py tests/test_share_merge_resolution.py tests/test_share_merge_end_to_end.py
+
+      - name: Qt dialog regression
+        if: steps.phase.outputs.name == 'verify'
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -m pytest -q tests/test_share_merge_dialog.py -rs
+
+      - name: Compile and diff checks
+        if: steps.phase.outputs.name == 'verify'
+        run: |
+          python -m compileall -q app.py src
+          git diff --check
+
+      - name: Full pytest
+        if: steps.phase.outputs.name == 'verify'
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m pytest -q -rs | tee hotfix-full-pytest.txt
+
+      - name: Finalize verified hotfix
+        if: steps.phase.outputs.name == 'verify' && success()
         env:
           HOTFIX_BRANCH: ${{ github.head_ref }}
         run: |
-          rm .github/workflows/hotfix_apply_merge_validation_pr.yml
+          python - <<'PY'
+          from pathlib import Path
+          report = Path("docs/stage_reports/HOTFIX_MERGE_PLAN_VALIDATION_UI.md")
+          output = Path("hotfix-full-pytest.txt").read_text(encoding="utf-8", errors="replace").strip()
+          text = report.read_text(encoding="utf-8")
+          text = text.replace(
+              "Workflow tamamlandığında gerçek full pytest çıktısı aşağıya otomatik eklenecektir.",
+              "```text\n" + output + "\n```",
+          )
+          report.write_text(text, encoding="utf-8")
+          PY
+          rm -f hotfix-full-pytest.txt
+          rm -f .github/workflows/hotfix_apply_merge_validation.yml
+          rm -f .github/workflows/hotfix_apply_merge_validation_pr.yml
+          rm -f docs/stage_reports/HOTFIX_WORKFLOW_FAILURE.log
           git config user.name "STS Hotfix Runner"
           git config user.email "actions@users.noreply.github.com"
           git add -A
           git diff --cached --check
-          git commit -m "Remove temporary hotfix runner [hotfix-cleanup]"
+          git commit -m "Fix resolved merge validation and dialog state [hotfix-verified]"
           git push origin HEAD:${HOTFIX_BRANCH}
+
+      - name: Verification failure summary
+        if: steps.phase.outputs.name == 'verify' && failure()
+        run: |
+          echo "Verification failed. No verification commit was created."
+          git status --short
