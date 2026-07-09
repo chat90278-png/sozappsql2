@@ -2,36 +2,127 @@
 """Current-main Analiz Merkezi integration layer.
 
 The compact MainWindow UI remains the visual source of truth. This subclass adds
-Analysis Center routing, the compact contract-status summary box, and the approved
-animated corner overlay. Existing QAction callbacks and permission rules remain
-the source of truth.
+Analysis Center routing, the compact contract-status summary box, the approved
+layered corner menu, and small main-page density fixes without changing business
+callbacks or permission rules.
 """
 from __future__ import annotations
 
 import logging
 from pathlib import Path
 
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QMessageBox, QSizePolicy, QToolButton, QWidget
+from PySide6.QtCore import QRect, QSize, Qt
+from PySide6.QtGui import QColor, QPixmap
+from PySide6.QtWidgets import (
+    QLabel,
+    QMessageBox,
+    QSizePolicy,
+    QStyle,
+    QToolButton,
+    QWidget,
+)
 
 from analysis_center.analysis_data_loader import load_analysis_data
 from analysis_center.analysis_metrics import compute_metrics
 from src.ui.main_page_final_window import MainWindow as CompactMainWindow
+from src.ui.main_window import app_icon_path
 from src.ui.widgets.contract_status_summary import (
     ContractStatusSummary,
     ContractStatusSummaryWidget,
 )
-from src.ui.widgets.corner_menu_overlay import CornerMenuOverlay
+from src.ui.widgets.corner_menu_layer import CornerMenuOverlay
+from src.ui.widgets.filterable_header import PLATFORM_SELECTED_ROLE, PlatformListDelegate
 
 
 _log = logging.getLogger(__name__)
 
 
+class CompactPlatformListDelegate(PlatformListDelegate):
+    """Same platform semantics with tighter horizontal rhythm for the 275 px rail."""
+
+    def paint(self, painter, option, index):
+        painter.save()
+        try:
+            state = option.state
+            is_selected = bool(index.data(PLATFORM_SELECTED_ROLE))
+            is_hover = bool(state & QStyle.State_MouseOver)
+
+            if is_selected:
+                painter.fillRect(option.rect, QColor("#eff6ff"))
+                painter.fillRect(
+                    QRect(option.rect.left(), option.rect.top(), 3, option.rect.height()),
+                    QColor("#2563eb"),
+                )
+            elif is_hover:
+                painter.fillRect(option.rect, QColor("#f0f7ff"))
+            else:
+                painter.fillRect(option.rect, QColor("#ffffff"))
+
+            row = index.row()
+            pal_bg, pal_fg = self._PALETTES[row % len(self._PALETTES)]
+            platform_name = str(index.data(Qt.UserRole) or index.data(Qt.DisplayRole) or "").strip()
+            abbr = platform_name[:3].upper() if platform_name else "?"
+            rect = option.rect
+
+            abbr_rect = QRect(
+                rect.left() + 8,
+                rect.top() + (rect.height() - 24) // 2,
+                30,
+                24,
+            )
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QColor(pal_bg))
+            painter.drawRoundedRect(abbr_rect, 5, 5)
+
+            abbr_font = painter.font()
+            abbr_font.setPointSize(8)
+            abbr_font.setBold(True)
+            painter.setFont(abbr_font)
+            painter.setPen(QColor(pal_fg))
+            painter.drawText(abbr_rect, Qt.AlignCenter, abbr)
+
+            name_x = abbr_rect.right() + 7
+            count_str = self._counts.get(row, "")
+            count_w = 24 if count_str else 0
+            name_rect = QRect(
+                name_x,
+                rect.top(),
+                max(0, rect.width() - name_x - count_w - 6),
+                rect.height(),
+            )
+
+            name_font = painter.font()
+            name_font.setPointSize(9)
+            name_font.setBold(is_selected)
+            painter.setFont(name_font)
+            painter.setPen(QColor("#1e40af") if is_selected else QColor("#374151"))
+            painter.drawText(name_rect, Qt.AlignVCenter | Qt.AlignLeft, platform_name)
+
+            if count_str:
+                count_rect = QRect(rect.right() - count_w - 5, rect.top(), count_w, rect.height())
+                count_font = painter.font()
+                count_font.setPointSize(8)
+                count_font.setBold(False)
+                painter.setFont(count_font)
+                painter.setPen(QColor("#94a3b8"))
+                painter.drawText(count_rect, Qt.AlignVCenter | Qt.AlignRight, count_str)
+        finally:
+            painter.restore()
+
+    def sizeHint(self, option, index):
+        try:
+            width = int(option.rect.width()) if option is not None else 275
+            return QSize(width if width > 0 else 275, 40)
+        except Exception:
+            return QSize(275, 40)
+
+
 class MainWindow(CompactMainWindow):
-    """Compact main window with Analysis Center and safe corner-menu overlay."""
+    """Compact main window with Analysis Center and safe layered corner menu."""
 
     def build(self):
         super().build()
+        self._polish_compact_main_page()
         self._install_contract_status_widget()
 
         root = self.centralWidget()
@@ -39,13 +130,9 @@ class MainWindow(CompactMainWindow):
         experimental_menu = experimental_btn.menu() if isinstance(experimental_btn, QToolButton) else None
 
         if root is not None and isinstance(experimental_btn, QToolButton):
-            # Do not reuse the menu tree produced by the compact experimental
-            # QToolButton. That tree can already contain QAction/QMenu wrappers
-            # whose C++ owners were destroyed when the legacy button was replaced.
-            # Reusing it caused both the deleted-QAction permission crash and dead
-            # submenu links (for example Raporlar). Build a fresh action tree while
-            # all MainWindow callbacks are alive, then use it only as the overlay's
-            # hidden action model.
+            # Never reuse the compact experimental menu ownership tree. Build a
+            # fresh hidden QAction/QMenu model, then render it through the layered
+            # overlay. This keeps permission/action callbacks as source of truth.
             if experimental_menu is not None:
                 try:
                     experimental_menu.hide()
@@ -67,7 +154,7 @@ class MainWindow(CompactMainWindow):
             self._corner_menu_overlay = CornerMenuOverlay(
                 host=root,
                 source_menu=source_menu,
-                before_open=None,
+                before_open=self._refresh_permission_actions,
                 parent=self,
             )
             self.top_actions_btn = self._corner_menu_overlay.button
@@ -76,6 +163,98 @@ class MainWindow(CompactMainWindow):
 
             if experimental_menu is not None:
                 experimental_menu.deleteLater()
+
+    def _polish_compact_main_page(self) -> None:
+        self._polish_left_platform_rail()
+        self._polish_identity_logo()
+        self._fix_today_badge_text_width()
+
+    def _polish_left_platform_rail(self) -> None:
+        platform_list = getattr(self, "platform_list", None)
+        if platform_list is None:
+            return
+
+        left_panel = platform_list.parentWidget()
+        left_column = left_panel.parentWidget() if left_panel is not None else None
+        if left_column is not None:
+            left_column.setFixedWidth(275)
+        if left_panel is not None:
+            left_panel.setFixedWidth(275)
+
+        self._platform_list_delegate = CompactPlatformListDelegate(platform_list)
+        platform_list.setItemDelegate(self._platform_list_delegate)
+
+        title_label = None
+        if left_panel is not None:
+            for label in left_panel.findChildren(QLabel, "panelTitle"):
+                if str(label.text() or "").strip() == "Platformlar":
+                    title_label = label
+                    break
+        if title_label is not None:
+            header = title_label.parentWidget()
+            if header is not None:
+                header.setObjectName("platformPanelHeader")
+                header.setAutoFillBackground(False)
+                header_layout = header.layout()
+                if header_layout is not None:
+                    header_layout.setContentsMargins(10, 7, 10, 7)
+                    header_layout.setSpacing(5)
+                header.setStyleSheet(
+                    "QWidget#platformPanelHeader{background:transparent;border:none;}"
+                    "QLabel#platformPanelTitle{background:transparent;border:none;padding:0;margin:0;}"
+                )
+            title_label.setObjectName("platformPanelTitle")
+            title_label.setAutoFillBackground(False)
+            title_label.setStyleSheet(
+                "QLabel#platformPanelTitle{background:transparent;border:none;padding:0;margin:0;}"
+            )
+
+        new_button = left_panel.findChild(QWidget, "newContractBtn") if left_panel is not None else None
+        if new_button is not None:
+            new_button.setMinimumHeight(42)
+            new_button.setMaximumHeight(42)
+
+        info_bar = getattr(self, "platform_info_bar", None)
+        if info_bar is not None and info_bar.layout() is not None:
+            info_bar.layout().setContentsMargins(8, 3, 6, 3)
+            info_bar.layout().setSpacing(3)
+
+    def _polish_identity_logo(self) -> None:
+        root = self.centralWidget()
+        logo = root.findChild(QLabel, "appIdentityLogo") if root is not None else None
+        if logo is None:
+            return
+        logo.setFixedSize(72, 72)
+        logo.setStyleSheet(
+            "QLabel#appIdentityLogo{background:#0f2b61;border:1px solid #5fb7ff;"
+            "border-radius:18px;padding:1px;}"
+        )
+        source = app_icon_path()
+        if source and source.exists():
+            pixmap = QPixmap(str(source))
+            if not pixmap.isNull():
+                logo.setPixmap(
+                    pixmap.scaled(68, 68, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                )
+
+    def _fix_today_badge_text_width(self) -> None:
+        today_num = getattr(self, "today_num", None)
+        today_info = getattr(self, "today_info", None)
+        if today_num is None or today_info is None:
+            return
+        today_box = today_num.parentWidget()
+        today_layout = today_box.layout() if today_box is not None else None
+        if today_box is not None:
+            today_box.setFixedSize(68, 112)
+        if today_layout is not None:
+            # Legacy 12 px horizontal margins left only 44 px for "TEMMUZ".
+            today_layout.setContentsMargins(4, 8, 4, 8)
+            today_layout.setSpacing(1)
+        today_info.setMinimumWidth(58)
+        today_info.setMaximumWidth(58)
+        today_info.setAlignment(Qt.AlignCenter)
+        today_info.setWordWrap(False)
+        today_info.setStyleSheet("background:transparent;border:none;padding:0;margin:0;")
 
     def _install_contract_status_widget(self) -> None:
         calendar_widget = getattr(self, "_cal_widget", None)
@@ -86,18 +265,11 @@ class MainWindow(CompactMainWindow):
         if calendar_layout is None:
             return
 
-        # The compact main page previously gave the middle area to the inherited
-        # upcoming-scroll surface. Keep that object alive for legacy callbacks,
-        # but replace only its visible slot with the new Analysis Center summary.
         upcoming_scroll = getattr(self, "upcoming_scroll", None)
         if upcoming_scroll is not None:
             calendar_layout.removeWidget(upcoming_scroll)
             upcoming_scroll.hide()
 
-        # CalendarWidget used to sit after an expanding scroll surface. Once that
-        # surface is hidden, a Preferred-size QFrame can absorb the free width and
-        # visually stretch. Freeze its own natural width so the approved calendar
-        # geometry remains unchanged.
         try:
             calendar_widget.ensurePolished()
             calendar_width = max(
@@ -122,9 +294,6 @@ class MainWindow(CompactMainWindow):
             Qt.AlignVCenter,
         )
 
-        # Keep deliberate free space for future header widgets. The status box is
-        # fixed-width and the calendar stays anchored on the right at its natural
-        # width instead of either widget expanding to fill the strip.
         calendar_index = calendar_layout.indexOf(calendar_widget)
         if calendar_index >= 0:
             calendar_layout.insertStretch(calendar_index, 1)
@@ -156,9 +325,6 @@ class MainWindow(CompactMainWindow):
             return
 
         try:
-            # Use the same normalized loader + metric engine as Analysis Center.
-            # We stop at compute_metrics instead of composing the full dashboard,
-            # because the main-page box only needs four contract status metrics.
             data = load_analysis_data(
                 source=source_path,
                 contract_index=list(self.contract_index or []),
