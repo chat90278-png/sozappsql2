@@ -1,0 +1,346 @@
+name: Apply merge validation hotfix
+
+on:
+  push:
+    branches:
+      - hotfix/resolved-merge-validation-ui
+
+permissions:
+  contents: write
+
+jobs:
+  apply-hotfix:
+    if: ${{ !contains(github.event.head_commit.message, '[hotfix-applied]') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Apply precise source and regression patch
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              file_path = Path(path)
+              text = file_path.read_text(encoding="utf-8")
+              count = text.count(old)
+              if count != 1:
+                  raise RuntimeError(f"{path}: expected one replacement, found {count}")
+              file_path.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          def append_once(path: str, marker: str, block: str) -> None:
+              file_path = Path(path)
+              text = file_path.read_text(encoding="utf-8")
+              if marker in text:
+                  raise RuntimeError(f"{path}: marker already present: {marker}")
+              file_path.write_text(text.rstrip() + "\n\n\n" + block.strip() + "\n", encoding="utf-8")
+
+          replace_once(
+              "src/services/share_merge_service.py",
+              """import json\nimport logging\nimport sqlite3\nfrom pathlib import Path\nfrom typing import Any\n""",
+              """import json\nimport logging\nimport sqlite3\nfrom copy import deepcopy\nfrom dataclasses import dataclass, field\nfrom pathlib import Path\nfrom typing import Any\n""",
+          )
+          replace_once(
+              "src/services/share_merge_service.py",
+              """class SharePackageStatusError(ShareMergePreparationError):\n    pass\n\n\ndef _source_conn_and_owner""",
+              """class SharePackageStatusError(ShareMergePreparationError):\n    pass\n\n\n@dataclass(frozen=True)\nclass _PreparedShareMergePlan(MergePlan):\n    \"\"\"Merge plan carrying non-presentational graph context for validation.\n\n    The context is intentionally excluded from repr/equality so the public plan\n    surface, deterministic operation semantics, and existing immutable-plan\n    checks remain unchanged.\n    \"\"\"\n\n    resolution_base_snapshot: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)\n    resolution_local_snapshot: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)\n    resolution_remote_snapshot: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)\n\n\ndef _source_conn_and_owner""",
+          )
+          replace_once(
+              "src/services/share_merge_service.py",
+              """    plan = build_merge_plan(base_snapshot, local_snapshot, remote_snapshot)\n    _mark_package_returned_if_open""",
+              """    raw_plan = build_merge_plan(base_snapshot, local_snapshot, remote_snapshot)\n    plan = _PreparedShareMergePlan(\n        contract_merge_uid=raw_plan.contract_merge_uid,\n        base_snapshot_hash=raw_plan.base_snapshot_hash,\n        local_snapshot_hash=raw_plan.local_snapshot_hash,\n        remote_snapshot_hash=raw_plan.remote_snapshot_hash,\n        changes=raw_plan.changes,\n        conflicts=raw_plan.conflicts,\n        warnings=raw_plan.warnings,\n        summary=raw_plan.summary,\n        resolution_base_snapshot=deepcopy(base_snapshot),\n        resolution_local_snapshot=deepcopy(local_snapshot),\n        resolution_remote_snapshot=deepcopy(remote_snapshot),\n    )\n    _mark_package_returned_if_open""",
+          )
+
+          replace_once(
+              "src/domain/share_merge_resolution.py",
+              """def resolve_merge_plan(merge_plan: MergePlan, decisions: Any = None, *, require_all_conflicts_resolved: bool = False,\n                       base_snapshot: dict | None = None, local_snapshot: dict | None = None,\n                       remote_snapshot: dict | None = None) -> ResolvedMergePlan:\n    items = build_resolution_items(merge_plan)\n""",
+              """def resolve_merge_plan(merge_plan: MergePlan, decisions: Any = None, *, require_all_conflicts_resolved: bool = False,\n                       base_snapshot: dict | None = None, local_snapshot: dict | None = None,\n                       remote_snapshot: dict | None = None) -> ResolvedMergePlan:\n    if base_snapshot is None:\n        base_snapshot = getattr(merge_plan, \"resolution_base_snapshot\", None)\n    if local_snapshot is None:\n        local_snapshot = getattr(merge_plan, \"resolution_local_snapshot\", None)\n    if remote_snapshot is None:\n        remote_snapshot = getattr(merge_plan, \"resolution_remote_snapshot\", None)\n    items = build_resolution_items(merge_plan)\n""",
+          )
+
+          replace_once(
+              "src/ui/presenters/share_merge_presenter.py",
+              """\n\ndef entity_group_label(kind: MergeEntityKind) -> str:\n""",
+              """\n\nSTRUCTURAL_ISSUE_MESSAGES = {\n    \"ABSENT_DELIVERY_PARENT_SYSTEM\": \"Teslimatın bağlı olduğu sistem doğrulanamadı.\",\n    \"PARENT_DELETE_CHILD_KEEP_CONFLICT\": \"Silinecek sistem altında korunan teslimatlar var.\",\n    \"ABSENT_FOLDER_PARENT\": \"Belge klasörünün üst klasörü doğrulanamadı.\",\n    \"ABSENT_FILE_PARENT_FOLDER\": \"Belgenin hedef klasörü doğrulanamadı.\",\n    \"FOLDER_DELETE_CHILD_KEEP_CONFLICT\": \"Silinecek klasör altında korunan belge veya klasörler var.\",\n    \"FOLDER_PARENT_CYCLE\": \"Belge klasörü yapısı doğrulanamadı.\",\n}\n\n\ndef structural_validation_message(resolved_plan: ResolvedMergePlan) -> str:\n    \"\"\"Return a bounded user-facing reason without leaking raw graph payloads.\"\"\"\n    issues = [\n        issue\n        for issue in resolved_plan.issues\n        if issue.code != \"UNRESOLVED_CONFLICT\" and issue.severity == \"ERROR\"\n    ]\n    if not issues:\n        return \"\"\n    reason = STRUCTURAL_ISSUE_MESSAGES.get(issues[0].code, \"Birleştirme planı doğrulanamadı.\")\n    extra = f\" (+{len(issues) - 1} sorun)\" if len(issues) > 1 else \"\"\n    return f\"Birleştirme planı hazırlanamadı: {reason}{extra}\"\n\n\ndef entity_group_label(kind: MergeEntityKind) -> str:\n""",
+          )
+
+          replace_once(
+              "src/ui/dialogs/share_merge_dialog.py",
+              """    grouped_presented_items,\n    plan_summary_text,\n)\n""",
+              """    grouped_presented_items,\n    plan_summary_text,\n    structural_validation_message,\n)\n""",
+          )
+          replace_once(
+              "src/ui/dialogs/share_merge_dialog.py",
+              """        row = QHBoxLayout()\n        row.addStretch(1)\n        row.addWidget(QLabel(\"Karar:\"))\n        row.addWidget(combo)\n""",
+              """        row = QHBoxLayout()\n        row.addStretch(1)\n        decision_caption = QLabel(\"Karar:\")\n        decision_caption.setObjectName(\"shareMergeDecisionCaption\")\n        row.addWidget(decision_caption)\n        row.addWidget(combo)\n""",
+          )
+          replace_once(
+              "src/ui/dialogs/share_merge_dialog.py",
+              """        elif structural:\n            self.apply_btn.setToolTip(\"Plan doğrulama sorunları çözülmeden devam edilemez.\")\n            self.status_label.setText(\"Plan doğrulama sorunları çözülmeden devam edilemez.\")\n""",
+              """        elif structural:\n            validation_message = structural_validation_message(self.controller.resolved_plan)\n            self.apply_btn.setToolTip(validation_message)\n            self.status_label.setText(validation_message)\n""",
+          )
+          replace_once(
+              "src/ui/dialogs/share_merge_dialog.py",
+              """        QDialog#shareMergeDialog QLabel#shareMergeValue{background:transparent;color:#0f2747;border:1px solid #e3edf8;border-radius:7px;padding:6px;font-size:11px;}\n        QComboBox#shareMergeDecisionCombo{min-width:240px;min-height:30px;}\n""",
+              """        QDialog#shareMergeDialog QLabel#shareMergeValue{background:transparent;color:#0f2747;border:1px solid #e3edf8;border-radius:7px;padding:6px;font-size:11px;}\n        QDialog#shareMergeDialog QLabel#shareMergeDecisionCaption{background:transparent;border:0;color:#0f2747;}\n        QComboBox#shareMergeDecisionCombo{min-width:240px;min-height:30px;}\n""",
+          )
+
+          replace_once(
+              "tests/test_share_assignment_merge.py",
+              """from src.services.sts_store import STSStore\nfrom tests.test_share_merge_end_to_end import make_registered_share\n""",
+              """from src.services.sts_store import STSStore\nfrom src.ui.presenters.share_merge_presenter import ShareMergeDecisionController\nfrom tests.test_share_merge_end_to_end import make_registered_share\n""",
+          )
+          append_once(
+              "tests/test_share_assignment_merge.py",
+              "test_prepared_plan_context_keeps_mixed_assignment_and_delivery_conflicts_valid",
+              r'''
+def test_prepared_plan_context_keeps_mixed_assignment_and_delivery_conflicts_valid(tmp_path):
+    source, share, _ci, _cid, _metadata = make_registered_share(tmp_path)
+    _save_units(source, identifier="LOCAL-SER", note="LOCAL-Q")
+    _save_units(share, identifier="REMOTE-SER", note="REMOTE-Q")
+    source.db.conn.execute("UPDATE contracts SET note='LOCAL-NOTE'")
+    share.db.conn.execute("UPDATE contracts SET note='REMOTE-NOTE'")
+    source.db.conn.commit()
+    share.db.conn.commit()
+
+    ci, systems, deliveries = share.load_contract_structure("AKINCI", "C-1", contract_type="Ana Sözleşme")
+    remote_delivery = DeliveryInfo("DEL-REMOTE", "PLAN", "", "", {"C": 1}, {"C": 0})
+    remote_delivery.component_units = {
+        "C": [{"slot_no": 1, "identifier": "REMOTE-NEW", "is_delivered": 0, "note": "REMOTE-QUEUE"}]
+    }
+    deliveries["SYS"].append(remote_delivery)
+    share.write_contract(ci, systems, deliveries)
+
+    plan = prepare_share_merge_plan(source, share.path)
+    assert getattr(plan, "resolution_base_snapshot", None)
+    assert getattr(plan, "resolution_local_snapshot", None)
+    assert getattr(plan, "resolution_remote_snapshot", None)
+
+    controller = ShareMergeDecisionController(plan)
+    initial = controller.live_summary()
+    assert initial["unresolved_conflict_count"] >= 2
+    assert initial["structural_issue_count"] == 0
+
+    for item in list(controller.resolved_plan.resolution_items):
+        if item.is_conflict:
+            controller.set_decision(item.target.target_id, MergeDecisionKind.REMOTE_USE)
+
+    summary = controller.live_summary()
+    assert summary["unresolved_conflict_count"] == 0
+    assert summary["structural_issue_count"] == 0
+    assert controller.can_apply()
+
+    add_delivery = next(
+        op for op in controller.resolved_plan.operations
+        if op.operation_kind == MergeOperationKind.ADD_DELIVERY and op.entity_label == "DEL-REMOTE"
+    )
+    assert not any(
+        op.operation_kind == MergeOperationKind.SET_DELIVERY_COMPONENT_FIELD
+        and op.entity_uid == add_delivery.entity_uid
+        for op in controller.resolved_plan.operations
+    )
+    assert add_delivery.value["components"][0]["units"][0]["identifier"] == "REMOTE-NEW"
+
+    result = apply_resolved_share_merge(source, share.path, controller.resolved_plan)
+    assert result.success
+    rows = source.db.conn.execute(
+        """
+        SELECT dcu.identifier,dcu.note
+        FROM delivery_component_units dcu
+        JOIN delivery_components dc ON dc.id=dcu.delivery_component_id
+        JOIN deliveries d ON d.id=dc.delivery_id
+        WHERE d.name='DEL-REMOTE'
+        ORDER BY dcu.slot_no
+        """
+    ).fetchall()
+    assert [(row["identifier"], row["note"]) for row in rows] == [("REMOTE-NEW", "REMOTE-QUEUE")]
+    source.db.close(); share.db.close()
+''',
+          )
+
+          replace_once(
+              "tests/test_share_merge_presenter.py",
+              """    MergeDecisionKind,\n    MergeDecisionTarget,\n    MergeDecisionTargetType,\n    ResolutionItem,\n)\n""",
+              """    MergeDecisionKind,\n    MergeDecisionTarget,\n    MergeDecisionTargetType,\n    MergeResolutionIssue,\n    ResolutionItem,\n    ResolvedMergePlan,\n)\n""",
+          )
+          replace_once(
+              "tests/test_share_merge_presenter.py",
+              """    format_value,\n    present_item,\n)\n""",
+              """    format_value,\n    present_item,\n    structural_validation_message,\n)\n""",
+          )
+          append_once(
+              "tests/test_share_merge_presenter.py",
+              "test_structural_validation_message_is_safe_and_actionable",
+              r'''
+def test_structural_validation_message_is_safe_and_actionable():
+    resolved = ResolvedMergePlan(
+        contract_merge_uid="contract-secret",
+        base_snapshot_hash="a" * 64,
+        local_snapshot_hash="b" * 64,
+        remote_snapshot_hash="c" * 64,
+        issues=[
+            MergeResolutionIssue(
+                "ABSENT_DELIVERY_PARENT_SYSTEM",
+                "raw uid-secret deadbeef {'payload_json': true}",
+                ("uid-secret",),
+            ),
+            MergeResolutionIssue(
+                "ABSENT_FILE_PARENT_FOLDER",
+                "raw file graph payload",
+                ("file-secret",),
+            ),
+        ],
+        summary={"structural_issue_count": 2},
+    )
+    message = structural_validation_message(resolved)
+    assert "Teslimatın bağlı olduğu sistem doğrulanamadı" in message
+    assert "(+1 sorun)" in message
+    assert "uid-secret" not in message
+    assert "deadbeef" not in message
+    assert "payload_json" not in message
+    assert "{" not in message and "}" not in message
+''',
+          )
+
+          replace_once(
+              "tests/test_share_merge_dialog.py",
+              """    from PySide6.QtWidgets import QApplication, QComboBox, QMessageBox\n""",
+              """    from PySide6.QtWidgets import QApplication, QComboBox, QLabel, QMessageBox\n""",
+          )
+          replace_once(
+              "tests/test_share_merge_dialog.py",
+              """from src.domain.share_merge_resolution import resolve_merge_plan\nfrom src.models.share_merge_resolution_models import MergeDecisionKind\n""",
+              """from src.domain.share_merge_resolution import resolve_merge_plan\nfrom src.models.app_models import DeliveryInfo\nfrom src.models.share_merge_resolution_models import MergeDecisionKind\n""",
+          )
+          replace_once(
+              "tests/test_share_merge_dialog.py",
+              """from tests.test_share_merge_end_to_end import _edit_note, _prepare_keep_both_conflict, make_registered_share\n""",
+              """from tests.test_share_assignment_merge import _save_units\nfrom tests.test_share_merge_end_to_end import _edit_note, _prepare_keep_both_conflict, make_registered_share\n""",
+          )
+          append_once(
+              "tests/test_share_merge_dialog.py",
+              "test_mixed_graph_last_decision_enables_button_and_clear_disables",
+              r'''
+def test_mixed_graph_last_decision_enables_button_and_clear_disables(qapp, tmp_path):
+    source, share, _ci, _cid, _metadata = make_registered_share(tmp_path)
+    _save_units(source, identifier="LOCAL-SER", note="LOCAL-Q")
+    _save_units(share, identifier="REMOTE-SER", note="REMOTE-Q")
+    _edit_note(source, "LOCAL-NOTE")
+    _edit_note(share, "REMOTE-NOTE")
+
+    ci, systems, deliveries = share.load_contract_structure("AKINCI", "C-1", contract_type="Ana Sözleşme")
+    remote_delivery = DeliveryInfo("DEL-REMOTE", "PLAN", "", "", {"C": 1}, {"C": 0})
+    remote_delivery.component_units = {
+        "C": [{"slot_no": 1, "identifier": "REMOTE-NEW", "is_delivered": 0, "note": "REMOTE-QUEUE"}]
+    }
+    deliveries["SYS"].append(remote_delivery)
+    share.write_contract(ci, systems, deliveries)
+
+    plan = prepare_share_merge_plan(source, share.path)
+    dialog = ShareMergeDialog(
+        merge_plan=plan,
+        share_path=share.path,
+        metadata=None,
+        preflight_callback=lambda resolved, allow_partial: None,
+        apply_callback=lambda resolved, allow_partial: None,
+    )
+    try:
+        initial = dialog.controller.live_summary()
+        assert initial["unresolved_conflict_count"] >= 2
+        assert initial["structural_issue_count"] == 0
+        assert not dialog.apply_btn.isEnabled()
+
+        conflict_combos = [
+            combo
+            for target_id, combo in dialog._decision_combos.items()
+            if (dialog.controller.item_by_target(target_id) and dialog.controller.item_by_target(target_id).is_conflict)
+        ]
+        assert len(conflict_combos) >= 2
+        for combo in conflict_combos[:-1]:
+            _choose(combo, MergeDecisionKind.REMOTE_USE)
+        assert not dialog.apply_btn.isEnabled()
+
+        _choose(conflict_combos[-1], MergeDecisionKind.REMOTE_USE)
+        summary = dialog.controller.live_summary()
+        assert summary["unresolved_conflict_count"] == 0
+        assert summary["structural_issue_count"] == 0
+        assert dialog.apply_btn.isEnabled()
+        assert "Plan doğrulama" not in dialog.status_label.text()
+
+        conflict_combos[-1].setCurrentIndex(0)
+        assert dialog.controller.live_summary()["unresolved_conflict_count"] == 1
+        assert not dialog.apply_btn.isEnabled()
+
+        caption = dialog.findChild(QLabel, "shareMergeDecisionCaption")
+        assert caption is not None
+        assert "QDialog#shareMergeDialog QLabel#shareMergeDecisionCaption" in dialog.styleSheet()
+    finally:
+        dialog.close(); source.db.close(); share.db.close()
+''',
+          )
+
+          report = Path("docs/stage_reports/HOTFIX_MERGE_PLAN_VALIDATION_UI.md")
+          report.parent.mkdir(parents=True, exist_ok=True)
+          report.write_text(
+              """# HOTFIX — Merge Plan Validation UI\n\n## Root cause\n\n`ShareMergeDecisionController` karar değişiminde stale state tutmuyordu; `set_decision()` ve `clear_decision()` her seferinde `resolve_merge_plan()` çağırıyordu. Gerçek hata resolution graph validation context plumbing içindeydi.\n\n`prepare_share_merge_plan()` BASE, LOCAL ve REMOTE snapshotlarını okuyup `build_merge_plan()` için kullanıyor, fakat yalnız çıplak `MergePlan` döndürüyordu. Dialog controller daha sonra `resolve_merge_plan(plan, decisions)` çağırınca `base_snapshot`, `local_snapshot` ve `remote_snapshot` parametreleri `None` kalıyordu. `_projected_graph_issues()` bu durumda final graphı boş LOCAL entity setlerinden başlatıyordu.\n\nMevcut bir sistem altına eklenmiş remote teslimat için `ADD_DELIVERY` operation'ı doğru `system_merge_uid` taşımasına rağmen mevcut parent system validation graphında görünmüyordu. Sonuç sahte `ABSENT_DELIVERY_PARENT_SYSTEM` structural issue idi. Bu yüzden UI'da `Çözülmemiş çakışma: 0` olsa bile `structural_issue_count > 0` kalıyor ve `Değişiklikleri Birleştir` butonu disabled oluyordu. Assignment/unit hotfix bu bugı oluşturmadı; mixed delivery/unit senaryosu daha önce gizli olan context gap'ini görünür hale getirdi.\n\n## Fix\n\n- `prepare_share_merge_plan()` sonucu, public `MergePlan` davranışını değiştirmeyen private `_PreparedShareMergePlan` ile BASE/LOCAL/REMOTE resolution context taşıyor. Snapshot context alanları repr/equality dışı.\n- `resolve_merge_plan()` explicit snapshot argümanı verilmemişse prepared plan üzerindeki resolution context'i kullanıyor. Explicit argümanlar hâlâ öncelikli ve eski pure `build_merge_plan()` test/call path'i korunuyor.\n- Validation bypass edilmedi. Operation hash, graph validation, stale/replay ve apply preflight guardları korunuyor.\n- Remote-added delivery full nested component/unit state'i `ADD_DELIVERY` operation'ında taşımaya devam ediyor; aynı delivery için duplicate `SET_DELIVERY_COMPONENT_FIELD` operation üretilmediği regression ile doğrulandı.\n- Structural issue UI metni raw issue message/UID/JSON/hash göstermeyen bounded presenter formatter'a taşındı. İlk actionable reason ve varsa `(+N sorun)` gösteriliyor.\n- `Karar:` label `shareMergeDecisionCaption` objectName aldı ve yalnız `QDialog#shareMergeDialog` scope'unda transparent/background-border-free style uygulandı. Global QLabel style değiştirilmedi.\n\n## Button enable contract\n\nDecision combo signal -> `_on_decision_changed()` -> controller `set_decision/clear_decision` -> `resolve_merge_plan()` -> projected graph validation -> `live_summary()` -> `_refresh_summary()` zinciri korunuyor.\n\nButon yalnız:\n\n- `unresolved_conflict_count == 0`\n- `structural_issue_count == 0`\n- submit/busy state kapalı\n\nkoşullarında aktif.\n\n## Regression coverage\n\n- mixed assignment units conflict + contract conflict + remote-added delivery/units\n- prepared graph context mevcut parent system'i doğru görür\n- all REMOTE_USE sonrası unresolved=0, structural=0 ve controller apply-ready\n- remote-added delivery unit payloadı ADD_DELIVERY içinde bir kez taşınır\n- duplicate child unit field operation yok\n- apply sonrası unit row source DB'ye bir kez gelir\n- structural validation message raw UID/JSON/hash sızdırmaz\n- Qt dialog: son karar button enable, kararı tekrar unresolved yapınca disable\n- Qt dialog: decision caption scoped style selector mevcut\n\n## Windows retest\n\n1. Seri/kuyruk no conflict ve iki tarafta farklı eklenen teslimatlar içeren paylaşım dosyasını aç.\n2. Conflict kartlarının tamamında karar ver.\n3. `Çözülmemiş çakışma: 0` ve `structural issue` olmadığı durumda `Değişiklikleri Birleştir` aktif olmalı.\n4. Bir conflict kararını tekrar `Karar seçin` durumuna getir; buton tekrar disabled olmalı.\n5. `Karar:` metni arkasında gri dikdörtgen olmamalı.\n6. Merge sonrası yeni teslimat seri/kuyruk satırlarının ana STS'ye tek kopya geldiğini doğrula.\n\n## Final test output\n\nWorkflow tamamlandığında gerçek full pytest çıktısı aşağıya otomatik eklenecektir.\n""",
+              encoding="utf-8",
+          )
+          PY
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Focused merge and assignment tests
+        run: |
+          python -m pytest -q tests/test_share_assignment_merge.py
+          python -m pytest -q tests/test_share_merge_presenter.py
+          python -m pytest -q tests/test_share_merge_apply.py tests/test_share_merge_prepare.py tests/test_share_merge_resolution.py tests/test_share_merge_end_to_end.py
+
+      - name: Qt dialog regression collection
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -m pytest -q tests/test_share_merge_dialog.py -rs
+
+      - name: Compile and static diff checks
+        run: |
+          python -m compileall -q app.py src
+          git diff --check
+
+      - name: Full pytest
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m pytest -q -rs | tee /tmp/hotfix-full-pytest.txt
+
+      - name: Finalize report and commit verified patch
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          report = Path("docs/stage_reports/HOTFIX_MERGE_PLAN_VALIDATION_UI.md")
+          output = Path("/tmp/hotfix-full-pytest.txt").read_text(encoding="utf-8", errors="replace").strip()
+          text = report.read_text(encoding="utf-8")
+          text = text.replace(
+              "Workflow tamamlandığında gerçek full pytest çıktısı aşağıya otomatik eklenecektir.",
+              "```text\n" + output + "\n```",
+          )
+          report.write_text(text, encoding="utf-8")
+          PY
+          rm .github/workflows/hotfix_apply_merge_validation.yml
+          git config user.name "STS Hotfix Runner"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "Fix resolved merge validation and dialog state [hotfix-applied]"
+          git push origin HEAD:hotfix/resolved-merge-validation-ui
