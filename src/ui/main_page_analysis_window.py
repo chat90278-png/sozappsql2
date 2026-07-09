@@ -36,24 +36,33 @@ class MainWindow(CompactMainWindow):
 
         root = self.centralWidget()
         experimental_btn = getattr(self, "top_actions_btn", None)
-        source_menu = experimental_btn.menu() if isinstance(experimental_btn, QToolButton) else None
+        experimental_menu = experimental_btn.menu() if isinstance(experimental_btn, QToolButton) else None
 
-        if root is not None and isinstance(experimental_btn, QToolButton) and source_menu is not None:
-            # Refresh QAction visibility while the legacy QToolButton/QMenu wiring
-            # is still intact. The overlay must not call this legacy refresh path
-            # after top_actions_btn is replaced by the custom painted QWidget.
-            try:
-                self._refresh_permission_actions()
-            except Exception:
-                _log.exception("Corner-menu permission refresh failed during overlay install")
+        if root is not None and isinstance(experimental_btn, QToolButton):
+            # Do not reuse the menu tree produced by the compact experimental
+            # QToolButton. That tree can already contain QAction/QMenu wrappers
+            # whose C++ owners were destroyed when the legacy button was replaced.
+            # Reusing it caused both the deleted-QAction permission crash and dead
+            # submenu links (for example Raporlar). Build a fresh action tree while
+            # all MainWindow callbacks are alive, then use it only as the overlay's
+            # hidden action model.
+            if experimental_menu is not None:
+                try:
+                    experimental_menu.hide()
+                except Exception:
+                    pass
 
-            # The QMenu tree remains only an action/callback model. It is never
-            # shown as a native popup. The overlay renders ordinary child widgets
-            # and triggers the existing QAction objects directly.
             experimental_btn.hide()
             experimental_btn.setMenu(None)
-            source_menu.setParent(self)
             experimental_btn.deleteLater()
+
+            self._corner_menu_model_host = QWidget(root)
+            self._corner_menu_model_host.setObjectName("cornerMenuModelHost")
+            self._corner_menu_model_host.setFixedSize(0, 0)
+            self._corner_menu_model_host.hide()
+
+            source_menu = self._build_top_actions_menu(self._corner_menu_model_host)
+            source_menu.hide()
 
             self._corner_menu_overlay = CornerMenuOverlay(
                 host=root,
@@ -64,6 +73,9 @@ class MainWindow(CompactMainWindow):
             self.top_actions_btn = self._corner_menu_overlay.button
             self.top_actions_menu = source_menu
             self._corner_menu_overlay.reposition()
+
+            if experimental_menu is not None:
+                experimental_menu.deleteLater()
 
     def _install_contract_status_widget(self) -> None:
         calendar_widget = getattr(self, "_cal_widget", None)
