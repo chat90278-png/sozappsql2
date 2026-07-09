@@ -22,20 +22,19 @@ def qt_app():
     yield app
 
 
-def _reports_menu(window):
-    menu = window.top_actions_menu
-    return next(
-        action.menu()
-        for action in menu.actions()
-        if action.menu() is not None and str(action.text() or "").replace("&", "") == "Raporlar"
-    )
-
-
 def test_compact_main_window_keeps_ui_and_adds_analysis_center_report_action(qt_app):
     window = MainWindow()
     try:
-        reports = _reports_menu(window)
-        labels = [str(action.text() or "").replace("&", "") for action in reports.actions()]
+        top_actions = list(window.top_actions_menu.actions())
+        report_action = next(
+            action
+            for action in top_actions
+            if action.menu() is not None and str(action.text() or "").replace("&", "") == "Raporlar"
+        )
+        reports = report_action.menu()
+        assert reports is not None
+        report_actions = list(reports.actions())
+        labels = [str(action.text() or "").replace("&", "") for action in report_actions]
         assert labels.count("Analiz Merkezi") == 1
         assert "Tahmini Teslimat Takvimi" in labels
         assert "Platform Teslimat Özeti" in labels
