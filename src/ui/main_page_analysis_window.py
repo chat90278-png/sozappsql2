@@ -21,18 +21,24 @@ class MainWindow(CompactMainWindow):
     def build(self):
         super().build()
 
-        # Stability hotfix for packaged Windows/PySide6 builds.
-        # The animated corner button introduced a custom clicked -> popup path
-        # plus geometry/shadow animation while the QMenu was being shown. The
-        # crash dialog appears only on this interaction path. Replace only that
-        # surface with a plain native QToolButton and keep the exact same QMenu,
-        # actions, submenus and permission callbacks. Menu-open visual property
-        # handling remains connected through the existing QMenu signals.
-        animated_btn = getattr(self, "top_actions_btn", None)
-        menu = animated_btn.menu() if isinstance(animated_btn, QToolButton) else None
+        # Hard rollback of the experimental animated/popup integration on the
+        # actual application entry class. Do NOT reuse the menu created by the
+        # animated layer: that QMenu already owns animation-state signal
+        # connections and custom popup styling. Build a completely fresh native
+        # menu from the existing action factory so the click path is the same as
+        # the original stable MainWindow implementation.
+        experimental_btn = getattr(self, "top_actions_btn", None)
         root = self.centralWidget()
 
-        if isinstance(animated_btn, QToolButton) and menu is not None and root is not None:
+        if isinstance(experimental_btn, QToolButton) and root is not None:
+            experimental_menu = experimental_btn.menu()
+            experimental_btn.hide()
+            experimental_btn.setMenu(None)
+            if experimental_menu is not None:
+                experimental_menu.hide()
+                experimental_menu.deleteLater()
+            experimental_btn.deleteLater()
+
             safe_btn = QToolButton(root)
             safe_btn.setObjectName("cornerMenuBtn")
             safe_btn.setText("☰")
@@ -40,17 +46,15 @@ class MainWindow(CompactMainWindow):
             safe_btn.setToolButtonStyle(Qt.ToolButtonTextOnly)
             safe_btn.setPopupMode(QToolButton.InstantPopup)
             safe_btn.setFixedSize(72, 72)
-            safe_btn.setProperty("menuOpen", "false")
 
-            menu.setParent(safe_btn)
-            safe_btn.setMenu(menu)
-
-            animated_btn.hide()
-            animated_btn.setMenu(None)
-            animated_btn.deleteLater()
+            # Fresh QMenu: _build_top_actions_menu recreates the original menu
+            # hierarchy/callbacks/permission refresh and this subclass adds
+            # Analiz Merkezi through its override below.
+            safe_menu = self._build_top_actions_menu(safe_btn)
+            safe_btn.setMenu(safe_menu)
 
             self.top_actions_btn = safe_btn
-            self.top_actions_menu = menu
+            self.top_actions_menu = safe_menu
             safe_btn.show()
             self.position_corner_menu()
 
