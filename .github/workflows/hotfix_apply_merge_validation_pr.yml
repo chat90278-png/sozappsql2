@@ -1,4 +1,4 @@
-name: Bootstrap merge validation hotfix
+name: Verify merge validation hotfix
 
 on:
   pull_request:
@@ -13,7 +13,7 @@ permissions:
   contents: write
 
 jobs:
-  bootstrap-hotfix:
+  verify-hotfix:
     if: ${{ github.head_ref == 'hotfix/resolved-merge-validation-ui' }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
@@ -25,148 +25,104 @@ jobs:
           fetch-depth: 1
           show-progress: false
 
-      - name: Determine phase
-        id: phase
-        shell: bash
-        run: |
-          subject="$(git log -1 --pretty=%s)"
-          if [[ "$subject" == *"[hotfix-verified]"* ]]; then
-            phase=done
-          elif grep -q 'resolution_base_snapshot' src/services/share_merge_service.py \
-            && grep -q 'structural_validation_message' src/ui/presenters/share_merge_presenter.py \
-            && grep -q 'shareMergeDecisionCaption' src/ui/dialogs/share_merge_dialog.py; then
-            phase=verify
-          elif [[ "$subject" == *"[hotfix-diagnostic]"* ]]; then
-            phase=diagnostic
-          else
-            phase=patch
-          fi
-          echo "name=$phase" >> "$GITHUB_OUTPUT"
-          echo "HEAD subject: $subject"
-          echo "Phase: $phase"
-
       - name: Set up Python
-        if: steps.phase.outputs.name == 'patch' || steps.phase.outputs.name == 'verify'
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
 
-      - name: Apply source and regression patch
-        if: steps.phase.outputs.name == 'patch'
-        env:
-          HOTFIX_RUNNER_PATH: .github/workflows/hotfix_apply_merge_validation.yml
-        shell: bash
-        run: |
-          set -o pipefail
-          python - <<'PY' 2>&1 | tee hotfix-patch.log
-          from __future__ import annotations
-
-          import os
-          import subprocess
-          from pathlib import Path
-
-          runner_path = Path(os.environ["HOTFIX_RUNNER_PATH"])
-          text = runner_path.read_text(encoding="utf-8")
-          start_marker = "      - name: Apply precise source and regression patch\n        shell: bash\n        run: |\n"
-          end_marker = "\n      - name: Install dependencies\n"
-          if text.count(start_marker) != 1 or text.count(end_marker) != 1:
-              raise RuntimeError("Hotfix patch runner markers are not unique")
-          block = text.split(start_marker, 1)[1].split(end_marker, 1)[0]
-          command = "\n".join(
-              line[10:] if line.startswith("          ") else line
-              for line in block.splitlines()
-          )
-          proc = subprocess.run(
-              command,
-              shell=True,
-              check=False,
-              executable="/bin/bash",
-              stdout=subprocess.PIPE,
-              stderr=subprocess.STDOUT,
-              text=True,
-          )
-          print(proc.stdout or "")
-          raise SystemExit(proc.returncode)
-          PY
-
-      - name: Commit patch for verification
-        if: steps.phase.outputs.name == 'patch' && success()
-        env:
-          HOTFIX_BRANCH: ${{ github.head_ref }}
-        run: |
-          rm -f hotfix-patch.log
-          git config user.name "STS Hotfix Runner"
-          git config user.email "actions@users.noreply.github.com"
-          git add src tests docs/stage_reports/HOTFIX_MERGE_PLAN_VALIDATION_UI.md
-          git diff --cached --check
-          git commit -m "Apply resolved merge validation hotfix [hotfix-patch]"
-          git push origin HEAD:${HOTFIX_BRANCH}
-
-      - name: Persist patch failure diagnostic
-        if: steps.phase.outputs.name == 'patch' && failure()
-        env:
-          HOTFIX_BRANCH: ${{ github.head_ref }}
-        run: |
-          git reset --hard HEAD
-          mkdir -p docs/stage_reports
-          cp hotfix-patch.log docs/stage_reports/HOTFIX_WORKFLOW_FAILURE.log
-          git config user.name "STS Hotfix Runner"
-          git config user.email "actions@users.noreply.github.com"
-          git add docs/stage_reports/HOTFIX_WORKFLOW_FAILURE.log
-          git commit -m "Record hotfix patch failure [hotfix-diagnostic]"
-          git push origin HEAD:${HOTFIX_BRANCH}
-
-      - name: Install dependencies
-        if: steps.phase.outputs.name == 'verify'
+      - name: Install verification dependencies
         run: |
           python -m pip install -q --upgrade pip
           python -m pip install -q pytest
           python -m pip install -q -r requirements.txt
 
+      - name: Normalize generated regression indentation
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              file_path = Path(path)
+              text = file_path.read_text(encoding="utf-8")
+              count = text.count(old)
+              if count != 1:
+                  raise RuntimeError(f"{path}: expected one indentation replacement, found {count}")
+              file_path.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          replace_once(
+              "tests/test_share_assignment_merge.py",
+              "        if item.is_conflict:\n  controller.set_decision(item.target.target_id, MergeDecisionKind.REMOTE_USE)",
+              "        if item.is_conflict:\n            controller.set_decision(item.target.target_id, MergeDecisionKind.REMOTE_USE)",
+          )
+          replace_once(
+              "tests/test_share_merge_dialog.py",
+              """        conflict_combos = [\n  combo\n  for target_id, combo in dialog._decision_combos.items()\n  if (dialog.controller.item_by_target(target_id) and dialog.controller.item_by_target(target_id).is_conflict)\n        ]""",
+              """        conflict_combos = [\n            combo\n            for target_id, combo in dialog._decision_combos.items()\n            if (dialog.controller.item_by_target(target_id) and dialog.controller.item_by_target(target_id).is_conflict)\n        ]""",
+          )
+          replace_once(
+              "tests/test_share_merge_dialog.py",
+              "        for combo in conflict_combos[:-1]:\n  _choose(combo, MergeDecisionKind.REMOTE_USE)",
+              "        for combo in conflict_combos[:-1]:\n            _choose(combo, MergeDecisionKind.REMOTE_USE)",
+          )
+          replace_once(
+              "tests/test_share_merge_presenter.py",
+              """        issues=[\n  MergeResolutionIssue(\n      \"ABSENT_DELIVERY_PARENT_SYSTEM\",\n      \"raw uid-secret deadbeef {'payload_json': true}\",\n      (\"uid-secret\",),\n  ),\n  MergeResolutionIssue(\n      \"ABSENT_FILE_PARENT_FOLDER\",\n      \"raw file graph payload\",\n      (\"file-secret\",),\n  ),\n        ],""",
+              """        issues=[\n            MergeResolutionIssue(\n                \"ABSENT_DELIVERY_PARENT_SYSTEM\",\n                \"raw uid-secret deadbeef {'payload_json': true}\",\n                (\"uid-secret\",),\n            ),\n            MergeResolutionIssue(\n                \"ABSENT_FILE_PARENT_FOLDER\",\n                \"raw file graph payload\",\n                (\"file-secret\",),\n            ),\n        ],""",
+          )
+          PY
+
       - name: Assignment regression
-        if: steps.phase.outputs.name == 'verify'
         shell: bash
         run: |
           set -o pipefail
           python -m pytest -q tests/test_share_assignment_merge.py 2>&1 | tee assignment-regression.log
 
-      - name: Upload assignment failure log
-        if: steps.phase.outputs.name == 'verify' && failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: assignment-regression-log
-          path: assignment-regression.log
-          if-no-files-found: error
-
       - name: Presenter regression
-        if: steps.phase.outputs.name == 'verify'
-        run: python -m pytest -q tests/test_share_merge_presenter.py
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m pytest -q tests/test_share_merge_presenter.py 2>&1 | tee presenter-regression.log
 
       - name: Core merge regression
-        if: steps.phase.outputs.name == 'verify'
-        run: python -m pytest -q tests/test_share_merge_apply.py tests/test_share_merge_prepare.py tests/test_share_merge_resolution.py tests/test_share_merge_end_to_end.py
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m pytest -q tests/test_share_merge_apply.py tests/test_share_merge_prepare.py tests/test_share_merge_resolution.py tests/test_share_merge_end_to_end.py 2>&1 | tee core-regression.log
 
       - name: Qt dialog regression
-        if: steps.phase.outputs.name == 'verify'
         env:
           QT_QPA_PLATFORM: offscreen
-        run: python -m pytest -q tests/test_share_merge_dialog.py -rs
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m pytest -q tests/test_share_merge_dialog.py -rs 2>&1 | tee qt-regression.log
 
       - name: Compile and diff checks
-        if: steps.phase.outputs.name == 'verify'
         run: |
           python -m compileall -q app.py src
           git diff --check
 
       - name: Full pytest
-        if: steps.phase.outputs.name == 'verify'
         shell: bash
         run: |
           set -o pipefail
-          python -m pytest -q -rs | tee hotfix-full-pytest.txt
+          python -m pytest -q -rs 2>&1 | tee hotfix-full-pytest.txt
+
+      - name: Upload verification failure logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hotfix-verification-logs
+          path: |
+            assignment-regression.log
+            presenter-regression.log
+            core-regression.log
+            qt-regression.log
+            hotfix-full-pytest.txt
+          if-no-files-found: warn
 
       - name: Finalize verified hotfix
-        if: steps.phase.outputs.name == 'verify' && success()
+        if: success()
         env:
           HOTFIX_BRANCH: ${{ github.head_ref }}
         run: |
@@ -181,7 +137,7 @@ jobs:
           )
           report.write_text(text, encoding="utf-8")
           PY
-          rm -f hotfix-full-pytest.txt assignment-regression.log
+          rm -f assignment-regression.log presenter-regression.log core-regression.log qt-regression.log hotfix-full-pytest.txt
           rm -f .github/workflows/hotfix_apply_merge_validation.yml
           rm -f .github/workflows/hotfix_apply_merge_validation_pr.yml
           rm -f docs/stage_reports/HOTFIX_WORKFLOW_FAILURE.log
@@ -191,9 +147,3 @@ jobs:
           git diff --cached --check
           git commit -m "Fix resolved merge validation and dialog state [hotfix-verified]"
           git push origin HEAD:${HOTFIX_BRANCH}
-
-      - name: Verification failure summary
-        if: steps.phase.outputs.name == 'verify' && failure()
-        run: |
-          echo "Verification failed. No verification commit was created."
-          git status --short
