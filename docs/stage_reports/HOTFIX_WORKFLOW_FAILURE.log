@@ -38,3 +38,5 @@ yaml.scanner.ScannerError: mapping values are not allowed here
   in "<unicode string>", line 116, column 70:
      ... EL-REMOTE", "PLAN", "", "", {"C": 1}, {"C": 0})
                                          ^
+
+Retry note: PyYAML parsing removed; patch block is now extracted between fixed workflow markers and dedented before execution.
