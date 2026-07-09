@@ -30,15 +30,19 @@ jobs:
         run: |
           subject="$(git log -1 --pretty=%s)"
           if [[ "$subject" == *"[hotfix-verified]"* ]]; then
-            echo "name=done" >> "$GITHUB_OUTPUT"
+            phase=done
+          elif grep -q 'resolution_base_snapshot' src/services/share_merge_service.py \
+            && grep -q 'structural_validation_message' src/ui/presenters/share_merge_presenter.py \
+            && grep -q 'shareMergeDecisionCaption' src/ui/dialogs/share_merge_dialog.py; then
+            phase=verify
           elif [[ "$subject" == *"[hotfix-diagnostic]"* ]]; then
-            echo "name=diagnostic" >> "$GITHUB_OUTPUT"
-          elif [[ "$subject" == *"[hotfix-patch]"* ]]; then
-            echo "name=verify" >> "$GITHUB_OUTPUT"
+            phase=diagnostic
           else
-            echo "name=patch" >> "$GITHUB_OUTPUT"
+            phase=patch
           fi
+          echo "name=$phase" >> "$GITHUB_OUTPUT"
           echo "HEAD subject: $subject"
+          echo "Phase: $phase"
 
       - name: Set up Python
         if: steps.phase.outputs.name == 'patch' || steps.phase.outputs.name == 'verify'
