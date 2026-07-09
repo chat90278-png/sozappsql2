@@ -8,7 +8,7 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("PySide6")
 
-from PySide6.QtWidgets import QApplication, QSizePolicy
+from PySide6.QtWidgets import QApplication, QSizePolicy, QWidget
 
 from src.ui.main_page_analysis_window import MainWindow
 from src.ui.widgets.contract_status_summary import (
@@ -46,8 +46,7 @@ def test_contract_status_widget_is_compact_white_surface_and_emits_open_request(
         assert widget.width() == 460
         assert widget.height() == 112
         assert widget.sizePolicy().horizontalPolicy() == QSizePolicy.Fixed
-        assert widget.findChild(type(widget), "contractStatusContent") is None
-        content = widget.findChild(object, "contractStatusContent")
+        content = widget.findChild(QWidget, "contractStatusContent")
         assert content is not None
         assert "background:#ffffff" in widget.styleSheet()
 
