@@ -12,7 +12,7 @@ import logging
 from pathlib import Path
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QMessageBox, QToolButton, QWidget
+from PySide6.QtWidgets import QMessageBox, QSizePolicy, QToolButton, QWidget
 
 from analysis_center.analysis_data_loader import load_analysis_data
 from analysis_center.analysis_metrics import compute_metrics
@@ -82,6 +82,22 @@ class MainWindow(CompactMainWindow):
             calendar_layout.removeWidget(upcoming_scroll)
             upcoming_scroll.hide()
 
+        # CalendarWidget used to sit after an expanding scroll surface. Once that
+        # surface is hidden, a Preferred-size QFrame can absorb the free width and
+        # visually stretch. Freeze its own natural width so the approved calendar
+        # geometry remains unchanged.
+        try:
+            calendar_widget.ensurePolished()
+            calendar_width = max(
+                int(calendar_widget.sizeHint().width()),
+                int(calendar_widget.minimumSizeHint().width()),
+            )
+            if calendar_width > 0:
+                calendar_widget.setFixedWidth(calendar_width)
+            calendar_widget.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        except Exception:
+            _log.exception("Calendar size could not be locked while installing status widget")
+
         self.contract_status_widget = ContractStatusSummaryWidget(calendar_card)
         self.contract_status_widget.open_analysis_requested.connect(self.open_analysis_center)
 
@@ -90,9 +106,16 @@ class MainWindow(CompactMainWindow):
         calendar_layout.insertWidget(
             insert_index,
             self.contract_status_widget,
-            1,
+            0,
             Qt.AlignVCenter,
         )
+
+        # Keep deliberate free space for future header widgets. The status box is
+        # fixed-width and the calendar stays anchored on the right at its natural
+        # width instead of either widget expanding to fill the strip.
+        calendar_index = calendar_layout.indexOf(calendar_widget)
+        if calendar_index >= 0:
+            calendar_layout.insertStretch(calendar_index, 1)
 
     def _analysis_source_path(self) -> Path | None:
         if not self.store:

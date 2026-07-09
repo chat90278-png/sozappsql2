@@ -8,7 +8,7 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("PySide6")
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QSizePolicy, QWidget
 
 from src.ui.main_page_analysis_window import MainWindow
 from src.ui.widgets.contract_status_summary import (
@@ -40,9 +40,16 @@ def test_contract_status_summary_maps_analysis_metrics_without_reclassifying():
     assert summary.completed_percent == 33
 
 
-def test_contract_status_widget_emits_analysis_open_request(qt_app):
+def test_contract_status_widget_is_compact_white_surface_and_emits_open_request(qt_app):
     widget = ContractStatusSummaryWidget()
     try:
+        assert widget.width() == 460
+        assert widget.height() == 112
+        assert widget.sizePolicy().horizontalPolicy() == QSizePolicy.Fixed
+        content = widget.findChild(QWidget, "contractStatusContent")
+        assert content is not None
+        assert "background:#ffffff" in widget.styleSheet()
+
         calls: list[str] = []
         widget.open_analysis_requested.connect(lambda: calls.append("open"))
         widget.open_button.click()
@@ -51,7 +58,7 @@ def test_contract_status_widget_emits_analysis_open_request(qt_app):
         widget.close()
 
 
-def test_main_page_places_only_status_box_in_middle_slot_and_uses_analysis_engine(
+def test_main_page_keeps_calendar_fixed_and_uses_analysis_engine(
     qt_app,
     tmp_path,
     monkeypatch,
@@ -59,9 +66,16 @@ def test_main_page_places_only_status_box_in_middle_slot_and_uses_analysis_engin
     window = MainWindow()
     try:
         calendar_layout = window._cal_widget.parentWidget().layout()
-        assert calendar_layout.indexOf(window.contract_status_widget) >= 0
-        assert calendar_layout.indexOf(window.contract_status_widget) < calendar_layout.indexOf(window._cal_widget)
+        status_index = calendar_layout.indexOf(window.contract_status_widget)
+        calendar_index = calendar_layout.indexOf(window._cal_widget)
+
+        assert status_index >= 0
+        assert status_index < calendar_index
+        assert calendar_index - status_index >= 2  # deliberate stretch/free slot
         assert window.upcoming_scroll.isHidden()
+        assert window.contract_status_widget.width() == 460
+        assert window._cal_widget.sizePolicy().horizontalPolicy() == QSizePolicy.Fixed
+        assert window._cal_widget.minimumWidth() == window._cal_widget.maximumWidth()
 
         source = tmp_path / "STS-A1__v017__2026-07-09_12-00.sts"
 

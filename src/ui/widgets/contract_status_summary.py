@@ -67,7 +67,7 @@ class ContractStatusBar(QWidget):
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
         self._summary = ContractStatusSummary()
-        self.setFixedHeight(10)
+        self.setFixedHeight(11)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
     def set_summary(self, summary: ContractStatusSummary) -> None:
@@ -106,7 +106,7 @@ class ContractStatusBar(QWidget):
 
 
 class ContractStatusSummaryWidget(QFrame):
-    """112 px main-page box that mirrors Analysis Center contract metrics."""
+    """Compact fixed-width main-page box that mirrors Analysis Center metrics."""
 
     open_analysis_requested = Signal()
 
@@ -115,6 +115,10 @@ class ContractStatusSummaryWidget(QFrame):
         background:#ffffff;
         border:1px solid #d6e0ec;
         border-radius:12px;
+    }
+    QWidget#contractStatusContent {
+        background:#ffffff;
+        border:none;
     }
     QWidget#contractStatusTotalPanel {
         background:transparent;
@@ -125,34 +129,35 @@ class ContractStatusSummaryWidget(QFrame):
         background:transparent;
         color:#0f2b61;
         border:none;
-        font-size:29px;
+        font-size:30px;
         font-weight:900;
     }
     QLabel#contractStatusTotalLabel {
         background:transparent;
         color:#64748b;
         border:none;
-        font-size:8px;
+        font-size:9px;
         font-weight:900;
     }
     QLabel#contractStatusTitle {
         background:transparent;
-        color:#75849a;
+        color:#61738b;
         border:none;
-        font-size:9px;
+        font-size:10px;
         font-weight:900;
     }
     QLabel#contractStatusPercent {
         background:transparent;
-        color:#94a3b8;
+        color:#7b8ba0;
         border:none;
-        font-size:8px;
+        font-size:9px;
+        font-weight:700;
     }
     QLabel#contractStatusLegend {
         background:transparent;
-        color:#64748b;
+        color:#55657a;
         border:none;
-        font-size:8px;
+        font-size:10px;
         font-weight:800;
     }
     QPushButton#contractStatusOpenButton {
@@ -178,10 +183,9 @@ class ContractStatusSummaryWidget(QFrame):
         super().__init__(parent)
         self._summary = ContractStatusSummary()
         self.setObjectName("contractStatusSummaryWidget")
-        self.setFixedHeight(112)
-        self.setMinimumWidth(390)
-        self.setMaximumWidth(570)
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setFixedSize(460, 112)
+        self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         self.setStyleSheet(self._STYLE)
         self._build_ui()
         self.set_summary(self._summary)
@@ -193,9 +197,9 @@ class ContractStatusSummaryWidget(QFrame):
 
         total_panel = QWidget(self)
         total_panel.setObjectName("contractStatusTotalPanel")
-        total_panel.setFixedWidth(120)
+        total_panel.setFixedWidth(104)
         total_layout = QVBoxLayout(total_panel)
-        total_layout.setContentsMargins(6, 0, 10, 0)
+        total_layout.setContentsMargins(6, 0, 9, 0)
         total_layout.setSpacing(0)
         total_layout.addStretch(1)
 
@@ -203,7 +207,7 @@ class ContractStatusSummaryWidget(QFrame):
         self.total_value.setObjectName("contractStatusTotalValue")
         self.total_value.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         total_layout.addWidget(self.total_value)
-        total_layout.addSpacing(5)
+        total_layout.addSpacing(4)
 
         total_label = QLabel("TOPLAM SÖZLEŞME", total_panel)
         total_label.setObjectName("contractStatusTotalLabel")
@@ -212,6 +216,8 @@ class ContractStatusSummaryWidget(QFrame):
         root.addWidget(total_panel, 0)
 
         content = QWidget(self)
+        content.setObjectName("contractStatusContent")
+        content.setAttribute(Qt.WA_StyledBackground, True)
         content_layout = QVBoxLayout(content)
         content_layout.setContentsMargins(0, 1, 0, 1)
         content_layout.setSpacing(0)
@@ -226,11 +232,11 @@ class ContractStatusSummaryWidget(QFrame):
         title_row.addStretch(1)
         title_row.addWidget(self.percent_label)
         content_layout.addLayout(title_row)
-        content_layout.addSpacing(9)
+        content_layout.addSpacing(10)
 
         self.status_bar = ContractStatusBar(content)
         content_layout.addWidget(self.status_bar)
-        content_layout.addSpacing(7)
+        content_layout.addSpacing(8)
 
         legend_row = QHBoxLayout()
         legend_row.setContentsMargins(0, 0, 0, 0)
