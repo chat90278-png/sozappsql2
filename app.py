@@ -14,6 +14,10 @@ from src.services.multiplatform_contract_persistence import install_multiplatfor
 install_multiplatform_contract_persistence_fix()
 
 from src.ui.main_page_analysis_window import MainWindow
+from src.ui.contract.multiplatform_context_refresh import install_multiplatform_context_refresh_fix
+
+install_multiplatform_context_refresh_fix()
+
 from src.ui.main_window import (
     app_icon_path,
     configure_windows_app_identity,
