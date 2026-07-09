@@ -185,6 +185,30 @@ class ShareMergeDecisionController:
         }
 
 
+STRUCTURAL_ISSUE_MESSAGES = {
+    "ABSENT_DELIVERY_PARENT_SYSTEM": "Teslimatın bağlı olduğu sistem doğrulanamadı.",
+    "PARENT_DELETE_CHILD_KEEP_CONFLICT": "Silinecek sistem altında korunan teslimatlar var.",
+    "ABSENT_FOLDER_PARENT": "Belge klasörünün üst klasörü doğrulanamadı.",
+    "ABSENT_FILE_PARENT_FOLDER": "Belgenin hedef klasörü doğrulanamadı.",
+    "FOLDER_DELETE_CHILD_KEEP_CONFLICT": "Silinecek klasör altında korunan belge veya klasörler var.",
+    "FOLDER_PARENT_CYCLE": "Belge klasörü yapısı doğrulanamadı.",
+}
+
+
+def structural_validation_message(resolved_plan: ResolvedMergePlan) -> str:
+    """Return a bounded user-facing reason without leaking raw graph payloads."""
+    issues = [
+        issue
+        for issue in resolved_plan.issues
+        if issue.code != "UNRESOLVED_CONFLICT" and issue.severity == "ERROR"
+    ]
+    if not issues:
+        return ""
+    reason = STRUCTURAL_ISSUE_MESSAGES.get(issues[0].code, "Birleştirme planı doğrulanamadı.")
+    extra = f" (+{len(issues) - 1} sorun)" if len(issues) > 1 else ""
+    return f"Birleştirme planı hazırlanamadı: {reason}{extra}"
+
+
 def entity_group_label(kind: MergeEntityKind) -> str:
     return ENTITY_GROUP_LABELS.get(kind, "Diğer")
 

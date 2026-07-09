@@ -31,6 +31,7 @@ from src.ui.presenters.share_merge_presenter import (
     decision_label,
     grouped_presented_items,
     plan_summary_text,
+    structural_validation_message,
 )
 from src.ui.theme import STYLE
 
@@ -235,7 +236,9 @@ class ShareMergeDialog(QDialog):
         self._decision_combos[item.target.target_id] = combo
         row = QHBoxLayout()
         row.addStretch(1)
-        row.addWidget(QLabel("Karar:"))
+        decision_caption = QLabel("Karar:")
+        decision_caption.setObjectName("shareMergeDecisionCaption")
+        row.addWidget(decision_caption)
         row.addWidget(combo)
         lay.addLayout(row)
         return card
@@ -270,8 +273,9 @@ class ShareMergeDialog(QDialog):
             self.apply_btn.setToolTip("Devam etmek için tüm çakışmalar hakkında karar verin.")
             self.status_label.setText("Devam etmek için tüm çakışmalar hakkında karar verin.")
         elif structural:
-            self.apply_btn.setToolTip("Plan doğrulama sorunları çözülmeden devam edilemez.")
-            self.status_label.setText("Plan doğrulama sorunları çözülmeden devam edilemez.")
+            validation_message = structural_validation_message(self.controller.resolved_plan)
+            self.apply_btn.setToolTip(validation_message)
+            self.status_label.setText(validation_message)
         else:
             self.apply_btn.setToolTip("")
             self.status_label.setText("")
@@ -369,6 +373,7 @@ class ShareMergeDialog(QDialog):
         QLabel#shareMergeConflictBadge{background:#fef3c7;color:#92400e;border:1px solid #facc15;border-radius:10px;padding:3px 8px;font-size:10px;font-weight:900;}
         QDialog#shareMergeDialog QLabel#shareMergeValueCaption{background:transparent;border:0;color:#64748b;font-size:10px;font-weight:800;}
         QDialog#shareMergeDialog QLabel#shareMergeValue{background:transparent;color:#0f2747;border:1px solid #e3edf8;border-radius:7px;padding:6px;font-size:11px;}
+        QDialog#shareMergeDialog QLabel#shareMergeDecisionCaption{background:transparent;border:0;color:#0f2747;}
         QComboBox#shareMergeDecisionCombo{min-width:240px;min-height:30px;}
         QLabel#shareMergeStatus{color:#64748b;font-size:11px;font-weight:700;}
         QPushButton#shareMergeApply{background:#2563eb;color:#ffffff;border:0;border-radius:9px;padding:8px 16px;font-weight:900;}
