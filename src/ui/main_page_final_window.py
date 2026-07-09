@@ -6,14 +6,18 @@ layout without replacing MainWindow business logic.
 """
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QFontMetrics
+from PySide6.QtCore import QEasingCurve, QPoint, QPropertyAnimation, QRect, Qt, QTimer
+from PySide6.QtGui import QColor, QPixmap
 from PySide6.QtWidgets import (
-    QFrame, QHBoxLayout, QLabel, QPushButton, QScrollArea, QSizePolicy,
-    QToolButton, QVBoxLayout, QWidget,
+    QFrame, QGraphicsDropShadowEffect, QHBoxLayout, QLabel, QMenu, QPushButton,
+    QSizePolicy, QToolButton, QVBoxLayout, QWidget,
 )
 
-from src.ui.main_window import MainWindow as LegacyMainWindow, qt_obj_alive
+from src.ui.main_window import (
+    MainWindow as LegacyMainWindow,
+    app_icon_path,
+    qt_obj_alive,
+)
 
 
 _FINAL_MAIN_STYLE = r"""
@@ -28,34 +32,52 @@ QFrame#appIdentityCard, QFrame#calendarHeaderCard {
 QLabel#appIdentityLogo {
     background:#0f2b61;
     border:1px solid #5fb7ff;
-    border-radius:15px;
+    border-radius:18px;
     padding:4px;
+}
+QWidget#appBrandWrap {
+    background:transparent;
+    border:none;
 }
 QLabel#appBrandTitle {
     background:transparent;
     color:#0f172a;
+    border:none;
+    padding:0;
+    margin:0;
     font-size:17px;
     font-weight:900;
 }
 QLabel#appBrandSubtitle {
     background:transparent;
     color:#75849a;
+    border:none;
+    padding:0;
+    margin:0;
     font-size:12px;
 }
 QToolButton#cornerMenuBtn {
-    background:#243548;
+    background:qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                               stop:0 #2a4056, stop:0.58 #243548, stop:1 #182a3b);
     color:#ffffff;
     border:none;
     border-top-left-radius:0px;
     border-top-right-radius:0px;
     border-bottom-right-radius:0px;
-    border-bottom-left-radius:72px;
-    padding:0 0 14px 14px;
+    border-bottom-left-radius:78px;
+    padding:0 0 15px 15px;
     font-size:22px;
     font-weight:900;
 }
-QToolButton#cornerMenuBtn:hover { background:#2b4055; }
-QToolButton#cornerMenuBtn:pressed { background:#1b2c3d; }
+QToolButton#cornerMenuBtn:hover {
+    background:qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                               stop:0 #354f68, stop:0.60 #2b4055, stop:1 #1d3348);
+}
+QToolButton#cornerMenuBtn:pressed,
+QToolButton#cornerMenuBtn[menuOpen="true"] {
+    background:qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                               stop:0 #22384c, stop:0.60 #1c3042, stop:1 #10202e);
+}
 QToolButton#cornerMenuBtn::menu-indicator { image:none; width:0; }
 QFrame#openWindowsStrip {
     background:#f6f9fc;
@@ -80,6 +102,107 @@ QFrame#calendarHeaderCard QScrollArea#upcomingScroll QWidget {
     border:0;
 }
 """
+
+
+_CORNER_MENU_POPUP_STYLE = r"""
+QMenu#cornerMenuPopup {
+    background:#ffffff;
+    color:#122033;
+    border:1px solid #cfd9e5;
+    border-top-left-radius:14px;
+    border-top-right-radius:0px;
+    border-bottom-left-radius:14px;
+    border-bottom-right-radius:14px;
+    padding:10px 7px 8px 7px;
+}
+QMenu#cornerMenuPopup::item {
+    background:transparent;
+    color:#122033;
+    border:0;
+    border-radius:9px;
+    padding:9px 28px 9px 14px;
+    margin:2px 3px;
+    font-size:12px;
+    font-weight:700;
+}
+QMenu#cornerMenuPopup::item:selected {
+    background:#edf4ff;
+    color:#1849a2;
+}
+QMenu#cornerMenuPopup::item:disabled {
+    color:#94a3b8;
+}
+QMenu#cornerMenuPopup::separator {
+    height:1px;
+    background:#e3eaf2;
+    margin:6px 8px;
+}
+QMenu#cornerMenuPopup::right-arrow {
+    width:8px;
+    height:8px;
+}
+"""
+
+
+class AnimatedCornerMenuButton(QToolButton):
+    """Single-surface corner menu button with a restrained hover motion."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._normal_rect = QRect()
+        self._hover_rect = QRect()
+        self._menu_open = False
+
+        self._geometry_animation = QPropertyAnimation(self, b"geometry", self)
+        self._geometry_animation.setDuration(165)
+        self._geometry_animation.setEasingCurve(QEasingCurve.OutCubic)
+
+        shadow = QGraphicsDropShadowEffect(self)
+        shadow.setBlurRadius(20)
+        shadow.setOffset(-2, 5)
+        shadow.setColor(QColor(20, 43, 68, 92))
+        self.setGraphicsEffect(shadow)
+        self._shadow = shadow
+
+    def set_anchor_rects(self, normal_rect: QRect, hover_rect: QRect) -> None:
+        self._normal_rect = QRect(normal_rect)
+        self._hover_rect = QRect(hover_rect)
+        if not self.underMouse() and not self._menu_open:
+            self._geometry_animation.stop()
+            self.setGeometry(self._normal_rect)
+
+    def _animate_to(self, target: QRect) -> None:
+        if not target.isValid():
+            return
+        self._geometry_animation.stop()
+        self._geometry_animation.setStartValue(self.geometry())
+        self._geometry_animation.setEndValue(target)
+        self._geometry_animation.start()
+
+    def set_menu_open(self, is_open: bool) -> None:
+        self._menu_open = bool(is_open)
+        if self._menu_open:
+            self._animate_to(self._hover_rect)
+            self._shadow.setBlurRadius(28)
+            self._shadow.setOffset(-3, 7)
+        elif not self.underMouse():
+            self._animate_to(self._normal_rect)
+            self._shadow.setBlurRadius(20)
+            self._shadow.setOffset(-2, 5)
+
+    def enterEvent(self, event):
+        super().enterEvent(event)
+        self._animate_to(self._hover_rect)
+        self._shadow.setBlurRadius(28)
+        self._shadow.setOffset(-3, 7)
+
+    def leaveEvent(self, event):
+        super().leaveEvent(event)
+        if self._menu_open:
+            return
+        self._animate_to(self._normal_rect)
+        self._shadow.setBlurRadius(20)
+        self._shadow.setOffset(-2, 5)
 
 
 class MainWindow(LegacyMainWindow):
@@ -133,29 +256,45 @@ class MainWindow(LegacyMainWindow):
         body.addWidget(left_column, 0)
         body.addWidget(right_column, 1)
 
-        # Identity card reuses the real logo and the same connection_label.
+        # Identity card reuses the real icon source and the same connection_label.
         identity = QFrame(left_column)
         identity.setObjectName("appIdentityCard")
         identity.setFixedHeight(146)
         identity_lay = QHBoxLayout(identity)
-        identity_lay.setContentsMargins(16, 14, 16, 14)
-        identity_lay.setSpacing(14)
+        identity_lay.setContentsMargins(14, 12, 14, 12)
+        identity_lay.setSpacing(12)
 
         logo = topbar.findChild(QLabel, "appLogo")
         if logo is not None:
             logo.setObjectName("appIdentityLogo")
-            logo.setFixedSize(58, 58)
+            logo.setFixedSize(72, 72)
+            logo_source = app_icon_path()
+            if logo_source and logo_source.exists():
+                pixmap = QPixmap(str(logo_source))
+                if not pixmap.isNull():
+                    logo.setPixmap(
+                        pixmap.scaled(
+                            62,
+                            62,
+                            Qt.KeepAspectRatio,
+                            Qt.SmoothTransformation,
+                        )
+                    )
             identity_lay.addWidget(logo, 0, Qt.AlignVCenter)
 
         brand_wrap = QWidget(identity)
+        brand_wrap.setObjectName("appBrandWrap")
+        brand_wrap.setAutoFillBackground(False)
         brand_lay = QVBoxLayout(brand_wrap)
         brand_lay.setContentsMargins(0, 0, 0, 0)
         brand_lay.setSpacing(2)
         brand_lay.addStretch(1)
         title = QLabel("STS Sözleşme Takip", brand_wrap)
         title.setObjectName("appBrandTitle")
+        title.setAutoFillBackground(False)
         subtitle = QLabel("Konfigürasyon Yönetimi", brand_wrap)
         subtitle.setObjectName("appBrandSubtitle")
+        subtitle.setAutoFillBackground(False)
         brand_lay.addWidget(title)
         brand_lay.addWidget(subtitle)
         brand_lay.addSpacing(6)
@@ -212,13 +351,88 @@ class MainWindow(LegacyMainWindow):
         self.open_windows_layout.setSpacing(6)
         self.open_windows_layout.setAlignment(Qt.AlignLeft | Qt.AlignBottom)
 
-        # Same QToolButton/menu/callbacks, now detached as a root corner overlay.
-        self.top_actions_btn.setParent(root)
-        self.top_actions_btn.setObjectName("cornerMenuBtn")
-        self.top_actions_btn.setText("☰")
-        self.top_actions_btn.setFixedSize(72, 72)
-        self.top_actions_btn.show()
+        # Preserve the same QMenu/actions/permission callbacks, but replace only
+        # the corner button surface so hover motion and popup anchoring are ours.
+        old_button = self.top_actions_btn
+        actions_menu = old_button.menu()
+        animated_button = AnimatedCornerMenuButton(root)
+        animated_button.setObjectName("cornerMenuBtn")
+        animated_button.setText("☰")
+        animated_button.setToolTip("Menü")
+        animated_button.setPopupMode(QToolButton.DelayedPopup)
+        animated_button.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        animated_button.setFixedSize(72, 72)
+        animated_button.setProperty("menuOpen", "false")
+
+        if actions_menu is not None:
+            actions_menu.setParent(animated_button)
+            animated_button.setMenu(actions_menu)
+            self._style_corner_menu_tree(actions_menu)
+            actions_menu.aboutToShow.connect(self._on_corner_menu_show)
+            actions_menu.aboutToHide.connect(self._on_corner_menu_hide)
+
+        old_button.hide()
+        old_button.deleteLater()
+        self.top_actions_btn = animated_button
+        self.top_actions_menu = actions_menu
+        animated_button.clicked.connect(self.show_corner_menu)
+        animated_button.show()
         self.position_corner_menu()
+
+    def _style_corner_menu_tree(self, menu: QMenu) -> None:
+        menu.setObjectName("cornerMenuPopup")
+        menu.setStyleSheet(_CORNER_MENU_POPUP_STYLE)
+        for action in menu.actions():
+            submenu = action.menu()
+            if submenu is not None:
+                self._style_corner_menu_tree(submenu)
+
+    def _refresh_corner_menu_button_style(self) -> None:
+        btn = getattr(self, "top_actions_btn", None)
+        if not qt_obj_alive(btn):
+            return
+        try:
+            btn.style().unpolish(btn)
+            btn.style().polish(btn)
+        except Exception:
+            pass
+        btn.update()
+
+    def _on_corner_menu_show(self) -> None:
+        btn = getattr(self, "top_actions_btn", None)
+        if not qt_obj_alive(btn):
+            return
+        btn.setProperty("menuOpen", "true")
+        if isinstance(btn, AnimatedCornerMenuButton):
+            btn.set_menu_open(True)
+        self._refresh_corner_menu_button_style()
+
+    def _on_corner_menu_hide(self) -> None:
+        btn = getattr(self, "top_actions_btn", None)
+        if not qt_obj_alive(btn):
+            return
+        btn.setProperty("menuOpen", "false")
+        if isinstance(btn, AnimatedCornerMenuButton):
+            btn.set_menu_open(False)
+        self._refresh_corner_menu_button_style()
+
+    def show_corner_menu(self) -> None:
+        btn = getattr(self, "top_actions_btn", None)
+        if not qt_obj_alive(btn):
+            return
+        menu = btn.menu()
+        if menu is None or menu.isVisible():
+            return
+        self._style_corner_menu_tree(menu)
+        menu.adjustSize()
+        menu_size = menu.sizeHint()
+        popup_pos = btn.mapToGlobal(
+            QPoint(
+                btn.width() - menu_size.width(),
+                btn.height() - 14,
+            )
+        )
+        menu.popup(popup_pos)
 
     def _tool_chip_frame_style(self, active: bool = False, stale: bool = False) -> str:
         accent = "#f59e0b" if stale else ("#2563eb" if active else "#b8c8dc")
@@ -311,7 +525,13 @@ class MainWindow(LegacyMainWindow):
         parent = self.centralWidget()
         if not qt_obj_alive(btn) or parent is None:
             return
-        btn.move(max(parent.width() - btn.width(), 0), 0)
+
+        normal_rect = QRect(max(parent.width() - 72, 0), 0, 72, 72)
+        hover_rect = QRect(max(parent.width() - 78, 0), 0, 78, 78)
+        if isinstance(btn, AnimatedCornerMenuButton):
+            btn.set_anchor_rects(normal_rect, hover_rect)
+        else:
+            btn.setGeometry(normal_rect)
         btn.raise_()
 
     def resizeEvent(self, event):
