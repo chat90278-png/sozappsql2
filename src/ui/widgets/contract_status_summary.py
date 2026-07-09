@@ -113,28 +113,38 @@ class ContractStatusSummaryWidget(QFrame):
     _STYLE = r"""
     QFrame#contractStatusSummaryWidget {
         background:#ffffff;
-        border:1px solid #d6e0ec;
+        border:1.5px solid #d8e2ed;
         border-radius:12px;
+    }
+    QFrame#contractStatusSummaryWidget:hover {
+        border-color:#397bd8;
+        background:#fafcff;
     }
     QWidget#contractStatusContent {
         background:#ffffff;
         border:none;
+    }
+    QFrame#contractStatusSummaryWidget:hover QWidget#contractStatusContent {
+        background:#fafcff;
     }
     QWidget#contractStatusTotalPanel {
         background:transparent;
         border:none;
         border-right:1px solid #e2e8f0;
     }
+    QFrame#contractStatusSummaryWidget:hover QWidget#contractStatusTotalPanel {
+        background:#fafcff;
+    }
     QLabel#contractStatusTotalValue {
         background:transparent;
         color:#0f2b61;
         border:none;
-        font-size:30px;
+        font-size:31px;
         font-weight:900;
     }
     QLabel#contractStatusTotalLabel {
         background:transparent;
-        color:#64748b;
+        color:#475569;
         border:none;
         font-size:9px;
         font-weight:900;
@@ -197,21 +207,24 @@ class ContractStatusSummaryWidget(QFrame):
 
         total_panel = QWidget(self)
         total_panel.setObjectName("contractStatusTotalPanel")
-        total_panel.setFixedWidth(104)
+        total_panel.setAttribute(Qt.WA_StyledBackground, True)
+        total_panel.setFixedWidth(114)
         total_layout = QVBoxLayout(total_panel)
-        total_layout.setContentsMargins(6, 0, 9, 0)
+        total_layout.setContentsMargins(5, 0, 9, 0)
         total_layout.setSpacing(0)
         total_layout.addStretch(1)
 
         self.total_value = QLabel("0", total_panel)
         self.total_value.setObjectName("contractStatusTotalValue")
-        self.total_value.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self.total_value.setAlignment(Qt.AlignHCenter | Qt.AlignVCenter)
         total_layout.addWidget(self.total_value)
         total_layout.addSpacing(4)
 
-        total_label = QLabel("TOPLAM SÖZLEŞME", total_panel)
-        total_label.setObjectName("contractStatusTotalLabel")
-        total_layout.addWidget(total_label)
+        self.total_label = QLabel("TOPLAM SÖZLEŞME", total_panel)
+        self.total_label.setObjectName("contractStatusTotalLabel")
+        self.total_label.setAlignment(Qt.AlignHCenter | Qt.AlignVCenter)
+        self.total_label.setWordWrap(False)
+        total_layout.addWidget(self.total_label)
         total_layout.addStretch(1)
         root.addWidget(total_panel, 0)
 
@@ -232,15 +245,18 @@ class ContractStatusSummaryWidget(QFrame):
         title_row.addStretch(1)
         title_row.addWidget(self.percent_label)
         content_layout.addLayout(title_row)
-        content_layout.addSpacing(10)
+
+        # Keep the title visually separate, then lower the distribution content
+        # slightly inside the 112 px card for a calmer vertical rhythm.
+        content_layout.addSpacing(14)
 
         self.status_bar = ContractStatusBar(content)
         content_layout.addWidget(self.status_bar)
-        content_layout.addSpacing(8)
+        content_layout.addSpacing(10)
 
         legend_row = QHBoxLayout()
         legend_row.setContentsMargins(0, 0, 0, 0)
-        legend_row.setSpacing(4)
+        legend_row.setSpacing(0)
         self.completed_label = self._legend_label(content)
         self.in_progress_label = self._legend_label(content)
         self.not_started_label = self._legend_label(content)
@@ -262,7 +278,11 @@ class ContractStatusSummaryWidget(QFrame):
         label = QLabel(parent)
         label.setObjectName("contractStatusLegend")
         label.setTextFormat(Qt.RichText)
-        label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        label.setAlignment(Qt.AlignCenter)
+        label.setMinimumWidth(0)
+        # Ignore each text sizeHint horizontally so the three status labels are
+        # distributed as genuinely equal cells instead of drifting by text length.
+        label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
         return label
 
     @staticmethod
