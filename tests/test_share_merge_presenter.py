@@ -195,16 +195,16 @@ def test_structural_validation_message_is_safe_and_actionable():
         local_snapshot_hash="b" * 64,
         remote_snapshot_hash="c" * 64,
         issues=[
-  MergeResolutionIssue(
-      "ABSENT_DELIVERY_PARENT_SYSTEM",
-      "raw uid-secret deadbeef {'payload_json': true}",
-      ("uid-secret",),
-  ),
-  MergeResolutionIssue(
-      "ABSENT_FILE_PARENT_FOLDER",
-      "raw file graph payload",
-      ("file-secret",),
-  ),
+            MergeResolutionIssue(
+                "ABSENT_DELIVERY_PARENT_SYSTEM",
+                "raw uid-secret deadbeef {'payload_json': true}",
+                ("uid-secret",),
+            ),
+            MergeResolutionIssue(
+                "ABSENT_FILE_PARENT_FOLDER",
+                "raw file graph payload",
+                ("file-secret",),
+            ),
         ],
         summary={"structural_issue_count": 2},
     )

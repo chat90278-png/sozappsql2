@@ -187,13 +187,13 @@ def test_mixed_graph_last_decision_enables_button_and_clear_disables(qapp, tmp_p
         assert not dialog.apply_btn.isEnabled()
 
         conflict_combos = [
-  combo
-  for target_id, combo in dialog._decision_combos.items()
-  if (dialog.controller.item_by_target(target_id) and dialog.controller.item_by_target(target_id).is_conflict)
+            combo
+            for target_id, combo in dialog._decision_combos.items()
+            if (dialog.controller.item_by_target(target_id) and dialog.controller.item_by_target(target_id).is_conflict)
         ]
         assert len(conflict_combos) >= 2
         for combo in conflict_combos[:-1]:
-  _choose(combo, MergeDecisionKind.REMOTE_USE)
+            _choose(combo, MergeDecisionKind.REMOTE_USE)
         assert not dialog.apply_btn.isEnabled()
 
         _choose(conflict_combos[-1], MergeDecisionKind.REMOTE_USE)

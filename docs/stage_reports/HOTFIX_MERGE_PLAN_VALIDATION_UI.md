@@ -52,4 +52,12 @@ koşullarında aktif.
 
 ## Final test output
 
-Workflow tamamlandığında gerçek full pytest çıktısı aşağıya otomatik eklenecektir.
+```text
+........................................................................ [ 55%]
+..........................................................               [100%]
+=========================== short test summary info ============================
+SKIPPED [1] tests/test_share_history_dialog.py:9: PySide6 Qt runtime unavailable: libEGL.so.1: cannot open shared object file: No such file or directory
+SKIPPED [1] tests/test_share_merge_dialog.py:12: PySide6 Qt runtime unavailable: libEGL.so.1: cannot open shared object file: No such file or directory
+SKIPPED [1] tests/test_share_merge_window_orchestration.py:11: PySide6 Qt runtime unavailable: libEGL.so.1: cannot open shared object file: No such file or directory
+130 passed, 3 skipped in 5.41s
+```

@@ -177,7 +177,7 @@ def test_prepared_plan_context_keeps_mixed_assignment_and_delivery_conflicts_val
 
     for item in list(controller.resolved_plan.resolution_items):
         if item.is_conflict:
-  controller.set_decision(item.target.target_id, MergeDecisionKind.REMOTE_USE)
+            controller.set_decision(item.target.target_id, MergeDecisionKind.REMOTE_USE)
 
     summary = controller.live_summary()
     assert summary["unresolved_conflict_count"] == 0
