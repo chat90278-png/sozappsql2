@@ -1,0 +1,38 @@
+name: Analysis Center Integration
+
+on:
+  push:
+    branches:
+      - integration/analysis-center-tur21-current-main
+  pull_request:
+    paths:
+      - "analysis_center/**"
+      - "src/ui/analysis_center_window.py"
+      - "src/ui/main_page_analysis_window.py"
+      - "app.py"
+      - "tests/test_analysis*.py"
+      - "tests/smoke_*analysis*.py"
+      - "tests/smoke_*tur*.py"
+      - ".github/workflows/analysis-integration.yml"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      QT_QPA_PLATFORM: offscreen
+      PYTHONPATH: .
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Compile
+        run: python -m compileall -q app.py src analysis_center tests
+      - name: Full test suite
+        run: python -m pytest -q
+      - name: Current-main Analysis Center release acceptance
+        run: python tests/smoke_analysis_center_current_main_acceptance.py
