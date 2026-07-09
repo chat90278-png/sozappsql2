@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   bootstrap-hotfix:
-    if: ${{ github.head_ref == 'hotfix/resolved-merge-validation-ui' }}
+    if: ${{ github.head_ref == 'hotfix/resolved-merge-validation-ui' && !contains(github.event.head_commit.message, '[hotfix-diagnostic]') }}
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
@@ -76,13 +76,19 @@ jobs:
                       raise SystemExit(proc.returncode)
           PY
 
-      - name: Upload hotfix failure log
+      - name: Persist hotfix failure log without partial patch
         if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: hotfix-driver-log
-          path: /tmp/hotfix-driver.log
-          if-no-files-found: error
+        env:
+          HOTFIX_BRANCH: ${{ github.head_ref }}
+        run: |
+          git reset --hard HEAD
+          mkdir -p docs/stage_reports
+          cp /tmp/hotfix-driver.log docs/stage_reports/HOTFIX_WORKFLOW_FAILURE.log
+          git config user.name "STS Hotfix Runner"
+          git config user.email "actions@users.noreply.github.com"
+          git add docs/stage_reports/HOTFIX_WORKFLOW_FAILURE.log
+          git commit -m "Record hotfix runner failure [hotfix-diagnostic]"
+          git push origin HEAD:${HOTFIX_BRANCH}
 
       - name: Remove PR bootstrap runner
         if: success()
