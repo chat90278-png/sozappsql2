@@ -7,7 +7,9 @@ from src.models.share_merge_resolution_models import (
     MergeDecisionKind,
     MergeDecisionTarget,
     MergeDecisionTargetType,
+    MergeResolutionIssue,
     ResolutionItem,
+    ResolvedMergePlan,
 )
 from src.ui.presenters.share_merge_presenter import (
     decision_label,
@@ -15,6 +17,7 @@ from src.ui.presenters.share_merge_presenter import (
     field_label,
     format_value,
     present_item,
+    structural_validation_message,
 )
 
 
@@ -183,3 +186,32 @@ def test_detail_formatter_presents_unit_slots_without_dict_repr():
     assert "Kuyruk No / Seri No" in detail
     assert "#001" in detail and "SER-1" in detail
     assert "{'" not in detail and '"slot_no"' not in detail
+
+
+def test_structural_validation_message_is_safe_and_actionable():
+    resolved = ResolvedMergePlan(
+        contract_merge_uid="contract-secret",
+        base_snapshot_hash="a" * 64,
+        local_snapshot_hash="b" * 64,
+        remote_snapshot_hash="c" * 64,
+        issues=[
+            MergeResolutionIssue(
+                "ABSENT_DELIVERY_PARENT_SYSTEM",
+                "raw uid-secret deadbeef {'payload_json': true}",
+                ("uid-secret",),
+            ),
+            MergeResolutionIssue(
+                "ABSENT_FILE_PARENT_FOLDER",
+                "raw file graph payload",
+                ("file-secret",),
+            ),
+        ],
+        summary={"structural_issue_count": 2},
+    )
+    message = structural_validation_message(resolved)
+    assert "Teslimatın bağlı olduğu sistem doğrulanamadı" in message
+    assert "(+1 sorun)" in message
+    assert "uid-secret" not in message
+    assert "deadbeef" not in message
+    assert "payload_json" not in message
+    assert "{" not in message and "}" not in message

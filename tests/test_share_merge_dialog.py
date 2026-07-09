@@ -7,17 +7,19 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
 try:
-    from PySide6.QtWidgets import QApplication, QComboBox, QMessageBox
+    from PySide6.QtWidgets import QApplication, QComboBox, QLabel, QMessageBox
 except ImportError as exc:
     pytest.skip(f"PySide6 Qt runtime unavailable: {exc}", allow_module_level=True)
 
 from src.domain.share_merge_resolution import resolve_merge_plan
+from src.models.app_models import DeliveryInfo
 from src.models.share_merge_resolution_models import MergeDecisionKind
 from src.services.share_merge_apply_service import MergeSourceChangedError
 from src.services.share_merge_service import prepare_share_merge_plan
 from src.ui.dialogs.share_merge_dialog import ShareMergeDialog
 from src.ui.presenters.share_merge_error_presenter import present_share_merge_error
 
+from tests.test_share_assignment_merge import _save_units
 from tests.test_share_merge_end_to_end import _edit_note, _prepare_keep_both_conflict, make_registered_share
 
 
@@ -153,3 +155,60 @@ def test_unexpected_error_presenter_is_safe():
     assert presentation.severity == "error"
     assert "Beklenmeyen" in presentation.message
     assert "raw bytes" not in presentation.message
+
+
+def test_mixed_graph_last_decision_enables_button_and_clear_disables(qapp, tmp_path):
+    source, share, _ci, _cid, _metadata = make_registered_share(tmp_path)
+    _save_units(source, identifier="LOCAL-SER", note="LOCAL-Q")
+    _save_units(share, identifier="REMOTE-SER", note="REMOTE-Q")
+    _edit_note(source, "LOCAL-NOTE")
+    _edit_note(share, "REMOTE-NOTE")
+
+    ci, systems, deliveries = share.load_contract_structure("AKINCI", "C-1", contract_type="Ana Sözleşme")
+    remote_delivery = DeliveryInfo("DEL-REMOTE", "PLAN", "", "", {"C": 1}, {"C": 0})
+    remote_delivery.component_units = {
+        "C": [{"slot_no": 1, "identifier": "REMOTE-NEW", "is_delivered": 0, "note": "REMOTE-QUEUE"}]
+    }
+    deliveries["SYS"].append(remote_delivery)
+    share.write_contract(ci, systems, deliveries)
+
+    plan = prepare_share_merge_plan(source, share.path)
+    dialog = ShareMergeDialog(
+        merge_plan=plan,
+        share_path=share.path,
+        metadata=None,
+        preflight_callback=lambda resolved, allow_partial: None,
+        apply_callback=lambda resolved, allow_partial: None,
+    )
+    try:
+        initial = dialog.controller.live_summary()
+        assert initial["unresolved_conflict_count"] >= 2
+        assert initial["structural_issue_count"] == 0
+        assert not dialog.apply_btn.isEnabled()
+
+        conflict_combos = [
+            combo
+            for target_id, combo in dialog._decision_combos.items()
+            if (dialog.controller.item_by_target(target_id) and dialog.controller.item_by_target(target_id).is_conflict)
+        ]
+        assert len(conflict_combos) >= 2
+        for combo in conflict_combos[:-1]:
+            _choose(combo, MergeDecisionKind.REMOTE_USE)
+        assert not dialog.apply_btn.isEnabled()
+
+        _choose(conflict_combos[-1], MergeDecisionKind.REMOTE_USE)
+        summary = dialog.controller.live_summary()
+        assert summary["unresolved_conflict_count"] == 0
+        assert summary["structural_issue_count"] == 0
+        assert dialog.apply_btn.isEnabled()
+        assert "Plan doğrulama" not in dialog.status_label.text()
+
+        conflict_combos[-1].setCurrentIndex(0)
+        assert dialog.controller.live_summary()["unresolved_conflict_count"] == 1
+        assert not dialog.apply_btn.isEnabled()
+
+        caption = dialog.findChild(QLabel, "shareMergeDecisionCaption")
+        assert caption is not None
+        assert "QDialog#shareMergeDialog QLabel#shareMergeDecisionCaption" in dialog.styleSheet()
+    finally:
+        dialog.close(); source.db.close(); share.db.close()

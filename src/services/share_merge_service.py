@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+from copy import deepcopy
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -41,6 +43,20 @@ class SourceContractNotFoundError(ShareMergePreparationError):
 
 class SharePackageStatusError(ShareMergePreparationError):
     pass
+
+
+@dataclass(frozen=True)
+class _PreparedShareMergePlan(MergePlan):
+    """Merge plan carrying non-presentational graph context for validation.
+
+    The context is intentionally excluded from repr/equality so the public plan
+    surface, deterministic operation semantics, and existing immutable-plan
+    checks remain unchanged.
+    """
+
+    resolution_base_snapshot: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
+    resolution_local_snapshot: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
+    resolution_remote_snapshot: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
 
 def _source_conn_and_owner(source_store_or_conn: Any) -> tuple[sqlite3.Connection, bool]:
@@ -127,7 +143,20 @@ def prepare_share_merge_plan(source_store_or_conn: Any, share_path: Path | str) 
     finally:
         share_conn.close()
 
-    plan = build_merge_plan(base_snapshot, local_snapshot, remote_snapshot)
+    raw_plan = build_merge_plan(base_snapshot, local_snapshot, remote_snapshot)
+    plan = _PreparedShareMergePlan(
+        contract_merge_uid=raw_plan.contract_merge_uid,
+        base_snapshot_hash=raw_plan.base_snapshot_hash,
+        local_snapshot_hash=raw_plan.local_snapshot_hash,
+        remote_snapshot_hash=raw_plan.remote_snapshot_hash,
+        changes=raw_plan.changes,
+        conflicts=raw_plan.conflicts,
+        warnings=raw_plan.warnings,
+        summary=raw_plan.summary,
+        resolution_base_snapshot=deepcopy(base_snapshot),
+        resolution_local_snapshot=deepcopy(local_snapshot),
+        resolution_remote_snapshot=deepcopy(remote_snapshot),
+    )
     _mark_package_returned_if_open(conn, metadata.share_package_id, metadata.source_contract_merge_uid)
     _log.debug(
         "Prepared share merge plan package=%s contract=%s base=%s local=%s remote=%s conflicts=%s safe_remote=%s",

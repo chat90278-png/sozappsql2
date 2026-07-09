@@ -625,6 +625,12 @@ def hash_merge_operations(operations: Iterable[MergeOperation]) -> str:
 def resolve_merge_plan(merge_plan: MergePlan, decisions: Any = None, *, require_all_conflicts_resolved: bool = False,
                        base_snapshot: dict | None = None, local_snapshot: dict | None = None,
                        remote_snapshot: dict | None = None) -> ResolvedMergePlan:
+    if base_snapshot is None:
+        base_snapshot = getattr(merge_plan, "resolution_base_snapshot", None)
+    if local_snapshot is None:
+        local_snapshot = getattr(merge_plan, "resolution_local_snapshot", None)
+    if remote_snapshot is None:
+        remote_snapshot = getattr(merge_plan, "resolution_remote_snapshot", None)
     items = build_resolution_items(merge_plan)
     item_map = {item.target.target_id: item for item in items}
     explicit = _decision_map(decisions, item_map)
