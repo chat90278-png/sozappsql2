@@ -1,62 +1,56 @@
 # -*- coding: utf-8 -*-
 """Current-main Analiz Merkezi integration layer.
 
-The compact MainWindow UI remains the visual source of truth. This subclass only
-adds the Tur 21 Analysis Center report route/current permission boundary and the
-main-entry compatibility hotfixes required by the current compact UI.
+The compact MainWindow UI remains the visual source of truth. This subclass adds
+Analysis Center routing and replaces the native/experimental popup surface with
+the approved animated corner overlay. Existing QAction callbacks and permission
+rules remain the source of truth.
 """
 from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QMessageBox, QToolButton, QWidget
 
 from src.ui.main_page_final_window import MainWindow as CompactMainWindow
+from src.ui.widgets.corner_menu_overlay import CornerMenuOverlay
 
 
 class MainWindow(CompactMainWindow):
-    """Compact main window with Analysis Center wiring."""
+    """Compact main window with Analysis Center and safe corner-menu overlay."""
 
     def build(self):
         super().build()
 
-        # Hard rollback of the experimental animated/popup integration on the
-        # actual application entry class. Do NOT reuse the menu created by the
-        # animated layer: that QMenu already owns animation-state signal
-        # connections and custom popup styling. Build a completely fresh native
-        # menu from the existing action factory so the click path is the same as
-        # the original stable MainWindow implementation.
-        experimental_btn = getattr(self, "top_actions_btn", None)
         root = self.centralWidget()
+        experimental_btn = getattr(self, "top_actions_btn", None)
+        source_menu = experimental_btn.menu() if isinstance(experimental_btn, QToolButton) else None
 
-        if isinstance(experimental_btn, QToolButton) and root is not None:
-            experimental_menu = experimental_btn.menu()
+        if root is not None and isinstance(experimental_btn, QToolButton) and source_menu is not None:
+            # The QMenu tree remains only an action/callback model. It is never
+            # shown as a native popup. The overlay renders ordinary child widgets
+            # and triggers the existing QAction objects directly.
             experimental_btn.hide()
             experimental_btn.setMenu(None)
-            if experimental_menu is not None:
-                experimental_menu.hide()
-                experimental_menu.deleteLater()
+            source_menu.setParent(self)
             experimental_btn.deleteLater()
 
-            safe_btn = QToolButton(root)
-            safe_btn.setObjectName("cornerMenuBtn")
-            safe_btn.setText("☰")
-            safe_btn.setToolTip("Menü")
-            safe_btn.setToolButtonStyle(Qt.ToolButtonTextOnly)
-            safe_btn.setPopupMode(QToolButton.InstantPopup)
-            safe_btn.setFixedSize(72, 72)
+            self._corner_menu_overlay = CornerMenuOverlay(
+                host=root,
+                source_menu=source_menu,
+                before_open=self._refresh_permission_actions,
+                parent=self,
+            )
+            self.top_actions_btn = self._corner_menu_overlay.button
+            self.top_actions_menu = source_menu
+            self._corner_menu_overlay.reposition()
 
-            # Fresh QMenu: _build_top_actions_menu recreates the original menu
-            # hierarchy/callbacks/permission refresh and this subclass adds
-            # Analiz Merkezi through its override below.
-            safe_menu = self._build_top_actions_menu(safe_btn)
-            safe_btn.setMenu(safe_menu)
-
-            self.top_actions_btn = safe_btn
-            self.top_actions_menu = safe_menu
-            safe_btn.show()
-            self.position_corner_menu()
+    def position_corner_menu(self):
+        overlay = getattr(self, "_corner_menu_overlay", None)
+        if overlay is not None:
+            overlay.reposition()
+            return
+        super().position_corner_menu()
 
     def _build_top_actions_menu(self, parent) -> object:
         menu = super()._build_top_actions_menu(parent)
