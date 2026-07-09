@@ -8,6 +8,7 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("PySide6")
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QSizePolicy, QWidget
 
 from src.ui.main_page_analysis_window import MainWindow
@@ -40,15 +41,35 @@ def test_contract_status_summary_maps_analysis_metrics_without_reclassifying():
     assert summary.completed_percent == 33
 
 
-def test_contract_status_widget_is_compact_white_surface_and_emits_open_request(qt_app):
+def test_contract_status_widget_matches_calendar_hover_and_balances_inner_layout(qt_app):
     widget = ContractStatusSummaryWidget()
     try:
         assert widget.width() == 460
         assert widget.height() == 112
         assert widget.sizePolicy().horizontalPolicy() == QSizePolicy.Fixed
+
         content = widget.findChild(QWidget, "contractStatusContent")
+        total_panel = widget.findChild(QWidget, "contractStatusTotalPanel")
         assert content is not None
-        assert "background:#ffffff" in widget.styleSheet()
+        assert total_panel is not None
+        assert total_panel.width() == 114
+
+        style = widget.styleSheet()
+        assert "border:1.5px solid #d8e2ed" in style
+        assert "QFrame#contractStatusSummaryWidget:hover" in style
+        assert "border-color:#397bd8" in style
+        assert "background:#fafcff" in style
+        assert "hover QWidget#contractStatusContent" in style
+
+        assert widget.total_value.alignment() & Qt.AlignHCenter
+        assert widget.total_label.alignment() & Qt.AlignHCenter
+        for label in (
+            widget.completed_label,
+            widget.in_progress_label,
+            widget.not_started_label,
+        ):
+            assert label.alignment() & Qt.AlignHCenter
+            assert label.sizePolicy().horizontalPolicy() == QSizePolicy.Ignored
 
         calls: list[str] = []
         widget.open_analysis_requested.connect(lambda: calls.append("open"))
