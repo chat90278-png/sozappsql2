@@ -9,6 +9,10 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 from PySide6.QtCore import QTimer
 from PySide6.QtGui import QFont, QIcon
 
+from src.services.multiplatform_contract_persistence import install_multiplatform_contract_persistence_fix
+
+install_multiplatform_contract_persistence_fix()
+
 from src.ui.main_page_analysis_window import MainWindow
 from src.ui.main_window import (
     app_icon_path,
