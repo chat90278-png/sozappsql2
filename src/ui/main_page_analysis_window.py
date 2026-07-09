@@ -1,20 +1,39 @@
 # -*- coding: utf-8 -*-
 """Current-main Analiz Merkezi integration layer.
 
-The compact MainWindow UI remains the visual source of truth.  This subclass only
-adds the Tur 21 Analysis Center report route and current permission boundary.
+The compact MainWindow UI remains the visual source of truth. This subclass only
+adds the Tur 21 Analysis Center report route/current permission boundary and the
+main-entry compatibility hotfixes required by the current compact UI.
 """
 from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtWidgets import QMessageBox, QWidget
+from PySide6.QtWidgets import QMessageBox, QToolButton, QWidget
 
 from src.ui.main_page_final_window import MainWindow as CompactMainWindow
 
 
 class MainWindow(CompactMainWindow):
     """Compact main window with Analysis Center wiring."""
+
+    def build(self):
+        super().build()
+
+        # Hotfix: the animated corner button had been switched to DelayedPopup
+        # and its clicked(bool) signal was wired to a manually positioned popup
+        # handler. On the packaged Windows/PySide6 runtime that click path can
+        # escape through sys.excepthook before the menu is shown. Keep the same
+        # animated button, QMenu instance, actions, permission refresh callbacks
+        # and aboutToShow/aboutToHide visual state; delegate popup opening back
+        # to QToolButton's proven native InstantPopup path.
+        btn = getattr(self, "top_actions_btn", None)
+        if isinstance(btn, QToolButton):
+            try:
+                btn.clicked.disconnect()
+            except (RuntimeError, TypeError):
+                pass
+            btn.setPopupMode(QToolButton.InstantPopup)
 
     def _build_top_actions_menu(self, parent) -> object:
         menu = super()._build_top_actions_menu(parent)
