@@ -23,6 +23,7 @@ jobs:
         with:
           ref: ${{ github.head_ref }}
           fetch-depth: 1
+          show-progress: false
 
       - name: Determine phase
         id: phase
@@ -118,12 +119,23 @@ jobs:
       - name: Install dependencies
         if: steps.phase.outputs.name == 'verify'
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt
+          python -m pip install -q --upgrade pip
+          python -m pip install -q -r requirements.txt
 
       - name: Assignment regression
         if: steps.phase.outputs.name == 'verify'
-        run: python -m pytest -q tests/test_share_assignment_merge.py
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m pytest -q tests/test_share_assignment_merge.py 2>&1 | tee assignment-regression.log
+
+      - name: Upload assignment failure log
+        if: steps.phase.outputs.name == 'verify' && failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: assignment-regression-log
+          path: assignment-regression.log
+          if-no-files-found: error
 
       - name: Presenter regression
         if: steps.phase.outputs.name == 'verify'
@@ -168,7 +180,7 @@ jobs:
           )
           report.write_text(text, encoding="utf-8")
           PY
-          rm -f hotfix-full-pytest.txt
+          rm -f hotfix-full-pytest.txt assignment-regression.log
           rm -f .github/workflows/hotfix_apply_merge_validation.yml
           rm -f .github/workflows/hotfix_apply_merge_validation_pr.yml
           rm -f docs/stage_reports/HOTFIX_WORKFLOW_FAILURE.log
