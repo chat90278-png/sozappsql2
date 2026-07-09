@@ -22,7 +22,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ github.head_ref }}
-          fetch-depth: 0
+          fetch-depth: 1
 
       - name: Determine phase
         id: phase
@@ -57,7 +57,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          python - <<'PY' | tee hotfix-patch.log
+          python - <<'PY' 2>&1 | tee hotfix-patch.log
           from __future__ import annotations
 
           import os
