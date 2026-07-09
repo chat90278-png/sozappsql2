@@ -2,18 +2,29 @@
 """Current-main Analiz Merkezi integration layer.
 
 The compact MainWindow UI remains the visual source of truth. This subclass adds
-Analysis Center routing and replaces the native/experimental popup surface with
-the approved animated corner overlay. Existing QAction callbacks and permission
-rules remain the source of truth.
+Analysis Center routing, the compact contract-status summary box, and the approved
+animated corner overlay. Existing QAction callbacks and permission rules remain
+the source of truth.
 """
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QMessageBox, QToolButton, QWidget
 
+from analysis_center.analysis_data_loader import load_analysis_data
+from analysis_center.analysis_metrics import compute_metrics
 from src.ui.main_page_final_window import MainWindow as CompactMainWindow
+from src.ui.widgets.contract_status_summary import (
+    ContractStatusSummary,
+    ContractStatusSummaryWidget,
+)
 from src.ui.widgets.corner_menu_overlay import CornerMenuOverlay
+
+
+_log = logging.getLogger(__name__)
 
 
 class MainWindow(CompactMainWindow):
@@ -21,6 +32,7 @@ class MainWindow(CompactMainWindow):
 
     def build(self):
         super().build()
+        self._install_contract_status_widget()
 
         root = self.centralWidget()
         experimental_btn = getattr(self, "top_actions_btn", None)
@@ -44,6 +56,86 @@ class MainWindow(CompactMainWindow):
             self.top_actions_btn = self._corner_menu_overlay.button
             self.top_actions_menu = source_menu
             self._corner_menu_overlay.reposition()
+
+    def _install_contract_status_widget(self) -> None:
+        calendar_widget = getattr(self, "_cal_widget", None)
+        if calendar_widget is None:
+            return
+        calendar_card = calendar_widget.parentWidget()
+        calendar_layout = calendar_card.layout() if calendar_card is not None else None
+        if calendar_layout is None:
+            return
+
+        # The compact main page previously gave the middle area to the inherited
+        # upcoming-scroll surface. Keep that object alive for legacy callbacks,
+        # but replace only its visible slot with the new Analysis Center summary.
+        upcoming_scroll = getattr(self, "upcoming_scroll", None)
+        if upcoming_scroll is not None:
+            calendar_layout.removeWidget(upcoming_scroll)
+            upcoming_scroll.hide()
+
+        self.contract_status_widget = ContractStatusSummaryWidget(calendar_card)
+        self.contract_status_widget.open_analysis_requested.connect(self.open_analysis_center)
+
+        calendar_index = calendar_layout.indexOf(calendar_widget)
+        insert_index = calendar_index if calendar_index >= 0 else 1
+        calendar_layout.insertWidget(
+            insert_index,
+            self.contract_status_widget,
+            1,
+            Qt.AlignVCenter,
+        )
+
+    def _analysis_source_path(self) -> Path | None:
+        if not self.store:
+            return None
+        source_path = (
+            getattr(getattr(self.store, "db", None), "path", None)
+            or getattr(self.store, "path", None)
+            or self.path
+        )
+        try:
+            return Path(source_path) if source_path else None
+        except Exception:
+            return None
+
+    def _refresh_contract_status_widget(self) -> None:
+        widget = getattr(self, "contract_status_widget", None)
+        if widget is None:
+            return
+        if not self.store or not self.is_sts_mode():
+            widget.clear_summary()
+            return
+
+        source_path = self._analysis_source_path()
+        if source_path is None:
+            widget.clear_summary()
+            return
+
+        try:
+            # Use the same normalized loader + metric engine as Analysis Center.
+            # We stop at compute_metrics instead of composing the full dashboard,
+            # because the main-page box only needs four contract status metrics.
+            data = load_analysis_data(
+                source=source_path,
+                contract_index=list(self.contract_index or []),
+                use_sample=False,
+            )
+            metrics = compute_metrics(data)
+            widget.set_summary(ContractStatusSummary.from_metrics(metrics))
+        except Exception:
+            _log.exception("Main-page contract status summary could not be refreshed")
+            widget.clear_summary()
+
+    def update_alert_strip(self):
+        super().update_alert_strip()
+        self._refresh_contract_status_widget()
+
+    def set_empty_state(self):
+        super().set_empty_state()
+        widget = getattr(self, "contract_status_widget", None)
+        if widget is not None:
+            widget.clear_summary()
 
     def position_corner_menu(self):
         overlay = getattr(self, "_corner_menu_overlay", None)
@@ -77,12 +169,14 @@ class MainWindow(CompactMainWindow):
 
         from src.ui.analysis_center_window import AnalysisCenterWindow
 
-        source_path = (
-            getattr(getattr(self.store, "db", None), "path", None)
-            or getattr(self.store, "path", None)
-            or self.path
-        )
-        source_path = Path(source_path)
+        source_path = self._analysis_source_path()
+        if source_path is None:
+            QMessageBox.information(
+                self,
+                "Veri dosyası gerekli",
+                "Analiz Merkezi veri kaynağı belirlenemedi.",
+            )
+            return None
 
         return self.open_or_raise_tool_window(
             "report:analysis_center",
