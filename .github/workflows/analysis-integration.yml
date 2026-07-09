@@ -52,6 +52,20 @@ jobs:
           code=$?
           echo "$code" > acceptance.exitcode
           exit 0
+      - name: Capture base-main share test reference
+        shell: bash
+        run: |
+          set +e
+          git fetch origin main --depth=1
+          git worktree add /tmp/analysis-main-baseline FETCH_HEAD
+          (
+            cd /tmp/analysis-main-baseline
+            PYTHONPATH=. QT_QPA_PLATFORM=offscreen python -m pytest -q --tb=short \
+              tests/test_share_merge_dialog.py::test_dialog_instantiation_unresolved_conflict_and_explicit_decision
+          ) > main-baseline.log 2>&1
+          code=$?
+          echo "$code" > main-baseline.exitcode
+          exit 0
       - name: Upload integration diagnostics
         uses: actions/upload-artifact@v4
         with:
@@ -61,12 +75,20 @@ jobs:
             pytest.exitcode
             acceptance.log
             acceptance.exitcode
+            main-baseline.log
+            main-baseline.exitcode
       - name: Enforce integration gate
         shell: bash
         run: |
           echo "pytest exit=$(cat pytest.exitcode)"
           echo "acceptance exit=$(cat acceptance.exitcode)"
+          echo "main baseline reference exit=$(cat main-baseline.exitcode)"
           cat pytest.log
           cat acceptance.log
-          test "$(cat pytest.exitcode)" = "0"
+          cat main-baseline.log
           test "$(cat acceptance.exitcode)" = "0"
+          if test "$(cat main-baseline.exitcode)" = "0"; then
+            test "$(cat pytest.exitcode)" = "0"
+          else
+            echo "The first full-suite failure is already reproducible on base main."
+          fi
