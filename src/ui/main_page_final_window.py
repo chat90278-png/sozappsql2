@@ -191,6 +191,13 @@ class MainWindow(LegacyMainWindow):
         alert_strip.hide()
 
         # Re-skin the existing tool-window strip as true tabs at the very top.
+        self.open_windows_strip.setStyleSheet(
+            "QFrame#openWindowsStrip{background:#f6f9fc;border:1px solid #d7e0ea;"
+            "border-radius:0;border-top-left-radius:10px;border-top-right-radius:10px;"
+            "min-height:44px;max-height:46px;}"
+            "QLabel#openWindowsLabel{background:transparent;color:#40536c;font-size:11px;font-weight:900;}"
+            "QScrollArea#openWindowsScroll,QWidget#openWindowsHost{background:transparent;border:0;}"
+        )
         self.open_windows_strip.setFixedHeight(46)
         strip_lay = self.open_windows_strip.layout()
         strip_lay.setContentsMargins(12, 6, 84, 0)
@@ -199,7 +206,9 @@ class MainWindow(LegacyMainWindow):
         if strip_label is not None:
             strip_label.setText("·  Pencereler:")
             strip_label.setFixedHeight(34)
+            strip_lay.setAlignment(strip_label, Qt.AlignBottom)
         self.open_windows_scroll.setFixedHeight(40)
+        strip_lay.setAlignment(self.open_windows_scroll, Qt.AlignBottom)
         self.open_windows_layout.setSpacing(6)
         self.open_windows_layout.setAlignment(Qt.AlignLeft | Qt.AlignBottom)
 
@@ -281,6 +290,7 @@ class MainWindow(LegacyMainWindow):
         lay.setContentsMargins(12, 6, 7, 4)
         lay.setSpacing(6)
         self.open_windows_layout.setAlignment(Qt.AlignLeft | Qt.AlignBottom)
+        self.open_windows_layout.setAlignment(chip, Qt.AlignBottom)
         self._apply_tool_chip_visual(chip, key == getattr(self, "_active_tool_window_key", ""))
         return chip
 
