@@ -7,9 +7,24 @@ from datetime import date
 from typing import Callable, Dict, List, Optional, Tuple
 
 from src.domain.constants import STATUS_VALUES
-from src.domain.flexible_date import flexible_or_blank, parse_flexible_date, validate_flexible_date
+from src.domain.delivery_core import (
+    ACTUAL_DATE_LABEL,
+    PLANNED_DATE_LABEL,
+    as_number,
+    assignable_remaining,
+    build_delivery_info,
+    distributable_target,
+    fmt_num,
+    is_delivered_status,
+    planned_remaining_state,
+    remaining_qty,
+    validate_quantities,
+    validate_status_rules,
+    validate_unit_tracking,
+)
+from src.domain.flexible_date import flexible_or_blank
 from src.models.app_models import DeliveryInfo, SystemInfo
-from src.services.excel_store import as_number, fmt_num, iso_or_blank, normalize_sheet_name
+from src.services.excel_store import iso_or_blank, normalize_sheet_name
 from src.ui.date_picker import build_date_input
 from src.ui.delegates import CompactNumberDelegate
 from src.ui.dialogs.styled_dialog import StyledDialog
@@ -628,8 +643,7 @@ class DeliveryDialog(StyledDialog):
 
     def _is_delivered_status(self) -> bool:
         status = self.status.currentText().strip() if hasattr(self, "status") else ""
-        norm = status.lower().replace("ı", "i").replace("İ", "i")
-        return norm in {"teslim edildi", "tamamlandi", "tamamlandı"}
+        return is_delivered_status(status)
 
     def on_status_changed(self, _text: str = ""):
         self._sync_actual_date_visibility()
@@ -663,12 +677,7 @@ class DeliveryDialog(StyledDialog):
     def _planned_remaining_state(
         self, planned: Dict[str, float], delivered: Dict[str, float]
     ) -> Tuple[bool, List[str]]:
-        active_components = [comp for comp, qty in planned.items() if max(as_number(qty), 0) > 0.0001]
-        remaining = [
-            comp for comp in active_components
-            if max(as_number(planned.get(comp, 0)) - as_number(delivered.get(comp, 0)), 0) > 0.0001
-        ]
-        return bool(active_components) and not remaining, remaining
+        return planned_remaining_state(planned, delivered)
 
     def _recalc_completion(self):
         return
@@ -683,14 +692,24 @@ class DeliveryDialog(StyledDialog):
         rows = []
         for comp in self.component_keys:
             total = self._system_component_qty(comp)
-            assigned = max(as_number(self.planned_assigned.get(comp, 0)), 0) + self._current_planned_for(comp)
-            available = total - assigned
+            assigned_elsewhere = max(as_number(self.planned_assigned.get(comp, 0)), 0)
+            current_planned = self._current_planned_for(comp)
+            assigned = assigned_elsewhere + current_planned
+            available = assignable_remaining(total, assigned_elsewhere, current_planned)
             if abs(available) > 0.0001:
                 rows.append((comp, assigned, available))
         return rows
 
     def over_assigned_components(self) -> set:
-        return {comp for comp, _assigned, available in self.assignment_rows() if available < -0.0001}
+        return {
+            comp
+            for comp in self.component_keys
+            if assignable_remaining(
+                self._system_component_qty(comp),
+                max(as_number(self.planned_assigned.get(comp, 0)), 0),
+                self._current_planned_for(comp),
+            ) < -0.0001
+        }
 
     def filter_qty_components(self, text: str):
         query = normalize_sheet_name(text)
@@ -755,7 +774,7 @@ class DeliveryDialog(StyledDialog):
                     continue
                 system_qty = self._system_component_qty(comp)
                 assigned_qty = max(as_number(self.planned_assigned.get(comp, 0)), 0)
-                allowed_qty = max(system_qty - assigned_qty, 0)
+                allowed_qty = distributable_target(system_qty, assigned_qty)
                 planned_item.setText(fmt_num(allowed_qty))
                 if delivered_item and as_number(delivered_item.text()) > allowed_qty:
                     delivered_item.setText(fmt_num(allowed_qty))
@@ -783,7 +802,7 @@ class DeliveryDialog(StyledDialog):
                     continue
                 system_qty = self._system_component_qty(comp)
                 assigned_qty = max(as_number(self.planned_assigned.get(comp, 0)), 0)
-                remaining_qty = max(system_qty - assigned_qty, 0)
+                remaining_qty = distributable_target(system_qty, assigned_qty)
                 planned_item.setText(fmt_num(remaining_qty))
                 if delivered_item and as_number(delivered_item.text()) > remaining_qty:
                     delivered_item.setText(fmt_num(remaining_qty))
@@ -805,7 +824,7 @@ class DeliveryDialog(StyledDialog):
         dv = as_number(d.text())
         was_blocked = self.qty_table.blockSignals(True)
         try:
-            r.setText(fmt_num(max(pv - dv, 0)))
+            r.setText(fmt_num(remaining_qty(pv, dv)))
         finally:
             self.qty_table.blockSignals(was_blocked)
 
@@ -828,12 +847,9 @@ class DeliveryDialog(StyledDialog):
                 # Teslim edilecek değişti
                 new_qty = as_number(item.text())
                 if self._is_unit_tracking(comp):
-                    # Ondalıklı değer uyarısı
-                    if new_qty != int(new_qty):
-                        QMessageBox.warning(
-                            self, "Ondalıklı Adet",
-                            f"Bu bileşende teslim edilecek adet tam sayı olmalıdır.\n({comp})"
-                        )
+                    validation_error = validate_unit_tracking(comp, new_qty, [])
+                    if validation_error:
+                        QMessageBox.warning(self, "Ondalıklı Adet", validation_error)
                         item.setText("0")
                         self._update_remaining_row(row)
                         return
@@ -871,90 +887,69 @@ class DeliveryDialog(StyledDialog):
         for comp, (p, d, _r) in self.inputs.items():
             pv = as_number(p.text())
             dv = as_number(d.text())
-            assigned_other = max(as_number(self.planned_assigned.get(comp, 0)), 0)
-            system_qty = self._system_component_qty(comp)
-            if pv + assigned_other > system_qty + 0.0001:
-                QMessageBox.warning(self, "Hata", f"{comp}: tanımlanan toplam miktar sistem adedini aşamaz.")
-                return
-            if dv > pv:
-                QMessageBox.warning(self, "Hata", f"{comp}: teslim edilen, teslim edilecekten büyük olamaz.")
-                return
             planned[comp] = pv
             delivered[comp] = dv
 
+            quantity_errors = validate_quantities(
+                [comp],
+                planned,
+                delivered,
+                self._system_component_qty,
+                lambda key: max(as_number(self.planned_assigned.get(key, 0)), 0),
+            )
+            if quantity_errors:
+                QMessageBox.warning(self, "Hata", quantity_errors[0])
+                return
+
             # Unit tracking validation
             if self._is_unit_tracking(comp) and pv > 0:
-                if pv != int(pv):
-                    QMessageBox.warning(
-                        self, "Ondalıklı Adet",
-                        f"Bu bileşende teslim edilecek adet tam sayı olmalıdır.\n({comp})"
-                    )
+                validation_error = validate_unit_tracking(comp, pv, [])
+                if validation_error:
+                    QMessageBox.warning(self, "Ondalıklı Adet", validation_error)
                     return
                 if comp == self.active_unit_component and self.left_panel_mode == "unit_tracking":
                     self._component_units_state[comp] = self.unit_side_panel.get_units()
                 units = self._ensure_component_units(comp, int(max(pv, dv)))
-                counts: Dict[str, int] = {}
-                for unit in units:
-                    ident = normalize_sheet_name(unit.get("identifier", ""))
-                    if ident:
-                        counts[ident] = counts.get(ident, 0) + 1
-                if any(v > 1 for v in counts.values()):
-                    QMessageBox.warning(
-                        self, "Tekrar Var",
-                        f"{comp}: Aynı kuyruk no / seri no iki kez girilemez. Lütfen düzeltin."
-                    )
+                validation_error = validate_unit_tracking(comp, pv, units)
+                if validation_error:
+                    QMessageBox.warning(self, "Tekrar Var", validation_error)
                     return
                 component_units[comp] = units
 
         t0_text = str(getattr(self.system, "t0_date", "") or self._delivery_t0_date).strip()
         completion = str(getattr(self.system, "completion_date", "") or self._delivery_completion_date).strip()
         plan_acc_text = self.planned_acceptance_date.text().strip()
+        acc_text = self.acceptance_date.text().strip()
         planned_label = self._planned_date_label_text()
         actual_label = self._actual_date_label_text()
-        if not plan_acc_text or plan_acc_text == "-":
-            QMessageBox.warning(
-                self,
-                "Tarih gerekli",
-                f"{planned_label} zorunludur. Kesin tarih yazabilir veya belirsizse TBD / YYYY-MM-TBD / YYYY-TBD-TBD kullanabilirsiniz.",
+
+        status_errors = validate_status_rules(
+            self.status.currentText(),
+            acc_text,
+            plan_acc_text,
+            planned,
+            delivered,
+        )
+        if status_errors:
+            message = (
+                status_errors[0]
+                .replace(PLANNED_DATE_LABEL, planned_label)
+                .replace(ACTUAL_DATE_LABEL, actual_label)
             )
-            return
-        ok, message = validate_flexible_date(plan_acc_text, allow_empty=False)
-        if not ok:
-            QMessageBox.warning(self, "Tarih hatası", f"{planned_label}: {message}")
-            return
-        acc_text = self.acceptance_date.text().strip()
-        ok, message = validate_flexible_date(acc_text, allow_empty=True)
-        if not ok:
-            QMessageBox.warning(self, "Tarih hatası", f"{actual_label}: {message}")
-            return
-        acc_date = parse_flexible_date(acc_text)
-        if acc_text and not acc_date and self._is_delivered_status():
-            QMessageBox.warning(self, "Tarih hatası", f"Tamamlanan kayıtta {actual_label} kesin YYYY-MM-DD olmalıdır. TBD kabul edilmez.")
-            return
-        if acc_date and acc_date > date.today():
-            QMessageBox.warning(self, "Tarih hatası", f"{actual_label} bugünden ileri olamaz.")
+            if message.startswith(f"{planned_label} zorunludur."):
+                title = "Tarih gerekli"
+            elif message.startswith(f"Durum tamamlandı/teslim edildi olduğunda {actual_label} zorunludur."):
+                title = f"{actual_label} Gerekli"
+            elif message.startswith("Durum 'Teslim Edildi' olduğunda"):
+                title = "Teslim Edilen Eksik"
+            elif message.startswith("Bu teslimatta tüm bileşenlerin kalanı 0."):
+                title = "Durum Uyumsuz"
+            else:
+                title = "Tarih hatası"
+            QMessageBox.warning(self, title, message)
             return
 
-        all_delivered, remaining_components = self._planned_remaining_state(planned, delivered)
-        if self._is_delivered_status():
-            if not acc_text:
-                QMessageBox.warning(self, f"{actual_label} Gerekli", f"Durum tamamlandı/teslim edildi olduğunda {actual_label} zorunludur.")
-                return
-            if remaining_components:
-                QMessageBox.warning(
-                    self, "Teslim Edilen Eksik",
-                    "Durum 'Teslim Edildi' olduğunda bu teslimattaki tüm bileşenlerin kalan değeri 0 olmalıdır.\n\n"
-                    "Eksik kalan bileşenler:\n• " + "\n• ".join(remaining_components),
-                )
-                return
-        elif all_delivered:
-            QMessageBox.warning(
-                self, "Durum Uyumsuz",
-                "Bu teslimatta tüm bileşenlerin kalanı 0. Kaydetmeden önce Durum alanını 'Teslim Edildi' yapın.",
-            )
-            return
-
-        self.result = DeliveryInfo(
+        self.result = build_delivery_info(
             name=self.name.text().strip(),
             status=self.status.currentText(),
             acceptance_date=flexible_or_blank(acc_text),
