@@ -14,12 +14,20 @@ jobs:
     timeout-minutes: 30
 
     steps:
-      - name: Clone feature branch quietly
+      - name: Clone baseline and feature quietly
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          git clone -q --depth 1 --branch "${GITHUB_HEAD_REF}" \
-            "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" repo
+          repo_url="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git clone -q --depth 1 --branch main "${repo_url}" baseline
+          git clone -q --depth 1 --branch "${GITHUB_HEAD_REF}" "${repo_url}" feature
+          echo "BASELINE_SHA=$(git -C baseline rev-parse HEAD)"
+          echo "FEATURE_SHA=$(git -C feature rev-parse HEAD)"
+
+      - name: Verify isolated branch baseline
+        run: |
+          test "$(git -C baseline rev-parse HEAD)" = "2931fa267560397d4d849d6365acde504f376775"
+          test "$(git -C feature merge-base HEAD origin/main 2>/dev/null || true)" != ""
 
       - name: Install Linux Qt runtime libraries
         run: |
@@ -27,13 +35,13 @@ jobs:
           sudo apt-get install -y -qq libegl1 libgl1 >/dev/null
 
       - name: Install runtime and test dependencies
-        working-directory: repo
+        working-directory: feature
         run: |
           python3 -m pip install -q -r requirements.txt >/dev/null 2>&1
           python3 -m pip install -q pytest >/dev/null 2>&1
 
       - name: Compile schema upgrade surface
-        working-directory: repo
+        working-directory: feature
         run: >-
           python3 -m py_compile
           src/services/sts_schema_upgrade.py
@@ -43,14 +51,50 @@ jobs:
           tests/test_sts_schema_upgrade_gate.py
 
       - name: Run combined focused schema tests
-        working-directory: repo
+        working-directory: feature
         run: >-
           python3 -m pytest -q --tb=short
           tests/test_sts_schema_upgrade.py
           tests/test_sts_schema_upgrade_gate.py
 
-      - name: Run full pytest suite
-        working-directory: repo
+      - name: Run baseline and feature full suites
         env:
           QT_QPA_PLATFORM: offscreen
-        run: python3 -m pytest -q --tb=short
+        run: |
+          set +e
+          (cd baseline && python3 -m pytest -q --tb=no --junitxml=/tmp/baseline.xml >/tmp/baseline.out 2>&1)
+          baseline_status=$?
+          (cd feature && python3 -m pytest -q --tb=no --junitxml=/tmp/feature.xml >/tmp/feature.out 2>&1)
+          feature_status=$?
+          set -e
+          echo "BASELINE_PYTEST_STATUS=${baseline_status}"
+          echo "FEATURE_PYTEST_STATUS=${feature_status}"
+
+      - name: Compare full-suite failure sets
+        run: |
+          python3 - <<'PY'
+          import xml.etree.ElementTree as ET
+
+          def failures(path):
+              root = ET.parse(path).getroot()
+              out = set()
+              for case in root.iter("testcase"):
+                  if case.find("failure") is not None or case.find("error") is not None:
+                      out.add(f"{case.get('classname', '')}::{case.get('name', '')}".strip(":"))
+              return out
+
+          baseline = failures("/tmp/baseline.xml")
+          feature = failures("/tmp/feature.xml")
+          feature_only = sorted(feature - baseline)
+          baseline_only = sorted(baseline - feature)
+          print(f"BASELINE_FAILURES={len(baseline)}")
+          print(f"FEATURE_FAILURES={len(feature)}")
+          print(f"FEATURE_ONLY_FAILURES={len(feature_only)}")
+          print(f"BASELINE_ONLY_FAILURES={len(baseline_only)}")
+          for node in feature_only[:25]:
+              print(f"FEATURE_ONLY={node}")
+          for node in baseline_only[:25]:
+              print(f"BASELINE_ONLY={node}")
+          if feature_only:
+              raise SystemExit(1)
+          PY
