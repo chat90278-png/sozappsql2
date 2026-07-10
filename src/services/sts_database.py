@@ -246,6 +246,7 @@ class STSDatabase:
                 self.conn.execute(f"RELEASE SAVEPOINT {sp}")
                 raise
         else:
+            self.conn.execute("BEGIN")
             try:
                 yield
                 self.conn.commit()
