@@ -2690,22 +2690,22 @@ class _MonthDetailDialog(QWidget):
             self._cal_grid.setColumnStretch(c, 1)
 
     def _build_unknown_band(self) -> QFrame:
-        """'YYYY-MM-TBD' kayıtları için, gün ızgarasının üstünde tam genişlikte
-        bant. İçinde HER kayıt için ayrı tıklanabilir kapsül var — tek satır
-        özet değil, her teslimat/kabul kaydı kendi kapsülünde listelenir.
-        Bir kapsüle tıklamak o tek kaydı seçer (bkz. _on_unknown_pill_click);
-        bu seçim normal gün seçimiyle aynı anda var olamaz."""
+        """'YYYY-MM-TBD' kayıtları için bant.
+        Kapsüller yatay scroll ile kayar — bant sabit yükseklikte kalır,
+        takvim gridini itmez."""
         band = QFrame()
         band.setObjectName("unknownDayBand")
         band.setStyleSheet(
             f"QFrame#unknownDayBand{{border:1.5px dashed {_COLOR['belirsiz']};"
             f"background:{_BG['belirsiz']}; border-radius:12px;}}"
         )
+        band.setFixedHeight(86)
 
         outer = QVBoxLayout(band)
-        outer.setContentsMargins(14, 12, 14, 12)
-        outer.setSpacing(10)
+        outer.setContentsMargins(14, 8, 14, 8)
+        outer.setSpacing(6)
 
+        # Başlık satırı
         head = QHBoxLayout()
         head.setSpacing(8)
         dot = QLabel("●")
@@ -2728,15 +2728,36 @@ class _MonthDetailDialog(QWidget):
         head.addStretch()
         outer.addLayout(head)
 
-        pill_row = QHBoxLayout()
+        # Kapsüller — yatay scroll içinde
+        scroll = QScrollArea()
+        scroll.setObjectName("pillScroll")
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setFixedHeight(44)
+        scroll.setStyleSheet(
+            "QScrollArea{background:transparent; border:none;}"
+            "QScrollArea > QWidget > QWidget{background:transparent;}"
+            "QScrollBar:horizontal{height:4px; background:transparent; margin:0;}"
+            "QScrollBar::handle:horizontal{"
+            f"background:rgba(139,124,213,0.35); border-radius:2px; min-width:30px;}}"
+            "QScrollBar::add-line:horizontal,QScrollBar::sub-line:horizontal{width:0;}"
+        )
+        pill_host = QWidget()
+        pill_host.setStyleSheet("background:transparent;")
+        pill_row = QHBoxLayout(pill_host)
+        pill_row.setContentsMargins(0, 2, 0, 2)
         pill_row.setSpacing(8)
+
         self._unknown_pills: Dict[int, QWidget] = {}
         for idx, ev in enumerate(self._unknown_day_events):
             pill = self._build_unknown_pill(idx, ev)
             pill_row.addWidget(pill)
             self._unknown_pills[idx] = pill
         pill_row.addStretch()
-        outer.addLayout(pill_row)
+        scroll.setWidget(pill_host)
+        outer.addWidget(scroll)
 
         return band
 
@@ -2787,20 +2808,21 @@ class _MonthDetailDialog(QWidget):
             )
 
     def _build_fully_unknown_band(self) -> QFrame:
-        """TBD (tamamen belirsiz) ve YYYY-TBD-TBD tarihli teslimatlar için bant.
-        Her kayıt ayrı kapsül olarak listelenir; tıklanınca sağ panelde
-        'fully_unknown:<idx>' seçimi tetiklenir."""
+        """TBD / YYYY-TBD-TBD tarihli teslimatlar için bant.
+        Kapsüller yatay scroll ile kayar — bant sabit yükseklikte kalır."""
         band = QFrame()
         band.setObjectName("fullyUnknownBand")
         band.setStyleSheet(
             f"QFrame#fullyUnknownBand{{border:1.5px dashed {_COLOR['belirsiz']};"
             f"background:#fdf8ff; border-radius:12px;}}"
         )
+        band.setFixedHeight(86)
 
         outer = QVBoxLayout(band)
-        outer.setContentsMargins(14, 12, 14, 12)
-        outer.setSpacing(10)
+        outer.setContentsMargins(14, 8, 14, 8)
+        outer.setSpacing(6)
 
+        # Başlık satırı
         head = QHBoxLayout()
         head.setSpacing(8)
         dot = QLabel("●")
@@ -2822,8 +2844,28 @@ class _MonthDetailDialog(QWidget):
         head.addStretch()
         outer.addLayout(head)
 
-        pill_row = QHBoxLayout()
+        # Kapsüller — yatay scroll içinde
+        scroll = QScrollArea()
+        scroll.setObjectName("pillScroll")
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setFixedHeight(44)
+        scroll.setStyleSheet(
+            "QScrollArea{background:transparent; border:none;}"
+            "QScrollArea > QWidget > QWidget{background:transparent;}"
+            "QScrollBar:horizontal{height:4px; background:transparent; margin:0;}"
+            "QScrollBar::handle:horizontal{"
+            f"background:rgba(139,124,213,0.35); border-radius:2px; min-width:30px;}}"
+            "QScrollBar::add-line:horizontal,QScrollBar::sub-line:horizontal{width:0;}"
+        )
+        pill_host = QWidget()
+        pill_host.setStyleSheet("background:transparent;")
+        pill_row = QHBoxLayout(pill_host)
+        pill_row.setContentsMargins(0, 2, 0, 2)
         pill_row.setSpacing(8)
+
         if not hasattr(self, "_fu_pills"):
             self._fu_pills: Dict[int, QWidget] = {}
         else:
@@ -2834,7 +2876,8 @@ class _MonthDetailDialog(QWidget):
             pill_row.addWidget(pill)
             self._fu_pills[idx] = pill
         pill_row.addStretch()
-        outer.addLayout(pill_row)
+        scroll.setWidget(pill_host)
+        outer.addWidget(scroll)
 
         return band
 
