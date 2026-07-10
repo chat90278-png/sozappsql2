@@ -41,6 +41,11 @@ jobs:
             tail -n 5 /tmp/schema-pytest.out
             exit 0
           fi
+          if [ ! -f /tmp/schema-combined-junit.xml ]; then
+            echo "SCHEMA_COMBINED_RESULT=LAUNCH_OR_COLLECTION_FAILURE"
+            cat /tmp/schema-pytest.out
+            exit "${status}"
+          fi
           python3 - <<'PY'
           import xml.etree.ElementTree as ET
 
