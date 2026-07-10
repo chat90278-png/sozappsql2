@@ -6,7 +6,7 @@ from pathlib import Path
 from PySide6.QtCore import QObject, Signal
 
 from src.services.sts_database import STSMigrationError
-from src.services.sts_schema_upgrade import upgrade_sts_file
+from src.services.sts_schema_upgrade_gate import upgrade_sts_file
 from src.services.sts_store import STSStore
 
 _log = logging.getLogger(__name__)
