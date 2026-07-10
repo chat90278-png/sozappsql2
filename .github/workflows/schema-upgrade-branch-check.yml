@@ -9,9 +9,9 @@ permissions:
   contents: read
 
 jobs:
-  schema-combined-diagnostic:
+  schema-upgrade-check:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
 
     steps:
       - name: Clone feature branch quietly
@@ -21,47 +21,31 @@ jobs:
           git clone -q --depth 1 --branch "${GITHUB_HEAD_REF}" \
             "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" repo
 
-      - name: Install dependencies quietly
-        working-directory: repo
-        run: python3 -m pip install -q -r requirements.txt >/dev/null 2>&1
-
-      - name: Print exact combined focused failure
+      - name: Install runtime and test dependencies
         working-directory: repo
         run: |
-          set +e
-          python3 -m pytest -q --tb=short \
-            --junitxml=/tmp/schema-combined-junit.xml \
-            tests/test_sts_schema_upgrade.py \
-            tests/test_sts_schema_upgrade_gate.py \
-            >/tmp/schema-pytest.out 2>&1
-          status=$?
-          set -e
-          if [ "${status}" -eq 0 ]; then
-            echo "SCHEMA_COMBINED_RESULT=PASS"
-            tail -n 5 /tmp/schema-pytest.out
-            exit 0
-          fi
-          if [ ! -f /tmp/schema-combined-junit.xml ]; then
-            echo "SCHEMA_COMBINED_RESULT=LAUNCH_OR_COLLECTION_FAILURE"
-            cat /tmp/schema-pytest.out
-            exit "${status}"
-          fi
-          python3 - <<'PY'
-          import xml.etree.ElementTree as ET
+          python3 -m pip install -q -r requirements.txt >/dev/null 2>&1
+          python3 -m pip install -q pytest >/dev/null 2>&1
 
-          root = ET.parse("/tmp/schema-combined-junit.xml").getroot()
-          failures = []
-          for case in root.iter("testcase"):
-              for node in list(case.findall("failure")) + list(case.findall("error")):
-                  name = f"{case.get('classname', '')}::{case.get('name', '')}".strip(":")
-                  message = str(node.get("message") or "").strip()
-                  detail = str(node.text or "").strip()
-                  failures.append((name, message, detail))
-          print(f"SCHEMA_COMBINED_RESULT=FAIL failed_cases={len(failures)}")
-          for index, (name, message, detail) in enumerate(failures[:3], 1):
-              print(f"FAILURE_{index}_NODE={name}")
-              print(f"FAILURE_{index}_MESSAGE={message}")
-              compact = " | ".join(line.strip() for line in detail.splitlines() if line.strip())
-              print(f"FAILURE_{index}_DETAIL={compact[-4000:]}")
-          PY
-          exit "${status}"
+      - name: Compile schema upgrade surface
+        working-directory: repo
+        run: >-
+          python3 -m py_compile
+          src/services/sts_schema_upgrade.py
+          src/services/sts_schema_upgrade_gate.py
+          src/workers/sts_load_worker.py
+          tests/test_sts_schema_upgrade.py
+          tests/test_sts_schema_upgrade_gate.py
+
+      - name: Run combined focused schema tests
+        working-directory: repo
+        run: >-
+          python3 -m pytest -q --tb=short
+          tests/test_sts_schema_upgrade.py
+          tests/test_sts_schema_upgrade_gate.py
+
+      - name: Run full pytest suite
+        working-directory: repo
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python3 -m pytest -q --tb=short
