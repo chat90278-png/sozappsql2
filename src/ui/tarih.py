@@ -86,8 +86,13 @@ class CalendarDataWorker(QObject):
                 " FROM deliveries d"
                 " JOIN systems s ON s.id = d.system_id"
                 " JOIN contracts c ON c.id = d.contract_id"
-                " JOIN contract_platforms cp ON cp.contract_id = c.id"
-                " JOIN platforms p ON p.id = cp.platform_id"
+                # ÖNEMLİ: platform, sistemin KENDİ platform_id'sinden alınır.
+                # Eskiden contract_platforms üzerinden JOIN yapılıyordu; bir
+                # sözleşme birden fazla platforma bağlıysa (paylaşımlı
+                # sözleşme) her teslimat 2+ kez üretiliyor ve bileşen adetleri
+                # ikiye/üçe katlanıyordu. Artık teslimat, bağlı olduğu
+                # sistemin platformunu miras alıyor — tek platform, tek satır.
+                " JOIN platforms p ON p.id = COALESCE(s.platform_id, c.platform_id)"
                 " JOIN delivery_components dc ON dc.delivery_id = d.id"
                 " JOIN components comp ON comp.id = dc.component_id"
                 " WHERE dc.planned > 0"
@@ -1652,13 +1657,17 @@ class _RecordAccordionCard(QFrame):
             # Tam adı tooltip (sohbet baloncuğu) olarak göster
             name_lbl.setToolTip(title)
         sysname = str(self._ev.get("system_label") or "")
+        platform = str(self._ev.get("platform") or "")
         status_lbl = _status_label_for(self._ev)
-        meta_txt = f"{sysname} · {status_lbl}" if sysname else status_lbl
-        meta_lbl = QLabel(_elide(meta_txt, 36))
+        # Aynı sözleşme birden fazla platforma bağlıysa, meta satırında
+        # platform adı her zaman görünür — "Sistem 1 · AKINCI · Normal".
+        meta_parts = [p for p in (sysname, platform, status_lbl) if p]
+        meta_txt = " · ".join(meta_parts)
+        meta_lbl = QLabel(_elide(meta_txt, 40))
         meta_lbl.setStyleSheet(
             "font-size:10px; font-weight:700; color:#64748b; background:transparent;"
         )
-        if len(meta_txt) > 36:
+        if len(meta_txt) > 40:
             meta_lbl.setToolTip(meta_txt)
         info.addWidget(name_lbl)
         info.addWidget(meta_lbl)
@@ -2774,12 +2783,30 @@ class _MonthDetailDialog(QWidget):
         lay.setContentsMargins(12, 0, 12, 0)
         lay.setSpacing(6)
         title = str(ev.get("title") or ev.get("no") or "")
-        name_lbl = QLabel(_elide(title, 22))
+        name_lbl = QLabel(_elide(title, 26))
         name_lbl.setStyleSheet(
             f"font-size:12px; font-weight:800; background:transparent;"
             f"color:{'#ffffff' if is_selected else '#1e293b'}; border:none;"
         )
+        if len(title) > 26:
+            name_lbl.setToolTip(title)
         lay.addWidget(name_lbl)
+
+        # Platform rozeti — aynı sözleşme birden fazla platforma bağlıysa
+        # (paylaşımlı sözleşme), her kapsül hangi platforma ait olduğunu
+        # her zaman net bir rozetle gösterir; title elide'ında kaybolmaz.
+        platform = str(ev.get("platform") or "")
+        if platform:
+            plat_lbl = QLabel(platform)
+            plat_lbl.setStyleSheet(
+                "font-size:9px; font-weight:900; background:rgba(57,123,216,0.15);"
+                "color:#1f5be3; border-radius:5px; padding:2px 6px; border:none;"
+                if not is_selected else
+                "font-size:9px; font-weight:900; background:rgba(255,255,255,0.22);"
+                "color:#ffffff; border-radius:5px; padding:2px 6px; border:none;"
+            )
+            lay.addWidget(plat_lbl)
+
         kind_lbl = QLabel(str(ev.get("type") or ""))
         kind_lbl.setStyleSheet(
             f"font-size:9.5px; font-weight:700; background:transparent;"
@@ -2894,14 +2921,28 @@ class _MonthDetailDialog(QWidget):
         lay.setContentsMargins(12, 0, 12, 0)
         lay.setSpacing(6)
         title = str(ev.get("title") or ev.get("no") or "")
-        name_lbl = QLabel(_elide(title, 22))
+        name_lbl = QLabel(_elide(title, 26))
         name_lbl.setStyleSheet(
             f"font-size:12px; font-weight:800; background:transparent;"
             f"color:{'#ffffff' if is_selected else '#1e293b'}; border:none;"
         )
-        if len(title) > 22:
+        if len(title) > 26:
             name_lbl.setToolTip(title)
         lay.addWidget(name_lbl)
+
+        # Platform rozeti — bkz. _build_unknown_pill'deki aynı gerekçe.
+        platform = str(ev.get("platform") or "")
+        if platform:
+            plat_lbl = QLabel(platform)
+            plat_lbl.setStyleSheet(
+                "font-size:9px; font-weight:900; background:rgba(57,123,216,0.15);"
+                "color:#1f5be3; border-radius:5px; padding:2px 6px; border:none;"
+                if not is_selected else
+                "font-size:9px; font-weight:900; background:rgba(255,255,255,0.22);"
+                "color:#ffffff; border-radius:5px; padding:2px 6px; border:none;"
+            )
+            lay.addWidget(plat_lbl)
+
         raw_lbl = QLabel(str(ev.get("_eff_raw") or "TBD"))
         raw_lbl.setStyleSheet(
             f"font-size:9.5px; font-weight:700; background:transparent;"
