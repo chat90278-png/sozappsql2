@@ -1,0 +1,133 @@
+name: Temporary build-info candidate
+
+on:
+  push:
+    branches:
+      - tmp/build-info-runner-20260710
+
+permissions:
+  contents: write
+
+jobs:
+  prepare-candidate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 6dbae263d28b9c913502f8a42a0b29b1907d24b7
+          fetch-depth: 0
+
+      - name: Apply exact build-info changes
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          root = Path.cwd()
+          main_path = root / "src" / "ui" / "main_window.py"
+          readme_path = root / "README.md"
+
+          def replace_once(text: str, old: str, new: str, label: str) -> str:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected exactly one anchor, got {count}")
+              return text.replace(old, new, 1)
+
+          main_text = main_path.read_text(encoding="utf-8")
+
+          import_anchor = "from src.services import perf_tracker\n"
+          main_text = replace_once(
+              main_text,
+              import_anchor,
+              import_anchor + "from src._build_info import BUILD_COMMIT, BUILD_COMMIT_SHORT, BUILD_DATE\n",
+              "main import",
+          )
+
+          method_anchor = (
+              '            QMessageBox.warning(self, "Kullanım Kılavuzu", '
+              'f"Kullanım kılavuzu açılamadı:\\n{exc}")\n\n'
+              '    def build(self):\n'
+          )
+          method_replacement = (
+              '            QMessageBox.warning(self, "Kullanım Kılavuzu", '
+              'f"Kullanım kılavuzu açılamadı:\\n{exc}")\n\n'
+              '    def show_build_info(self):\n'
+              '        QMessageBox.information(\n'
+              '            self,\n'
+              '            "Sürüm / Build",\n'
+              '            f"Commit: {BUILD_COMMIT}\\n"\n'
+              '            f"Kısa commit: {BUILD_COMMIT_SHORT}\\n"\n'
+              '            f"Build tarihi (UTC): {BUILD_DATE}",\n'
+              '        )\n\n'
+              '    def build(self):\n'
+          )
+          main_text = replace_once(main_text, method_anchor, method_replacement, "show_build_info method")
+
+          menu_anchor = '        self._add_menu_action(help_menu, "Kullanım Kılavuzu", self.open_usage_guide)\n'
+          main_text = replace_once(
+              main_text,
+              menu_anchor,
+              menu_anchor + '        self._add_menu_action(help_menu, "Sürüm / Build", self.show_build_info)\n',
+              "help menu action",
+          )
+          main_path.write_text(main_text, encoding="utf-8")
+
+          (root / "src" / "_build_info.py").write_text(
+              'BUILD_COMMIT = "unknown"\n'
+              'BUILD_COMMIT_SHORT = "unknown"\n'
+              'BUILD_DATE = "unknown"\n',
+              encoding="utf-8",
+          )
+
+          (root / "scripts" / "write_build_info.py").write_text(
+              '''from __future__ import annotations\n\nimport subprocess\nfrom datetime import datetime, timezone\nfrom pathlib import Path\n\n\nROOT = Path(__file__).resolve().parents[1]\nBUILD_INFO_PATH = ROOT / "src" / "_build_info.py"\n\n\ndef _git(*args: str) -> str:\n    return subprocess.check_output(["git", *args], cwd=ROOT, text=True).strip()\n\n\ndef main() -> None:\n    build_commit = _git("rev-parse", "HEAD")\n    build_commit_short = _git("rev-parse", "--short", "HEAD")\n    build_date = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")\n    BUILD_INFO_PATH.write_text(\n        f'BUILD_COMMIT = "{build_commit}"\\n'\n        f'BUILD_COMMIT_SHORT = "{build_commit_short}"\\n'\n        f'BUILD_DATE = "{build_date}"\\n',\n        encoding="utf-8",\n    )\n    print(f"Wrote {BUILD_INFO_PATH.relative_to(ROOT)} for {build_commit_short} at {build_date}")\n\n\nif __name__ == "__main__":\n    main()\n''',
+              encoding="utf-8",
+          )
+
+          readme_text = readme_path.read_text(encoding="utf-8")
+          readme_anchor = "STS.exe is built from the checked-in PyInstaller spec:\n\n"
+          readme_addition = (
+              readme_anchor
+              + "Before running PyInstaller, refresh the embedded build metadata:\n\n"
+              + "```bash\npython scripts/write_build_info.py\n```\n\n"
+              + "`src/_build_info.py` keeps `unknown` placeholders in source control; "
+              + "the script replaces them with the current HEAD commit, short commit, and UTC build timestamp.\n\n"
+          )
+          readme_text = replace_once(readme_text, readme_anchor, readme_addition, "README build step")
+          readme_path.write_text(readme_text, encoding="utf-8")
+          PY
+
+      - name: Verify candidate diff
+        shell: bash
+        run: |
+          git add -N src/_build_info.py scripts/write_build_info.py
+          git diff --numstat -- src/_build_info.py scripts/write_build_info.py src/ui/main_window.py README.md | tee /tmp/build-info-numstat.txt
+          python - <<'PY'
+          import subprocess
+
+          output = subprocess.check_output(
+              ["git", "diff", "--numstat", "--", "src/_build_info.py", "scripts/write_build_info.py", "src/ui/main_window.py", "README.md"],
+              text=True,
+          )
+          stats = {}
+          for line in output.splitlines():
+              added, deleted, path = line.split("\t", 2)
+              stats[path] = (int(added), int(deleted))
+          expected = {"src/_build_info.py", "scripts/write_build_info.py", "src/ui/main_window.py", "README.md"}
+          if set(stats) != expected:
+              raise SystemExit(f"unexpected changed paths: {stats}")
+          if stats["src/ui/main_window.py"][1] != 0:
+              raise SystemExit(f"main_window.py has deletions: {stats['src/ui/main_window.py']}")
+          if stats["README.md"][1] != 0:
+              raise SystemExit(f"README.md has deletions: {stats['README.md']}")
+          PY
+
+      - name: Push verified candidate branch
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B tmp/build-info-candidate-20260710
+          git add src/_build_info.py scripts/write_build_info.py src/ui/main_window.py README.md
+          git commit -m "chore: stage verified build-info candidate"
+          git push --force origin HEAD:refs/heads/tmp/build-info-candidate-20260710
