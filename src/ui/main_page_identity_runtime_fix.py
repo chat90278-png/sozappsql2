@@ -2,7 +2,7 @@
 """Compact main-page identity-card sizing polish."""
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QTimer, Qt
 from PySide6.QtGui import QFontMetrics, QPixmap
 from PySide6.QtWidgets import QLabel
 
@@ -18,9 +18,7 @@ def install_main_page_identity_runtime_fix() -> None:
 
     original_polish = main_page.MainWindow._polish_identity_logo
 
-    def polish_identity(self) -> None:
-        original_polish(self)
-
+    def apply_identity_fit(self) -> None:
         root = self.centralWidget()
         if root is None:
             return
@@ -56,7 +54,17 @@ def install_main_page_identity_runtime_fix() -> None:
             point_size -= 1
         font.setPointSize(point_size)
         title.setFont(font)
+        title.setStyleSheet(
+            "QLabel#appBrandTitle{background:transparent;color:#0f172a;border:none;"
+            f"padding:0;margin:0;font-size:{point_size}pt;font-weight:900;}"
+        )
         title.setToolTip(title.text())
+
+    def polish_identity(self) -> None:
+        original_polish(self)
+        # main_page_final_window appends its final stylesheet only after build()
+        # returns. Defer one event-loop turn so these geometry/font overrides win.
+        QTimer.singleShot(0, lambda: apply_identity_fit(self))
 
     main_page.MainWindow._polish_identity_logo = polish_identity
     main_page._STS_IDENTITY_RUNTIME_FIX_INSTALLED = True
