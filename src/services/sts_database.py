@@ -54,7 +54,7 @@ def quote_identifier(identifier: str) -> str:
 LEGACY_CONTRACT_PARENT_NO_COLUMN = "parent_contract_" "no"
 LEGACY_CONTRACT_USERS_COLUMN = "user_" "names"
 LEGACY_DELIVERY_SYSTEM_LABEL_COLUMN = "system_" "name"
-CURRENT_SCHEMA_VERSION = 17
+CURRENT_SCHEMA_VERSION = 18
 
 
 class STSMigrationError(RuntimeError):
@@ -587,6 +587,8 @@ class STSDatabase:
         create_if("contract_responsible_engineers", ("contract_id",), "CREATE INDEX IF NOT EXISTS idx_contract_resp_eng_contract ON contract_responsible_engineers(contract_id)")
         create_if("contract_responsible_engineers", ("staff_id",), "CREATE INDEX IF NOT EXISTS idx_contract_resp_eng_staff ON contract_responsible_engineers(staff_id)")
         create_if("systems", ("contract_id", "platform_id"), "CREATE INDEX IF NOT EXISTS idx_systems_contract_platform ON systems(contract_id, platform_id)")
+        create_if("staff_agenda_state", ("staff_id",), "CREATE INDEX IF NOT EXISTS idx_staff_agenda_state_staff ON staff_agenda_state(staff_id)")
+        create_if("staff_agenda_state", ("staff_id", "snoozed_until"), "CREATE INDEX IF NOT EXISTS idx_staff_agenda_state_snoozed ON staff_agenda_state(staff_id,snoozed_until)")
 
     def init_schema(self):
         migrated = []
@@ -609,6 +611,7 @@ CREATE TABLE IF NOT EXISTS contract_tags(id INTEGER PRIMARY KEY AUTOINCREMENT,co
 CREATE TABLE IF NOT EXISTS contract_file_folders(id INTEGER PRIMARY KEY AUTOINCREMENT,contract_id INTEGER NOT NULL,merge_uid TEXT NOT NULL DEFAULT '',parent_id INTEGER,name TEXT NOT NULL,created_at TEXT,updated_at TEXT,UNIQUE(contract_id,parent_id,name),FOREIGN KEY(contract_id) REFERENCES contracts(id) ON DELETE CASCADE,FOREIGN KEY(parent_id) REFERENCES contract_file_folders(id) ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS contract_files(id INTEGER PRIMARY KEY AUTOINCREMENT,contract_id INTEGER NOT NULL,merge_uid TEXT NOT NULL DEFAULT '',folder_id INTEGER,filename TEXT NOT NULL,original_path TEXT,file_ext TEXT,mime_type TEXT,size_bytes INTEGER NOT NULL DEFAULT 0,sha256 TEXT DEFAULT '',content_blob BLOB NOT NULL,note TEXT,created_at TEXT,updated_at TEXT,FOREIGN KEY(contract_id) REFERENCES contracts(id) ON DELETE CASCADE,FOREIGN KEY(folder_id) REFERENCES contract_file_folders(id) ON DELETE SET NULL);
 CREATE TABLE IF NOT EXISTS activity_logs(id INTEGER PRIMARY KEY AUTOINCREMENT,created_at TEXT NOT NULL,actor TEXT,source TEXT,device_name TEXT,action TEXT NOT NULL,entity_type TEXT,entity_id TEXT,entity_key TEXT,platform_id INTEGER,contract_no TEXT,message TEXT,before_json TEXT,after_json TEXT,payload_json TEXT,FOREIGN KEY(platform_id) REFERENCES platforms(id) ON DELETE SET NULL);
+CREATE TABLE IF NOT EXISTS staff_agenda_state(staff_id INTEGER NOT NULL,agenda_key TEXT NOT NULL,first_presented_at TEXT,last_presented_at TEXT,seen_at TEXT,seen_version TEXT NOT NULL DEFAULT '',snoozed_until TEXT,snoozed_version TEXT NOT NULL DEFAULT '',snoozed_severity TEXT NOT NULL DEFAULT '',dismissed_at TEXT,dismissed_version TEXT NOT NULL DEFAULT '',created_at TEXT,updated_at TEXT,PRIMARY KEY(staff_id,agenda_key),FOREIGN KEY(staff_id) REFERENCES staff(id) ON DELETE CASCADE);
             """
         )
         if self._migrate_contract_user_bridge():
@@ -947,7 +950,6 @@ CREATE TABLE IF NOT EXISTS activity_logs(id INTEGER PRIMARY KEY AUTOINCREMENT,cr
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_pdr_summary_scope ON platform_delivery_report_summary(platform_id,user_id,contract_id)")
         self.conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_pdr_lines_serial_key ON platform_delivery_report_lines(platform_id,user_id,contract_id,component_id,serial_key)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_pdr_lines_scope ON platform_delivery_report_lines(platform_id,user_id,contract_id,component_id,serial_key)")
-
         # --- Schema v15: share package registry for future return/merge tracking ---
         self.conn.execute("""
             CREATE TABLE IF NOT EXISTS share_packages (
