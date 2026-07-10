@@ -72,7 +72,9 @@ def create_build_info_files() -> None:
         encoding="utf-8",
     )
 
-    (ROOT / "scripts" / "write_build_info.py").write_text(
+    scripts_dir = ROOT / "scripts"
+    scripts_dir.mkdir(parents=True, exist_ok=True)
+    (scripts_dir / "write_build_info.py").write_text(
         '''from __future__ import annotations\n\nimport subprocess\nfrom datetime import datetime, timezone\nfrom pathlib import Path\n\n\nROOT = Path(__file__).resolve().parents[1]\nBUILD_INFO_PATH = ROOT / "src" / "_build_info.py"\n\n\ndef _git(*args: str) -> str:\n    return subprocess.check_output(["git", *args], cwd=ROOT, text=True).strip()\n\n\ndef main() -> None:\n    build_commit = _git("rev-parse", "HEAD")\n    build_commit_short = _git("rev-parse", "--short", "HEAD")\n    build_date = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")\n    BUILD_INFO_PATH.write_text(\n        f'BUILD_COMMIT = "{build_commit}"\\n'\n        f'BUILD_COMMIT_SHORT = "{build_commit_short}"\\n'\n        f'BUILD_DATE = "{build_date}"\\n',\n        encoding="utf-8",\n    )\n    print(f"Wrote {BUILD_INFO_PATH.relative_to(ROOT)} for {build_commit_short} at {build_date}")\n\n\nif __name__ == "__main__":\n    main()\n''',
         encoding="utf-8",
     )
