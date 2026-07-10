@@ -24,7 +24,18 @@ from PySide6.QtWidgets import (
 )
 from src.ui.date_picker import build_date_input
 from src.ui.message_boxes import ask_yes_no
-from src.domain.flexible_date import flexible_or_blank, parse_flexible_date, validate_flexible_date
+from src.domain.delivery_core import (
+    ACTUAL_DATE_LABEL,
+    build_delivery_info,
+    distributable_target,
+    is_delivered_status,
+    planned_remaining_state,
+    remaining_qty,
+    split_evenly,
+    validate_quantities,
+    validate_status_rules,
+)
+from src.domain.flexible_date import flexible_or_blank
 
 from src.models.app_models import DeliveryInfo
 from src.domain.constants import STATUS_VALUES
@@ -306,7 +317,8 @@ class AutoAcceptDialog(QDialog):
         self._updating = True
         for r, comp in enumerate(self.component_keys):
             qty = max(as_number(self.unassigned_total.get(comp, 0)), 0)
-            planned = qty / self.accept_count if self.divisible.get(comp) else 0
+            planned_values = split_evenly(qty, self.accept_count)
+            planned = planned_values[idx] if planned_values else 0.0
             values = [comp, planned, 0, planned]
             for c, v in enumerate(values):
                 item = QTableWidgetItem(fmt_num(v) if c else str(v))
@@ -339,72 +351,89 @@ class AutoAcceptDialog(QDialog):
             self.current_index += 1
             self.update_nav_state()
 
-    def _norm_status_text(self, status: str) -> str:
-        txt = str(status or "").strip().lower()
-        repl = {"ı": "i", "İ": "i", "ş": "s", "Ş": "s", "ğ": "g", "Ğ": "g", "ü": "u", "Ü": "u", "ö": "o", "Ö": "o", "ç": "c", "Ç": "c"}
-        for a, b in repl.items():
-            txt = txt.replace(a, b)
-        return " ".join(txt.split())
-
     def _is_delivered_status(self, status: str) -> bool:
-        return self._norm_status_text(status) in {"teslim edildi", "tamamlandi"}
+        return is_delivered_status(status)
+
+    def _accept_quantity_maps(self, i: int) -> tuple[Dict[str, float], Dict[str, float]]:
+        tbl = self.tables[i]
+        planned: Dict[str, float] = {}
+        delivered: Dict[str, float] = {}
+        for r, comp in enumerate(self.component_keys):
+            planned[comp] = max(as_number(tbl.item(r, 1).text()), 0)
+            delivered[comp] = max(as_number(tbl.item(r, 2).text()), 0)
+        return planned, delivered
 
     def _accept_remaining_components(self, i: int) -> List[str]:
-        tbl = self.tables[i]
-        missing: List[str] = []
-        for r, comp in enumerate(self.component_keys):
-            planned = max(as_number(tbl.item(r, 1).text()), 0)
-            delivered = max(as_number(tbl.item(r, 2).text()), 0)
-            if planned > 0.0001 and max(planned - delivered, 0) > 0.0001:
-                missing.append(comp)
-        return missing
+        planned, delivered = self._accept_quantity_maps(i)
+        _all_delivered, remaining_components = planned_remaining_state(planned, delivered)
+        return remaining_components
+
+    def _status_validation_warning(self, error: str) -> tuple[str, str, str]:
+        actual_label = "Gerçek Teslimat Tarihi"
+        message = str(error or "").replace(ACTUAL_DATE_LABEL, actual_label)
+        exact_core_message = (
+            f"Tamamlanan kayıtta {actual_label} kesin YYYY-MM-DD olmalıdır. TBD kabul edilmez."
+        )
+        required_core_message = (
+            f"Durum tamamlandı/teslim edildi olduğunda {actual_label} zorunludur."
+        )
+        if message == exact_core_message:
+            return (
+                "date",
+                "Tarih hatası",
+                "Teslim Edildi durumunda Gerçek Teslimat Tarihi kesin YYYY-MM-DD olmalı.",
+            )
+        if message == required_core_message:
+            return (
+                "status",
+                "Gerçek Teslimat Tarihi Gerekli",
+                "Durum 'Teslim Edildi' olduğunda Gerçek Teslimat Tarihi zorunludur.",
+            )
+        if message.startswith("Durum 'Teslim Edildi' olduğunda"):
+            return "status", "Teslim Edilen Eksik", message
+        if message.startswith("Bu teslimatta tüm bileşenlerin kalanı 0."):
+            return "status", "Durum Uyumsuz", message
+        return "date", "Tarih hatası", message
 
     def validate_accept(self, i: int) -> bool:
         if not self.name_edits[i].text().strip():
             QMessageBox.warning(self, "Eksik", "Teslimat adı girin.")
             return False
         acc_text = self.acc_date_edits[i].text().strip()
-        ok, message = validate_flexible_date(acc_text, allow_empty=True)
-        if not ok:
-            QMessageBox.warning(self, "Tarih hatası", f"Gerçek Teslimat Tarihi: {message}")
-            return False
-        acc_date = parse_flexible_date(acc_text)
-        delivered_status = self._is_delivered_status(self.status_boxes[i].currentText())
-        if delivered_status and acc_text and not acc_date:
-            QMessageBox.warning(self, "Tarih hatası", "Teslim Edildi durumunda Gerçek Teslimat Tarihi kesin YYYY-MM-DD olmalı.")
-            return False
-        if acc_date and acc_date > date.today():
-            QMessageBox.warning(self, "Tarih hatası", "Gerçek Teslimat Tarihi bugünden ileri olamaz.")
-            return False
-        tbl = self.tables[i]
-        active_planned = False
-        for r, comp in enumerate(self.component_keys):
-            planned = max(as_number(tbl.item(r, 1).text()), 0)
-            delivered = max(as_number(tbl.item(r, 2).text()), 0)
-            active_planned = active_planned or planned > 0.0001
-            if delivered > planned:
-                QMessageBox.warning(self, "Hata", f"{comp}: teslim edilen teslim edilecekten büyük olamaz.")
+        planned, delivered = self._accept_quantity_maps(i)
+        status_errors = validate_status_rules(
+            self.status_boxes[i].currentText(),
+            acc_text,
+            "TBD",
+            planned,
+            delivered,
+        )
+        mapped_status_errors = [self._status_validation_warning(error) for error in status_errors]
+        for phase, title, message in mapped_status_errors:
+            if phase == "date":
+                QMessageBox.warning(self, title, message)
                 return False
-        remaining_components = self._accept_remaining_components(i)
-        if delivered_status:
-            if not acc_text:
-                QMessageBox.warning(self, "Gerçek Teslimat Tarihi Gerekli", "Durum 'Teslim Edildi' olduğunda Gerçek Teslimat Tarihi zorunludur.")
-                return False
-            if remaining_components:
-                QMessageBox.warning(
-                    self,
-                    "Teslim Edilen Eksik",
-                    "Durum 'Teslim Edildi' olduğunda bu teslimattaki tüm bileşenlerin kalan değeri 0 olmalıdır.\n\n"
-                    "Eksik kalan bileşenler:\n• " + "\n• ".join(remaining_components),
-                )
-                return False
-        elif active_planned and not remaining_components:
-            QMessageBox.warning(
-                self,
-                "Durum Uyumsuz",
-                "Bu teslimatta tüm bileşenlerin kalanı 0. Kaydetmeden önce Durum alanını 'Teslim Edildi' yapın.",
+
+        for comp in self.component_keys:
+            quantity_errors = validate_quantities(
+                [comp],
+                planned,
+                delivered,
+                lambda key: planned.get(key, 0),
+                lambda _key: 0,
             )
-            return False
+            if quantity_errors:
+                message = quantity_errors[0].replace(
+                    "teslim edilen, teslim edilecekten büyük olamaz.",
+                    "teslim edilen teslim edilecekten büyük olamaz.",
+                )
+                QMessageBox.warning(self, "Hata", message)
+                return False
+
+        for phase, title, message in mapped_status_errors:
+            if phase == "status":
+                QMessageBox.warning(self, title, message)
+                return False
         return True
 
     def on_status_changed(self, idx: int):
@@ -444,7 +473,7 @@ class AutoAcceptDialog(QDialog):
             delivered = planned
             table.item(row, 2).setText(fmt_num(delivered))
         table.item(row, 1).setText(fmt_num(planned))
-        table.item(row, 3).setText(fmt_num(max(planned - delivered, 0)))
+        table.item(row, 3).setText(fmt_num(remaining_qty(planned, delivered)))
         self._updating = False
         self.refresh_unassigned_panel()
 
@@ -457,11 +486,11 @@ class AutoAcceptDialog(QDialog):
             for j, other_tbl in enumerate(self.tables):
                 if j != accept_idx:
                     other_assigned += as_number(other_tbl.item(r, 1).text())
-            qty = max(total_available - other_assigned, 0)
+            qty = distributable_target(total_available, other_assigned)
             tbl.item(r, 1).setText(fmt_num(qty))
             if as_number(tbl.item(r, 2).text()) > qty:
                 tbl.item(r, 2).setText(fmt_num(qty))
-            tbl.item(r, 3).setText(fmt_num(max(qty - as_number(tbl.item(r, 2).text()), 0)))
+            tbl.item(r, 3).setText(fmt_num(remaining_qty(qty, as_number(tbl.item(r, 2).text()))))
         self._updating = False
         self.refresh_unassigned_panel()
 
@@ -474,11 +503,11 @@ class AutoAcceptDialog(QDialog):
             for j, other_tbl in enumerate(self.tables):
                 if j != accept_idx:
                     other_assigned += as_number(other_tbl.item(r, 1).text())
-            remaining = max(contract_qty - other_assigned, 0)
+            remaining = distributable_target(contract_qty, other_assigned)
             tbl.item(r, 1).setText(fmt_num(remaining))
             if as_number(tbl.item(r, 2).text()) > remaining:
                 tbl.item(r, 2).setText(fmt_num(remaining))
-            tbl.item(r, 3).setText(fmt_num(max(remaining - as_number(tbl.item(r, 2).text()), 0)))
+            tbl.item(r, 3).setText(fmt_num(remaining_qty(remaining, as_number(tbl.item(r, 2).text()))))
         self._updating = False
         self.refresh_unassigned_panel()
 
@@ -596,7 +625,7 @@ class AutoAcceptDialog(QDialog):
                 d = max(as_number(tbl.item(r, 2).text()), 0)
                 planned[comp] = p
                 delivered[comp] = d
-            self.result_deliveries.append(DeliveryInfo(
+            self.result_deliveries.append(build_delivery_info(
                 name=self.name_edits[i].text().strip(),
                 status=self.status_boxes[i].currentText(),
                 acceptance_date=flexible_or_blank(self.acc_date_edits[i].text().strip()),
