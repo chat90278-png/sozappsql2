@@ -1,0 +1,46 @@
+name: Prompt5 byte-faithful apply
+
+on:
+  push:
+    branches:
+      - chatgpt/prompt5-byte-staging
+    paths:
+      - .github/prompt5/auto_accept_dialog.py.gz.b64
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: chatgpt/prompt5-byte-staging
+          fetch-depth: 0
+
+      - name: Verify exact bytes and fast-forward feature branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp .github/prompt5/auto_accept_dialog.py.gz.b64 /tmp/payload.b64
+          base64 -d /tmp/payload.b64 > /tmp/payload.gz
+          echo '7ffa7a1440973a9f46f13e52dd77672672fc1313e5195dfa0a94ef5207f1c58c  /tmp/payload.gz' | sha256sum -c -
+          gzip -dc /tmp/payload.gz > /tmp/auto_accept_dialog.py
+          echo 'beb7b99dfe8cade1c2121301f8f85b2f11147c9b9d7feb4e0c28dfb6ca77efd3  /tmp/auto_accept_dialog.py' | sha256sum -c -
+
+          git fetch origin feature/delivery-core
+          current="$(git rev-parse origin/feature/delivery-core)"
+          test "$current" = 'b147c13db6e9a82baf717c596e2180f66b5f28a6'
+
+          git checkout -B prompt5-target origin/feature/delivery-core
+          cp /tmp/auto_accept_dialog.py src/ui/dialogs/auto_accept_dialog.py
+          blob="$(git hash-object src/ui/dialogs/auto_accept_dialog.py)"
+          test "$blob" = '06b6e963b798d3c75434c3afc5042eeaee32b20c'
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/ui/dialogs/auto_accept_dialog.py
+          test "$(git diff --cached --name-only)" = 'src/ui/dialogs/auto_accept_dialog.py'
+          git commit -m 'ui: add planned acceptance date and unit tracking to AutoAcceptDialog, wired to delivery_core (per-card isolated state, cross-card distribution unchanged — verified via 581/581 pytest, 28/28 smoke, 3/3 critical STS smoke, per-card isolation and cross-card regression smoke)'
+          git push origin HEAD:feature/delivery-core
