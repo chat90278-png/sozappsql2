@@ -24,7 +24,7 @@ jobs:
           cache: pip
 
       - name: Install project dependencies
-        run: python -m pip install -r requirements.txt
+        run: python -m pip install -q -r requirements.txt
 
       - name: Compile schema upgrade surface
         run: >-
@@ -35,29 +35,16 @@ jobs:
           tests/test_sts_schema_upgrade.py
           tests/test_sts_schema_upgrade_gate.py
 
-      - name: Run focused schema upgrade tests
-        id: focused
-        continue-on-error: true
-        run: >-
-          python -m pytest -q
-          --junitxml=schema-focused-junit.xml
-          tests/test_sts_schema_upgrade.py
-          tests/test_sts_schema_upgrade_gate.py
-
-      - name: Upload focused test report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: schema-focused-junit
-          path: schema-focused-junit.xml
-          if-no-files-found: error
-
-      - name: Stop after focused failure
-        if: steps.focused.outcome != 'success'
-        run: exit 1
+      - name: Run focused schema upgrade tests repeatedly
+        run: |
+          for run in 1 2 3; do
+            echo "focused schema run ${run}/3"
+            python -m pytest -q --tb=short \
+              tests/test_sts_schema_upgrade.py \
+              tests/test_sts_schema_upgrade_gate.py
+          done
 
       - name: Run full pytest suite
-        if: steps.focused.outcome == 'success'
         env:
           QT_QPA_PLATFORM: offscreen
-        run: python -m pytest -q
+        run: python -m pytest -q --tb=short
