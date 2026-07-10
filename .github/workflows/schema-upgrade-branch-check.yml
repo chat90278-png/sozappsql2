@@ -48,6 +48,7 @@ jobs:
           src/workers/sts_load_worker.py
           tests/test_sts_schema_upgrade.py
           tests/test_sts_schema_upgrade_gate.py
+          tests/test_sts_schema_upgrade_orchestration.py
 
       - name: Run combined focused schema tests
         working-directory: feature
@@ -55,6 +56,7 @@ jobs:
           python3 -m pytest -q --tb=short
           tests/test_sts_schema_upgrade.py
           tests/test_sts_schema_upgrade_gate.py
+          tests/test_sts_schema_upgrade_orchestration.py
 
       - name: Run baseline and feature full suites
         env:
