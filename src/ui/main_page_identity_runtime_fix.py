@@ -18,6 +18,16 @@ def install_main_page_identity_runtime_fix() -> None:
 
     original_polish_identity = main_page.MainWindow._polish_identity_logo
     original_polish_platform_rail = main_page.MainWindow._polish_left_platform_rail
+    original_update_connection_badge = main_page.MainWindow.update_connection_badge
+
+    def compact_connection_text(label: QLabel | None) -> None:
+        if label is None:
+            return
+        text = str(label.text() or "").strip()
+        if text in {"✓ STS veri dosyası bağlandı", "✓ STS bağlı"}:
+            label.setText("✓ STS bağlandı")
+        label.setWordWrap(False)
+        label.setToolTip("STS veri dosyası bağlandı" if "bağlandı" in text else text)
 
     def apply_identity_fit(self) -> None:
         root = self.centralWidget()
@@ -40,27 +50,27 @@ def install_main_page_identity_runtime_fix() -> None:
                     )
 
         title = root.findChild(QLabel, "appBrandTitle")
-        if title is None:
-            return
-
-        title.setWordWrap(False)
-        title.setMinimumWidth(0)
-        title.setMaximumWidth(163)
-        font = title.font()
-        point_size = max(10, int(font.pointSize() or 10))
-        while point_size > 10:
+        if title is not None:
+            title.setWordWrap(False)
+            title.setMinimumWidth(0)
+            title.setMaximumWidth(170)
+            font = title.font()
+            point_size = max(11, int(font.pointSize() or 11))
+            while point_size > 11:
+                font.setPointSize(point_size)
+                if QFontMetrics(font).horizontalAdvance(title.text()) <= title.maximumWidth():
+                    break
+                point_size -= 1
             font.setPointSize(point_size)
-            if QFontMetrics(font).horizontalAdvance(title.text()) <= title.maximumWidth():
-                break
-            point_size -= 1
-        font.setPointSize(point_size)
-        title.setFont(font)
-        title.setStyleSheet(
-            "QLabel#appBrandTitle{background:transparent;color:#0f172a;border:none;"
-            + f"padding:0;margin:0;font-size:{point_size}pt;font-weight:900;"
-            + "}"
-        )
-        title.setToolTip(title.text())
+            title.setFont(font)
+            title.setStyleSheet(
+                "QLabel#appBrandTitle{background:transparent;color:#0f172a;border:none;"
+                + f"padding:0;margin:0;font-size:{point_size}pt;font-weight:900;"
+                + "}"
+            )
+            title.setToolTip(title.text())
+
+        compact_connection_text(getattr(self, "connection_label", None))
 
     def apply_platform_header_alignment(self) -> None:
         platform_list = getattr(self, "platform_list", None)
@@ -119,6 +129,11 @@ def install_main_page_identity_runtime_fix() -> None:
         # Layout coordinates are reliable after the compact columns have settled.
         QTimer.singleShot(0, lambda: apply_platform_header_alignment(self))
 
+    def update_connection_badge(self, mode: str) -> None:
+        original_update_connection_badge(self, mode)
+        compact_connection_text(getattr(self, "connection_label", None))
+
     main_page.MainWindow._polish_identity_logo = polish_identity
     main_page.MainWindow._polish_left_platform_rail = polish_platform_rail
+    main_page.MainWindow.update_connection_badge = update_connection_badge
     main_page._STS_IDENTITY_RUNTIME_FIX_INSTALLED = True
