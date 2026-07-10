@@ -1200,7 +1200,10 @@ class AnalysisCenterWindow(QMainWindow):
         self.setMinimumSize(900, 600)
         self.setStyleSheet(_ANALYSIS_STYLE)
         self._build_ui()
-        self.refresh_data()
+        # refresh_data senkron olarak ağır hesaplama yapar (load_analysis_data +
+        # compute_metrics). Pencere önce gösterilsin, veri hemen ardından yüklensin.
+        from PySide6.QtCore import QTimer
+        QTimer.singleShot(0, self.refresh_data)
 
     def _build_ui(self) -> None:
         root = QWidget(self)
