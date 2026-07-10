@@ -131,3 +131,5 @@ jobs:
           git add src/_build_info.py scripts/write_build_info.py src/ui/main_window.py README.md
           git commit -m "chore: stage verified build-info candidate"
           git push --force origin HEAD:refs/heads/tmp/build-info-candidate-20260710
+
+# trigger: 2
