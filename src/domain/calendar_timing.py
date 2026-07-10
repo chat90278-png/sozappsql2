@@ -203,6 +203,16 @@ def fetch_calendar_event_sources(conn: sqlite3.Connection, year_from: int, year_
             "platform": str(r["platform"] or ""),
             "no": str(r["no"] or ""),
             "type": str(r["type"] or ""),
+            # Bir sözleşme birden fazla platforma bağlıysa (contract_platforms,
+            # "paylaşımlı sözleşme" özelliği), aynı sözleşme no'su her platform
+            # için ayrı bir kayıt üretir — bu KASITLIDIR. Ama görsel olarak
+            # ayırt edilebilmesi için başlığa platform adı açıkça eklenir;
+            # aksi halde takvimde aynı sözleşme iki kez, birbirinden
+            # ayrılamayan şekilde görünür.
+            "title": (
+                f"{r['no']} · {r['type']} ({r['platform']})"
+                if str(r["platform"] or "") else f"{r['no']} · {r['type']}"
+            ),
             "status": str(r["status"] or ""),
             "completion_date": str(r["completion_date"] or ""),
             "acceptance_date": str(r["acceptance_date"] or ""),
@@ -221,9 +231,14 @@ def fetch_calendar_event_sources(conn: sqlite3.Connection, year_from: int, year_
         " c.contract_no AS no, s.name AS system_name,"
         " s.status, s.completion_date, s.acceptance_date"
         " FROM systems s"
-        " JOIN contracts c           ON c.id = s.contract_id"
-        " JOIN contract_platforms cp ON cp.contract_id = c.id"
-        " JOIN platforms p           ON p.id = cp.platform_id"
+        " JOIN contracts c   ON c.id = s.contract_id"
+        # ÖNEMLİ: platform, sistemin KENDİ platform_id'sinden alınır — bir
+        # sözleşme birden fazla platforma bağlıysa (contract_platforms) bile,
+        # her sistem sadece TEK bir platforma ait olmalı. Eskiden bu JOIN
+        # contract_platforms üzerinden yapılıyordu ve sözleşme 2 platforma
+        # bağlıysa her sistem/teslimat 2 kez (bir platform + diğer platform
+        # etiketiyle) üretiliyordu — adetler ve kayıtlar ikiye katlanıyordu.
+        " JOIN platforms p   ON p.id = COALESCE(s.platform_id, c.platform_id)"
         " WHERE s.completion_date IS NOT NULL AND s.completion_date != '' AND ("
         "   SUBSTR(s.completion_date,1,4) BETWEEN ? AND ?"
         "   OR s.completion_date = 'TBD'"
@@ -245,8 +260,8 @@ def fetch_calendar_event_sources(conn: sqlite3.Connection, year_from: int, year_
         " FROM deliveries d"
         " JOIN systems  s  ON s.id  = d.system_id"
         " JOIN contracts c ON c.id  = d.contract_id"
-        " JOIN contract_platforms cp ON cp.contract_id = c.id"
-        " JOIN platforms p ON p.id  = cp.platform_id"
+        # Aynı düzeltme: teslimat, bağlı olduğu sistemin platformunu miras alır.
+        " JOIN platforms p ON p.id  = COALESCE(s.platform_id, c.platform_id)"
         " WHERE ("
         "   (d.acceptance_date IS NOT NULL AND d.acceptance_date != '' AND ("
         "       SUBSTR(d.acceptance_date,1,4) BETWEEN ? AND ?"
@@ -268,12 +283,18 @@ def fetch_calendar_event_sources(conn: sqlite3.Connection, year_from: int, year_
     for r in s_rows:
         sname = str(r["system_name"] or "")
         no = str(r["no"] or "")
+        platform = str(r["platform"] or "")
+        # Başlığa platform adını ekle — aynı sözleşme no'su birden fazla
+        # platformda görünebildiği için (paylaşımlı sözleşme), pill/kart
+        # üzerinde hangi platforma ait olduğu HER ZAMAN net görünmeli.
+        label = f"{no} · {sname}" if sname else no
+        title = f"{label} ({platform})" if platform else label
         system_events.append({
             "row": int(r["contract_row"]),
-            "platform": str(r["platform"] or ""),
+            "platform": platform,
             "no": no, "type": "Sistem",
             "system_label": sname,
-            "title": f"{no} · {sname}" if sname else no,
+            "title": title,
             "status": str(r["status"] or ""),
             "completion_date": str(r["completion_date"] or ""),
             "acceptance_date": str(r["acceptance_date"] or ""),
@@ -284,14 +305,16 @@ def fetch_calendar_event_sources(conn: sqlite3.Connection, year_from: int, year_
         sname = str(r["system_name"] or "")
         dname = str(r["delivery_name"] or "")
         no = str(r["no"] or "")
+        platform = str(r["platform"] or "")
         label = f"{no} · {sname} / {dname}" if sname else f"{no} / {dname}"
+        title = f"{label} ({platform})" if platform else label
         system_events.append({
             "row": int(r["contract_row"]),
             "delivery_id": int(r["delivery_id"]),
-            "platform": str(r["platform"] or ""),
+            "platform": platform,
             "no": no, "type": "Teslimat",
             "system_label": sname,
-            "title": label,
+            "title": title,
             "status": str(r["status"] or ""),
             "completion_date": "",
             "acceptance_date": str(r["acceptance_date"] or ""),
