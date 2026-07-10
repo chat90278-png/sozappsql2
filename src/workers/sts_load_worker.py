@@ -6,6 +6,7 @@ from pathlib import Path
 from PySide6.QtCore import QObject, Signal
 
 from src.services.sts_database import STSMigrationError
+from src.services.sts_schema_upgrade import upgrade_sts_file
 from src.services.sts_store import STSStore
 
 _log = logging.getLogger(__name__)
@@ -46,20 +47,61 @@ class STSLoadWorker(QObject):
                 header = fh.read(16)
             if not header.startswith(b"SQLite format 3"):
                 raise ValueError("Dosya geçerli bir STS/SQLite veritabanı değil.")
-            self.progress.emit(55, "Veritabanı hazırlanıyor...")
+
+            upgrade_result = upgrade_sts_file(
+                self.path,
+                progress_callback=lambda value, message: self.progress.emit(
+                    value,
+                    message,
+                ),
+            )
+            if upgrade_result.status == "upgraded":
+                _log.info(
+                    "STS schema upgraded: path=%s from=%s to=%s migrations=%s backup=%s",
+                    self.path,
+                    upgrade_result.from_version,
+                    upgrade_result.to_version,
+                    upgrade_result.applied_migrations,
+                    upgrade_result.backup_path,
+                )
+                backup_name = (
+                    upgrade_result.backup_path.name
+                    if upgrade_result.backup_path is not None
+                    else "-"
+                )
+                self.progress.emit(
+                    84,
+                    f"Veri dosyası v{upgrade_result.from_version or 'legacy'} → "
+                    f"v{upgrade_result.to_version} güncellendi. "
+                    f"Yedek: {backup_name}",
+                )
+
+            self.progress.emit(88, "Güncel veri yapısı doğrulanıyor...")
             store = None
             try:
-                store = STSStore(self.path, actor="Index Worker", source="STS Index Worker")
+                store = STSStore(
+                    self.path,
+                    actor="Index Worker",
+                    source="STS Index Worker",
+                )
             finally:
                 if store is not None:
                     store.db.close()
-            self.progress.emit(80, "Doğrulama tamamlandı, yükleniyor...")
+            self.progress.emit(92, "Doğrulama tamamlandı, yükleniyor...")
             self.finished.emit()
         except STSMigrationError as exc:
-            _log.exception("STSLoadWorker migration hatası: %s", getattr(exc, "technical_detail", ""))
-            backup_text = f"\n\nYedek dosya: {exc.backup_path}" if getattr(exc, "backup_path", None) else ""
-            self.failed.emit(f"{exc.user_message}{backup_text}\n\nTeknik detaylar loga yazıldı.")
+            _log.exception(
+                "STSLoadWorker migration hatası: %s",
+                getattr(exc, "technical_detail", ""),
+            )
+            backup_text = (
+                f"\n\nYedek dosya: {exc.backup_path}"
+                if getattr(exc, "backup_path", None)
+                else ""
+            )
+            self.failed.emit(
+                f"{exc.user_message}{backup_text}\n\nTeknik detaylar loga yazıldı."
+            )
         except Exception as exc:
             _log.exception("STSLoadWorker doğrulama/hazırlık hatası")
             self.failed.emit(str(exc))
-
