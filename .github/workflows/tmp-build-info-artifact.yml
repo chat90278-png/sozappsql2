@@ -1,0 +1,23 @@
+name: Temporary build-info artifact
+
+on:
+  pull_request:
+    branches:
+      - feature/menu-redesign
+
+permissions:
+  contents: read
+
+jobs:
+  build-candidate-artifact:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apply and verify exact candidate changes
+        run: python .github/tmp_build_info_candidate.py
+      - name: Upload verified candidate files
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-info-candidate
+          path: build-info-candidate-artifact
+          if-no-files-found: error
