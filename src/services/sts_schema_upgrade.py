@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import shutil
 import sqlite3
 from dataclasses import dataclass
@@ -268,17 +267,6 @@ def _validate_sqlite_file(
         conn.close()
 
 
-def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as fh:
-        while True:
-            chunk = fh.read(1024 * 1024)
-            if not chunk:
-                break
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
 def _create_verified_backup(
     path: Path,
     *,
@@ -292,33 +280,44 @@ def _create_verified_backup(
         CURRENT_SCHEMA_VERSION,
     )
     source_uri = f"file:{path.as_posix()}?mode=ro"
-    source = sqlite3.connect(source_uri, uri=True)
-    target = sqlite3.connect(str(backup_path))
+    source: sqlite3.Connection | None = None
+    target: sqlite3.Connection | None = None
     try:
+        source = sqlite3.connect(source_uri, uri=True)
+        target = sqlite3.connect(str(backup_path))
         source.backup(target)
-    finally:
         target.close()
+        target = None
         source.close()
+        source = None
 
-    _validate_sqlite_file(
-        backup_path,
-        expected_version=from_version,
-        check_foreign_keys=False,
-    )
-    if not backup_path.exists() or backup_path.stat().st_size <= 0:
-        raise RuntimeError("Migration yedeği oluşturulamadı veya boş.")
-    _sha256_file(backup_path)
-    return backup_path
+        _validate_sqlite_file(
+            backup_path,
+            expected_version=from_version,
+            check_foreign_keys=False,
+        )
+        if not backup_path.exists() or backup_path.stat().st_size <= 0:
+            raise RuntimeError("Migration yedeği oluşturulamadı veya boş.")
+        return backup_path
+    except Exception:
+        try:
+            if backup_path.exists():
+                backup_path.unlink()
+        except Exception:
+            pass
+        raise
+    finally:
+        if target is not None:
+            target.close()
+        if source is not None:
+            source.close()
 
 
 def _remove_sqlite_sidecars(path: Path) -> None:
     for suffix in ("-wal", "-shm", "-journal"):
         sidecar = Path(f"{path}{suffix}")
-        try:
-            if sidecar.exists():
-                sidecar.unlink()
-        except Exception:
-            pass
+        if sidecar.exists():
+            sidecar.unlink()
 
 
 def _restore_backup(
@@ -474,6 +473,13 @@ def upgrade_sts_file(
             check_foreign_keys=True,
         )
         conn.commit()
+        conn.close()
+        conn = None
+        _validate_sqlite_file(
+            sts_path,
+            expected_version=CURRENT_SCHEMA_VERSION,
+            check_foreign_keys=True,
+        )
     except Exception as exc:
         if conn is not None:
             try:
@@ -486,7 +492,17 @@ def upgrade_sts_file(
                 pass
             conn = None
 
-        if backup_path is not None and backup_path.exists():
+        if backup_path is None:
+            raise STSMigrationError(
+                "Güncelleme öncesi güvenli yedek oluşturulamadığı için "
+                "STS dosyasında değişiklik yapılmadı.",
+                technical_detail=(
+                    f"backup_creation_failed; from=v{from_version}; "
+                    f"target=v{CURRENT_SCHEMA_VERSION}; error={exc}"
+                ),
+            ) from exc
+
+        if backup_path.exists():
             try:
                 _restore_backup(
                     backup_path,
@@ -517,17 +533,6 @@ def upgrade_sts_file(
     finally:
         if conn is not None:
             conn.close()
-
-    final_version = read_sts_schema_version(sts_path)
-    if final_version != CURRENT_SCHEMA_VERSION:
-        raise STSMigrationError(
-            "STS dosyasının sürüm doğrulaması tamamlanamadı.",
-            backup_path=backup_path,
-            technical_detail=(
-                f"final_version=v{final_version}; "
-                f"target=v{CURRENT_SCHEMA_VERSION}"
-            ),
-        )
 
     _emit(
         progress_callback,
