@@ -223,6 +223,40 @@ def test_v16_runs_only_v16_to_v17(tmp_path: Path):
     } <= _columns(path, "share_packages")
 
 
+def test_registry_is_contiguous_and_targets_current_schema():
+    assert upgrade.MIGRATIONS
+    assert upgrade.MIGRATIONS[0].from_version == upgrade.VERSIONED_MIGRATION_FLOOR
+    assert upgrade.MIGRATIONS[-1].to_version == CURRENT_SCHEMA_VERSION
+    assert len({step.from_version for step in upgrade.MIGRATIONS}) == len(
+        upgrade.MIGRATIONS
+    )
+    for current_step, next_step in zip(
+        upgrade.MIGRATIONS,
+        upgrade.MIGRATIONS[1:],
+    ):
+        assert current_step.to_version == next_step.from_version
+
+
+def test_backup_creation_failure_leaves_source_untouched(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    path = tmp_path / "backup-failure.sts"
+    _create_versioned_db(path, 14)
+
+    def _fail_backup(*args, **kwargs):
+        raise RuntimeError("injected backup failure")
+
+    monkeypatch.setattr(upgrade, "_create_verified_backup", _fail_backup)
+
+    with pytest.raises(STSMigrationError) as exc_info:
+        upgrade.upgrade_sts_file(path)
+
+    assert "dosyasında değişiklik yapılmadı" in exc_info.value.user_message
+    assert read_sts_schema_version(path) == 14
+    assert "share_packages" not in _tables(path)
+
+
 def test_current_schema_is_noop_and_does_not_create_backup(tmp_path: Path):
     path = tmp_path / "current.sts"
     db = STSDatabase(path)
