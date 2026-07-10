@@ -67,15 +67,22 @@ class ContractStatusBar(QWidget):
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
         self._summary = ContractStatusSummary()
+        self.setObjectName("contractStatusBar")
+        self.setAttribute(Qt.WA_StyledBackground, False)
+        self.setAutoFillBackground(False)
         self.setFixedHeight(11)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.setStyleSheet(
+            "QWidget#contractStatusBar{background:transparent; border:none;}"
+        )
 
     def set_summary(self, summary: ContractStatusSummary) -> None:
         self._summary = summary.normalized()
         self.update()
 
     def paintEvent(self, event) -> None:  # noqa: N802 - Qt override
-        super().paintEvent(event)
+        # Bu widget kendi arka planını tamamen çizer. super().paintEvent() çağrısı
+        # global QSS arka planının barın arkasına sızmasına neden olabiliyordu.
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing, True)
         painter.setPen(Qt.NoPen)
@@ -110,97 +117,59 @@ class ContractStatusSummaryWidget(QFrame):
 
     open_analysis_requested = Signal()
 
-    _STYLE = r"""
-    QFrame#contractStatusSummaryWidget {
-        background:#ffffff;
-        border:1.5px solid #d8e2ed;
-        border-radius:12px;
-    }
-    QFrame#contractStatusSummaryWidget:hover {
-        border-color:#397bd8;
-        background:#fafcff;
-    }
-    QWidget#contractStatusContent {
-        background:#ffffff;
-        border:none;
-    }
-    QFrame#contractStatusSummaryWidget:hover QWidget#contractStatusContent {
-        background:#fafcff;
-    }
-    QWidget#contractStatusTotalPanel {
-        background:transparent;
-        border:none;
-        border-right:1px solid #e2e8f0;
-    }
-    QFrame#contractStatusSummaryWidget:hover QWidget#contractStatusTotalPanel {
-        background:#fafcff;
-    }
-    QLabel#contractStatusTotalValue {
-        background:transparent;
-        color:#0f2b61;
-        border:none;
-        font-size:31px;
-        font-weight:900;
-    }
-    QLabel#contractStatusTotalLabel {
-        background:transparent;
-        color:#475569;
-        border:none;
-        font-size:9px;
-        font-weight:900;
-    }
-    QLabel#contractStatusTitle {
-        background:transparent;
-        color:#61738b;
-        border:none;
-        font-size:10px;
-        font-weight:900;
-    }
-    QLabel#contractStatusPercent {
-        background:transparent;
-        color:#7b8ba0;
-        border:none;
-        font-size:9px;
-        font-weight:700;
-    }
-    QLabel#contractStatusLegend {
-        background:transparent;
-        color:#55657a;
-        border:none;
-        font-size:10px;
-        font-weight:800;
-    }
-    QPushButton#contractStatusOpenButton {
-        width:28px;
-        height:28px;
-        min-width:28px;
-        max-width:28px;
-        min-height:28px;
-        max-height:28px;
-        background:#eff6ff;
-        color:#1554d1;
-        border:1px solid #a9c7ff;
-        border-radius:8px;
-        padding:0;
-        font-size:15px;
-        font-weight:900;
-    }
-    QPushButton#contractStatusOpenButton:hover { background:#dbeafe; }
-    QPushButton#contractStatusOpenButton:pressed { background:#bfdbfe; }
-    """
+    _QSS = (
+        "QFrame#contractStatusSummaryWidget{"
+        "background:#ffffff; border:1.5px solid #d8e2ed; border-radius:12px;}"
+        "QFrame#contractStatusSummaryWidget:hover{"
+        "border-color:#397bd8; background:#ffffff;}"
+        # Panel widget'ları (QLabel değil, sadece QWidget container'lar)
+        "QWidget#contractStatusContent{"
+        "background:#ffffff; border:none;}"
+        "QFrame#contractStatusSummaryWidget:hover QWidget#contractStatusContent{"
+        "background:#ffffff;}"
+        "QWidget#contractStatusTotalPanel{"
+        "background:transparent; border:none; border-right:1px solid #e2e8f0;}"
+        # ContractStatusBar ve diğer anonim child QWidget'lar
+        "QFrame#contractStatusSummaryWidget QWidget{"
+        "background:transparent;}"
+        "QFrame#contractStatusSummaryWidget QWidget#contractStatusContent{"
+        "background:#ffffff;}"
+        "QFrame#contractStatusSummaryWidget:hover QWidget#contractStatusContent{"
+        "background:#ffffff;}"
+        # Tüm QLabel'ların arka planı şeffaf — global #e8eef5 sızmaz
+        "QFrame#contractStatusSummaryWidget QLabel{"
+        "background:transparent; border:none;}"
+        "QLabel#contractStatusTotalValue{"
+        "color:#0f2b61; font-size:31px; font-weight:900;}"
+        "QLabel#contractStatusTotalLabel{"
+        "color:#475569; font-size:9px; font-weight:900;}"
+        "QLabel#contractStatusTitle{"
+        "color:#61738b; font-size:10px; font-weight:900;}"
+        "QLabel#contractStatusPercent{"
+        "color:#7b8ba0; font-size:9px; font-weight:700;}"
+        "QLabel#contractStatusLegend{"
+        "color:#55657a; font-size:10px; font-weight:800;}"
+        "QPushButton#contractStatusOpenButton{"
+        "width:28px; height:28px; min-width:28px; max-width:28px;"
+        "min-height:28px; max-height:28px; background:#eff6ff; color:#1554d1;"
+        "border:1px solid #a9c7ff; border-radius:8px; padding:0;"
+        "font-size:15px; font-weight:900;}"
+        "QPushButton#contractStatusOpenButton:hover{background:#dbeafe;}"
+        "QPushButton#contractStatusOpenButton:pressed{background:#bfdbfe;}"
+    )
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
         self._summary = ContractStatusSummary()
         self.setObjectName("contractStatusSummaryWidget")
         self.setAttribute(Qt.WA_StyledBackground, True)
-        self.setFixedSize(460, 112)
-        self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-        self.setStyleSheet(self._STYLE)
-        self._build_ui()
+        self.setFixedHeight(112)
+        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        self.setStyleSheet(self._QSS)
+        self._build()
         self.set_summary(self._summary)
 
-    def _build_ui(self) -> None:
+    def _build(self) -> None:
         root = QHBoxLayout(self)
         root.setContentsMargins(10, 10, 10, 10)
         root.setSpacing(10)
@@ -231,12 +200,19 @@ class ContractStatusSummaryWidget(QFrame):
         content = QWidget(self)
         content.setObjectName("contractStatusContent")
         content.setAttribute(Qt.WA_StyledBackground, True)
+        content.setAutoFillBackground(False)
+        # Child widget'in kendi QSS'i, uygulama seviyesindeki/global QWidget
+        # arka plan kurallarından daha yüksek öncelikle beyaz zemini korur.
+        content.setStyleSheet(
+            "QWidget#contractStatusContent{background:#ffffff; border:none;}"
+        )
         content_layout = QVBoxLayout(content)
-        content_layout.setContentsMargins(0, 1, 0, 1)
-        content_layout.setSpacing(0)
+        content_layout.setContentsMargins(0, 6, 0, 6)
+        content_layout.setSpacing(4)
 
         title_row = QHBoxLayout()
         title_row.setContentsMargins(0, 0, 0, 0)
+        title_row.setSpacing(6)
         title = QLabel("SÖZLEŞME DURUMU", content)
         title.setObjectName("contractStatusTitle")
         self.percent_label = QLabel("%0 tamamlandı", content)
@@ -246,17 +222,15 @@ class ContractStatusSummaryWidget(QFrame):
         title_row.addWidget(self.percent_label)
         content_layout.addLayout(title_row)
 
-        # Keep the title visually separate, then lower the distribution content
-        # slightly inside the 112 px card for a calmer vertical rhythm.
-        content_layout.addSpacing(14)
+        content_layout.addStretch(1)
 
         self.status_bar = ContractStatusBar(content)
         content_layout.addWidget(self.status_bar)
-        content_layout.addSpacing(10)
+        content_layout.addSpacing(4)
 
         legend_row = QHBoxLayout()
         legend_row.setContentsMargins(0, 0, 0, 0)
-        legend_row.setSpacing(0)
+        legend_row.setSpacing(8)
         self.completed_label = self._legend_label(content)
         self.in_progress_label = self._legend_label(content)
         self.not_started_label = self._legend_label(content)
@@ -264,7 +238,6 @@ class ContractStatusSummaryWidget(QFrame):
         legend_row.addWidget(self.in_progress_label, 1)
         legend_row.addWidget(self.not_started_label, 1)
         content_layout.addLayout(legend_row)
-        content_layout.addStretch(1)
         root.addWidget(content, 1)
 
         self.open_button = QPushButton(">", self)
@@ -273,6 +246,14 @@ class ContractStatusSummaryWidget(QFrame):
         self.open_button.clicked.connect(self.open_analysis_requested.emit)
         root.addWidget(self.open_button, 0, Qt.AlignVCenter)
 
+        # Kart bütününe tıklanınca da sinyal emit edilir
+        self.setCursor(Qt.PointingHandCursor)
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.LeftButton:
+            self.open_analysis_requested.emit()
+        super().mousePressEvent(event)
+
     @staticmethod
     def _legend_label(parent: QWidget) -> QLabel:
         label = QLabel(parent)
@@ -280,9 +261,7 @@ class ContractStatusSummaryWidget(QFrame):
         label.setTextFormat(Qt.RichText)
         label.setAlignment(Qt.AlignCenter)
         label.setMinimumWidth(0)
-        # Ignore each text sizeHint horizontally so the three status labels are
-        # distributed as genuinely equal cells instead of drifting by text length.
-        label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+        label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         return label
 
     @staticmethod
