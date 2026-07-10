@@ -16,6 +16,8 @@ jobs:
     steps:
       - name: Checkout feature branch
         uses: actions/checkout@v4
+        with:
+          show-progress: false
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -35,16 +37,30 @@ jobs:
           tests/test_sts_schema_upgrade.py
           tests/test_sts_schema_upgrade_gate.py
 
-      - name: Run focused schema upgrade tests repeatedly
+      - name: Run core migration tests repeatedly
+        id: core
+        continue-on-error: true
         run: |
-          for run in 1 2 3; do
-            echo "focused schema run ${run}/3"
-            python -m pytest -q --tb=short \
-              tests/test_sts_schema_upgrade.py \
-              tests/test_sts_schema_upgrade_gate.py
+          for run in 1 2 3 4 5; do
+            echo "core migration run ${run}/5"
+            python -m pytest -q --tb=short tests/test_sts_schema_upgrade.py
           done
 
+      - name: Run fingerprint gate tests repeatedly
+        id: gate
+        continue-on-error: true
+        run: |
+          for run in 1 2 3 4 5; do
+            echo "fingerprint gate run ${run}/5"
+            python -m pytest -q --tb=short tests/test_sts_schema_upgrade_gate.py
+          done
+
+      - name: Fail on focused regression
+        if: always() && (steps.core.outcome != 'success' || steps.gate.outcome != 'success')
+        run: exit 1
+
       - name: Run full pytest suite
+        if: always() && steps.core.outcome == 'success' && steps.gate.outcome == 'success'
         env:
           QT_QPA_PLATFORM: offscreen
         run: python -m pytest -q --tb=short
