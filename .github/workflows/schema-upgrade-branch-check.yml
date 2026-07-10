@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: write
 
 jobs:
   schema-upgrade-check:
@@ -37,30 +38,54 @@ jobs:
           tests/test_sts_schema_upgrade.py
           tests/test_sts_schema_upgrade_gate.py
 
-      - name: Run core migration tests repeatedly
-        id: core
+      - name: Run combined focused schema tests
+        id: combined
         continue-on-error: true
-        run: |
-          for run in 1 2 3 4 5; do
-            echo "core migration run ${run}/5"
-            python -m pytest -q --tb=short tests/test_sts_schema_upgrade.py
-          done
+        run: >-
+          python -m pytest -q --tb=short
+          --junitxml=schema-combined-junit.xml
+          tests/test_sts_schema_upgrade.py
+          tests/test_sts_schema_upgrade_gate.py
 
-      - name: Run fingerprint gate tests repeatedly
-        id: gate
-        continue-on-error: true
+      - name: Report combined failure to draft PR
+        if: always() && steps.combined.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          for run in 1 2 3 4 5; do
-            echo "fingerprint gate run ${run}/5"
-            python -m pytest -q --tb=short tests/test_sts_schema_upgrade_gate.py
-          done
+          python - <<'PY'
+          import os
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
 
-      - name: Fail on focused regression
-        if: always() && (steps.core.outcome != 'success' || steps.gate.outcome != 'success')
+          root = ET.parse("schema-combined-junit.xml").getroot()
+          lines = ["### Schema focused CI failure diagnostic", ""]
+          failed = 0
+          for case in root.iter("testcase"):
+              nodes = list(case.findall("failure")) + list(case.findall("error"))
+              for node in nodes:
+                  failed += 1
+                  name = f"{case.get('classname', '')}::{case.get('name', '')}".strip(":")
+                  message = str(node.get("message") or "").strip()
+                  detail = str(node.text or "").strip()
+                  lines.extend([
+                      f"**{name}**",
+                      "```text",
+                      (message + "\n" + detail)[-5000:],
+                      "```",
+                      "",
+                  ])
+          lines.append(f"failed_cases={failed}")
+          Path("schema-combined-failure.md").write_text("\n".join(lines), encoding="utf-8")
+          PY
+          gh pr comment "${PR_NUMBER}" --body-file schema-combined-failure.md
+
+      - name: Fail if combined focused tests failed
+        if: always() && steps.combined.outcome == 'failure'
         run: exit 1
 
       - name: Run full pytest suite
-        if: always() && steps.core.outcome == 'success' && steps.gate.outcome == 'success'
+        if: always() && steps.combined.outcome == 'success'
         env:
           QT_QPA_PLATFORM: offscreen
         run: python -m pytest -q --tb=short
