@@ -51,21 +51,6 @@ def install_corner_menu_runtime_fix() -> None:
         self.setGraphicsEffect(None)
         self._shadow = None
 
-    def clear_panel_rows(self) -> None:
-        # deleteLater() alone leaves the previous submenu widgets alive until the
-        # next event-loop turn. QLayout.sizeHint() can therefore reuse stale child
-        # geometry during the same click that switches menus and return 1 px. The
-        # layer then shrinks and clips the new panel. Detach each widget immediately
-        # before scheduling deletion so the next sizeHint only sees the new rows.
-        while self._layout.count():
-            item = self._layout.takeAt(0)
-            widget = item.widget()
-            if widget is not None:
-                widget.hide()
-                widget.setParent(None)
-                widget.deleteLater()
-        self._layout.invalidate()
-
     def set_progress(self, value: float) -> None:
         self._progress = max(0.0, min(1.0, float(value)))
         self.update()
@@ -133,7 +118,6 @@ def install_corner_menu_runtime_fix() -> None:
 
     layer.CornerMenuOverlay.__init__ = overlay_init
     layer.CornerMenuButton.__init__ = button_init
-    layer.CornerMenuPanel._clear_rows = clear_panel_rows
     layer.CornerMenuButton.set_progress = set_progress
     layer.CornerMenuButton.progress = Property(
         float,
