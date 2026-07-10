@@ -950,6 +950,7 @@ CREATE TABLE IF NOT EXISTS staff_agenda_state(staff_id INTEGER NOT NULL,agenda_k
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_pdr_summary_scope ON platform_delivery_report_summary(platform_id,user_id,contract_id)")
         self.conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_pdr_lines_serial_key ON platform_delivery_report_lines(platform_id,user_id,contract_id,component_id,serial_key)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_pdr_lines_scope ON platform_delivery_report_lines(platform_id,user_id,contract_id,component_id,serial_key)")
+
         # --- Schema v15: share package registry for future return/merge tracking ---
         self.conn.execute("""
             CREATE TABLE IF NOT EXISTS share_packages (
