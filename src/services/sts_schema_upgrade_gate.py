@@ -30,12 +30,111 @@ class SchemaFingerprint:
 
 _V14_COLUMNS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("meta", ("key", "value")),
+    ("platforms", ("id", "name", "sort_order")),
+    ("users", ("id", "name")),
+    ("components", ("id", "name", "display_order")),
+    ("component_platforms", ("id", "component_id", "platform_id")),
+    ("tags", ("id", "name")),
+    ("contracts", ("id", "platform_id", "merge_uid", "revision")),
+    ("contract_users", ("contract_id", "user_id")),
+    (
+        "contract_platforms",
+        ("id", "contract_id", "platform_id", "sort_order", "is_primary"),
+    ),
+    ("systems", ("id", "contract_id", "merge_uid", "platform_id")),
+    (
+        "system_components",
+        ("id", "system_id", "component_id", "qty", "note"),
+    ),
+    (
+        "deliveries",
+        (
+            "id",
+            "contract_id",
+            "system_id",
+            "delivery_user_id",
+            "merge_uid",
+            "planned_acceptance_date",
+        ),
+    ),
+    (
+        "delivery_components",
+        ("id", "delivery_id", "component_id", "planned", "delivered"),
+    ),
+    (
+        "delivery_component_units",
+        (
+            "id",
+            "delivery_component_id",
+            "slot_no",
+            "identifier",
+            "is_delivered",
+            "note",
+        ),
+    ),
+    ("contract_tags", ("id", "contract_id", "tag_id")),
+    (
+        "contract_file_folders",
+        (
+            "id",
+            "contract_id",
+            "merge_uid",
+            "parent_id",
+            "name",
+            "created_at",
+            "updated_at",
+        ),
+    ),
+    (
+        "contract_files",
+        (
+            "id",
+            "contract_id",
+            "merge_uid",
+            "folder_id",
+            "filename",
+            "original_path",
+            "file_ext",
+            "mime_type",
+            "size_bytes",
+            "sha256",
+            "content_blob",
+            "note",
+            "created_at",
+            "updated_at",
+        ),
+    ),
+    (
+        "activity_logs",
+        ("id", "platform_id", "entity_type", "entity_id", "source", "device_name"),
+    ),
+    (
+        "delivery_schedule_revision_rows",
+        ("id", "contract_id", "delivery_id", "contract_no", "field_name", "is_deleted"),
+    ),
+    ("delivery_schedule_rev_hidden_logs", ("id", "log_id")),
+    (
+        "platform_delivery_report_summary",
+        ("id", "platform_id", "user_id", "contract_id", "status", "description"),
+    ),
+    (
+        "platform_delivery_report_lines",
+        (
+            "id",
+            "platform_id",
+            "user_id",
+            "contract_id",
+            "component_id",
+            "serial_no",
+            "serial_key",
+        ),
+    ),
+    ("internal_locations", ("id", "name", "is_active", "sort_order")),
+    (
+        "contract_responsible_engineers",
+        ("contract_id", "staff_id", "sort_order", "is_primary"),
+    ),
     ("sts_metadata", ("key", "value")),
-    ("contracts", ("id", "merge_uid", "revision")),
-    ("systems", ("id", "merge_uid")),
-    ("deliveries", ("id", "merge_uid")),
-    ("contract_file_folders", ("id", "merge_uid")),
-    ("contract_files", ("id", "merge_uid")),
 )
 
 _V14_INDEXES = (
