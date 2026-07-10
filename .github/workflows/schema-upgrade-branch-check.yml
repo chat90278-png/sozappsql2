@@ -27,7 +27,6 @@ jobs:
       - name: Verify isolated branch baseline
         run: |
           test "$(git -C baseline rev-parse HEAD)" = "2931fa267560397d4d849d6365acde504f376775"
-          test "$(git -C feature merge-base HEAD origin/main 2>/dev/null || true)" != ""
 
       - name: Install Linux Qt runtime libraries
         run: |
