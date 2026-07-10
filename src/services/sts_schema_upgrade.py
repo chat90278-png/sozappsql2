@@ -335,6 +335,14 @@ def _restore_backup(
     )
 
 
+def _validate_rolled_back_source(path: Path, *, expected_version: int) -> None:
+    _validate_sqlite_file(
+        path,
+        expected_version=expected_version,
+        check_foreign_keys=False,
+    )
+
+
 def _upgrade_with_legacy_compatibility(
     path: Path,
     *,
@@ -441,6 +449,8 @@ def upgrade_sts_file(
     backup_path: Path | None = None
     active_step: MigrationStep | None = None
     conn: sqlite3.Connection | None = None
+    transaction_started = False
+    committed = False
     try:
         backup_path = _create_verified_backup(
             sts_path,
@@ -453,6 +463,7 @@ def upgrade_sts_file(
         conn.execute("PRAGMA foreign_keys=ON")
         conn.execute("PRAGMA busy_timeout=5000")
         conn.execute("BEGIN IMMEDIATE")
+        transaction_started = True
 
         total_steps = len(chain)
         for index, step in enumerate(chain):
@@ -473,6 +484,7 @@ def upgrade_sts_file(
             check_foreign_keys=True,
         )
         conn.commit()
+        committed = True
         conn.close()
         conn = None
         _validate_sqlite_file(
@@ -481,15 +493,22 @@ def upgrade_sts_file(
             check_foreign_keys=True,
         )
     except Exception as exc:
+        rollback_succeeded = False
+        rollback_error = ""
         if conn is not None:
-            try:
-                conn.rollback()
-            except Exception:
-                pass
+            if transaction_started and not committed:
+                try:
+                    conn.rollback()
+                    rollback_succeeded = True
+                except Exception as rollback_exc:
+                    rollback_error = str(rollback_exc)
             try:
                 conn.close()
-            except Exception:
-                pass
+            except Exception as close_exc:
+                if rollback_error:
+                    rollback_error = f"{rollback_error}; close={close_exc}"
+                else:
+                    rollback_error = f"close={close_exc}"
             conn = None
 
         if backup_path is None:
@@ -501,6 +520,38 @@ def upgrade_sts_file(
                     f"target=v{CURRENT_SCHEMA_VERSION}; error={exc}"
                 ),
             ) from exc
+
+        if not transaction_started:
+            raise STSMigrationError(
+                "STS dosyası güncelleme için kilitlenemedi veya migration "
+                "başlatılamadı. Dosyada değişiklik yapılmadı.",
+                backup_path=backup_path,
+                technical_detail=(
+                    f"migration_not_started; from=v{from_version}; "
+                    f"target=v{CURRENT_SCHEMA_VERSION}; error={exc}"
+                ),
+            ) from exc
+
+        rollback_validation_error = ""
+        if rollback_succeeded and not committed:
+            try:
+                _validate_rolled_back_source(
+                    sts_path,
+                    expected_version=from_version,
+                )
+            except Exception as validation_exc:
+                rollback_validation_error = str(validation_exc)
+            else:
+                raise STSMigrationError(
+                    "STS dosyası güncellenemedi. Migration işlemi geri alındı "
+                    "ve orijinal veri dosyası korundu.",
+                    backup_path=backup_path,
+                    technical_detail=(
+                        f"migration={active_step.name if active_step else 'transaction'}; "
+                        f"from=v{from_version}; target=v{CURRENT_SCHEMA_VERSION}; "
+                        f"rollback=validated; error={exc}"
+                    ),
+                ) from exc
 
         if backup_path.exists():
             try:
@@ -515,8 +566,10 @@ def upgrade_sts_file(
                     "geri yüklenemedi. Lütfen yedek dosyayı kullanın.",
                     backup_path=backup_path,
                     technical_detail=(
-                        f"migration={active_step.name if active_step else 'backup'}: "
-                        f"{exc}; restore={restore_exc}"
+                        f"migration={active_step.name if active_step else 'transaction'}; "
+                        f"error={exc}; "
+                        f"rollback={rollback_error or rollback_validation_error or 'unavailable'}; "
+                        f"restore={restore_exc}"
                     ),
                 ) from exc
 
@@ -525,8 +578,9 @@ def upgrade_sts_file(
             "geri yüklendi.",
             backup_path=backup_path,
             technical_detail=(
-                f"migration={active_step.name if active_step else 'backup'}; "
+                f"migration={active_step.name if active_step else 'transaction'}; "
                 f"from=v{from_version}; target=v{CURRENT_SCHEMA_VERSION}; "
+                f"rollback={rollback_error or rollback_validation_error or 'unavailable'}; "
                 f"error={exc}"
             ),
         ) from exc
