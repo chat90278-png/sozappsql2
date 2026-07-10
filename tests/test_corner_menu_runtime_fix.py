@@ -28,3 +28,10 @@ def test_corner_menu_fix_removes_graphics_effect_and_preopen_callback() -> None:
     assert "before_open=None" in source
     assert "setGraphicsEffect(None)" in source
     assert "shadow_path = QPainterPath(path)" in source
+
+
+def test_corner_menu_fix_detaches_old_rows_before_submenu_measurement() -> None:
+    source = (ROOT / "src" / "ui" / "corner_menu_runtime_fix.py").read_text(encoding="utf-8")
+    assert "CornerMenuPanel._clear_rows = clear_panel_rows" in source
+    assert "widget.setParent(None)" in source
+    assert "self._layout.invalidate()" in source
