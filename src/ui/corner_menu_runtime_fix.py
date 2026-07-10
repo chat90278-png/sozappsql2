@@ -1,17 +1,19 @@
 # -*- coding: utf-8 -*-
 """Runtime hardening for the compact corner menu.
 
-This module isolates two regressions introduced by the layered corner-menu
+This module isolates three regressions introduced by the layered corner-menu
 integration:
 
 * the legacy permission refresh callback can raise before the custom panel is
   rendered;
 * QGraphicsDropShadowEffect renders the full rectangular widget buffer and
-  leaves a visible square around the painted quarter-circle surface.
+  leaves a visible square around the painted quarter-circle surface;
+* submenu navigation can measure the panel while deleteLater() rows are still
+  alive, collapsing the layer and clipping the newly rendered submenu.
 
 The QAction/QMenu tree remains the source of truth. Only the visual adapter and
-its pre-open hook are patched here so business callbacks and permission gates are
-not redefined.
+its pre-open/layout hooks are patched here so business callbacks and permission
+gates are not redefined.
 """
 from __future__ import annotations
 
@@ -48,6 +50,21 @@ def install_corner_menu_runtime_fix() -> None:
         # exposes a square halo. Draw the shadow from the same path instead.
         self.setGraphicsEffect(None)
         self._shadow = None
+
+    def clear_panel_rows(self) -> None:
+        # deleteLater() alone leaves the previous submenu widgets alive until the
+        # next event-loop turn. QLayout.sizeHint() can therefore reuse stale child
+        # geometry during the same click that switches menus and return 1 px. The
+        # layer then shrinks and clips the new panel. Detach each widget immediately
+        # before scheduling deletion so the next sizeHint only sees the new rows.
+        while self._layout.count():
+            item = self._layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.hide()
+                widget.setParent(None)
+                widget.deleteLater()
+        self._layout.invalidate()
 
     def set_progress(self, value: float) -> None:
         self._progress = max(0.0, min(1.0, float(value)))
@@ -116,6 +133,7 @@ def install_corner_menu_runtime_fix() -> None:
 
     layer.CornerMenuOverlay.__init__ = overlay_init
     layer.CornerMenuButton.__init__ = button_init
+    layer.CornerMenuPanel._clear_rows = clear_panel_rows
     layer.CornerMenuButton.set_progress = set_progress
     layer.CornerMenuButton.progress = Property(
         float,
