@@ -284,7 +284,7 @@ def test_future_schema_fails_closed_without_mutation(tmp_path: Path):
     assert not (tmp_path / "yedekler").exists()
 
 
-def test_failed_step_restores_original_database_from_backup(
+def test_failed_step_uses_validated_rollback_without_copying_backup_over_source(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -306,16 +306,126 @@ def test_failed_step_restores_original_database_from_backup(
         ),
     )
 
+    def _unexpected_copy2(*args, **kwargs):
+        raise AssertionError("validated rollback must not copy backup over source")
+
+    monkeypatch.setattr(upgrade.shutil, "copy2", _unexpected_copy2)
+
     with pytest.raises(STSMigrationError) as exc_info:
         upgrade.upgrade_sts_file(path)
 
     error = exc_info.value
-    assert "yedekten geri yüklendi" in error.user_message
+    assert "Migration işlemi geri alındı" in error.user_message
+    assert "orijinal veri dosyası korundu" in error.user_message
     assert error.backup_path is not None
     assert error.backup_path.exists()
     assert read_sts_schema_version(path) == 15
     assert "migration_should_rollback" not in _tables(path)
     assert "injected_failure" in error.technical_detail
+    assert "rollback=validated" in error.technical_detail
+
+
+def test_failure_before_begin_immediate_does_not_restore_over_source(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    path = tmp_path / "begin-failure.sts"
+    _create_versioned_db(path, 15)
+    real_connect = sqlite3.connect
+
+    class BeginFailureConnection:
+        def __init__(self, inner: sqlite3.Connection):
+            self._inner = inner
+
+        @property
+        def row_factory(self):
+            return self._inner.row_factory
+
+        @row_factory.setter
+        def row_factory(self, value):
+            self._inner.row_factory = value
+
+        def execute(self, sql, *args, **kwargs):
+            if str(sql).strip().upper() == "BEGIN IMMEDIATE":
+                raise sqlite3.OperationalError("database is locked")
+            return self._inner.execute(sql, *args, **kwargs)
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
+    def _connect(database, *args, **kwargs):
+        inner = real_connect(database, *args, **kwargs)
+        if str(database) == str(path) and not kwargs.get("uri", False):
+            return BeginFailureConnection(inner)
+        return inner
+
+    monkeypatch.setattr(upgrade.sqlite3, "connect", _connect)
+
+    def _unexpected_restore(*args, **kwargs):
+        raise AssertionError("migration not started; restore must not run")
+
+    monkeypatch.setattr(upgrade, "_restore_backup", _unexpected_restore)
+
+    with pytest.raises(STSMigrationError) as exc_info:
+        upgrade.upgrade_sts_file(path)
+
+    error = exc_info.value
+    assert "migration başlatılamadı" in error.user_message
+    assert "Dosyada değişiklik yapılmadı" in error.user_message
+    assert "migration_not_started" in error.technical_detail
+    assert error.backup_path is not None
+    assert error.backup_path.exists()
+    assert read_sts_schema_version(path) == 15
+
+
+def test_failed_rollback_validation_uses_backup_restore_as_last_resort(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    path = tmp_path / "restore-fallback.sts"
+    _create_versioned_db(path, 15)
+
+    def _failing_migration(conn: sqlite3.Connection) -> None:
+        conn.execute("CREATE TABLE migration_should_rollback(id INTEGER)")
+        raise RuntimeError("injected migration failure")
+
+    monkeypatch.setitem(
+        upgrade._MIGRATIONS_BY_FROM,
+        15,
+        upgrade.MigrationStep(
+            15,
+            16,
+            "injected_failure",
+            _failing_migration,
+        ),
+    )
+
+    def _fail_rollback_validation(*args, **kwargs):
+        raise RuntimeError("injected rollback validation failure")
+
+    monkeypatch.setattr(
+        upgrade,
+        "_validate_rolled_back_source",
+        _fail_rollback_validation,
+    )
+    real_restore = upgrade._restore_backup
+    restore_calls: list[tuple[tuple, dict]] = []
+
+    def _tracked_restore(*args, **kwargs):
+        restore_calls.append((args, kwargs))
+        return real_restore(*args, **kwargs)
+
+    monkeypatch.setattr(upgrade, "_restore_backup", _tracked_restore)
+
+    with pytest.raises(STSMigrationError) as exc_info:
+        upgrade.upgrade_sts_file(path)
+
+    error = exc_info.value
+    assert "yedekten geri yüklendi" in error.user_message
+    assert len(restore_calls) == 1
+    assert "injected rollback validation failure" in error.technical_detail
+    assert read_sts_schema_version(path) == 15
+    assert "migration_should_rollback" not in _tables(path)
 
 
 def test_unversioned_legacy_file_uses_compatibility_bootstrap(tmp_path: Path):
