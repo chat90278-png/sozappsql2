@@ -1104,8 +1104,12 @@ class ContractWorkWindow(QDialog):
         self.contract_action_tabs = ContractActionTabs(self, self.side_meta_host)
         self.build_side_meta_popover_bar(0)
         tabs_host_lay.addWidget(self.side_meta_bar, 0, Qt.AlignRight)
-        # side_meta_host layout'a değil, header altına overlay olarak konumlanır
-        QTimer.singleShot(80, self._place_tab_bar)
+        # side_meta_host layout'a değil, header altına overlay olarak konumlanır.
+        # Doğru konum hesaplanana kadar (header/edit butonu henüz layout'ta yerleşmemişken)
+        # varsayılan/tahmini konumda görünüp sonradan "zıplamasını" önlemek için,
+        # ilk doğru konumlama tamamlanana kadar barı gizli tutuyoruz.
+        self.side_meta_host.setVisible(False)
+        QTimer.singleShot(0, self._place_tab_bar)
         self.render_contract_tags()
 
         # ── Üst satır: SİSTEM BİLEŞENLERİ etiketi + Sistemi Düzenle butonu aynı hizada ──
@@ -1839,20 +1843,23 @@ class ContractWorkWindow(QDialog):
                         break
                     w = w.parent()
 
-            if sx is None:
-                # Fallback: "Ana Bilgileri Düzenle" butonunun %60 solundan başla
-                edit_btn = getattr(self, "header_edit_btn", None)
-                sx = int(self.width() * 0.55) if edit_btn is None else max(
-                    int(self.width() * 0.48),
-                    edit_btn.mapTo(self, QPoint(0, 0)).x() - int(self.width() * 0.32)
-                )
+            edit_btn = getattr(self, "header_edit_btn", None)
+            if sx is None or edit_btn is None or edit_btn.width() <= 0 or header.width() <= 0:
+                # Header/edit butonu henüz layout'a yerleşmemiş (örn. pencere hâlâ
+                # maksimize animasyonu sürüyor — özellikle uzak masaüstü/VM
+                # ortamlarında bu birkaç saniye sürebilir). Tahmini/yanlış bir
+                # konuma göre barı göstermek yerine kısa aralıklarla, cömert bir
+                # süre boyunca tekrar dene. Bar bu sırada gizli kalır.
+                retries = getattr(self, "_place_tab_bar_retries", 0)
+                if retries < 400:  # 15ms * 400 ≈ 6 sn — yavaş maksimize animasyonlarını kapsar
+                    self._place_tab_bar_retries = retries + 1
+                    QTimer.singleShot(15, self._place_tab_bar)
+                return
+
+            self._place_tab_bar_retries = 0
 
             # Sağ sınır: "Ana Bilgileri Düzenle" butonunun tam sol kenarı - 10px boşluk
-            edit_btn = getattr(self, "header_edit_btn", None)
-            if edit_btn is not None:
-                right_edge = edit_btn.mapTo(self, QPoint(0, 0)).x() - 10
-            else:
-                right_edge = self.width() - 16
+            right_edge = edit_btn.mapTo(self, QPoint(0, 0)).x() - 10
 
             available_w = max(280, self.width() - 24)
             desired_w = min(available_w, max(470, right_edge - sx))
@@ -1865,6 +1872,7 @@ class ContractWorkWindow(QDialog):
             host.setGeometry(x, y, host_w, bar_h)
             bar.setFixedWidth(host_w)
             bar.setFixedHeight(bar_h)
+            host.setVisible(True)
             host.raise_()
         except Exception:
             import traceback; traceback.print_exc()
