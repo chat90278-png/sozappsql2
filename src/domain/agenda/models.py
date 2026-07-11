@@ -82,10 +82,21 @@ class AgendaResult:
     new_count: int
     active_count: int
     counts_by_kind: Mapping[str, int]
+    new_keys: frozenset[str] = field(default_factory=frozenset)
+    states_by_key: Mapping[str, AgendaItemState] = field(default_factory=dict)
+    snoozed_count: int = 0
+    filtered_count: int = 0
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "items", tuple(self.items))
         object.__setattr__(self, "counts_by_kind", MappingProxyType(dict(self.counts_by_kind)))
+        object.__setattr__(self, "new_keys", frozenset(str(key) for key in self.new_keys))
+        object.__setattr__(self, "states_by_key", MappingProxyType(dict(self.states_by_key)))
+        for field_name in ("new_count", "active_count", "snoozed_count", "filtered_count"):
+            value = int(getattr(self, field_name))
+            if value < 0:
+                raise ValueError(f"{field_name} cannot be negative.")
+            object.__setattr__(self, field_name, value)
 
 
 @dataclass(frozen=True)
