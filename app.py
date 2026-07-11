@@ -17,10 +17,12 @@ from src.ui.main_page_analysis_window import MainWindow
 from src.ui.contract.multiplatform_context_refresh import install_multiplatform_context_refresh_fix
 from src.ui.corner_menu_runtime_fix import install_corner_menu_runtime_fix
 from src.ui.main_page_identity_runtime_fix import install_main_page_identity_runtime_fix
+from src.ui.dialogs.contract_edit_timing_runtime_fix import install_contract_edit_timing_fix
 
 install_multiplatform_context_refresh_fix()
 install_corner_menu_runtime_fix()
 install_main_page_identity_runtime_fix()
+install_contract_edit_timing_fix()
 
 from src.ui.main_window import (
     app_icon_path,
