@@ -21,6 +21,10 @@ from src.domain.agenda.models import (
     AgendaPresentationProfile,
     AgendaResult,
 )
+from src.domain.agenda.presentation import (
+    AgendaPresentationSnapshot,
+    project_agenda_result,
+)
 from src.domain.agenda.priority import AGENDA_SEVERITY_RANK, severity_rank
 from src.domain.agenda.providers import (
     AgendaProvider,
@@ -40,6 +44,7 @@ __all__ = [
     "AgendaLifecycleType",
     "AgendaPresentationProfile",
     "AgendaPresentationProfileCode",
+    "AgendaPresentationSnapshot",
     "AgendaProvider",
     "AgendaResult",
     "AgendaSeverity",
@@ -51,5 +56,6 @@ __all__ = [
     "deadline_stage_rank",
     "deadline_stage_severity",
     "deadline_stage_version",
+    "project_agenda_result",
     "severity_rank",
 ]
