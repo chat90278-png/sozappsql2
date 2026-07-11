@@ -1807,6 +1807,14 @@ class MainWindow(QMainWindow):
         if not self._tool_window_alive(widget):
             return
         try:
+            # Pencere zaten maksimize/tam ekran ise move() çağırmıyoruz: maksimize
+            # bir pencereyi taşımaya çalışmak bazı ortamlarda (özellikle uzak
+            # masaüstü/VM) pencere yöneticisiyle çakışıp gereksiz bir
+            # restore/re-maximize animasyonuna yol açabiliyor ve bu da örn.
+            # sözleşme detay penceresindeki sekme barının doğru konuma
+            # oturmasını saniyelerce geciktirebiliyor.
+            if widget.isMaximized() or widget.windowState() & Qt.WindowMaximized:
+                return
             screen = None
             try:
                 screen = widget.screen() or self.screen()
