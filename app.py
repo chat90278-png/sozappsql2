@@ -98,7 +98,7 @@ if __name__ == "__main__":
             win.show()
             sys.exit(app.exec())
         except Exception as exc:
-            _log.exception("Paylaşım açılış hatası")
+            _log.exception("Paylaşım STS açılış hatası")
             QMessageBox.critical(None, "Paylaşım açılamadı", f"Paylaşım dosyası açılamadı.\n\n{exc}")
             sys.exit(1)
 
