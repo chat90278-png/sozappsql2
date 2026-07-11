@@ -1,2 +1,3 @@
 Trigger the one-time bulk component integration workflow.
 Retry with split validation steps.
+Capture Qt smoke diagnostics.
