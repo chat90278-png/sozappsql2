@@ -1,0 +1,70 @@
+name: Temporary STS Schema PR Patch Trigger
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  patch-integration-branch:
+    if: github.head_ref == 'integration/sts-schema-upgrade-engine'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 1
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Extract and execute the isolated integration patch
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import textwrap
+
+          source = Path('.github/workflows/_temp_schema_integration_patch.yml').read_text(encoding='utf-8')
+          start = "      - name: Patch staged v18 migration contract and permanent guard\n        run: |\n"
+          end = "\n      - name: Install focused test dependency"
+          if source.count(start) != 1 or source.count(end) != 1:
+              raise SystemExit('temporary patch block markers are not unique')
+          body = source.split(start, 1)[1].split(end, 1)[0]
+          Path('/tmp/schema-integration-patch.sh').write_text(textwrap.dedent(body), encoding='utf-8')
+          PY
+          bash /tmp/schema-integration-patch.sh
+
+      - name: Validate staged v18 compatibility
+        run: |
+          python -m pip install -q pytest
+          python -m py_compile \
+            src/services/sts_schema_upgrade.py \
+            src/services/sts_schema_upgrade_gate.py \
+            src/workers/sts_load_worker.py \
+            tests/test_sts_schema_upgrade.py \
+            tests/test_sts_schema_upgrade_gate.py \
+            tests/test_sts_schema_upgrade_orchestration.py
+          python -m pytest -q --tb=short \
+            tests/test_sts_schema_upgrade.py \
+            tests/test_sts_schema_upgrade_gate.py \
+            tests/test_sts_schema_upgrade_orchestration.py
+
+      - name: Commit validated patch and remove temporary runners
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/_temp_schema_integration_patch.yml
+          git rm .github/workflows/_temp_schema_pr_patch_trigger.yml
+          git add src/services/sts_schema_upgrade.py \
+                  src/services/sts_schema_upgrade_gate.py \
+                  tests/test_sts_schema_upgrade.py \
+                  tests/test_sts_schema_upgrade_gate.py \
+                  docs/stage_reports/STS_SCHEMA_UPGRADE_ENGINE.md \
+                  .github/workflows/sts-schema-upgrade-contract.yml
+          git commit -m "Stage schema v18 upgrade contract for agenda integration"
+          git push origin HEAD:integration/sts-schema-upgrade-engine
