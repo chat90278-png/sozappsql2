@@ -33,6 +33,7 @@ from PySide6.QtWidgets import (
 )
 
 from src.ui.message_boxes import ask_yes_no, show_warning
+from src.ui.dialogs.component_entry_dialog import ComponentEntryDialog
 NAVY = "#0F1F3D"
 GRID = "#E2E8F0"
 MUTED = "#7A8AA3"
@@ -749,7 +750,7 @@ class PlatformComponentManagerDialog(QDialog):
         add_component = QPushButton("+ Bileşen", objectName="pcTopButton")
         add_component.setDefault(False)
         add_component.setAutoDefault(False)
-        add_component.clicked.connect(lambda: self._open_component_popover(None))
+        add_component.clicked.connect(self._open_component_entry_dialog)
         add_platform = QPushButton("+ Platform", objectName="pcTopButton")
         add_platform.setDefault(False)
         add_platform.setAutoDefault(False)
@@ -1349,6 +1350,13 @@ QPushButton#dangerButton {{ background:#FFF5F5; color:#DC2626; border:1px solid 
         if not replaced:
             items.append(comp)
         self.store.write_components(items, actor=self.store.current_actor() if hasattr(self.store, "current_actor") else "Sistem")
+
+    def _open_component_entry_dialog(self):
+        dialog = ComponentEntryDialog(self.store, self)
+        if dialog.exec() != QDialog.Accepted:
+            return
+        self._mark_saved(dialog.result_summary or "Bileşen kaydedildi")
+        self._load_data()
 
     def _open_component_popover(self, comp: dict[str, Any] | None):
         is_new = comp is None
