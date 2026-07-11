@@ -17,12 +17,19 @@ gates are not redefined.
 """
 from __future__ import annotations
 
-from PySide6.QtCore import Property, QPoint, Qt
+import inspect
+import sys
+
+from PySide6.QtCore import Property, QPoint, Qt, qDebug
 from PySide6.QtGui import QColor, QLinearGradient, QPainter, QPainterPath, QPen
 
 
 def install_corner_menu_runtime_fix() -> None:
     """Install the corner-menu fixes once for the current process."""
+    import shiboken6
+
+    from src.ui import main_page_analysis_window as main_page
+    from src.ui import main_window as legacy_main
     from src.ui.widgets import corner_menu_layer as layer
 
     if getattr(layer, "_STS_CORNER_MENU_RUNTIME_FIX_INSTALLED", False):
@@ -30,6 +37,51 @@ def install_corner_menu_runtime_fix() -> None:
 
     original_overlay_init = layer.CornerMenuOverlay.__init__
     original_button_init = layer.CornerMenuButton.__init__
+    original_handle_action = layer.CornerMenuOverlay._handle_action
+    original_build_top_actions_menu = legacy_main.MainWindow._build_top_actions_menu
+    original_analysis_build = main_page.MainWindow.build
+    build_call_count = 0
+
+    def emit_debug(message: str) -> None:
+        try:
+            print(message, flush=True)
+        except Exception:
+            pass
+        try:
+            qDebug(message)
+        except Exception:
+            pass
+
+    def debug_menu_model(label, menu) -> None:
+        try:
+            menu_valid = shiboken6.isValid(menu)
+            file_action = (
+                next(
+                    (
+                        item
+                        for item in menu.actions()
+                        if str(item.text() or "").replace("&", "") == "Dosya İşlemleri"
+                    ),
+                    None,
+                )
+                if menu_valid
+                else None
+            )
+            file_action_valid = (
+                shiboken6.isValid(file_action) if file_action is not None else False
+            )
+            message = (
+                f"[DEBUG][corner-menu] {label} "
+                f"menu_id={id(menu) if menu is not None else 'N/A'} "
+                f"menu_valid={menu_valid} "
+                f"menu_parent={menu.parent() if menu_valid else 'N/A'} "
+                f"file_action_id={id(file_action) if file_action is not None else 'N/A'} "
+                f"file_action_valid={file_action_valid} "
+                f"file_action_parent={file_action.parent() if file_action_valid else 'N/A'}"
+            )
+        except Exception as exc:
+            message = f"[DEBUG][corner-menu] {label} inspection failed: {exc}"
+        emit_debug(message)
 
     def overlay_init(self, host, source_menu, before_open=None, parent=None):
         # Permission visibility is already refreshed when the fresh hidden menu
@@ -50,6 +102,66 @@ def install_corner_menu_runtime_fix() -> None:
         # exposes a square halo. Draw the shadow from the same path instead.
         self.setGraphicsEffect(None)
         self._shadow = None
+
+    def handle_action(self, action) -> None:
+        try:
+            valid = shiboken6.isValid(action)
+            message = (
+                f"[DEBUG][corner-menu] _handle_action action id={id(action)} valid={valid} "
+                f"text={action.text() if valid else 'N/A'} "
+                f"parent={action.parent() if valid else 'N/A'}"
+            )
+        except Exception as exc:
+            message = f"[DEBUG][corner-menu] _handle_action inspection failed: {exc}"
+        emit_debug(message)
+        return original_handle_action(self, action)
+
+    def build_top_actions_menu(self, parent):
+        nonlocal build_call_count
+        menu = original_build_top_actions_menu(self, parent)
+        build_call_count += 1
+        if build_call_count == 1:
+            label = "build-call=legacy"
+        elif build_call_count == 2:
+            label = "build-call=layered"
+        else:
+            label = f"build-call={build_call_count}"
+        debug_menu_model(label, menu)
+        return menu
+
+    analysis_build_code = original_analysis_build.__code__
+    delete_later_line = None
+    try:
+        source_lines, start_line = inspect.getsourcelines(original_analysis_build)
+        for offset, source_line in enumerate(source_lines):
+            if "experimental_menu.deleteLater()" in source_line:
+                delete_later_line = start_line + offset
+                break
+    except Exception as exc:
+        emit_debug(
+            f"[DEBUG][corner-menu] deleteLater line discovery failed: {exc}"
+        )
+
+    def analysis_build(self, *args, **kwargs):
+        previous_trace = sys.gettrace()
+
+        def trace(frame, event, arg):
+            if frame.f_code is analysis_build_code:
+                if event == "line" and frame.f_lineno == delete_later_line:
+                    debug_menu_model(
+                        "before experimental_menu.deleteLater",
+                        frame.f_locals.get("experimental_menu"),
+                    )
+                return trace
+            return None
+
+        if delete_later_line is not None:
+            sys.settrace(trace)
+        try:
+            return original_analysis_build(self, *args, **kwargs)
+        finally:
+            if delete_later_line is not None:
+                sys.settrace(previous_trace)
 
     def set_progress(self, value: float) -> None:
         self._progress = max(0.0, min(1.0, float(value)))
@@ -117,7 +229,10 @@ def install_corner_menu_runtime_fix() -> None:
         )
 
     layer.CornerMenuOverlay.__init__ = overlay_init
+    layer.CornerMenuOverlay._handle_action = handle_action
     layer.CornerMenuButton.__init__ = button_init
+    legacy_main.MainWindow._build_top_actions_menu = build_top_actions_menu
+    main_page.MainWindow.build = analysis_build
     layer.CornerMenuButton.set_progress = set_progress
     layer.CornerMenuButton.progress = Property(
         float,
