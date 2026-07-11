@@ -5,7 +5,9 @@ on:
     paths:
       - "app.py"
       - "src/ui/dialogs/contract_edit_timing_runtime_fix.py"
+      - "src/ui/dialogs/sd_edit_timing_runtime_fix.py"
       - "tests/test_contract_edit_timing_runtime_fix.py"
+      - "tests/test_sd_edit_timing_runtime_fix.py"
       - ".github/workflows/contract-edit-timing-validation.yml"
   workflow_dispatch:
 
@@ -50,7 +52,12 @@ jobs:
         run: |
           python -m py_compile app.py
           python -m py_compile src/ui/dialogs/contract_edit_timing_runtime_fix.py
+          python -m py_compile src/ui/dialogs/sd_edit_timing_runtime_fix.py
           python -m py_compile tests/test_contract_edit_timing_runtime_fix.py
+          python -m py_compile tests/test_sd_edit_timing_runtime_fix.py
 
       - name: Run targeted regression tests
-        run: python -m pytest -q tests/test_contract_edit_timing_runtime_fix.py
+        run: |
+          python -m pytest -q \
+            tests/test_contract_edit_timing_runtime_fix.py \
+            tests/test_sd_edit_timing_runtime_fix.py
