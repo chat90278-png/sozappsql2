@@ -217,6 +217,73 @@ FAIL
 
 The exact feature-head SHA was checked out and verified successfully. Compile, targeted transaction/agenda tests, agenda schema smoke, and the existing STS database smoke all passed on the GitHub Actions Windows runner. The full pytest regression step failed, so the runtime gate cannot pass. The available decoded-log connector response rendered only the first 110 of 1,532 lines and did not expose the pytest failure tail; therefore failing test names, counts, duration, and traceback are not guessed.
 
+## Attempt 3 — Full Pytest Failure Diagnostic
+
+### Diagnostic Ref
+
+- branch: `feature/gundemim-agenda-system`
+- DIAGNOSTIC_HEAD_SHA: `607c096586a7391fe75c70ab561677f5415a7344`
+- BASE_SHA: `2931fa267560397d4d849d6365acde504f376775`
+- diagnostic PR: `#310`
+- schema version: `18`
+
+### Diagnostic Workflow
+
+- workflow name: `Gundemim Full Pytest Diagnostic`
+- trigger: `pull_request` activity type `reopened`, base branch `main`
+- expected head branch: `feature/gundemim-agenda-system`
+- expected head SHA: `607c096586a7391fe75c70ab561677f5415a7344`
+- run id: NOT FOUND
+- job id: NOT FOUND
+- status: NOT OBSERVED
+- conclusion: NOT OBSERVED
+- artifact id: NOT AVAILABLE because no matching run id was discovered
+- artifact name expected: `gundemim-full-pytest-diagnostic`
+
+The standard-library diagnostic script and reopened-PR workflow were created sequentially on the feature branch and fetched back from the exact feature ref before PR #310 was reopened. The workflow creation commit `607c096586a7391fe75c70ab561677f5415a7344` was verified identical to the current feature ref before the PR mutation. PR #310 reopened as a draft, remained unmerged, targeted `main`, and reported head SHA `607c096586a7391fe75c70ab561677f5415a7344`.
+
+Repeated `fetch_commit_workflow_runs` reads for the exact `DIAGNOSTIC_HEAD_SHA` returned an empty workflow run list. A supplementary read using the PR merge SHA also returned an empty run list. The available public GitHub Actions HTML read surface returned a cache miss. No unrelated or historical run was substituted.
+
+### Exact Checkout
+
+- `GUNDEMIM_CHECKOUT_SHA`: NOT OBSERVED
+- `GUNDEMIM_EXPECTED_SHA`: `607c096586a7391fe75c70ab561677f5415a7344`
+- DIAGNOSTIC_HEAD_SHA: `607c096586a7391fe75c70ab561677f5415a7344`
+- match: NOT OBSERVED because no matching diagnostic workflow run/job/log was discovered
+
+### JUnit Summary
+
+- `PYTEST_EXIT_CODE`: NOT OBSERVED
+- `PYTEST_TOTAL`: NOT OBSERVED
+- `PYTEST_FAILURES`: NOT OBSERVED
+- `PYTEST_ERRORS`: NOT OBSERVED
+- `PYTEST_SKIPPED`: NOT OBSERVED
+- `PYTEST_TIME`: NOT OBSERVED
+
+The sentinel range `GUNDEMIM_PYTEST_DIAG_BEGIN` through `GUNDEMIM_PYTEST_DIAG_END` could not be extracted because no matching run/job log was discoverable. Artifact extraction could not be attempted by run id because no matching diagnostic run id was available.
+
+### Failed Tests
+
+No exact failed or error testcase was extracted in Attempt 3. Test names, failure kinds, messages, traceback evidence, and agenda/transaction relation are therefore not guessed.
+
+### Raw Pytest Final Summary
+
+NOT AVAILABLE. The expected `validation-out/full-pytest.txt` artifact file could not be fetched without a matching workflow run and artifact id.
+
+### Root Cause Status
+
+INCOMPLETE
+
+Attempt 2 remains the last real runtime evidence: the targeted transaction/agenda suite, agenda schema smoke, and existing STS database smoke passed, while the full pytest regression step failed. Attempt 3 did not produce a discoverable `Gundemim Full Pytest Diagnostic` run for `DIAGNOSTIC_HEAD_SHA`, so the exact failing node/count/message/root-cause evidence remains unclassified.
+
+### Manager Gate
+
+Provider/engine development remains blocked pending manager review.
+
+### Attempt 3 Result
+
+DIAGNOSIS INCOMPLETE
+
 ## Final Result
 
 FAIL
