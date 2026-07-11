@@ -17,7 +17,7 @@ gates are not redefined.
 """
 from __future__ import annotations
 
-import inspect
+import dis
 import sys
 
 from PySide6.QtCore import Property, QPoint, Qt, qDebug
@@ -132,14 +132,39 @@ def install_corner_menu_runtime_fix() -> None:
     analysis_build_code = original_analysis_build.__code__
     delete_later_line = None
     try:
-        source_lines, start_line = inspect.getsourcelines(original_analysis_build)
-        for offset, source_line in enumerate(source_lines):
-            if "experimental_menu.deleteLater()" in source_line:
-                delete_later_line = start_line + offset
-                break
+        if "deleteLater" not in analysis_build_code.co_names:
+            raise RuntimeError("deleteLater not found in analysis build bytecode names")
+
+        instructions = list(dis.get_instructions(analysis_build_code))
+        line_starts = list(dis.findlinestarts(analysis_build_code))
+        for index, instruction in enumerate(instructions):
+            if (
+                instruction.opname not in {"LOAD_METHOD", "LOAD_ATTR"}
+                or instruction.argval != "deleteLater"
+                or index == 0
+            ):
+                continue
+            previous = instructions[index - 1]
+            if (
+                previous.opname != "LOAD_FAST"
+                or previous.argval != "experimental_menu"
+            ):
+                continue
+
+            for offset, line_number in line_starts:
+                if offset > instruction.offset:
+                    break
+                if line_number is not None:
+                    delete_later_line = line_number
+            break
+
+        if delete_later_line is None:
+            raise RuntimeError(
+                "experimental_menu.deleteLater bytecode site not found"
+            )
     except Exception as exc:
         emit_debug(
-            f"[DEBUG][corner-menu] deleteLater line discovery failed: {exc}"
+            f"[DEBUG][corner-menu] deleteLater bytecode discovery failed: {exc}"
         )
 
     def analysis_build(self, *args, **kwargs):
