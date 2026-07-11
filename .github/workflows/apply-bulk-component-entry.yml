@@ -86,7 +86,13 @@ jobs:
           manager_path.write_text(text, encoding="utf-8")
           PY
 
-      - name: Install dependencies
+      - name: Install Qt runtime libraries
+        shell: bash
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends libegl1
+
+      - name: Install Python dependencies
         shell: bash
         run: |
           python -m pip install --quiet --disable-pip-version-check -r requirements.txt
