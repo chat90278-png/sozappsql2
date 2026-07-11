@@ -1,0 +1,64 @@
+name: STS Schema Upgrade Contract
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "src/auth.py"
+      - "src/services/sts_database.py"
+      - "src/services/sts_schema_upgrade.py"
+      - "src/services/sts_schema_upgrade_gate.py"
+      - "src/workers/sts_load_worker.py"
+      - "tests/test_sts_schema_upgrade.py"
+      - "tests/test_sts_schema_upgrade_gate.py"
+      - "tests/test_sts_schema_upgrade_orchestration.py"
+  push:
+    branches:
+      - main
+    paths:
+      - "src/auth.py"
+      - "src/services/sts_database.py"
+      - "src/services/sts_schema_upgrade.py"
+      - "src/services/sts_schema_upgrade_gate.py"
+      - "src/workers/sts_load_worker.py"
+      - "tests/test_sts_schema_upgrade.py"
+      - "tests/test_sts_schema_upgrade_gate.py"
+      - "tests/test_sts_schema_upgrade_orchestration.py"
+
+permissions:
+  contents: read
+
+jobs:
+  schema-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install focused test dependency
+        run: python -m pip install -q pytest
+
+      - name: Compile schema upgrade surface
+        run: >-
+          python -m py_compile
+          src/services/sts_schema_upgrade.py
+          src/services/sts_schema_upgrade_gate.py
+          src/workers/sts_load_worker.py
+          tests/test_sts_schema_upgrade.py
+          tests/test_sts_schema_upgrade_gate.py
+          tests/test_sts_schema_upgrade_orchestration.py
+
+      - name: Validate migration registry, fingerprints, and open ownership
+        run: >-
+          python -m pytest -q --tb=short
+          tests/test_sts_schema_upgrade.py
+          tests/test_sts_schema_upgrade_gate.py
+          tests/test_sts_schema_upgrade_orchestration.py
