@@ -12,6 +12,7 @@ from typing import Callable, Optional
 from PySide6.QtCore import (
     QEvent,
     QEasingCurve,
+    QEventLoop,
     QObject,
     QPoint,
     Property,
@@ -65,16 +66,20 @@ QLabel#cornerMenuCaption {
     font-weight:700;
 }
 QPushButton#cornerMenuBack {
-    background:transparent;
-    color:#60758d;
+    background:#eaf1fc;
+    color:#1849a2;
     border:none;
-    border-radius:8px;
-    font-size:20px;
-    font-weight:800;
+    border-radius:13px;
+    padding:0;
+    font-size:16px;
+    font-weight:900;
 }
 QPushButton#cornerMenuBack:hover {
-    background:#edf4ff;
-    color:#1849a2;
+    background:#d9e8fb;
+    color:#0f3a85;
+}
+QPushButton#cornerMenuBack:pressed {
+    background:#c5dbf9;
 }
 QPushButton#cornerMenuRow {
     background:transparent;
@@ -380,10 +385,10 @@ class CornerMenuPanel(QFrame):
         caption_layout.setSpacing(5)
 
         if allow_back:
-            back = QPushButton("‹", caption_row)
+            back = QPushButton("<", caption_row)
             back.setObjectName("cornerMenuBack")
             back.setCursor(Qt.PointingHandCursor)
-            back.setFixedSize(24, 24)
+            back.setFixedSize(26, 26)
             back.clicked.connect(self.backRequested)
             caption_layout.addWidget(back, 0)
 
@@ -409,6 +414,17 @@ class CornerMenuPanel(QFrame):
             row.requested.connect(self.actionRequested)
             self._layout.addWidget(row)
 
+        self._layout.activate()
+        # Freshly added rows can report a stale/incomplete sizeHint() on the
+        # same synchronous pass that builds them (observed as the panel
+        # collapsing to just the caption row's height when switching straight
+        # from the root menu into a submenu). Flushing pending layout/style
+        # events before trusting sizeHint() gives Qt a chance to settle the
+        # new widgets' geometry first.
+        try:
+            QApplication.processEvents(QEventLoop.ExcludeUserInputEvents)
+        except Exception:
+            pass
         self._layout.activate()
         required_height = max(1, self._layout.sizeHint().height())
         self.setFixedHeight(required_height)
