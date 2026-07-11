@@ -270,3 +270,249 @@ This document does not authorize integration to `main`.
 - a final current-main differential and visual smoke remains mandatory;
 - no merge, rebase, update-ref or main write was authorized or performed;
 - no product/test/UI source was modified during this validation.
+
+## Attempt 2 — Visual Child Import Bootstrap Retry
+
+### Import Bootstrap Fix
+
+Attempt 2 changed only the temporary validation harness. Before importing PySide6 or any `src` module, every visual child:
+
+- resolved `SCRIPT_PATH = Path(__file__).resolve()`;
+- resolved the materialized feature root with `SCRIPT_PATH.parents[2]`;
+- removed duplicate root entries and inserted the exact root at `sys.path[0]`;
+- changed the working directory to the exact materialized feature root;
+- asserted `src`, compact, detail and main-page production paths;
+- emitted a `VISUAL_BOOTSTRAP_BEGIN/END` proof block.
+
+The parent process also launched every child with the exact materialized feature root as `cwd` and as the first `PYTHONPATH` entry.
+
+All three scale children recorded:
+
+- bootstrap result: PASS;
+- `VISUAL_REPO_ROOT`, `VISUAL_CWD` and `VISUAL_SYS_PATH_0` equal to the exact materialized feature root;
+- `VISUAL_SRC_EXISTS=1`;
+- `VISUAL_SCRIPT_EXISTS=1`.
+
+### Validated Refs and Run
+
+- accepted Stage 2B baseline: `0088006620c25a2508cbc3b7885d173bb5662292`
+- Stage 3A code head: `85cad2c7f4788a1ae946f98446bf942835cdf0c6`
+- Attempt 1 cleanup head: `978f733d8ccaa219b6cf0d8b8780df3874dc3c5a`
+- Attempt 2 validation head: `2176608f7a7f2ad63172f26d3763394c12a29c83`
+- current main observed when the Attempt 2 PR was created: `9e60beca5b33c2b821d5c8f54d88aba74793a5bf`
+- temporary draft PR: `#324`
+- workflow run: `29149911551`
+- validation job: `86537637403`
+
+The temporary PR remained draft-only and was not authorized for merge.
+
+### Environment
+
+- GitHub Actions hosted runner;
+- Microsoft Windows Server 2025, version `10.0.26100`;
+- runner image `windows-2025-vs2026`;
+- image version `20260628.158.1`;
+- CPython `3.11.9`;
+- PySide6 `6.11.1`;
+- Qt platform `offscreen`;
+- workflow permission `contents: read`;
+- exact feature source was materialized before `actions/setup-python`;
+- setup-python dependency cache was not used.
+
+### Exact SHA / Requirements
+
+| Check | Expected | Actual | Result |
+|---|---|---|---|
+| Baseline SHA | `0088006620c25a2508cbc3b7885d173bb5662292` | `0088006620c25a2508cbc3b7885d173bb5662292` | PASS |
+| Feature SHA | `2176608f7a7f2ad63172f26d3763394c12a29c83` | `2176608f7a7f2ad63172f26d3763394c12a29c83` | PASS |
+| `requirements.txt` bytes | equal | equal | PASS |
+
+### Targeted Runtime and Smokes
+
+- feature compile exit: `0`;
+- real offscreen targeted suite exit: `0`;
+- exact targeted summary: `209 passed in 9.63s`;
+- Agenda schema smoke exit: `0`;
+- Agenda schema output: `agenda_schema=PASS`, `schema_version=18`;
+- existing STS database smoke exit: `0`;
+- existing STS database smoke output: `ok`.
+
+### Scale 100
+
+- scale: `1.00`;
+- bootstrap: PASS;
+- child exit: `0`;
+- result: PASS;
+- QApplication constructed: YES;
+- device pixel ratio: `1.0`;
+- logical DPI: `96.0`;
+- compact logical size: `420 × 112`;
+- compact minimum/maximum height: `112`;
+- compact rows: `2`;
+- 420 px geometry offenders: `0`;
+- 250 px geometry offenders: `0`;
+- dwell before 500 ms: `0`;
+- dwell after total 750 ms: `1`;
+- duplicate key/version seen count remained: `1`;
+- selection-switch emitted only: `visual:agenda:01`;
+- details signal count: `1`;
+- compact contract IDs: `[1000]`;
+- detail logical size: `760 × 560`;
+- detail rows: `20`;
+- detail geometry offenders: `0`;
+- Qt.Tool: PASS;
+- Qt.NonModal: PASS;
+- WA_DeleteOnClose: PASS;
+- snooze codes: `tomorrow`, `three_days`, `one_week`;
+- detail contract IDs: `[1000]`;
+- detail dwell before/after: `0 / 1`;
+- pending close late-seen count: `0`;
+- MainWindow constructed: YES;
+- header indices: status `1`, agenda `2`, calendar `3`;
+- header order: PASS;
+- header logical height: `146`;
+- Agenda widget instances: `1`.
+
+PNG evidence:
+
+- `compact-scale-100.png`: `420 × 112`, `2205` bytes;
+- `detail-scale-100.png`: `760 × 560`, `8561` bytes;
+- `main-header-scale-100.png`: `1472 × 146`, `8982` bytes.
+
+### Scale 125
+
+- scale: `1.25`;
+- bootstrap: PASS;
+- child exit: `0`;
+- result: PASS;
+- QApplication constructed: YES;
+- device pixel ratio: `1.25`;
+- logical DPI: `96.0`;
+- compact logical size: `420 × 112`;
+- compact rows: `2`;
+- compact geometry offenders at both widths: `0`;
+- detail logical size: `760 × 560`;
+- detail rows: `20`;
+- detail geometry offenders: `0`;
+- Qt.Tool / NonModal / WA_DeleteOnClose: PASS;
+- compact and detail dwell, signal, snooze and close-cancellation checks: PASS;
+- MainWindow constructed: YES;
+- header indices: status `1`, agenda `2`, calendar `3`;
+- header order: PASS;
+- header logical height: `146`;
+- Agenda widget instances: `1`.
+
+PNG evidence:
+
+- `compact-scale-125.png`: `525 × 140`, `3165` bytes;
+- `detail-scale-125.png`: `950 × 700`, `11872` bytes;
+- `main-header-scale-125.png`: `1840 × 183`, `12970` bytes.
+
+### Scale 150
+
+- scale: `1.50`;
+- bootstrap: PASS;
+- child exit: `0`;
+- result: PASS;
+- QApplication constructed: YES;
+- device pixel ratio: `1.5`;
+- logical DPI: `96.0`;
+- compact logical size: `420 × 112`;
+- compact rows: `2`;
+- compact geometry offenders at both widths: `0`;
+- detail logical size: `760 × 560`;
+- detail rows: `20`;
+- detail geometry offenders: `0`;
+- Qt.Tool / NonModal / WA_DeleteOnClose: PASS;
+- compact and detail dwell, signal, snooze and close-cancellation checks: PASS;
+- MainWindow constructed: YES;
+- header indices: status `1`, agenda `2`, calendar `3`;
+- header order: PASS;
+- header logical height: `146`;
+- Agenda widget instances: `1`.
+
+PNG evidence:
+
+- `compact-scale-150.png`: `630 × 168`, `3510` bytes;
+- `detail-scale-150.png`: `1140 × 840`, `14168` bytes;
+- `main-header-scale-150.png`: `2208 × 219`, `14935` bytes.
+
+### Screenshot Artifact and Image Inspection
+
+- artifact ID: `8247880760`;
+- artifact name: `gundemim-stage3a-runtime-visual-validation-r1`;
+- size: `123478` bytes;
+- expired: `false`;
+- digest: `sha256:b1b80deceb0055014e0e0fba734839a754ab7d7079c4be0c4c31995e2b3fd14d`;
+- workflow head SHA: `2176608f7a7f2ad63172f26d3763394c12a29c83`;
+- PNG count: `9`.
+
+All PNG files existed, had positive dimensions, exceeded 500 bytes, were non-uniform and were not transparent-only.
+
+Actual image inspection was completed for representative 100%, 125% and 150% compact, detail and main-header screenshots. The compact captures showed the header, two rows and footer without overlap. Detail captures showed the header, scroll-list rows and action controls without geometry overlap. Main-header captures showed the status card before the Agenda card and the calendar after it. The hosted offscreen environment rendered text glyphs as square fallback boxes in the captured images; this was recorded as a runner/font-rendering limitation, not a blank, transparent, uniform or geometry-failing screenshot.
+
+### Full Pytest Absolute Results
+
+Accepted Stage 2B baseline:
+
+- pytest exit: `1`;
+- tests: `823`;
+- failures: `42`;
+- errors: `0`;
+- skipped: `0`;
+- JUnit time: `52.995`;
+- raw summary: `42 failed, 781 passed in 53.10s`.
+
+Attempt 2 feature:
+
+- pytest exit: `1`;
+- tests: `869`;
+- failures: `42`;
+- errors: `0`;
+- skipped: `0`;
+- JUnit time: `57.509`;
+- raw summary: `42 failed, 827 passed in 57.61s`.
+
+Both absolute suites remained non-zero and are not described as absolute full-suite passes.
+
+### JUnit Failure Differential
+
+Failure identity was `<classname>::<name>`. Both `failure` and `error` testcase nodes were included and parameter suffixes were preserved.
+
+- baseline failure/error node count: `42`;
+- feature failure/error node count: `42`;
+- shared node count: `42`;
+- baseline-only node count: `0`;
+- feature-only node count: `0`.
+
+Feature-only nodes:
+
+```text
+NONE
+```
+
+### Attempt 2 Result
+
+PASS.
+
+The visual import bootstrap completed at every scale. Exact refs and requirements parity, feature compile, the real offscreen targeted suite, both smoke tests, all three visual probes, actual MainWindow/header construction, nine PNG checks and the full-pytest JUnit differential all satisfied the R1 gate contract. `FEATURE_ONLY_FAILURE_NODE_COUNT=0`.
+
+## Final Result
+
+PASS.
+
+Attempt 1 remains recorded as FAIL because its visual children stopped at the project import boundary. Attempt 2 supersedes the operational gate decision with complete runtime, geometry, interaction, MainWindow/header, screenshot and JUnit evidence.
+
+## Further Isolated Development Gate
+
+OPEN.
+
+Stage 3A accepted. Further isolated Gündemim provider/scope/UI hardening may proceed.
+
+This approval applies only to `feature/gundemim-agenda-system` and does not authorize integration to `main`.
+
+## Main Merge Gate
+
+CLOSED.
+
+Main integration still requires current-main reconciliation, explicit schema v17→v18 migration and fingerprint support, and a final current-main differential plus visual smoke. No merge authorization is granted by this document.
