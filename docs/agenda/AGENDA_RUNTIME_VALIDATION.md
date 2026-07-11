@@ -383,14 +383,176 @@ Because Attempt 4 is INCOMPLETE:
 
 INCOMPLETE
 
+## Attempt 5 — Differential Gate Bootstrap Retry
+
+### Bootstrap Fix
+
+- The exact PR feature source was manually materialized before `actions/setup-python@v5`.
+- Setup Python ran second, after `requirements.txt` and the approved R4 gate script existed in the workspace.
+- Setup Python pip caching was fully removed: no `cache` field and no `cache-dependency-path` field.
+- This prevented the exact Attempt 4 bootstrap failure where setup-python searched an empty workspace for `requirements.txt` before source materialization.
+
+### Validated Refs
+
+- original BASE_SHA: `2931fa267560397d4d849d6365acde504f376775`
+- DIFFERENTIAL_R4_HEAD_SHA: `b889718ab1af29b8dc1fc1f5d56b128a7cf9870a`
+- current main observed SHA: `abb66421e05f8dc76e63c2d8e58d9782782af0ff`
+- validation PR: `#317`
+- feature branch: `feature/gundemim-agenda-system`
+- schema version: `18`
+
+### Workflow / Environment
+
+- execution target: GitHub Actions
+- workflow name: `Gundemim Baseline Differential Validation R4`
+- workflow run id: `29142574817`
+- workflow run number: `1`
+- workflow id: `311123228`
+- run status: `completed`
+- run conclusion: `success`
+- job id: `86518387881`
+- job name: `validate-differential-r4`
+- job status: `completed`
+- job conclusion: `success`
+- runner OS: `Microsoft Windows Server 2025` / `10.0.26100` / `Datacenter`
+- runner image: `windows-2025-vs2026`, image version `20260628.158.1`
+- Python: `CPython 3.11.9`
+- `QT_QPA_PLATFORM=offscreen`
+- `PYTHONUNBUFFERED=1`
+- `PIP_DISABLE_PIP_VERSION_CHECK=1`
+- observed GitHub token permission: `Contents: read`; metadata read was also reported by the runner
+
+The runtime step order completed successfully:
+
+1. `Prepare exact feature source`
+2. `Setup Python`
+3. `Install dependencies`
+4. `Run exact baseline vs feature gate R4`
+5. `Upload differential validation artifact`
+
+### SHA / Requirements
+
+- baseline expected SHA: `2931fa267560397d4d849d6365acde504f376775`
+- baseline actual SHA: `2931fa267560397d4d849d6365acde504f376775`
+- baseline SHA match: PASS
+- feature expected SHA: `b889718ab1af29b8dc1fc1f5d56b128a7cf9870a`
+- feature actual SHA: `b889718ab1af29b8dc1fc1f5d56b128a7cf9870a`
+- feature SHA match: PASS
+- requirements bytes match: PASS
+- `REQUIREMENTS_MATCH=1`
+
+### Targeted Results
+
+`python -m compileall -q src tests`
+
+- exit: `0`
+- result: PASS
+- captured output: empty, with successful process exit
+
+Targeted transaction and Agenda suite:
+
+`python -m pytest -q tests/test_sts_database_transactions.py tests/test_agenda_keys.py tests/test_agenda_deadline_stage.py tests/test_agenda_models.py tests/test_agenda_state_repository.py`
+
+- exit: `0`
+- result: PASS
+- exact summary: `59 passed in 6.75s`
+
+Agenda schema smoke:
+
+`python tests/smoke_sts_agenda_schema.py`
+
+- exit: `0`
+- result: PASS
+- exact output:
+  - `agenda_schema=PASS`
+  - `schema_version=18`
+
+Existing STS database smoke:
+
+`python tests/smoke_sts_database.py`
+
+- exit: `0`
+- result: PASS
+- exact output: `ok`
+
+### Absolute Full Pytest
+
+BASELINE:
+
+- pytest exit: `1`
+- JUnit tests: `660`
+- JUnit failures: `42`
+- JUnit errors: `0`
+- JUnit skipped: `0`
+- JUnit time: `79.525`
+- raw pytest summary: `42 failed, 618 passed in 79.62s (0:01:19)`
+
+FEATURE:
+
+- pytest exit: `1`
+- JUnit tests: `719`
+- JUnit failures: `42`
+- JUnit errors: `0`
+- JUnit skipped: `0`
+- JUnit time: `79.576`
+- raw pytest summary: `42 failed, 677 passed in 79.67s (0:01:19)`
+
+Both absolute full suites are non-zero, but no feature-only failing test node exists relative to the exact original baseline in the same environment.
+
+### Failure Node Differential
+
+- baseline failure node count: `42`
+- feature failure node count: `42`
+- shared failure node count: `42`
+- baseline-only failure node count: `0`
+- feature-only failure node count: `0`
+- feature-only details: NONE
+
+The baseline and feature failure/error node sets are identical. All 42 observed feature failing nodes were already present in the exact original baseline.
+
+### Artifact Evidence
+
+- artifact id: `8245673204`
+- artifact name: `gundemim-baseline-feature-differential-r4`
+- expired: `false`
+- artifact digest: `sha256:afc674243c1f3772750e35368c31ee5d864beef896fcad80b174452114ba1c4b`
+- artifact files parsed:
+  - `differential-summary.json`
+  - `baseline.xml`
+  - `feature.xml`
+  - `baseline.txt`
+  - `feature.txt`
+  - `feature-compile.txt`
+  - `targeted.txt`
+  - `agenda-schema-smoke.txt`
+  - `sts-db-smoke.txt`
+
+`differential-summary.json` is the authoritative structured evidence for the exact SHA, exit-code, JUnit-total, failure-node-set, and gate values.
+
+### Attempt 5 Result
+
+PASS
+
+The exact original baseline and exact R4 feature head were materialized and verified in the same Windows/Python/Qt/dependency environment. Targeted feature prerequisites all passed. Both full pytest suites produced parseable JUnit evidence. `FEATURE_ONLY_FAILURE_NODE_COUNT=0`, and the differential script returned `GATE=PASS`.
+
 ## Final Result
 
-INCOMPLETE
+PASS
 
 ## Provider / Engine Development Gate
 
-BLOCKED. Differential runtime evidence is incomplete. Provider/engine development remains blocked pending a completed exact BASE_SHA-vs-feature differential gate.
+OPEN ON ISOLATED FEATURE BRANCH.
 
-## Main Integration Gate
+Provider/engine development may proceed only on `feature/gundemim-agenda-system`. This isolated development approval does not authorize integration to `main`.
 
-Main merge remains forbidden until current-main schema-upgrade reconciliation and final integration validation are completed.
+## Main Merge Gate
+
+CLOSED.
+
+Current main contains the automatic STS schema upgrade engine and has advanced beyond the feature's original BASE_SHA. Before any integration:
+
+- schema v18 must add or reconcile an explicit v17→v18 migration contract;
+- the schema fingerprint registry/manifest must explicitly support v18;
+- current main must be treated as the new integration baseline;
+- a final current-main-vs-integrated-feature differential validation must run;
+- merge remains forbidden until that integration gate passes.
