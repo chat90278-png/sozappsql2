@@ -1,0 +1,115 @@
+name: Apply bulk component entry integration
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/apply-bulk-component-entry.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      QT_QPA_PLATFORM: offscreen
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Materialize feature files and patch manager
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import base64
+          import zlib
+
+          payloads = {
+              "src/domain/component_bulk_import.py": ".github/bulk-component-payload/domain.b64",
+              "src/ui/dialogs/component_entry_dialog.py": ".github/bulk-component-payload/ui.b64",
+              "tests/test_component_bulk_import.py": ".github/bulk-component-payload/domain_test.b64",
+              "tests/smoke_component_entry_dialog.py": ".github/bulk-component-payload/smoke.b64",
+          }
+          for destination, payload_path in payloads.items():
+              encoded = Path(payload_path).read_text(encoding="utf-8").strip()
+              output = Path(destination)
+              output.parent.mkdir(parents=True, exist_ok=True)
+              output.write_bytes(zlib.decompress(base64.b64decode(encoded)))
+
+          manager_path = Path("src/ui/dialogs/platform_component_manager.py")
+          text = manager_path.read_text(encoding="utf-8")
+
+          import_line = "from src.ui.dialogs.component_entry_dialog import ComponentEntryDialog"
+          if import_line not in text:
+              anchor = "from src.ui.message_boxes import ask_yes_no, show_warning\n"
+              if text.count(anchor) != 1:
+                  raise RuntimeError(f"Import anchor count mismatch: {text.count(anchor)}")
+              text = text.replace(anchor, anchor + import_line + "\n", 1)
+
+          old_connection = "add_component.clicked.connect(lambda: self._open_component_popover(None))"
+          new_connection = "add_component.clicked.connect(self._open_component_entry_dialog)"
+          if new_connection not in text:
+              if text.count(old_connection) != 1:
+                  raise RuntimeError(f"Button anchor count mismatch: {text.count(old_connection)}")
+              text = text.replace(old_connection, new_connection, 1)
+
+          method_signature = "    def _open_component_entry_dialog(self):\n"
+          if method_signature not in text:
+              anchor = "    def _open_component_popover(self, comp: dict[str, Any] | None):\n"
+              if text.count(anchor) != 1:
+                  raise RuntimeError(f"Method anchor count mismatch: {text.count(anchor)}")
+              method = (
+                  "    def _open_component_entry_dialog(self):\n"
+                  "        dialog = ComponentEntryDialog(self.store, self)\n"
+                  "        if dialog.exec() != QDialog.Accepted:\n"
+                  "            return\n"
+                  "        self._mark_saved(dialog.result_summary or \"Bileşen kaydedildi\")\n"
+                  "        self._load_data()\n\n"
+              )
+              text = text.replace(anchor, method + anchor, 1)
+
+          manager_path.write_text(text, encoding="utf-8")
+          PY
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          python -m pip install --quiet --disable-pip-version-check -r requirements.txt
+          python -m pip install --quiet --disable-pip-version-check pytest
+
+      - name: Validate integration
+        shell: bash
+        run: |
+          python -m py_compile src/domain/component_bulk_import.py src/ui/dialogs/component_entry_dialog.py src/ui/dialogs/platform_component_manager.py
+          python -m pytest -q tests/test_component_bulk_import.py
+          python tests/smoke_component_entry_dialog.py
+
+      - name: Commit product changes to main
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/bulk-component-payload/domain.b64
+          git rm .github/bulk-component-payload/ui.b64
+          git rm .github/bulk-component-payload/domain_test.b64
+          git rm .github/bulk-component-payload/smoke.b64
+          git add src/domain/component_bulk_import.py
+          git add src/ui/dialogs/component_entry_dialog.py
+          git add src/ui/dialogs/platform_component_manager.py
+          git add tests/test_component_bulk_import.py
+          git add tests/smoke_component_entry_dialog.py
+          git diff --cached --check
+          git commit -m "feat: add single and bulk component entry"
+          git push origin HEAD:main
