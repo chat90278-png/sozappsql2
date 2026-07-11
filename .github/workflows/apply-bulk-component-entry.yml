@@ -4,6 +4,7 @@ on:
   pull_request:
     types:
       - opened
+      - synchronize
     branches:
       - main
 
@@ -91,12 +92,17 @@ jobs:
           python -m pip install --quiet --disable-pip-version-check -r requirements.txt
           python -m pip install --quiet --disable-pip-version-check pytest
 
-      - name: Validate integration
+      - name: Compile integration sources
         shell: bash
-        run: |
-          python -m py_compile src/domain/component_bulk_import.py src/ui/dialogs/component_entry_dialog.py src/ui/dialogs/platform_component_manager.py
-          python -m pytest -q tests/test_component_bulk_import.py
-          python tests/smoke_component_entry_dialog.py
+        run: python -m py_compile src/domain/component_bulk_import.py src/ui/dialogs/component_entry_dialog.py src/ui/dialogs/platform_component_manager.py
+
+      - name: Run bulk component domain tests
+        shell: bash
+        run: python -m pytest -q tests/test_component_bulk_import.py
+
+      - name: Run bulk component Qt smoke
+        shell: bash
+        run: python tests/smoke_component_entry_dialog.py
 
       - name: Commit product changes to main
         shell: bash
