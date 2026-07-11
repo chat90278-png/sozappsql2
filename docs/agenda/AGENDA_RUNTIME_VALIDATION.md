@@ -284,12 +284,113 @@ Provider/engine development remains blocked pending manager review.
 
 DIAGNOSIS INCOMPLETE
 
+## Attempt 4 — Exact Baseline vs Feature Differential Gate
+
+### Manager Gate Decision
+
+For isolated branch regression validation, the absolute full-pytest zero-exit rule is replaced by an exact baseline-vs-feature JUnit failure-node differential. This follows the validated repository precedent documented in `docs/stage_reports/STS_SCHEMA_UPGRADE_ENGINE.md`: the exact baseline and feature are run in the same environment, failure/error testcase identities are compared as `<classname>::<name>`, and an absolute non-zero result does not by itself prove a feature regression when the feature introduces no new failing node.
+
+### Validated Refs
+
+- original BASE_SHA: `2931fa267560397d4d849d6365acde504f376775`
+- DIFFERENTIAL_HEAD_SHA: `3c61efcbf8aa55f629b308135d3af6e56b291c7b`
+- current main observed SHA: `abb66421e05f8dc76e63c2d8e58d9782782af0ff`
+- validation PR: `#316`
+- feature branch: `feature/gundemim-agenda-system`
+- schema version: `18`
+
+### Environment
+
+- execution target: GitHub Actions
+- workflow name: `Gundemim Baseline Differential Validation`
+- run id: `29142024367`
+- job id: `86516904535`
+- run status: `completed`
+- run conclusion: `failure`
+- job status: `completed`
+- job conclusion: `failure`
+- runner OS observed in logs: `Microsoft Windows Server 2025` / `10.0.26100` / `Datacenter`
+- runner image observed in logs: `windows-2025-vs2026`, image version `20260628.158.1`
+- Python observed in setup logs: `CPython 3.11.9`
+- `QT_QPA_PLATFORM=offscreen`
+- `PYTHONUNBUFFERED=1`
+- `PIP_DISABLE_PIP_VERSION_CHECK=1`
+- observed GitHub token permission: `Contents: read`; metadata read was also reported by the runner
+
+The workflow failed during `actions/setup-python@v5` cache initialization before repository materialization. The exact setup error was: `No file in D:\a\sozappsql2\sozappsql2 matched to [**/requirements.txt or **/pyproject.toml], make sure you have checked out the target repository`.
+
+### Targeted Foundation Results
+
+- compile: NOT RUN / NOT OBSERVED; `Prepare exact feature source` and the differential gate step were skipped after Setup Python failed
+- targeted transaction + agenda tests: NOT RUN / NOT OBSERVED
+- agenda schema smoke: NOT RUN / NOT OBSERVED
+- existing STS database smoke: NOT RUN / NOT OBSERVED
+
+Attempt 2 remains prior evidence that these targeted foundation commands passed on a Windows GitHub Actions runner, but Attempt 4 does not reuse that earlier SHA as proof for the current `DIFFERENTIAL_HEAD_SHA` gate.
+
+### Full Pytest Absolute Results
+
+BASELINE:
+
+- pytest exit: NOT RUN / NOT OBSERVED
+- tests: NOT OBSERVED
+- failures: NOT OBSERVED
+- errors: NOT OBSERVED
+- skipped: NOT OBSERVED
+- time: NOT OBSERVED
+
+FEATURE:
+
+- pytest exit: NOT RUN / NOT OBSERVED
+- tests: NOT OBSERVED
+- failures: NOT OBSERVED
+- errors: NOT OBSERVED
+- skipped: NOT OBSERVED
+- time: NOT OBSERVED
+
+No absolute suite result is labeled PASS or FAIL in Attempt 4 because neither suite reached execution.
+
+### Failure Node Differential
+
+- baseline failure node count: NOT OBSERVED
+- feature failure node count: NOT OBSERVED
+- shared failure node count: NOT OBSERVED
+- baseline-only failure node count: NOT OBSERVED
+- feature-only failure node count: NOT OBSERVED
+- feature-only details: NOT AVAILABLE
+
+The `GUNDEMIM_DIFF_GATE_BEGIN` / `GUNDEMIM_DIFF_GATE_END` sentinel was never produced because the differential script step was skipped. The artifact upload step ran with `if: always()` but reported that no `validation-out/*.json`, `*.xml`, or `*.txt` files existed; the run artifact list was empty. Therefore `differential-summary.json` and both JUnit files are unavailable.
+
+### Differential Gate Result
+
+INCOMPLETE
+
+Exact reason: the workflow prerequisite failed in Setup Python's pip-cache initialization before exact feature materialization, exact SHA verification, requirements parity runtime verification, targeted checks, baseline JUnit, feature JUnit, and failure-node comparison could run. This is validation infrastructure/orchestration failure, not evidence of a feature-only failing node and not a feature regression classification.
+
+### Main Drift / Integration Note
+
+Current main advanced after the feature's original BASE_SHA and includes the automatic STS schema upgrade engine documented in `docs/stage_reports/STS_SCHEMA_UPGRADE_ENGINE.md`.
+
+Because Attempt 4 is INCOMPLETE:
+
+- isolated provider/engine development remains blocked;
+- main merge remains forbidden;
+- before any future integration, schema v18 must be reconciled with the current migration registry and fingerprint contract;
+- current main must be the new integration baseline;
+- final current-main baseline-vs-integrated-feature differential validation is required.
+
+### Attempt 4 Result
+
+INCOMPLETE
+
 ## Final Result
 
-FAIL
+INCOMPLETE
+
+## Provider / Engine Development Gate
+
+BLOCKED. Differential runtime evidence is incomplete. Provider/engine development remains blocked pending a completed exact BASE_SHA-vs-feature differential gate.
 
 ## Main Integration Gate
 
-Provider/engine development remains blocked pending manager review.
-
-Main merge remains forbidden until final integration validation.
+Main merge remains forbidden until current-main schema-upgrade reconciliation and final integration validation are completed.
