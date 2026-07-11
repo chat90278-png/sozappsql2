@@ -1,0 +1,476 @@
+name: Temporary STS Schema Integration Patch
+
+on:
+  push:
+    branches:
+      - integration/sts-schema-upgrade-engine
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: integration/sts-schema-upgrade-engine
+          fetch-depth: 1
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Patch staged v18 migration contract and permanent guard
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              p = Path(path)
+              text = p.read_text(encoding="utf-8")
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one marker, found {count}: {old[:100]!r}")
+              p.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          engine = "src/services/sts_schema_upgrade.py"
+          migration_v18 = '''def _migrate_17_to_18(conn: sqlite3.Connection) -> None:
+              _require_columns(conn, "staff", {"id"})
+              conn.execute(
+                  """
+                  CREATE TABLE IF NOT EXISTS staff_agenda_state (
+                      staff_id INTEGER NOT NULL,
+                      agenda_key TEXT NOT NULL,
+                      first_presented_at TEXT,
+                      last_presented_at TEXT,
+                      seen_at TEXT,
+                      seen_version TEXT NOT NULL DEFAULT '',
+                      snoozed_until TEXT,
+                      snoozed_version TEXT NOT NULL DEFAULT '',
+                      snoozed_severity TEXT NOT NULL DEFAULT '',
+                      dismissed_at TEXT,
+                      dismissed_version TEXT NOT NULL DEFAULT '',
+                      created_at TEXT,
+                      updated_at TEXT,
+                      PRIMARY KEY(staff_id, agenda_key),
+                      FOREIGN KEY(staff_id) REFERENCES staff(id) ON DELETE CASCADE
+                  )
+                  """
+              )
+              _require_columns(
+                  conn,
+                  "staff_agenda_state",
+                  {
+                      "staff_id",
+                      "agenda_key",
+                      "first_presented_at",
+                      "last_presented_at",
+                      "seen_at",
+                      "seen_version",
+                      "snoozed_until",
+                      "snoozed_version",
+                      "snoozed_severity",
+                      "dismissed_at",
+                      "dismissed_version",
+                      "created_at",
+                      "updated_at",
+                  },
+              )
+              conn.execute(
+                  "CREATE INDEX IF NOT EXISTS idx_staff_agenda_state_staff "
+                  "ON staff_agenda_state(staff_id)"
+              )
+              conn.execute(
+                  "CREATE INDEX IF NOT EXISTS idx_staff_agenda_state_snoozed "
+                  "ON staff_agenda_state(staff_id,snoozed_until)"
+              )
+          '''
+          replace_once(
+              engine,
+              "\n\nMIGRATIONS: tuple[MigrationStep, ...] = (\n",
+              "\n\n" + migration_v18 + "\n\nMIGRATIONS: tuple[MigrationStep, ...] = (\n",
+          )
+          replace_once(
+              engine,
+              '    MigrationStep(16, 17, "v16_to_v17_share_cancellation_audit", _migrate_16_to_17),\n)',
+              '    MigrationStep(16, 17, "v16_to_v17_share_cancellation_audit", _migrate_16_to_17),\n'
+              '    MigrationStep(17, 18, "v17_to_v18_staff_agenda_state", _migrate_17_to_18),\n)',
+          )
+          replace_once(
+              engine,
+              "VERSIONED_MIGRATION_FLOOR = min(_MIGRATIONS_BY_FROM)\n",
+              "VERSIONED_MIGRATION_FLOOR = min(_MIGRATIONS_BY_FROM)\n"
+              "KNOWN_SCHEMA_VERSION = max(\n"
+              "    CURRENT_SCHEMA_VERSION,\n"
+              "    max(step.to_version for step in MIGRATIONS),\n"
+              ")\n",
+          )
+
+          gate = "src/services/sts_schema_upgrade_gate.py"
+          replace_once(
+              gate,
+              "from src.services.sts_schema_upgrade import (\n    VERSIONED_MIGRATION_FLOOR,\n",
+              "from src.services.sts_schema_upgrade import (\n    KNOWN_SCHEMA_VERSION,\n    VERSIONED_MIGRATION_FLOOR,\n",
+          )
+          v18_contract = '''
+          _V18_COLUMNS = (
+              "staff_id",
+              "agenda_key",
+              "first_presented_at",
+              "last_presented_at",
+              "seen_at",
+              "seen_version",
+              "snoozed_until",
+              "snoozed_version",
+              "snoozed_severity",
+              "dismissed_at",
+              "dismissed_version",
+              "created_at",
+              "updated_at",
+          )
+
+          _V18_INDEXES = (
+              "idx_staff_agenda_state_staff",
+              "idx_staff_agenda_state_snoozed",
+          )
+          '''
+          replace_once(
+              gate,
+              "\n\nFINGERPRINT_MIN_VERSION = VERSIONED_MIGRATION_FLOOR\n",
+              "\n" + v18_contract + "\nFINGERPRINT_MIN_VERSION = VERSIONED_MIGRATION_FLOOR\n",
+          )
+          replace_once(
+              gate,
+              "FINGERPRINT_MAX_VERSION = 17\n",
+              "FINGERPRINT_MAX_VERSION = KNOWN_SCHEMA_VERSION\n",
+          )
+          replace_once(
+              gate,
+              '''    if version >= 17:
+                  columns = _merge_required_columns(
+                      columns,
+                      "share_packages",
+                      _V17_COLUMNS,
+                  )
+
+              return SchemaFingerprint(
+          ''',
+              '''    if version >= 17:
+                  columns = _merge_required_columns(
+                      columns,
+                      "share_packages",
+                      _V17_COLUMNS,
+                  )
+              if version >= 18:
+                  columns = _merge_required_columns(columns, "staff", ("id",))
+                  columns = _merge_required_columns(
+                      columns,
+                      "staff_agenda_state",
+                      _V18_COLUMNS,
+                  )
+                  indexes.update(_V18_INDEXES)
+
+              return SchemaFingerprint(
+          ''',
+          )
+
+          core_test = "tests/test_sts_schema_upgrade.py"
+          v18_fixture = '''def _create_staff_agenda_state_v18(conn: sqlite3.Connection) -> None:
+              conn.execute("CREATE TABLE IF NOT EXISTS staff(id INTEGER PRIMARY KEY)")
+              conn.execute(
+                  """
+                  CREATE TABLE staff_agenda_state (
+                      staff_id INTEGER NOT NULL,
+                      agenda_key TEXT NOT NULL,
+                      first_presented_at TEXT,
+                      last_presented_at TEXT,
+                      seen_at TEXT,
+                      seen_version TEXT NOT NULL DEFAULT '',
+                      snoozed_until TEXT,
+                      snoozed_version TEXT NOT NULL DEFAULT '',
+                      snoozed_severity TEXT NOT NULL DEFAULT '',
+                      dismissed_at TEXT,
+                      dismissed_version TEXT NOT NULL DEFAULT '',
+                      created_at TEXT,
+                      updated_at TEXT,
+                      PRIMARY KEY(staff_id, agenda_key),
+                      FOREIGN KEY(staff_id) REFERENCES staff(id) ON DELETE CASCADE
+                  )
+                  """
+              )
+              conn.execute(
+                  "CREATE INDEX idx_staff_agenda_state_staff "
+                  "ON staff_agenda_state(staff_id)"
+              )
+              conn.execute(
+                  "CREATE INDEX idx_staff_agenda_state_snoozed "
+                  "ON staff_agenda_state(staff_id,snoozed_until)"
+              )
+          '''
+          replace_once(
+              core_test,
+              "\n\ndef _create_versioned_db(path: Path, version: int) -> None:\n",
+              "\n\n" + v18_fixture + "\n\ndef _create_versioned_db(path: Path, version: int) -> None:\n",
+          )
+          replace_once(
+              core_test,
+              '''            conn.execute(
+                      "ALTER TABLE share_packages "
+                      "ADD COLUMN cancelled_by_full_name TEXT NOT NULL DEFAULT ''"
+                  )
+              conn.commit()
+          ''',
+              '''            conn.execute(
+                      "ALTER TABLE share_packages "
+                      "ADD COLUMN cancelled_by_full_name TEXT NOT NULL DEFAULT ''"
+                  )
+              if version >= 18:
+                  _create_staff_agenda_state_v18(conn)
+              conn.commit()
+          ''',
+          )
+          replace_once(
+              core_test,
+              '''    assert result.to_version == CURRENT_SCHEMA_VERSION == 17
+              assert result.applied_migrations == (
+                  "v14_to_v15_share_package_registry",
+                  "v15_to_v16_merge_result_audit",
+                  "v16_to_v17_share_cancellation_audit",
+              )
+          ''',
+              '''    assert result.to_version == CURRENT_SCHEMA_VERSION
+              expected_migrations = [
+                  "v14_to_v15_share_package_registry",
+                  "v15_to_v16_merge_result_audit",
+                  "v16_to_v17_share_cancellation_audit",
+              ]
+              if CURRENT_SCHEMA_VERSION >= 18:
+                  expected_migrations.append("v17_to_v18_staff_agenda_state")
+              assert result.applied_migrations == tuple(expected_migrations)
+          ''',
+          )
+          replace_once(
+              core_test,
+              '''    assert result.applied_migrations == (
+                  "v16_to_v17_share_cancellation_audit",
+              )
+              assert read_sts_schema_version(path) == 17
+          ''',
+              '''    expected_migrations = ["v16_to_v17_share_cancellation_audit"]
+              if CURRENT_SCHEMA_VERSION >= 18:
+                  expected_migrations.append("v17_to_v18_staff_agenda_state")
+              assert result.applied_migrations == tuple(expected_migrations)
+              assert read_sts_schema_version(path) == CURRENT_SCHEMA_VERSION
+          ''',
+          )
+          replace_once(
+              core_test,
+              '''    assert upgrade.MIGRATIONS[-1].to_version == CURRENT_SCHEMA_VERSION
+          ''',
+              '''    assert upgrade.KNOWN_SCHEMA_VERSION >= CURRENT_SCHEMA_VERSION
+              assert upgrade.MIGRATIONS[-1].to_version == upgrade.KNOWN_SCHEMA_VERSION
+              assert CURRENT_SCHEMA_VERSION in {step.to_version for step in upgrade.MIGRATIONS}
+          ''',
+          )
+          staged_core_test = '''
+
+          def test_staged_v18_migration_activates_when_target_version_bumps(
+              tmp_path: Path,
+              monkeypatch: pytest.MonkeyPatch,
+          ):
+              path = tmp_path / "staged-v18.sts"
+              _create_versioned_db(path, 17)
+              monkeypatch.setattr(upgrade, "CURRENT_SCHEMA_VERSION", 18)
+
+              result = upgrade.upgrade_sts_file(path)
+
+              assert result.status == "upgraded"
+              assert result.from_version == 17
+              assert result.to_version == 18
+              assert result.applied_migrations == ("v17_to_v18_staff_agenda_state",)
+              assert read_sts_schema_version(path) == 18
+              assert "staff_agenda_state" in _tables(path)
+              conn = sqlite3.connect(path)
+              try:
+                  indexes = {
+                      str(row[0])
+                      for row in conn.execute(
+                          "SELECT name FROM sqlite_master WHERE type='index'"
+                      ).fetchall()
+                  }
+              finally:
+                  conn.close()
+              assert {
+                  "idx_staff_agenda_state_staff",
+                  "idx_staff_agenda_state_snoozed",
+              } <= indexes
+          '''
+          p = Path(core_test)
+          p.write_text(p.read_text(encoding="utf-8") + staged_core_test, encoding="utf-8")
+
+          gate_test = "tests/test_sts_schema_upgrade_gate.py"
+          replace_once(
+              gate_test,
+              "from src.services import sts_schema_upgrade_gate as gate\n",
+              "from src.services import sts_schema_upgrade as upgrade\n"
+              "from src.services import sts_schema_upgrade_gate as gate\n",
+          )
+          replace_once(
+              gate_test,
+              '''    assert gate.FINGERPRINT_MAX_VERSION == CURRENT_SCHEMA_VERSION
+              assert gate.FINGERPRINT_VERSIONS == tuple(
+                  range(gate.VERSIONED_MIGRATION_FLOOR, CURRENT_SCHEMA_VERSION + 1)
+              )
+          ''',
+              '''    assert gate.FINGERPRINT_MAX_VERSION == gate.KNOWN_SCHEMA_VERSION
+              assert gate.FINGERPRINT_MAX_VERSION >= CURRENT_SCHEMA_VERSION
+              assert gate.FINGERPRINT_VERSIONS == tuple(
+                  range(gate.VERSIONED_MIGRATION_FLOOR, gate.KNOWN_SCHEMA_VERSION + 1)
+              )
+          ''',
+          )
+          replace_once(
+              gate_test,
+              '    assert "schema_fingerprint_mismatch=v17" in error.technical_detail\n',
+              '    assert f"schema_fingerprint_mismatch=v{CURRENT_SCHEMA_VERSION}" in error.technical_detail\n',
+          )
+          replace_once(
+              gate_test,
+              '''    assert result.applied_migrations == (
+                  "v16_to_v17_share_cancellation_audit",
+              )
+          ''',
+              '''    expected_migrations = ["v16_to_v17_share_cancellation_audit"]
+              if CURRENT_SCHEMA_VERSION >= 18:
+                  expected_migrations.append("v17_to_v18_staff_agenda_state")
+              assert result.applied_migrations == tuple(expected_migrations)
+          ''',
+          )
+          replace_once(
+              gate_test,
+              '    assert "schema_fingerprint_not_registered=v17" in exc_info.value.technical_detail\n',
+              '    assert f"schema_fingerprint_not_registered=v{CURRENT_SCHEMA_VERSION}" in exc_info.value.technical_detail\n',
+          )
+          staged_gate_test = '''
+
+          def test_staged_v18_fingerprint_matches_active_agenda_schema_contract(
+              tmp_path: Path,
+              monkeypatch: pytest.MonkeyPatch,
+          ):
+              if CURRENT_SCHEMA_VERSION >= 18:
+                  pytest.skip("v18 is already the active schema")
+              path = tmp_path / "staged-v18-gate.sts"
+              db = STSDatabase(path)
+              db.close()
+              assert read_sts_schema_version(path) == 17
+
+              monkeypatch.setattr(upgrade, "CURRENT_SCHEMA_VERSION", 18)
+              monkeypatch.setattr(gate, "CURRENT_SCHEMA_VERSION", 18)
+              result = gate.upgrade_sts_file(path)
+
+              assert result.to_version == 18
+              assert result.applied_migrations == ("v17_to_v18_staff_agenda_state",)
+              fingerprint = gate.validate_versioned_schema_fingerprint(path, 18)
+              assert fingerprint.version == 18
+          '''
+          p = Path(gate_test)
+          p.write_text(p.read_text(encoding="utf-8") + staged_gate_test, encoding="utf-8")
+
+          report = Path("docs/stage_reports/STS_SCHEMA_UPGRADE_ENGINE.md")
+          report.write_text(
+              report.read_text(encoding="utf-8")
+              + '''
+
+          ## July 11 integration compatibility note — active schema v18 work
+
+          During main integration, open PR #310 (`feature/gundemim-agenda-system`) was found to stage schema v18 by adding `staff_agenda_state` and two indexes. The integration branch does not modify that feature branch or `sts_database.py`.
+
+          To avoid a future semantic break when v18 reaches main, the upgrade registry and fingerprint manifest now stage a dormant v17→v18 contract matching PR #310's schema patch. While `CURRENT_SCHEMA_VERSION` remains 17, the migration chain still stops at v17. When the schema constant becomes 18, the existing engine automatically activates `v17_to_v18_staff_agenda_state` and validates the v18 physical fingerprint.
+
+          A permanent focused GitHub Actions guard is also included for changes to `sts_database.py`, the upgrade engine/gate, or their regression tests. This makes future schema-version bumps exercise the migration/fingerprint contract automatically instead of relying on manual tracking.
+          ''',
+              encoding="utf-8",
+          )
+
+          permanent = Path(".github/workflows/sts-schema-upgrade-contract.yml")
+          permanent.write_text('''name: STS Schema Upgrade Contract
+
+          on:
+            pull_request:
+              branches: [main]
+              paths:
+                - "src/services/sts_database.py"
+                - "src/services/sts_schema_upgrade.py"
+                - "src/services/sts_schema_upgrade_gate.py"
+                - "src/workers/sts_load_worker.py"
+                - "tests/test_sts_schema_upgrade.py"
+                - "tests/test_sts_schema_upgrade_gate.py"
+                - "tests/test_sts_schema_upgrade_orchestration.py"
+            push:
+              branches: [main]
+              paths:
+                - "src/services/sts_database.py"
+                - "src/services/sts_schema_upgrade.py"
+                - "src/services/sts_schema_upgrade_gate.py"
+                - "src/workers/sts_load_worker.py"
+                - "tests/test_sts_schema_upgrade.py"
+                - "tests/test_sts_schema_upgrade_gate.py"
+                - "tests/test_sts_schema_upgrade_orchestration.py"
+
+          permissions:
+            contents: read
+
+          jobs:
+            schema-contract:
+              runs-on: ubuntu-latest
+              timeout-minutes: 10
+              steps:
+                - uses: actions/checkout@v4
+                - uses: actions/setup-python@v5
+                  with:
+                    python-version: "3.12"
+                - name: Install test dependency
+                  run: python -m pip install -q pytest
+                - name: Compile schema upgrade surface
+                  run: >-
+                    python -m py_compile
+                    src/services/sts_schema_upgrade.py
+                    src/services/sts_schema_upgrade_gate.py
+                    src/workers/sts_load_worker.py
+                    tests/test_sts_schema_upgrade.py
+                    tests/test_sts_schema_upgrade_gate.py
+                    tests/test_sts_schema_upgrade_orchestration.py
+                - name: Validate migration registry, fingerprints, and open ownership
+                  run: >-
+                    python -m pytest -q --tb=short
+                    tests/test_sts_schema_upgrade.py
+                    tests/test_sts_schema_upgrade_gate.py
+                    tests/test_sts_schema_upgrade_orchestration.py
+          ''', encoding="utf-8")
+          PY
+
+      - name: Install focused test dependency
+        run: python -m pip install -q pytest
+
+      - name: Validate staged v18 compatibility
+        run: >-
+          python -m pytest -q --tb=short
+          tests/test_sts_schema_upgrade.py
+          tests/test_sts_schema_upgrade_gate.py
+          tests/test_sts_schema_upgrade_orchestration.py
+
+      - name: Commit validated integration patch and remove temporary runner
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/_temp_schema_integration_patch.yml
+          git add src/services/sts_schema_upgrade.py \
+                  src/services/sts_schema_upgrade_gate.py \
+                  tests/test_sts_schema_upgrade.py \
+                  tests/test_sts_schema_upgrade_gate.py \
+                  docs/stage_reports/STS_SCHEMA_UPGRADE_ENGINE.md \
+                  .github/workflows/sts-schema-upgrade-contract.yml
+          git commit -m "Stage schema v18 upgrade contract for agenda integration"
+          git push origin HEAD:integration/sts-schema-upgrade-engine
