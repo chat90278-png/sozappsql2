@@ -1,0 +1,78 @@
+name: Gundemim Stage 2A Runtime Validation
+
+on:
+  pull_request:
+    types:
+      - opened
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+env:
+  QT_QPA_PLATFORM: offscreen
+  PYTHONUNBUFFERED: "1"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+
+jobs:
+  validate-stage2a:
+    if: github.head_ref == 'feature/gundemim-agenda-system'
+    runs-on: windows-latest
+    timeout-minutes: 50
+
+    steps:
+      - name: Prepare exact feature source
+        shell: pwsh
+        run: |
+          $feature = "${{ github.event.pull_request.head.sha }}"
+          Write-Host "GUNDEMIM_STAGE2A_WORKFLOW_FEATURE_SHA=$feature"
+
+          git init -q .
+          git remote add origin https://github.com/chat90278-png/sozappsql2.git
+          git -c protocol.version=2 fetch --quiet --depth=1 origin $feature
+          git checkout --quiet FETCH_HEAD
+
+          $actual = git rev-parse HEAD
+          Write-Host "GUNDEMIM_STAGE2A_WORKFLOW_ACTUAL_SHA=$actual"
+
+          if ($actual -ne $feature) {
+            throw "Stage 2A feature checkout SHA mismatch."
+          }
+          if (-not (Test-Path requirements.txt)) {
+            throw "requirements.txt missing after exact feature materialization."
+          }
+          if (-not (Test-Path .github/validation/gundemim_stage2a_gate.py)) {
+            throw "Stage 2A validation script missing."
+          }
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --quiet --disable-pip-version-check -r requirements.txt
+          if ($LASTEXITCODE -ne 0) { throw "requirements install failed" }
+
+          python -m pip install --quiet --disable-pip-version-check pytest
+          if ($LASTEXITCODE -ne 0) { throw "pytest install failed" }
+
+      - name: Run Stage 2A runtime gate
+        shell: pwsh
+        run: |
+          python .github/validation/gundemim_stage2a_gate.py --baseline-sha 1cf01400611aa4d0cee9391278664d9b931a4bf5 --feature-sha "${{ github.event.pull_request.head.sha }}" --repo-url https://github.com/chat90278-png/sozappsql2.git
+
+      - name: Upload validation artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gundemim-stage2a-runtime-validation
+          path: |
+            validation-out/*.json
+            validation-out/*.xml
+            validation-out/*.txt
+          if-no-files-found: warn
+          retention-days: 7
