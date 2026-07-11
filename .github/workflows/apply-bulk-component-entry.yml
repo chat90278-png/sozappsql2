@@ -102,7 +102,23 @@ jobs:
 
       - name: Run bulk component Qt smoke
         shell: bash
-        run: python tests/smoke_component_entry_dialog.py
+        run: |
+          mkdir -p validation-out
+          set +e
+          python tests/smoke_component_entry_dialog.py > validation-out/smoke.log 2>&1
+          code=$?
+          cat validation-out/smoke.log
+          echo "$code" > validation-out/smoke-exit-code.txt
+          exit "$code"
+
+      - name: Upload Qt smoke diagnostic
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bulk-component-smoke-diagnostic
+          path: validation-out/
+          if-no-files-found: warn
+          retention-days: 3
 
       - name: Commit product changes to main
         shell: bash
