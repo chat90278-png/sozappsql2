@@ -1,8 +1,13 @@
 from __future__ import annotations
 
-from collections.abc import Collection
+from collections.abc import Collection, Sequence
 
-from src.domain.agenda.source_models import AgendaCalendarSource
+from src.domain.agenda.source_models import (
+    AgendaCalendarSource,
+    AgendaSourceBundle,
+    ReturnedShareAgendaSource,
+)
+from src.models.share_models import SHARE_STATUS_RETURNED
 from src.services.sts_database import STSDatabase
 
 
@@ -10,6 +15,8 @@ _ENTITY_RANK = {"contract": 0, "system": 1, "delivery": 2}
 
 
 def _positive_int(value: object, field_name: str) -> int:
+    if isinstance(value, bool):
+        raise ValueError(f"{field_name} must be a positive integer.")
     try:
         parsed = int(value)
     except (TypeError, ValueError) as exc:
@@ -51,26 +58,11 @@ class AgendaSourceRepository:
         ).fetchall()
         return frozenset(int(row[0]) for row in rows)
 
-    def list_calendar_sources(
-        self,
-        contract_ids: Collection[int],
-    ) -> tuple[AgendaCalendarSource, ...]:
-        ids = _normalize_contract_ids(contract_ids)
+    def _platform_names_by_contract(self, ids: Sequence[int]) -> dict[int, tuple[str, ...]]:
         if not ids:
-            return ()
+            return {}
         placeholders = ",".join("?" for _ in ids)
-
-        contract_rows = self.conn.execute(
-            f"""
-            SELECT c.id,c.platform_id,c.contract_no,c.contract_type,c.status,
-                   c.completion_date,c.acceptance_date,c.note
-            FROM contracts AS c
-            WHERE c.id IN ({placeholders})
-            """,
-            ids,
-        ).fetchall()
-
-        platform_rows = self.conn.execute(
+        rows = self.conn.execute(
             f"""
             SELECT x.contract_id,p.name
             FROM (
@@ -89,18 +81,45 @@ class AgendaSourceRepository:
             [*ids, *ids],
         ).fetchall()
 
-        platforms_by_contract: dict[int, list[str]] = {}
-        seen_platforms: dict[int, set[str]] = {}
-        for row in platform_rows:
+        result: dict[int, list[str]] = {}
+        seen: dict[int, set[str]] = {}
+        for row in rows:
             contract_id = int(row[0])
             name = str(row[1] or "").strip()
             if not name:
                 continue
-            key = name.casefold()
-            if key in seen_platforms.setdefault(contract_id, set()):
+            normalized = name.casefold()
+            if normalized in seen.setdefault(contract_id, set()):
                 continue
-            seen_platforms[contract_id].add(key)
-            platforms_by_contract.setdefault(contract_id, []).append(name)
+            seen[contract_id].add(normalized)
+            result.setdefault(contract_id, []).append(name)
+        return {contract_id: tuple(names) for contract_id, names in result.items()}
+
+    def list_calendar_sources(
+        self,
+        contract_ids: Collection[int],
+    ) -> tuple[AgendaCalendarSource, ...]:
+        ids = _normalize_contract_ids(contract_ids)
+        return self._list_calendar_sources(ids, self._platform_names_by_contract(ids))
+
+    def _list_calendar_sources(
+        self,
+        ids: Sequence[int],
+        platforms_by_contract: dict[int, tuple[str, ...]],
+    ) -> tuple[AgendaCalendarSource, ...]:
+        if not ids:
+            return ()
+        placeholders = ",".join("?" for _ in ids)
+
+        contract_rows = self.conn.execute(
+            f"""
+            SELECT c.id,c.platform_id,c.contract_no,c.contract_type,c.status,
+                   c.completion_date,c.acceptance_date,c.note
+            FROM contracts AS c
+            WHERE c.id IN ({placeholders})
+            """,
+            list(ids),
+        ).fetchall()
 
         system_rows = self.conn.execute(
             f"""
@@ -112,7 +131,7 @@ class AgendaSourceRepository:
             LEFT JOIN platforms AS p ON p.id=COALESCE(s.platform_id,c.platform_id)
             WHERE s.contract_id IN ({placeholders})
             """,
-            ids,
+            list(ids),
         ).fetchall()
 
         delivery_rows = self.conn.execute(
@@ -126,7 +145,7 @@ class AgendaSourceRepository:
             LEFT JOIN platforms AS p ON p.id=COALESCE(s.platform_id,c.platform_id)
             WHERE d.contract_id IN ({placeholders})
             """,
-            ids,
+            list(ids),
         ).fetchall()
 
         sources: list[AgendaCalendarSource] = []
@@ -194,4 +213,81 @@ class AgendaSourceRepository:
                     source.entity_id,
                 ),
             )
+        )
+
+    def list_returned_share_sources(
+        self,
+        contract_ids: Collection[int],
+    ) -> tuple[ReturnedShareAgendaSource, ...]:
+        ids = _normalize_contract_ids(contract_ids)
+        return self._list_returned_share_sources(ids, self._platform_names_by_contract(ids))
+
+    def _list_returned_share_sources(
+        self,
+        ids: Sequence[int],
+        platforms_by_contract: dict[int, tuple[str, ...]],
+    ) -> tuple[ReturnedShareAgendaSource, ...]:
+        if not ids:
+            return ()
+        placeholders = ",".join("?" for _ in ids)
+        rows = self.conn.execute(
+            f"""
+            SELECT sp.id,sp.share_package_id,sp.contract_id,sp.contract_merge_uid,
+                   c.contract_no,c.contract_type,sp.status,
+                   sp.source_contract_revision,sp.permission_mode,
+                   sp.share_format_version,sp.snapshot_format_version,
+                   sp.base_snapshot_sha256,sp.created_at,
+                   NULLIF(sp.created_by_staff_id,0),sp.created_by_full_name,
+                   sp.exported_filename,COALESCE(sp.last_imported_at,''),
+                   NULLIF(sp.last_imported_by_staff_id,0),
+                   sp.last_remote_snapshot_sha256,sp.return_count
+            FROM share_packages AS sp
+            JOIN contracts AS c ON c.id=sp.contract_id
+            WHERE sp.contract_id IN ({placeholders})
+              AND sp.status=?
+            ORDER BY c.contract_no COLLATE NOCASE,
+                     sp.share_package_id COLLATE NOCASE,
+                     sp.id
+            """,
+            [*ids, SHARE_STATUS_RETURNED],
+        ).fetchall()
+
+        return tuple(
+            ReturnedShareAgendaSource(
+                registry_id=row[0],
+                share_package_id=row[1],
+                contract_id=row[2],
+                contract_merge_uid=row[3],
+                contract_no=row[4],
+                contract_type=row[5],
+                platform=" / ".join(platforms_by_contract.get(int(row[2]), ())),
+                status=row[6],
+                source_contract_revision=row[7],
+                permission_mode=row[8],
+                share_format_version=row[9],
+                snapshot_format_version=row[10],
+                base_snapshot_sha256=row[11],
+                created_at=row[12],
+                created_by_staff_id=row[13],
+                created_by_full_name=row[14],
+                exported_filename=row[15],
+                last_imported_at=row[16],
+                last_imported_by_staff_id=row[17],
+                last_remote_snapshot_sha256=row[18],
+                return_count=row[19],
+            )
+            for row in rows
+        )
+
+    def load_personal_sources(
+        self,
+        contract_ids: Collection[int],
+    ) -> AgendaSourceBundle:
+        ids = _normalize_contract_ids(contract_ids)
+        if not ids:
+            return AgendaSourceBundle()
+        platforms_by_contract = self._platform_names_by_contract(ids)
+        return AgendaSourceBundle(
+            calendar=self._list_calendar_sources(ids, platforms_by_contract),
+            returned_shares=self._list_returned_share_sources(ids, platforms_by_contract),
         )
