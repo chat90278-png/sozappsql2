@@ -10,6 +10,7 @@ from src.domain.agenda.priority import severity_rank
 from src.domain.agenda.providers import (
     AgendaProvider,
     DeadlineAgendaProvider,
+    ReturnedShareAgendaProvider,
     UnknownDateAgendaProvider,
 )
 from src.services.agenda_source_repository import AgendaSourceRepository
@@ -51,6 +52,7 @@ class StaffAgendaService:
         self.source_repository = source_repository or AgendaSourceRepository(db)
         self.providers = tuple(providers) if providers is not None else (
             DeadlineAgendaProvider(),
+            ReturnedShareAgendaProvider(),
             UnknownDateAgendaProvider(),
         )
         self.lifecycle_engine = lifecycle_engine or AgendaLifecycleEngine()
@@ -89,7 +91,7 @@ class StaffAgendaService:
         if not contract_ids:
             return self._empty(context)
 
-        sources = self.source_repository.list_calendar_sources(contract_ids)
+        sources = self.source_repository.load_personal_sources(contract_ids)
         raw_items: list[AgendaItem] = []
         seen_keys: set[str] = set()
         for provider in self.providers:
