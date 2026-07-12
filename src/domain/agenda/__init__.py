@@ -29,9 +29,14 @@ from src.domain.agenda.priority import AGENDA_SEVERITY_RANK, severity_rank
 from src.domain.agenda.providers import (
     AgendaProvider,
     DeadlineAgendaProvider,
+    ReturnedShareAgendaProvider,
     UnknownDateAgendaProvider,
 )
-from src.domain.agenda.source_models import AgendaCalendarSource
+from src.domain.agenda.source_models import (
+    AgendaCalendarSource,
+    AgendaSourceBundle,
+    ReturnedShareAgendaSource,
+)
 
 __all__ = [
     "AGENDA_SEVERITY_RANK",
@@ -48,8 +53,11 @@ __all__ = [
     "AgendaProvider",
     "AgendaResult",
     "AgendaSeverity",
+    "AgendaSourceBundle",
     "DeadlineAgendaProvider",
     "DeadlineStage",
+    "ReturnedShareAgendaProvider",
+    "ReturnedShareAgendaSource",
     "UnknownDateAgendaProvider",
     "build_agenda_key",
     "deadline_stage_for_remaining_days",
