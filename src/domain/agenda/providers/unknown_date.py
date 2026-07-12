@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
-
 from src.domain.agenda.constants import AgendaLifecycleType, AgendaSeverity
 from src.domain.agenda.keys import build_agenda_key
 from src.domain.agenda.models import AgendaContext, AgendaItem
-from src.domain.agenda.source_models import AgendaCalendarSource
+from src.domain.agenda.source_models import AgendaCalendarSource, AgendaSourceBundle
 from src.domain.calendar_timing import (
     calendar_date_kind,
     calendar_effective_date_raw,
@@ -42,10 +40,10 @@ class UnknownDateAgendaProvider:
     def build(
         self,
         context: AgendaContext,
-        sources: Sequence[AgendaCalendarSource],
+        sources: AgendaSourceBundle,
     ) -> tuple[AgendaItem, ...]:
         items: list[AgendaItem] = []
-        for source in sources:
+        for source in sources.calendar:
             calendar_item = source.as_calendar_item()
             raw = calendar_effective_date_raw(calendar_item)
             date_kind = calendar_date_kind(raw)
