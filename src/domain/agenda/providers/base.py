@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from typing import Protocol, Sequence
+from typing import Protocol
 
 from src.domain.agenda.models import AgendaContext, AgendaItem
-from src.domain.agenda.source_models import AgendaCalendarSource
+from src.domain.agenda.source_models import AgendaSourceBundle
 
 
 class AgendaProvider(Protocol):
@@ -12,6 +12,6 @@ class AgendaProvider(Protocol):
     def build(
         self,
         context: AgendaContext,
-        sources: Sequence[AgendaCalendarSource],
+        sources: AgendaSourceBundle,
     ) -> tuple[AgendaItem, ...]:
         ...
