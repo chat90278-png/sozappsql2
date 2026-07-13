@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 import pytest
 
@@ -13,6 +13,7 @@ from src.domain.agenda.constants import (
 from src.domain.agenda.keys import build_agenda_key
 from src.domain.agenda.models import AgendaContext, AgendaItem, AgendaItemState, AgendaPresentationProfile
 from src.domain.agenda.source_models import (
+    ActivityAgendaSource,
     AgendaCalendarSource,
     AgendaSourceBundle,
     DocumentLockAgendaSource,
@@ -118,6 +119,40 @@ def _lock(
     )
 
 
+def _activity(
+    *,
+    log_id=1,
+    contract_id=1,
+    action="contract_status_changed",
+    created_at="2026-07-11 10:00:00",
+    before=None,
+    after=None,
+    actor_name="Actor",
+    device_name="DEVICE",
+):
+    if before is None:
+        before = {"status": "Açık"}
+    if after is None:
+        after = {"status": "Kapalı"}
+    return ActivityAgendaSource(
+        log_id=log_id,
+        contract_id=contract_id,
+        action=action,
+        created_at=created_at,
+        contract_no=f"C-{contract_id}",
+        contract_type="Ana",
+        platform="Platform",
+        entity_type="contract",
+        entity_id=str(contract_id),
+        actor_name=actor_name,
+        device_name=device_name,
+        log_source="Test",
+        message="Changed",
+        before_values=before,
+        after_values=after,
+    )
+
+
 def _item(key="p:contract:1", *, kind="test", priority=100, severity=AgendaSeverity.ATTENTION, version="V1", payload=None):
     return AgendaItem(
         key=key,
@@ -144,6 +179,8 @@ class FakeSourceRepository:
         self.all_calls = 0
         self.load_calls = 0
         self.last_contract_ids = None
+        self.last_activity_since = None
+        self.activity_since_calls = []
 
     def list_personal_contract_ids(self, staff_id):
         self.personal_calls += 1
@@ -153,10 +190,12 @@ class FakeSourceRepository:
         self.all_calls += 1
         return self.all_ids
 
-    def load_personal_sources(self, contract_ids):
+    def load_personal_sources(self, contract_ids, *, activity_since=None):
         self.load_calls += 1
         selected = frozenset(contract_ids)
         self.last_contract_ids = selected
+        self.last_activity_since = activity_since
+        self.activity_since_calls.append(activity_since)
         return AgendaSourceBundle(
             calendar=tuple(source for source in self.bundle.calendar if source.contract_id in selected),
             returned_shares=tuple(
@@ -164,6 +203,9 @@ class FakeSourceRepository:
             ),
             document_locks=tuple(
                 source for source in self.bundle.document_locks if source.contract_id in selected
+            ),
+            activities=tuple(
+                source for source in self.bundle.activities if source.contract_id in selected
             ),
         )
 
@@ -793,6 +835,7 @@ def test_default_service_registers_document_lock_provider():
         "returned_share",
         "document_lock",
         "unknown_date",
+        "activity",
     ]
 
 
@@ -1002,3 +1045,224 @@ def test_removed_document_lock_source_resolves_condition():
     ]
     source.bundle = AgendaSourceBundle()
     assert service.build(context, touch_presented=False).items == ()
+
+
+def test_activity_source_contract_passes_exact_naive_eight_day_cutoff_once():
+    source = FakeSourceRepository(bundle=AgendaSourceBundle(activities=(_activity(),)))
+    service = StaffAgendaService(object(), state_repository=FakeStateRepository(), source_repository=source)
+    service.build(_context(permissions={"view_contracts"}), touch_presented=False)
+    assert source.load_calls == 1
+    assert source.activity_since_calls == [NOW - timedelta(days=8)]
+    assert source.last_activity_since == datetime(2026, 7, 3, 12, 0, 0)
+    assert source.last_activity_since.tzinfo is None
+
+
+def test_responsible_scope_filters_activity_bundle_to_responsible_contracts():
+    source = FakeSourceRepository(
+        ids=frozenset({1}),
+        all_ids=frozenset({1, 2}),
+        bundle=AgendaSourceBundle(activities=(_activity(log_id=1, contract_id=1), _activity(log_id=2, contract_id=2))),
+    )
+    service = StaffAgendaService(object(), state_repository=FakeStateRepository(), source_repository=source)
+    result = service.build(_context(permissions={"view_contracts"}), touch_presented=False)
+    assert [item.contract_id for item in result.items] == [1]
+    assert source.personal_calls == 1 and source.all_calls == 0
+
+
+def test_all_visible_and_viewer_scope_receive_all_activity_without_edit_permission():
+    source = FakeSourceRepository(
+        all_ids=frozenset({1, 2}),
+        bundle=AgendaSourceBundle(activities=(_activity(log_id=1, contract_id=1), _activity(log_id=2, contract_id=2))),
+    )
+    service = StaffAgendaService(object(), state_repository=FakeStateRepository(), source_repository=source)
+    result = service.build(
+        _context(
+            permissions={"view_contracts"},
+            scope=AgendaContractScopeCode.ALL_VISIBLE,
+            profile_code=AgendaPresentationProfileCode.VIEW_ONLY,
+            role="viewer",
+        ),
+        touch_presented=False,
+    )
+    assert {item.contract_id for item in result.items} == {1, 2}
+    assert {item.kind for item in result.items} == {"activity"}
+
+
+def test_custom_role_activity_capability_uses_explicit_permission_snapshot():
+    source = FakeSourceRepository(bundle=AgendaSourceBundle(activities=(_activity(),)))
+    service = StaffAgendaService(object(), state_repository=FakeStateRepository(), source_repository=source)
+    visible = service.build(
+        _context(permissions={"view_contracts"}, role="custom_role"),
+        touch_presented=False,
+    )
+    assert [item.kind for item in visible.items] == ["activity"]
+    hidden = service.build(
+        _context(permissions=set(), role="custom_role"),
+        touch_presented=False,
+    )
+    assert hidden.items == ()
+
+
+def test_explicit_override_filters_activity_exactly_and_skips_scope_queries():
+    source = FakeSourceRepository(
+        ids=frozenset({1}),
+        all_ids=frozenset({1, 2}),
+        bundle=AgendaSourceBundle(activities=(_activity(log_id=1, contract_id=1), _activity(log_id=2, contract_id=2))),
+    )
+    service = StaffAgendaService(object(), state_repository=FakeStateRepository(), source_repository=source)
+    result = service.build(
+        _context(
+            permissions={"view_contracts"},
+            ids=frozenset({2}),
+            scope=AgendaContractScopeCode.ALL_VISIBLE,
+            profile_code=AgendaPresentationProfileCode.MANAGEMENT,
+        ),
+        touch_presented=False,
+    )
+    assert [item.contract_id for item in result.items] == [2]
+    assert source.personal_calls == source.all_calls == 0
+    assert source.last_contract_ids == frozenset({2})
+
+
+def test_no_view_and_system_profiles_do_not_load_activity_or_touch_state():
+    source = FakeSourceRepository(all_ids=frozenset({1}), bundle=AgendaSourceBundle(activities=(_activity(),)))
+    state = FakeStateRepository()
+    provider = StaticProvider([_item()])
+    result = _service(source=source, state=state, providers=[provider]).build(
+        _context(permissions=set())
+    )
+    assert result.items == ()
+    assert source.personal_calls == source.all_calls == source.load_calls == 0
+    assert provider.enabled_calls == provider.build_calls == 0
+    assert state.get_calls == state.touch_calls == []
+
+    result = _service(source=source, state=state, providers=[provider]).build(
+        _context(
+            permissions={"view_contracts"},
+            staff_id=None,
+            scope=AgendaContractScopeCode.ALL_VISIBLE,
+            profile_code=AgendaPresentationProfileCode.SYSTEM,
+            role="admin",
+        )
+    )
+    assert result.items == ()
+    assert source.personal_calls == source.all_calls == source.load_calls == 0
+    assert provider.enabled_calls == provider.build_calls == 0
+    assert state.get_calls == state.touch_calls == []
+
+
+def test_activity_coexists_after_unknown_and_keys_do_not_collide():
+    activity = _activity(
+        log_id=9,
+        contract_id=1,
+        action="contract_updated",
+        before={"completion_date": "2026-07-01", "acceptance_date": None},
+        after={"completion_date": "2026-07-02", "acceptance_date": "2026-07-03"},
+    )
+    source = FakeSourceRepository(
+        ids=frozenset({1, 2, 3, 4}),
+        bundle=AgendaSourceBundle(
+            calendar=(_source(1, "2026-07-12"), _source(4, "TBD")),
+            returned_shares=(_returned(contract_id=2),),
+            document_locks=(_lock(contract_id=3),),
+            activities=(activity,),
+        ),
+    )
+    service = StaffAgendaService(object(), state_repository=FakeStateRepository(), source_repository=source)
+    result = service.build(
+        _context(
+            permissions={"view_contracts", "edit_contracts", "unlock_own_documents"}
+        ),
+        touch_presented=False,
+    )
+    assert [item.kind for item in result.items] == [
+        "deadline",
+        "returned_share",
+        "document_lock",
+        "unknown_date",
+        "activity",
+        "activity",
+    ]
+    assert [item.priority for item in result.items][-3:] == [500, 450, 450]
+    assert len({item.key for item in result.items}) == len(result.items)
+    activity_keys = [item.key for item in result.items if item.kind == "activity"]
+    assert activity_keys == [
+        "activity:activity_log:9:acceptance_date",
+        "activity:activity_log:9:completion_date",
+    ]
+
+
+def _activity_result_at(created_at, *, now=NOW, state=None):
+    source = FakeSourceRepository(bundle=AgendaSourceBundle(activities=(_activity(created_at=created_at),)))
+    state_repository = FakeStateRepository(state)
+    service = StaffAgendaService(object(), state_repository=state_repository, source_repository=source)
+    context = AgendaContext(
+        now=now,
+        today=now.date(),
+        presentation_profile=_profile(permissions={"view_contracts"}),
+        current_staff={"id": 1, "role": "personnel", "permissions": {"view_contracts"}},
+        staff_id=1,
+        permissions=frozenset({"view_contracts"}),
+        personal_contract_ids=frozenset({1}),
+        contract_scope=AgendaContractScopeCode.RESPONSIBLE,
+    )
+    return service.build(context, touch_presented=False), state_repository
+
+
+def test_activity_event_unseen_and_seen_lifecycle_boundaries():
+    visible, _ = _activity_result_at("2026-07-04 12:00:01")
+    assert visible.active_count == visible.new_count == 1
+    exact_expired, _ = _activity_result_at("2026-07-04 12:00:00")
+    assert exact_expired.items == () and exact_expired.filtered_count == 1
+    older, _ = _activity_result_at("2026-07-04 11:59:59")
+    assert older.items == ()
+
+    key = "activity:activity_log:1:status"
+    version = "ACTIVITY:1:status:2026-07-04 12:00:00"
+    recent_seen = {
+        key: AgendaItemState(
+            staff_id=1,
+            agenda_key=key,
+            seen_at="2026-07-10 12:00:01",
+            seen_version=version,
+        )
+    }
+    seen_visible, _ = _activity_result_at("2026-07-04 12:00:00", state=recent_seen)
+    assert seen_visible.active_count == 1 and seen_visible.new_count == 0
+    exact_seen = {
+        key: AgendaItemState(
+            staff_id=1,
+            agenda_key=key,
+            seen_at="2026-07-10 12:00:00",
+            seen_version=version,
+        )
+    }
+    seen_expired, _ = _activity_result_at("2026-07-04 12:00:00", state=exact_seen)
+    assert seen_expired.items == ()
+
+
+def test_activity_invalid_timestamp_and_dismissed_version_fail_closed():
+    invalid, _ = _activity_result_at("not-a-timestamp")
+    assert invalid.items == () and invalid.filtered_count == 1
+    key = "activity:activity_log:1:status"
+    version = "ACTIVITY:1:status:2026-07-11 10:00:00"
+    dismissed, _ = _activity_result_at(
+        "2026-07-11 10:00:00",
+        state={
+            key: AgendaItemState(
+                staff_id=1,
+                agenda_key=key,
+                dismissed_version=version,
+            )
+        },
+    )
+    assert dismissed.items == () and dismissed.filtered_count == 1
+
+
+def test_activity_touch_presented_and_snooze_capability_are_generic():
+    source = FakeSourceRepository(bundle=AgendaSourceBundle(activities=(_activity(),)))
+    state = FakeStateRepository()
+    service = StaffAgendaService(object(), state_repository=state, source_repository=source)
+    result = service.build(_context(permissions={"view_contracts"}), touch_presented=True)
+    assert result.items[0].supports_snooze is False
+    assert state.touch_calls == [(1, (result.items[0].key,), NOW)]
