@@ -4,11 +4,13 @@ from collections import Counter
 from collections.abc import Sequence
 from datetime import datetime
 
+from src.domain.agenda.activity import activity_source_cutoff
 from src.domain.agenda.constants import AgendaContractScopeCode, AgendaPresentationProfileCode
 from src.domain.agenda.lifecycle import AgendaLifecycleEngine
 from src.domain.agenda.models import AgendaContext, AgendaItem, AgendaResult
 from src.domain.agenda.priority import severity_rank
 from src.domain.agenda.providers import (
+    ActivityAgendaProvider,
     AgendaProvider,
     DeadlineAgendaProvider,
     DocumentLockAgendaProvider,
@@ -57,6 +59,7 @@ class StaffAgendaService:
             ReturnedShareAgendaProvider(),
             DocumentLockAgendaProvider(),
             UnknownDateAgendaProvider(),
+            ActivityAgendaProvider(),
         )
         self.lifecycle_engine = lifecycle_engine or AgendaLifecycleEngine()
 
@@ -106,7 +109,10 @@ class StaffAgendaService:
         if not contract_ids:
             return self._empty(context)
 
-        sources = self.source_repository.load_personal_sources(contract_ids)
+        sources = self.source_repository.load_personal_sources(
+            contract_ids,
+            activity_since=activity_source_cutoff(context.now),
+        )
         raw_items: list[AgendaItem] = []
         seen_keys: set[str] = set()
         for provider in self.providers:
