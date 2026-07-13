@@ -38,7 +38,6 @@ TABLE_LABELS = {
     "systems": "Sistem",
     "deliveries": "Teslimat",
     "components": "Bileşen",
-    "activity_logs": "İşlem geçmişi",
 }
 
 
@@ -67,7 +66,7 @@ class MetricCard(QFrame):
         self.value.setObjectName("perfMetricValue")
         root.addWidget(self.value)
 
-        hint = QLabel("p95 · yavaş uç kullanıcı deneyimi")
+        hint = QLabel("p95 · başarılı işlemlerin yavaş ucu")
         hint.setObjectName("perfMuted")
         root.addWidget(hint)
 
@@ -129,6 +128,7 @@ class PerformanceTrackingDialog(QDialog):
     def _style() -> str:
         return """
 QDialog#performanceTrackingDialog { background:#eef3f9; }
+QDialog#performanceTrackingDialog QLabel { background:transparent; }
 QFrame#perfHero { background:#10263f; border-radius:15px; }
 QLabel#perfHeroTitle { color:#fff; font-size:25px; font-weight:900; }
 QLabel#perfHeroText { color:#c8d8ea; font-size:12px; }
@@ -275,7 +275,7 @@ QDialog#performanceTrackingDialog QHeaderView::section {
             ("contracts", "Sözleşme"), ("systems", "Sistem"),
             ("deliveries", "Teslimat"), ("components", "Bileşen"),
             ("main_size", "Ana STS"), ("wal_size", "WAL"),
-            ("total_size", "Toplam disk"), ("largest", "En fazla satır"),
+            ("total_size", "Toplam disk"), ("largest", "En büyük iş grubu"),
             ("measurements", "Ölçüm"), ("failure_rate", "Başarısızlık"),
             ("attention", "Dikkat gereken"), ("slowest", "En zorlanan"),
         )
@@ -366,18 +366,22 @@ QDialog#performanceTrackingDialog QHeaderView::section {
 
     def _update_summary(self) -> None:
         counts = dict(self.db_stats.get("table_counts") or {})
-        for key in ("contracts", "systems", "deliveries", "components"):
-            self.summary_values[key].setText(format_count(counts.get(key, 0)))
+        business_counts = {
+            key: int(counts.get(key, 0) or 0)
+            for key in ("contracts", "systems", "deliveries", "components")
+        }
+        for key, count in business_counts.items():
+            self.summary_values[key].setText(format_count(count))
 
         disk = dict(self.report.get("disk_usage") or {})
         self.summary_values["main_size"].setText(format_bytes(disk.get("main_bytes")))
         self.summary_values["wal_size"].setText(format_bytes(disk.get("wal_bytes")))
         self.summary_values["total_size"].setText(format_bytes(disk.get("total_bytes")))
 
-        if counts:
-            name, count = max(counts.items(), key=lambda item: int(item[1] or 0))
+        if any(business_counts.values()):
+            name, count = max(business_counts.items(), key=lambda item: item[1])
             self.summary_values["largest"].setText(
-                f"{TABLE_LABELS.get(str(name), str(name))} · {format_count(count)}"
+                f"{TABLE_LABELS[name]} · {format_count(count)}"
             )
         else:
             self.summary_values["largest"].setText("-")
@@ -391,7 +395,7 @@ QDialog#performanceTrackingDialog QHeaderView::section {
             f"%{float(summary.get('failure_rate') or 0):.1f}"
         )
         attention = sum(
-            str(item.get("status")) in {"warning", "critical"}
+            str(item.get("status")) in {"warning", "critical", "failed"}
             for item in stats.values()
         )
         self.summary_values["attention"].setText(str(attention))
