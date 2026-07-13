@@ -155,7 +155,11 @@ class PersonalAgendaContextFactory:
 
         system_admin = _is_exact_system_admin(original_snapshot)
         if system_admin:
-            staff_id = _positive_int(original_snapshot.get("admin_id"), "current_staff.admin_id")
+            # system_admins.id is not a staff.id and cannot safely address
+            # staff_agenda_state. Keep the SYSTEM presentation profile, but
+            # leave persistent staff identity unresolved until a principal-state
+            # model is designed.
+            staff_id = None
         else:
             staff_id = _positive_int(original_snapshot.get("id"), "current_staff.id")
 
