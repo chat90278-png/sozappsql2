@@ -22,6 +22,19 @@ def test_xlsx_slicer_parts_counts_package_entries(tmp_path):
     assert slicer_fix._xlsx_slicer_parts(report) == (8, 8)
 
 
+def test_xlsx_slicer_parts_accepts_binary_cache_parts(tmp_path):
+    report = tmp_path / "binary-cache.xlsx"
+    with zipfile.ZipFile(report, "w") as archive:
+        archive.writestr("xl/slicers/slicer1.xml", "<slicer />")
+        archive.writestr("xl/slicerCaches/slicerCache1.bin", b"cache")
+        archive.writestr(
+            "xl/slicerCaches/_rels/slicerCache1.bin.rels",
+            "<Relationships />",
+        )
+
+    assert slicer_fix._xlsx_slicer_parts(report) == (1, 1)
+
+
 def test_transaction_keeps_original_when_slicer_phase_fails(
     tmp_path,
     monkeypatch,
