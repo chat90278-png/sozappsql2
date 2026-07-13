@@ -637,21 +637,69 @@ def test_manager_role_without_edit_contracts_skips_returned_share():
     assert [item.kind for item in result.items] == ["deadline"]
 
 
-def test_system_profile_uses_all_visible_scope():
-    source = FakeSourceRepository(
-        all_ids=frozenset({1, 2}),
-        bundle=AgendaSourceBundle(calendar=(_source(1), _source(2))),
-    )
-    _service(source=source).build(
+def test_system_admin_without_permissions_returns_empty_without_queries():
+    source = FakeSourceRepository(all_ids=frozenset({1, 2}))
+    state = FakeStateRepository()
+    provider = StaticProvider([_item()])
+    result = _service(source=source, state=state, providers=[provider]).build(
         _context(
+            permissions=frozenset(),
+            staff_id=None,
+            scope=AgendaContractScopeCode.ALL_VISIBLE,
+            profile_code=AgendaPresentationProfileCode.SYSTEM,
+            role="admin",
+        )
+    )
+
+    assert result.profile.code == AgendaPresentationProfileCode.SYSTEM
+    assert result.items == ()
+    assert source.personal_calls == source.all_calls == source.load_calls == 0
+    assert provider.enabled_calls == provider.build_calls == 0
+    assert state.get_calls == [] and state.touch_calls == []
+
+
+def test_system_admin_with_injected_permissions_still_returns_empty_without_queries():
+    source = FakeSourceRepository(all_ids=frozenset({1, 2}))
+    state = FakeStateRepository()
+    provider = StaticProvider([_item()])
+    result = _service(source=source, state=state, providers=[provider]).build(
+        _context(
+            permissions={"view_contracts", "edit_contracts"},
+            staff_id=None,
+            scope=AgendaContractScopeCode.ALL_VISIBLE,
+            profile_code=AgendaPresentationProfileCode.SYSTEM,
+            role="admin",
+        )
+    )
+
+    assert result.profile.code == AgendaPresentationProfileCode.SYSTEM
+    assert result.items == ()
+    assert source.personal_calls == source.all_calls == source.load_calls == 0
+    assert provider.enabled_calls == provider.build_calls == 0
+    assert state.get_calls == [] and state.touch_calls == []
+
+
+def test_system_admin_explicit_contract_override_still_does_not_build_without_state_identity():
+    source = FakeSourceRepository(all_ids=frozenset({1, 2}))
+    state = FakeStateRepository()
+    provider = StaticProvider([_item()])
+    result = _service(source=source, state=state, providers=[provider]).build(
+        _context(
+            permissions={"view_contracts", "edit_contracts"},
+            ids=frozenset({2}),
+            staff_id=None,
             scope=AgendaContractScopeCode.ALL_VISIBLE,
             profile_code=AgendaPresentationProfileCode.SYSTEM,
             role="admin",
         ),
         touch_presented=False,
     )
-    assert source.all_calls == 1
-    assert source.personal_calls == 0
+
+    assert result.profile.code == AgendaPresentationProfileCode.SYSTEM
+    assert result.items == ()
+    assert source.personal_calls == source.all_calls == source.load_calls == 0
+    assert provider.enabled_calls == provider.build_calls == 0
+    assert state.get_calls == [] and state.touch_calls == []
 
 
 def test_custom_role_personal_scope():
