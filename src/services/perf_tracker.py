@@ -471,28 +471,58 @@ def compute_stats(records: Iterable[Dict[str, Any]]) -> Dict[str, Dict[str, Any]
 
     stats: Dict[str, Dict[str, Any]] = {}
     for operation, items in groups.items():
-        values = sorted(float(item["duration_ms"]) for item in items)
-        failures = sum(1 for item in items if not bool(item.get("success", True)))
-        successes = len(items) - failures
+        successful_items = [
+            item for item in items if bool(item.get("success", True))
+        ]
+        failed_items = [
+            item for item in items if not bool(item.get("success", True))
+        ]
+        # Latency percentiles describe successful user operations. Failed
+        # operations keep their own average and failure rate so timeout/error
+        # durations cannot silently distort normal performance.
+        latency_items = successful_items or failed_items
+        values = sorted(float(item["duration_ms"]) for item in latency_items)
+        failed_values = [
+            float(item["duration_ms"]) for item in failed_items
+        ]
+        failures = len(failed_items)
+        successes = len(successful_items)
+        total_count = len(items)
         last_item = items[-1]
         p50 = _percentile(values, 0.50)
         p95 = _percentile(values, 0.95)
         info = operation_info(operation)
+
+        if failures and not successes:
+            status = "failed"
+        elif successes < DEFAULT_MIN_SAMPLE_COUNT:
+            status = "warning" if failures else "insufficient"
+        else:
+            status = classify_duration(operation, p95)
+            if failures and status == "ok":
+                status = "warning"
+
         stats[operation] = {
             **info,
-            "count": len(values),
+            "count": total_count,
+            "latency_count": len(values),
             "successes": successes,
             "failures": failures,
-            "failure_rate": round((failures / len(values)) * 100.0, 2) if values else 0.0,
+            "failure_rate": round((failures / total_count) * 100.0, 2)
+            if total_count
+            else 0.0,
             "avg_ms": round(sum(values) / len(values), 3),
             "min_ms": round(values[0], 3),
             "max_ms": round(values[-1], 3),
             "p50_ms": round(p50, 3),
             "p95_ms": round(p95, 3),
+            "failed_avg_ms": round(sum(failed_values) / len(failed_values), 3)
+            if failed_values
+            else None,
             "last_ms": round(float(last_item["duration_ms"]), 3),
             "last_success": bool(last_item.get("success", True)),
             "last_ts": str(last_item.get("ts") or ""),
-            "status": classify_summary(operation, p95, len(values)),
+            "status": status,
         }
     return stats
 
