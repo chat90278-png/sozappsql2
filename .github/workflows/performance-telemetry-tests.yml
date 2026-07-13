@@ -3,17 +3,23 @@ name: Performance telemetry tests
 on:
   pull_request:
     paths:
+      - "app.py"
       - "src/services/perf_tracker.py"
+      - "src/services/contract_save_telemetry_runtime_fix.py"
       - "src/ui/dialogs/performance_tracking.py"
       - "tests/test_perf_tracker_v2.py"
       - "tests/test_performance_tracking_dialog_v2.py"
+      - "tests/test_contract_save_telemetry_runtime_fix.py"
       - ".github/workflows/performance-telemetry-tests.yml"
   push:
     paths:
+      - "app.py"
       - "src/services/perf_tracker.py"
+      - "src/services/contract_save_telemetry_runtime_fix.py"
       - "src/ui/dialogs/performance_tracking.py"
       - "tests/test_perf_tracker_v2.py"
       - "tests/test_performance_tracking_dialog_v2.py"
+      - "tests/test_contract_save_telemetry_runtime_fix.py"
       - ".github/workflows/performance-telemetry-tests.yml"
 
 permissions:
@@ -54,10 +60,13 @@ jobs:
 
       - name: Compile changed modules
         run: |
+          python -m py_compile app.py
           python -m py_compile src/services/perf_tracker.py
+          python -m py_compile src/services/contract_save_telemetry_runtime_fix.py
           python -m py_compile src/ui/dialogs/performance_tracking.py
           python -m py_compile tests/test_perf_tracker_v2.py
           python -m py_compile tests/test_performance_tracking_dialog_v2.py
+          python -m py_compile tests/test_contract_save_telemetry_runtime_fix.py
 
       - name: Run focused telemetry and dialog tests
         id: focused_tests
@@ -68,6 +77,7 @@ jobs:
           python -m pytest -q \
             tests/test_perf_tracker_v2.py \
             tests/test_performance_tracking_dialog_v2.py \
+            tests/test_contract_save_telemetry_runtime_fix.py \
             > performance-test-output.txt 2>&1
 
       - name: Run full repository suite for diagnostics
