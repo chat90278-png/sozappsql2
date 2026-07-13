@@ -83,3 +83,60 @@ def test_transaction_replaces_original_only_after_validation(
     assert count == 8
     assert warning == ""
     assert slicer_fix._xlsx_slicer_parts(report) == (8, 8)
+
+
+def test_export_wrapper_keeps_base_success_when_slicers_fail(
+    tmp_path,
+    monkeypatch,
+):
+    import sys
+    from types import ModuleType, SimpleNamespace
+
+    services = sys.modules.get("src.services")
+    if services is None:
+        services = ModuleType("src.services")
+        monkeypatch.setitem(sys.modules, "src.services", services)
+
+    report = tmp_path / "fallback-report.xlsx"
+
+    def base_export(_store, output_path, filters=None, progress_cb=None):
+        Path(output_path).write_bytes(b"valid-base-report")
+        return {"output_path": str(output_path), "row_count": 3}
+
+    fake_exporter = SimpleNamespace(
+        export_delivery_schedule_report=base_export,
+        DASHBOARD_SLICERS_ENABLED=True,
+        _ensure_excel=lambda: None,
+        _uninitialize_excel_com=lambda: None,
+        _safe_filename=lambda value: str(value),
+        add_unique_slicer=lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        services,
+        "delivery_schedule_excel_exporter",
+        fake_exporter,
+        raising=False,
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "src.services.delivery_schedule_excel_exporter",
+        fake_exporter,
+    )
+    monkeypatch.setattr(
+        slicer_fix,
+        "_add_slicers_transactionally",
+        lambda _exporter, _path, attempts=2: (
+            False,
+            0,
+            "simulated slicer failure",
+        ),
+    )
+
+    slicer_fix.install_delivery_schedule_slicer_fix()
+    result = fake_exporter.export_delivery_schedule_report(None, report)
+
+    assert report.read_bytes() == b"valid-base-report"
+    assert result["row_count"] == 3
+    assert result["slicers_enabled"] is False
+    assert result["partial_success"] is True
+    assert "simulated slicer failure" in result["slicer_warning"]
