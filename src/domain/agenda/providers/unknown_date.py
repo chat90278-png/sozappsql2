@@ -37,6 +37,9 @@ def _subject(source: AgendaCalendarSource) -> str:
 class UnknownDateAgendaProvider:
     code = "unknown_date"
 
+    def is_enabled(self, context: AgendaContext) -> bool:
+        return "view_contracts" in context.permissions
+
     def build(
         self,
         context: AgendaContext,
