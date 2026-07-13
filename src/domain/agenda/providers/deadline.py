@@ -64,6 +64,9 @@ def _description(remaining_days: int) -> str:
 class DeadlineAgendaProvider:
     code = "deadline"
 
+    def is_enabled(self, context: AgendaContext) -> bool:
+        return "view_contracts" in context.permissions
+
     def build(
         self,
         context: AgendaContext,
