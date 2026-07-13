@@ -19,3 +19,8 @@ class AgendaPresentationProfileCode(str, Enum):
     MANAGEMENT = "MANAGEMENT"
     SYSTEM = "SYSTEM"
     VIEW_ONLY = "VIEW_ONLY"
+
+
+class AgendaContractScopeCode(str, Enum):
+    RESPONSIBLE = "RESPONSIBLE"
+    ALL_VISIBLE = "ALL_VISIBLE"
