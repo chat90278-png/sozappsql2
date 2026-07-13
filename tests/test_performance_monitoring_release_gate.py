@@ -301,6 +301,7 @@ def test_dialog_read_failure_is_visible_and_refresh_is_reenabled(tmp_path: Path,
 
     monkeypatch.setattr(perf_tracker, "build_report", fail_report)
     dialog = PerformanceTrackingDialog(_FakePerformanceStore(sts_path))
+    dialog.show()
     app.processEvents()
 
     assert dialog.refresh_button.isEnabled()
