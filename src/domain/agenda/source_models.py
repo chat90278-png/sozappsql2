@@ -1,7 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
+from types import MappingProxyType
+from typing import Any
 
+from src.domain.agenda.activity import CONTRACT_ACTIVITY_FIELDS_BY_ACTION
 from src.models.share_models import SHARE_PACKAGE_STATUSES
 
 
@@ -232,21 +236,97 @@ class DocumentLockAgendaSource:
 
 
 @dataclass(frozen=True)
+class ActivityAgendaSource:
+    log_id: int
+    contract_id: int
+    action: str
+    created_at: str
+
+    contract_no: str = ""
+    contract_type: str = ""
+    platform: str = ""
+
+    entity_type: str = "contract"
+    entity_id: str = ""
+
+    actor_name: str = ""
+    device_name: str = ""
+    log_source: str = ""
+    message: str = ""
+
+    before_values: Mapping[str, Any] = field(default_factory=dict)
+    after_values: Mapping[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        log_id = _positive_int(self.log_id, "log_id")
+        contract_id = _positive_int(self.contract_id, "contract_id")
+        action = _text(self.action)
+        created_at = _text(self.created_at)
+        entity_type = _text(self.entity_type).lower()
+        entity_id = _text(self.entity_id) or str(contract_id)
+
+        if action not in CONTRACT_ACTIVITY_FIELDS_BY_ACTION:
+            raise ValueError(f"Unsupported contract activity action: {action!r}")
+        if not created_at:
+            raise ValueError("created_at must be a non-empty timestamp string.")
+        if entity_type != "contract":
+            raise ValueError("entity_type must be 'contract'.")
+        if entity_id != str(contract_id):
+            raise ValueError("entity_id must exactly match contract_id.")
+        if not isinstance(self.before_values, Mapping):
+            raise TypeError("before_values must be a mapping.")
+        if not isinstance(self.after_values, Mapping):
+            raise TypeError("after_values must be a mapping.")
+
+        object.__setattr__(self, "log_id", log_id)
+        object.__setattr__(self, "contract_id", contract_id)
+        object.__setattr__(self, "action", action)
+        object.__setattr__(self, "created_at", created_at)
+        object.__setattr__(self, "entity_type", entity_type)
+        object.__setattr__(self, "entity_id", entity_id)
+        for field_name in (
+            "contract_no",
+            "contract_type",
+            "platform",
+            "actor_name",
+            "device_name",
+            "log_source",
+            "message",
+        ):
+            object.__setattr__(self, field_name, _text(getattr(self, field_name)))
+        object.__setattr__(
+            self,
+            "before_values",
+            MappingProxyType(dict(self.before_values)),
+        )
+        object.__setattr__(
+            self,
+            "after_values",
+            MappingProxyType(dict(self.after_values)),
+        )
+
+
+@dataclass(frozen=True)
 class AgendaSourceBundle:
     calendar: tuple[AgendaCalendarSource, ...] = ()
     returned_shares: tuple[ReturnedShareAgendaSource, ...] = ()
     document_locks: tuple[DocumentLockAgendaSource, ...] = ()
+    activities: tuple[ActivityAgendaSource, ...] = ()
 
     def __post_init__(self) -> None:
         calendar = tuple(self.calendar or ())
         returned_shares = tuple(self.returned_shares or ())
         document_locks = tuple(self.document_locks or ())
+        activities = tuple(self.activities or ())
         if any(not isinstance(source, AgendaCalendarSource) for source in calendar):
             raise TypeError("calendar must contain only AgendaCalendarSource values.")
         if any(not isinstance(source, ReturnedShareAgendaSource) for source in returned_shares):
             raise TypeError("returned_shares must contain only ReturnedShareAgendaSource values.")
         if any(not isinstance(source, DocumentLockAgendaSource) for source in document_locks):
             raise TypeError("document_locks must contain only DocumentLockAgendaSource values.")
+        if any(not isinstance(source, ActivityAgendaSource) for source in activities):
+            raise TypeError("activities must contain only ActivityAgendaSource values.")
         object.__setattr__(self, "calendar", calendar)
         object.__setattr__(self, "returned_shares", returned_shares)
         object.__setattr__(self, "document_locks", document_locks)
+        object.__setattr__(self, "activities", activities)
