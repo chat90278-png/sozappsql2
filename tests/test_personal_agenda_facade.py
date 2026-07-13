@@ -31,6 +31,7 @@ class _FakeStateRepository:
         self.mark_seen_calls = []
         self.snooze_calls = []
         self.clear_calls = []
+        self.get_calls = []
         self.persisted = {}
         self.mark_seen_returns_none = False
 
@@ -46,6 +47,7 @@ class _FakeStateRepository:
         return None if self.mark_seen_returns_none else state
 
     def get_states(self, staff_id, agenda_keys):
+        self.get_calls.append((staff_id, tuple(agenda_keys)))
         return {
             key: self.persisted[key]
             for key in agenda_keys
@@ -119,6 +121,30 @@ class _PermissionAwareAgendaService(_FakeAgendaService):
         )
 
 
+class _StateAwareAgendaService(_PermissionAwareAgendaService):
+    def build(self, context, *, touch_presented=True):
+        self.calls.append((context, touch_presented))
+        items = self.items if "view_contracts" in context.permissions else ()
+        states = self.state_repository.get_states(
+            context.staff_id,
+            [item.key for item in items],
+        ) if context.staff_id is not None else {}
+        new_keys = frozenset(
+            item.key
+            for item in items
+            if item.key not in states or states[item.key].seen_version != item.version
+        )
+        return AgendaResult(
+            profile=context.presentation_profile,
+            items=items,
+            new_count=len(new_keys),
+            active_count=len(items),
+            counts_by_kind={item.kind: len(items)} if items else {},
+            new_keys=new_keys,
+            states_by_key=states,
+        )
+
+
 def _staff(**overrides):
     value = {
         "id": 5,
@@ -150,6 +176,32 @@ def _item(
         version=version,
         actor_staff_id=999,
         supports_snooze=supports_snooze,
+    )
+
+
+def _activity_item(
+    *,
+    key="activity:activity_log:42:status",
+    version="ACTIVITY:42:status:2026-07-11 09:00:00",
+    actor_name="Test Personel",
+):
+    return AgendaItem(
+        key=key,
+        provider_code="activity",
+        kind="activity",
+        lifecycle_type=AgendaLifecycleType.EVENT,
+        title="C-1 durumu değişti",
+        description="Açık → Kapalı",
+        priority=450,
+        severity=AgendaSeverity.INFO,
+        version=version,
+        contract_id=1,
+        actor_staff_id=None,
+        actor_name=actor_name,
+        event_at="2026-07-11 09:00:00",
+        effective_date="2026-07-11 09:00:00",
+        supports_snooze=False,
+        action_hints=("open_contract",),
     )
 
 
@@ -435,3 +487,81 @@ def test_facade_does_not_grant_permissions_from_role():
     context = service.calls[0][0]
     assert context.permissions == frozenset()
     assert context.presentation_profile.permissions == frozenset()
+
+
+def test_activity_event_mark_seen_uses_exact_staff_key_and_version():
+    item = _activity_item()
+    facade, repo, _service = _facade(item)
+    seen_at = datetime(2026, 7, 11, 10, 30)
+    state = facade.mark_seen(_staff(id=7), item, seen_at=seen_at)
+    assert repo.mark_seen_calls == [(7, item.key, item.version, seen_at)]
+    assert state.staff_id == 7
+    assert state.agenda_key == item.key
+    assert state.seen_version == item.version
+
+
+def test_activity_mark_seen_then_load_is_visible_and_not_new():
+    item = _activity_item()
+    facade, repo, _service = _facade(item, service_class=_StateAwareAgendaService)
+    facade.mark_seen(_staff(), item, seen_at=datetime(2026, 7, 11, 10, 0))
+    snapshot = facade.load(_staff(), now=datetime(2026, 7, 11, 10, 30))
+    assert snapshot.all_items == (item,)
+    assert snapshot.result.active_count == 1
+    assert snapshot.result.new_count == 0
+    assert item.key not in snapshot.result.new_keys
+    assert snapshot.result.states_by_key[item.key].seen_version == item.version
+
+
+def test_activity_event_snooze_is_rejected_without_state_mutation():
+    item = _activity_item()
+    facade, repo, _service = _facade(item)
+    with pytest.raises(AgendaInteractionError, match="condition"):
+        facade.snooze(
+            _staff(),
+            item,
+            until=datetime(2026, 7, 12, 10, 0),
+            now=datetime(2026, 7, 11, 10, 0),
+        )
+    assert repo.snooze_calls == []
+    assert repo.persisted == {}
+
+
+def test_activity_no_view_mark_seen_rejected_before_state_access():
+    item = _activity_item()
+    facade, repo, _service = _facade(item)
+    with pytest.raises(AgendaInteractionError, match="view_contracts"):
+        facade.mark_seen(_staff(permissions=set()), item)
+    assert repo.mark_seen_calls == []
+    assert repo.get_calls == []
+    assert repo.snooze_calls == []
+    assert repo.clear_calls == []
+
+
+def test_activity_system_admin_interactions_rejected_before_state_access():
+    item = _activity_item()
+    facade, repo, _service = _facade(item)
+    session = _system_admin_session_with_view_permission()
+    assert session["admin_id"] == 9
+    with pytest.raises(AgendaInteractionError, match="valid current staff identity"):
+        facade.mark_seen(session, item)
+    with pytest.raises(AgendaInteractionError, match="valid current staff identity"):
+        facade.snooze(
+            session,
+            item,
+            until=datetime(2026, 7, 12, 10, 0),
+            now=datetime(2026, 7, 11, 10, 0),
+        )
+    assert repo.mark_seen_calls == []
+    assert repo.get_calls == []
+    assert repo.snooze_calls == []
+    assert repo.clear_calls == []
+
+
+def test_activity_actor_display_name_cannot_redirect_interaction_identity():
+    item = _activity_item(actor_name="Test Personel")
+    facade, repo, _service = _facade(item)
+    facade.mark_seen(_staff(id=12, full_name="Test Personel"), item)
+    assert item.actor_staff_id is None
+    assert item.actor_name == "Test Personel"
+    assert repo.mark_seen_calls[0][0] == 12
+    assert repo.mark_seen_calls[0][1:3] == (item.key, item.version)
