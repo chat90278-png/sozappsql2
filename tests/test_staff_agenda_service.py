@@ -15,6 +15,7 @@ from src.domain.agenda.models import AgendaContext, AgendaItem, AgendaItemState,
 from src.domain.agenda.source_models import (
     AgendaCalendarSource,
     AgendaSourceBundle,
+    DocumentLockAgendaSource,
     ReturnedShareAgendaSource,
 )
 from src.models.share_models import SHARE_STATUS_MERGED, SHARE_STATUS_RETURNED
@@ -97,6 +98,26 @@ def _returned(
     )
 
 
+def _lock(
+    *,
+    contract_id=1,
+    owner_id=1,
+    is_locked=True,
+    locked_at="2026-07-11 09:00:00",
+):
+    return DocumentLockAgendaSource(
+        contract_id=contract_id,
+        contract_no=f"C-{contract_id}",
+        contract_type="Ana",
+        is_locked=is_locked,
+        locked_by_staff_id=owner_id,
+        locked_by_device_name=f"device-{owner_id or 'unknown'}",
+        locked_by_full_name=f"Owner {owner_id}" if owner_id is not None else "",
+        locked_at=locked_at,
+        updated_at="2026-07-11 09:05:00",
+    )
+
+
 def _item(key="p:contract:1", *, kind="test", priority=100, severity=AgendaSeverity.ATTENTION, version="V1", payload=None):
     return AgendaItem(
         key=key,
@@ -140,6 +161,9 @@ class FakeSourceRepository:
             calendar=tuple(source for source in self.bundle.calendar if source.contract_id in selected),
             returned_shares=tuple(
                 source for source in self.bundle.returned_shares if source.contract_id in selected
+            ),
+            document_locks=tuple(
+                source for source in self.bundle.document_locks if source.contract_id in selected
             ),
         )
 
@@ -756,3 +780,225 @@ def test_empty_all_visible_scope_returns_empty():
     assert source.all_calls == 1
     assert source.load_calls == 0
     assert state.get_calls == []
+
+
+def test_default_service_registers_document_lock_provider():
+    service = StaffAgendaService(
+        object(),
+        state_repository=FakeStateRepository(),
+        source_repository=FakeSourceRepository(),
+    )
+    assert [provider.code for provider in service.providers] == [
+        "deadline",
+        "returned_share",
+        "document_lock",
+        "unknown_date",
+    ]
+
+
+def test_responsible_personnel_sees_only_responsible_document_lock():
+    source = FakeSourceRepository(
+        ids=frozenset({1}),
+        all_ids=frozenset({1, 2}),
+        bundle=AgendaSourceBundle(document_locks=(_lock(contract_id=1), _lock(contract_id=2))),
+    )
+    service = StaffAgendaService(object(), state_repository=FakeStateRepository(), source_repository=source)
+    result = service.build(
+        _context(permissions={"view_contracts", "unlock_own_documents"}),
+        touch_presented=False,
+    )
+    assert [item.contract_id for item in result.items] == [1]
+    assert source.last_contract_ids == frozenset({1})
+
+
+def test_all_visible_management_sees_all_document_locks_with_unlock_all():
+    source = FakeSourceRepository(
+        all_ids=frozenset({1, 2}),
+        bundle=AgendaSourceBundle(
+            document_locks=(_lock(contract_id=1), _lock(contract_id=2, owner_id=2)),
+        ),
+    )
+    service = StaffAgendaService(object(), state_repository=FakeStateRepository(), source_repository=source)
+    result = service.build(
+        _context(
+            permissions={"view_contracts", "unlock_all_documents"},
+            scope=AgendaContractScopeCode.ALL_VISIBLE,
+            profile_code=AgendaPresentationProfileCode.MANAGEMENT,
+            role="manager",
+        ),
+        touch_presented=False,
+    )
+    assert {item.contract_id for item in result.items} == {1, 2}
+
+
+def test_viewer_without_unlock_capability_does_not_receive_lock_item():
+    source = FakeSourceRepository(
+        all_ids=frozenset({1}),
+        bundle=AgendaSourceBundle(document_locks=(_lock(),)),
+    )
+    service = StaffAgendaService(object(), state_repository=FakeStateRepository(), source_repository=source)
+    result = service.build(
+        _context(
+            permissions={"view_contracts"},
+            scope=AgendaContractScopeCode.ALL_VISIBLE,
+            profile_code=AgendaPresentationProfileCode.VIEW_ONLY,
+            role="viewer",
+        ),
+        touch_presented=False,
+    )
+    assert result.items == ()
+
+
+def test_custom_role_uses_explicit_unlock_permission_snapshot():
+    source = FakeSourceRepository(
+        ids=frozenset({1}),
+        bundle=AgendaSourceBundle(document_locks=(_lock(),)),
+    )
+    service = StaffAgendaService(object(), state_repository=FakeStateRepository(), source_repository=source)
+    result = service.build(
+        _context(
+            permissions={"view_contracts", "unlock_own_documents"},
+            role="custom_role",
+        ),
+        touch_presented=False,
+    )
+    assert [item.kind for item in result.items] == ["document_lock"]
+
+
+def test_explicit_override_filters_document_lock_contracts_exactly():
+    source = FakeSourceRepository(
+        ids=frozenset({1}),
+        all_ids=frozenset({1, 2}),
+        bundle=AgendaSourceBundle(
+            document_locks=(_lock(contract_id=1), _lock(contract_id=2, owner_id=2)),
+        ),
+    )
+    service = StaffAgendaService(object(), state_repository=FakeStateRepository(), source_repository=source)
+    result = service.build(
+        _context(
+            permissions={"view_contracts", "unlock_all_documents"},
+            ids=frozenset({2}),
+            scope=AgendaContractScopeCode.ALL_VISIBLE,
+            profile_code=AgendaPresentationProfileCode.MANAGEMENT,
+        ),
+        touch_presented=False,
+    )
+    assert [item.contract_id for item in result.items] == [2]
+    assert source.personal_calls == source.all_calls == 0
+    assert source.last_contract_ids == frozenset({2})
+
+
+def test_all_provider_families_coexist_and_sort_by_priority():
+    source = FakeSourceRepository(
+        ids=frozenset({1, 2, 3, 4}),
+        bundle=AgendaSourceBundle(
+            calendar=(
+                _source(1, "2026-07-12"),
+                _source(2, "2026-07-27"),
+                _source(4, "TBD"),
+            ),
+            returned_shares=(_returned(contract_id=3),),
+            document_locks=(_lock(contract_id=2),),
+        ),
+    )
+    service = StaffAgendaService(object(), state_repository=FakeStateRepository(), source_repository=source)
+    result = service.build(
+        _context(
+            permissions={
+                "view_contracts",
+                "edit_contracts",
+                "unlock_own_documents",
+            }
+        ),
+        touch_presented=False,
+    )
+    assert [item.kind for item in result.items] == [
+        "deadline",
+        "returned_share",
+        "document_lock",
+        "deadline",
+        "unknown_date",
+    ]
+    assert [item.priority for item in result.items] == [970, 850, 800, 700, 500]
+
+
+def test_same_contract_keys_do_not_collide_across_providers():
+    source = FakeSourceRepository(
+        bundle=AgendaSourceBundle(
+            calendar=(_source(1, "2026-07-12"),),
+            returned_shares=(_returned(contract_id=1),),
+            document_locks=(_lock(contract_id=1),),
+        )
+    )
+    service = StaffAgendaService(object(), state_repository=FakeStateRepository(), source_repository=source)
+    result = service.build(
+        _context(
+            permissions={
+                "view_contracts",
+                "edit_contracts",
+                "unlock_own_documents",
+            }
+        ),
+        touch_presented=False,
+    )
+    assert len({item.key for item in result.items}) == 3
+
+
+def test_seen_document_lock_remains_visible_and_not_new():
+    lock = _lock()
+    key = build_agenda_key(
+        provider_code="document_lock",
+        entity_type="contract",
+        entity_id=lock.contract_id,
+    )
+    version = f"LOCKED:{lock.locked_by_staff_id}:{lock.locked_at}"
+    state = FakeStateRepository({
+        key: AgendaItemState(staff_id=1, agenda_key=key, seen_version=version)
+    })
+    source = FakeSourceRepository(bundle=AgendaSourceBundle(document_locks=(lock,)))
+    service = StaffAgendaService(object(), state_repository=state, source_repository=source)
+    result = service.build(
+        _context(permissions={"view_contracts", "unlock_own_documents"}),
+        touch_presented=False,
+    )
+    assert result.active_count == 1
+    assert result.new_count == 0
+
+
+def test_snoozed_document_lock_is_temporarily_filtered():
+    lock = _lock()
+    key = build_agenda_key(
+        provider_code="document_lock",
+        entity_type="contract",
+        entity_id=lock.contract_id,
+    )
+    version = f"LOCKED:{lock.locked_by_staff_id}:{lock.locked_at}"
+    state = FakeStateRepository({
+        key: AgendaItemState(
+            staff_id=1,
+            agenda_key=key,
+            snoozed_until="2026-07-12 12:00:00",
+            snoozed_version=version,
+            snoozed_severity="ATTENTION",
+        )
+    })
+    source = FakeSourceRepository(bundle=AgendaSourceBundle(document_locks=(lock,)))
+    service = StaffAgendaService(object(), state_repository=state, source_repository=source)
+    result = service.build(
+        _context(permissions={"view_contracts", "unlock_own_documents"}),
+        touch_presented=False,
+    )
+    assert result.items == ()
+    assert result.filtered_count == 1
+    assert result.snoozed_count == 1
+
+
+def test_removed_document_lock_source_resolves_condition():
+    source = FakeSourceRepository(bundle=AgendaSourceBundle(document_locks=(_lock(),)))
+    service = StaffAgendaService(object(), state_repository=FakeStateRepository(), source_repository=source)
+    context = _context(permissions={"view_contracts", "unlock_own_documents"})
+    assert [item.kind for item in service.build(context, touch_presented=False).items] == [
+        "document_lock"
+    ]
+    source.bundle = AgendaSourceBundle()
+    assert service.build(context, touch_presented=False).items == ()
