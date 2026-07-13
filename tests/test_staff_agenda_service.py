@@ -4,7 +4,12 @@ from datetime import date, datetime
 
 import pytest
 
-from src.domain.agenda.constants import AgendaLifecycleType, AgendaPresentationProfileCode, AgendaSeverity
+from src.domain.agenda.constants import (
+    AgendaContractScopeCode,
+    AgendaLifecycleType,
+    AgendaPresentationProfileCode,
+    AgendaSeverity,
+)
 from src.domain.agenda.keys import build_agenda_key
 from src.domain.agenda.models import AgendaContext, AgendaItem, AgendaItemState, AgendaPresentationProfile
 from src.domain.agenda.source_models import (
@@ -20,23 +25,38 @@ from src.services.sts_database import STSDatabase
 NOW = datetime(2026, 7, 11, 12, 0, 0)
 
 
-def _profile():
+def _profile(
+    *,
+    code=AgendaPresentationProfileCode.PERSONAL,
+    permissions=frozenset({"view_contracts", "edit_contracts"}),
+):
     return AgendaPresentationProfile(
-        code=AgendaPresentationProfileCode.PERSONAL,
-        display_name="Personal",
-        description="Personal",
-        permissions=frozenset({"view_contracts"}),
+        code=code,
+        display_name="Profile",
+        description="Profile",
+        permissions=frozenset(permissions),
     )
 
 
-def _context(*, permissions=frozenset({"view_contracts"}), ids=frozenset(), staff_id=1):
+def _context(
+    *,
+    permissions=frozenset({"view_contracts", "edit_contracts"}),
+    ids=frozenset(),
+    staff_id=1,
+    scope=AgendaContractScopeCode.RESPONSIBLE,
+    profile_code=AgendaPresentationProfileCode.PERSONAL,
+    role="personnel",
+):
+    permissions = frozenset(permissions)
     return AgendaContext(
         now=NOW,
         today=date(2026, 7, 11),
-        presentation_profile=_profile(),
+        presentation_profile=_profile(code=profile_code, permissions=permissions),
+        current_staff={"id": staff_id, "role": role, "permissions": permissions},
         staff_id=staff_id,
         permissions=permissions,
         personal_contract_ids=ids,
+        contract_scope=scope,
     )
 
 
@@ -95,16 +115,22 @@ def _item(key="p:contract:1", *, kind="test", priority=100, severity=AgendaSever
 
 
 class FakeSourceRepository:
-    def __init__(self, ids=frozenset({1}), bundle=None):
+    def __init__(self, ids=frozenset({1}), all_ids=None, bundle=None):
         self.ids = ids
+        self.all_ids = frozenset(ids if all_ids is None else all_ids)
         self.bundle = bundle or AgendaSourceBundle(calendar=(_source(),))
         self.personal_calls = 0
+        self.all_calls = 0
         self.load_calls = 0
         self.last_contract_ids = None
 
     def list_personal_contract_ids(self, staff_id):
         self.personal_calls += 1
         return self.ids
+
+    def list_all_contract_ids(self):
+        self.all_calls += 1
+        return self.all_ids
 
     def load_personal_sources(self, contract_ids):
         self.load_calls += 1
@@ -139,10 +165,18 @@ class FakeStateRepository:
 class StaticProvider:
     code = "static"
 
-    def __init__(self, items):
+    def __init__(self, items, *, enabled=True):
         self.items = tuple(items)
+        self.enabled = enabled
+        self.enabled_calls = 0
+        self.build_calls = 0
+
+    def is_enabled(self, context):
+        self.enabled_calls += 1
+        return self.enabled
 
     def build(self, context, sources):
+        self.build_calls += 1
         return self.items
 
 
@@ -160,7 +194,7 @@ def test_missing_view_contracts_permission_returns_empty_without_source_query():
     state = FakeStateRepository()
     result = _service(source=source, state=state).build(_context(permissions=frozenset()))
     assert result.items == ()
-    assert source.personal_calls == source.load_calls == 0
+    assert source.personal_calls == source.all_calls == source.load_calls == 0
     assert state.get_calls == [] and state.touch_calls == []
 
 
@@ -177,10 +211,12 @@ def test_personal_scope_excludes_unassigned_contracts():
 def test_context_personal_contract_ids_override_repository_scope():
     source = FakeSourceRepository(
         ids=frozenset({1}),
+        all_ids=frozenset({1, 2}),
         bundle=AgendaSourceBundle(calendar=(_source(2),)),
     )
     _service(source=source).build(_context(ids=frozenset({2})))
     assert source.personal_calls == 0
+    assert source.all_calls == 0
     assert source.last_contract_ids == frozenset({2})
 
 
@@ -463,3 +499,212 @@ def test_returned_share_status_transition_removes_condition(tmp_path):
         assert all(item.kind != "returned_share" for item in second.items)
     finally:
         db.close()
+
+
+def test_responsible_scope_queries_personal_contract_ids():
+    source = FakeSourceRepository(ids=frozenset({1}), all_ids=frozenset({1, 2}))
+    _service(source=source).build(_context(scope=AgendaContractScopeCode.RESPONSIBLE), touch_presented=False)
+    assert source.personal_calls == 1
+    assert source.all_calls == 0
+
+
+def test_all_visible_scope_queries_all_contract_ids():
+    source = FakeSourceRepository(
+        ids=frozenset({1}),
+        all_ids=frozenset({1, 2}),
+        bundle=AgendaSourceBundle(calendar=(_source(1), _source(2))),
+    )
+    _service(source=source).build(
+        _context(
+            scope=AgendaContractScopeCode.ALL_VISIBLE,
+            profile_code=AgendaPresentationProfileCode.MANAGEMENT,
+            role="manager",
+        ),
+        touch_presented=False,
+    )
+    assert source.personal_calls == 0
+    assert source.all_calls == 1
+    assert source.last_contract_ids == frozenset({1, 2})
+
+
+def test_explicit_contract_override_skips_scope_queries():
+    source = FakeSourceRepository(ids=frozenset({1}), all_ids=frozenset({1, 2}))
+    _service(source=source).build(
+        _context(
+            ids=frozenset({2}),
+            scope=AgendaContractScopeCode.ALL_VISIBLE,
+            profile_code=AgendaPresentationProfileCode.MANAGEMENT,
+        ),
+        touch_presented=False,
+    )
+    assert source.personal_calls == source.all_calls == 0
+    assert source.last_contract_ids == frozenset({2})
+
+
+def test_viewer_sees_all_deadline_and_unknown_but_not_returned_share():
+    source = FakeSourceRepository(
+        all_ids=frozenset({1, 2, 3}),
+        bundle=AgendaSourceBundle(
+            calendar=(_source(1, "2026-07-12"), _source(2, "TBD")),
+            returned_shares=(_returned(contract_id=3),),
+        ),
+    )
+    service = StaffAgendaService(object(), state_repository=FakeStateRepository(), source_repository=source)
+    result = service.build(
+        _context(
+            permissions={"view_contracts"},
+            scope=AgendaContractScopeCode.ALL_VISIBLE,
+            profile_code=AgendaPresentationProfileCode.VIEW_ONLY,
+            role="viewer",
+        ),
+        touch_presented=False,
+    )
+    assert {item.kind for item in result.items} == {"deadline", "unknown_date"}
+
+
+def test_personnel_sees_only_responsible_contracts():
+    source = FakeSourceRepository(
+        ids=frozenset({1}),
+        all_ids=frozenset({1, 2}),
+        bundle=AgendaSourceBundle(calendar=(_source(1), _source(2))),
+    )
+    service = StaffAgendaService(object(), state_repository=FakeStateRepository(), source_repository=source)
+    result = service.build(_context(), touch_presented=False)
+    assert {item.contract_id for item in result.items} == {1}
+
+
+def test_personnel_without_edit_contracts_does_not_see_returned_share():
+    source = FakeSourceRepository(
+        bundle=AgendaSourceBundle(calendar=(_source(),), returned_shares=(_returned(),)),
+    )
+    service = StaffAgendaService(object(), state_repository=FakeStateRepository(), source_repository=source)
+    result = service.build(
+        _context(permissions={"view_contracts"}),
+        touch_presented=False,
+    )
+    assert [item.kind for item in result.items] == ["deadline"]
+
+
+def test_manager_sees_all_operational_items_with_permissions():
+    source = FakeSourceRepository(
+        all_ids=frozenset({1, 2, 3}),
+        bundle=AgendaSourceBundle(
+            calendar=(_source(1, "2026-07-12"), _source(2, "TBD")),
+            returned_shares=(_returned(contract_id=3),),
+        ),
+    )
+    service = StaffAgendaService(object(), state_repository=FakeStateRepository(), source_repository=source)
+    result = service.build(
+        _context(
+            scope=AgendaContractScopeCode.ALL_VISIBLE,
+            profile_code=AgendaPresentationProfileCode.MANAGEMENT,
+            role="manager",
+        ),
+        touch_presented=False,
+    )
+    assert {item.kind for item in result.items} == {"deadline", "unknown_date", "returned_share"}
+
+
+def test_manager_role_without_view_contracts_returns_empty():
+    source = FakeSourceRepository(all_ids=frozenset({1}))
+    result = _service(source=source).build(
+        _context(
+            permissions={"edit_contracts"},
+            scope=AgendaContractScopeCode.ALL_VISIBLE,
+            profile_code=AgendaPresentationProfileCode.MANAGEMENT,
+            role="manager",
+        )
+    )
+    assert result.items == ()
+    assert source.all_calls == source.load_calls == 0
+
+
+def test_manager_role_without_edit_contracts_skips_returned_share():
+    source = FakeSourceRepository(
+        all_ids=frozenset({1}),
+        bundle=AgendaSourceBundle(calendar=(_source(),), returned_shares=(_returned(),)),
+    )
+    service = StaffAgendaService(object(), state_repository=FakeStateRepository(), source_repository=source)
+    result = service.build(
+        _context(
+            permissions={"view_contracts"},
+            scope=AgendaContractScopeCode.ALL_VISIBLE,
+            profile_code=AgendaPresentationProfileCode.MANAGEMENT,
+            role="manager",
+        ),
+        touch_presented=False,
+    )
+    assert [item.kind for item in result.items] == ["deadline"]
+
+
+def test_system_profile_uses_all_visible_scope():
+    source = FakeSourceRepository(
+        all_ids=frozenset({1, 2}),
+        bundle=AgendaSourceBundle(calendar=(_source(1), _source(2))),
+    )
+    _service(source=source).build(
+        _context(
+            scope=AgendaContractScopeCode.ALL_VISIBLE,
+            profile_code=AgendaPresentationProfileCode.SYSTEM,
+            role="admin",
+        ),
+        touch_presented=False,
+    )
+    assert source.all_calls == 1
+    assert source.personal_calls == 0
+
+
+def test_custom_role_personal_scope():
+    source = FakeSourceRepository(ids=frozenset({1}), all_ids=frozenset({1, 2}))
+    _service(source=source).build(
+        _context(role="custom_x", scope=AgendaContractScopeCode.RESPONSIBLE),
+        touch_presented=False,
+    )
+    assert source.personal_calls == 1
+    assert source.all_calls == 0
+
+
+def test_disabled_provider_build_is_not_called():
+    provider = StaticProvider([_item()], enabled=False)
+    result = _service(providers=[provider]).build(_context(), touch_presented=False)
+    assert result.items == ()
+    assert provider.enabled_calls == 1
+    assert provider.build_calls == 0
+
+
+def test_capability_gate_is_provider_generic():
+    enabled = StaticProvider([_item("enabled")], enabled=True)
+    disabled = StaticProvider([_item("disabled")], enabled=False)
+    result = _service(providers=[disabled, enabled]).build(_context(), touch_presented=False)
+    assert [item.key for item in result.items] == ["enabled"]
+    assert disabled.build_calls == 0
+    assert enabled.build_calls == 1
+
+
+def test_source_bundle_loaded_once_after_scope_resolution():
+    source = FakeSourceRepository(all_ids=frozenset({1}))
+    _service(source=source).build(
+        _context(
+            scope=AgendaContractScopeCode.ALL_VISIBLE,
+            profile_code=AgendaPresentationProfileCode.MANAGEMENT,
+        ),
+        touch_presented=False,
+    )
+    assert source.all_calls == 1
+    assert source.load_calls == 1
+
+
+def test_empty_all_visible_scope_returns_empty():
+    source = FakeSourceRepository(all_ids=frozenset(), bundle=AgendaSourceBundle())
+    state = FakeStateRepository()
+    result = _service(source=source, state=state).build(
+        _context(
+            scope=AgendaContractScopeCode.ALL_VISIBLE,
+            profile_code=AgendaPresentationProfileCode.VIEW_ONLY,
+            permissions={"view_contracts"},
+        )
+    )
+    assert result.items == ()
+    assert source.all_calls == 1
+    assert source.load_calls == 0
+    assert state.get_calls == []
