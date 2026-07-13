@@ -22,7 +22,7 @@ permissions:
 jobs:
   telemetry-and-ui:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     env:
       QT_QPA_PLATFORM: offscreen
       PERFORMANCE_PREVIEW_PATH: performance-dialog-preview.png
@@ -59,8 +59,8 @@ jobs:
           python -m py_compile tests/test_perf_tracker_v2.py
           python -m py_compile tests/test_performance_tracking_dialog_v2.py
 
-      - name: Run telemetry and dialog regression tests
-        id: regression_tests
+      - name: Run focused telemetry and dialog tests
+        id: focused_tests
         continue-on-error: true
         shell: bash
         run: |
@@ -70,6 +70,14 @@ jobs:
             tests/test_performance_tracking_dialog_v2.py \
             > performance-test-output.txt 2>&1
 
+      - name: Run full repository regression suite
+        id: full_tests
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m pytest -q > full-test-output.txt 2>&1
+
       - name: Upload validation artifacts
         if: always()
         uses: actions/upload-artifact@v4
@@ -77,12 +85,16 @@ jobs:
           name: performance-validation-artifacts
           path: |
             performance-test-output.txt
+            full-test-output.txt
             performance-dialog-preview.png
           if-no-files-found: error
           retention-days: 7
 
-      - name: Fail when regression tests fail
-        if: steps.regression_tests.outcome == 'failure'
+      - name: Fail when validation fails
+        if: steps.focused_tests.outcome == 'failure' || steps.full_tests.outcome == 'failure'
         run: |
+          echo "=== Focused tests ==="
           cat performance-test-output.txt
+          echo "=== Full suite ==="
+          cat full-test-output.txt
           exit 1
