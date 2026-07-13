@@ -1,0 +1,60 @@
+name: Agenda Stage 04C-R1-E Execution Validation
+
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - synchronize
+      - reopened
+
+permissions:
+  contents: read
+  actions: read
+  pull-requests: read
+
+jobs:
+  agenda-stage-04c-r1-execution-validation:
+    if: github.event.pull_request.head.ref == 'feature/gundemim-agenda-system'
+    runs-on: windows-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout exact PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install repository dependencies
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install pytest
+
+      - name: Run Stage 4C-R1 execution validation
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
+          PYTHONUTF8: "1"
+        run: |
+          $ErrorActionPreference = "Continue"
+          python tools/validation/validate_agenda_stage_04c_r1_execution.py --output validation-output
+          exit $LASTEXITCODE
+
+      - name: Upload execution evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agenda-stage-04c-r1-execution-evidence
+          path: validation-output
+          if-no-files-found: error
+          retention-days: 90
