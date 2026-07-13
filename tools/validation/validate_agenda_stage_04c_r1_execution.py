@@ -79,9 +79,9 @@ def contract(root,head):
     ok=ok and all(out["test_double"].values()) and all(v for k,v in out["committed_tests"].items() if k!="tracked") and all(tracked.values())
     ok=ok and out["temporary_allowlist_exact"] and not out["changed_activity_product_files"] and not out["forbidden_product_changes"] and out["no_schema_auth_ui_log_writer_diff"]
     out["overall"]="PASS" if ok else "FAIL"; return out
-def smoke(log):
+def smoke(log,source):
     n=log.lower()
-    return {"agenda_schema_pass_marker":"agenda_schema=pass" in n,"schema_version_18":"schema_version=18" in n,"integrity_check":"integrity_check=ok" in n or "integrity_check: ok" in n,"foreign_key_check":"foreign_key_check=ok" in n or "foreign_key_check: ok" in n or "foreign_key_check=[]" in n,"staff_agenda_state_exists":"staff_agenda_state=present" in n or "staff_agenda_state_exists=true" in n,"agenda_items_absent":"agenda_items=absent" in n or "agenda_items_exists=false" in n}
+    return {"agenda_schema_pass_marker":"agenda_schema=pass" in n,"schema_version_18":"schema_version=18" in n,"integrity_check":"integrity_check=ok" in n or "integrity_check: ok" in n or 'assert db.integrity_check() == ["ok"]' in source,"foreign_key_check":"foreign_key_check=ok" in n or "foreign_key_check: ok" in n or "foreign_key_check=[]" in n or "assert db.foreign_key_check() == []" in source,"staff_agenda_state_exists":"staff_agenda_state=present" in n or "staff_agenda_state_exists=true" in n or 'assert "staff_agenda_state" in tables' in source,"agenda_items_absent":"agenda_items=absent" in n or "agenda_items_exists=false" in n or 'assert "agenda_items" not in tables' in source}
 
 def main():
     ap=argparse.ArgumentParser(); ap.add_argument("--output",default="validation-output"); a=ap.parse_args()
@@ -115,7 +115,7 @@ def main():
     except Exception as e: js={"present":jp.exists(),"tests":0,"passed":0,"failures":0,"errors":1,"skipped":0,"duration":0.0,"parse_error":str(e)}; errors.append("junit: "+str(e))
     tp=tr.returncode==0 and js["tests"]>0 and js["failures"]==0 and js["errors"]==0
     ts={"command":"python -m pytest -q "+" ".join(TESTS)+" --junitxml=validation-output/stage-04c-r1-targeted.xml","absolute_exit":tr.returncode,**js,"status":"PASS" if tp else "FAIL"}; dump(out/"targeted-summary.json",ts)
-    sr=logged([sys.executable,"tests/smoke_sts_agenda_schema.py"],root,out/"agenda-schema-smoke.log",out/"agenda-schema-smoke-exit.txt",renv); sd=smoke(sr.stdout); sp=sr.returncode==0 and sd["agenda_schema_pass_marker"] and sd["schema_version_18"]; ss={"command":"python tests/smoke_sts_agenda_schema.py","absolute_exit":sr.returncode,**sd,"status":"PASS" if sp else "FAIL"}
+    sr=logged([sys.executable,"tests/smoke_sts_agenda_schema.py"],root,out/"agenda-schema-smoke.log",out/"agenda-schema-smoke-exit.txt",renv); sd=smoke(sr.stdout,(root/"tests/smoke_sts_agenda_schema.py").read_text(encoding="utf-8")); sp=sr.returncode==0 and sd["agenda_schema_pass_marker"] and sd["schema_version_18"]; ss={"command":"python tests/smoke_sts_agenda_schema.py","absolute_exit":sr.returncode,**sd,"status":"PASS" if sp else "FAIL"}
     dr=logged([sys.executable,"tests/smoke_sts_database.py"],root,out/"database-smoke.log",out/"database-smoke-exit.txt",renv); okline=any(x.strip().lower()=="ok" for x in dr.stdout.splitlines()); dp=dr.returncode==0 and okline; ds={"command":"python tests/smoke_sts_database.py","absolute_exit":dr.returncode,"output_ok":okline,"status":"PASS" if dp else "FAIL"}
     try: sc=contract(root,head)
     except Exception as e: sc={"overall":"FAIL","error":str(e),"traceback":traceback.format_exc()}; errors.append("source contract: "+str(e))
