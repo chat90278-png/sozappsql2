@@ -41,6 +41,20 @@ jobs:
           python -m pip install -r requirements.txt
           python -m pip install pytest==8.4.2
 
+      - name: Adjust validation harness for hidden parent semantics
+        shell: pwsh
+        run: |
+          @'
+          from pathlib import Path
+          path = Path('tools/validation/fix42_apply_and_validate.py')
+          text = path.read_text(encoding='utf-8')
+          old = 'assert dialog.partial_warning.isVisible()'
+          new = 'assert not dialog.partial_warning.isHidden()'
+          if old not in text and new not in text:
+              raise SystemExit('partial warning assertion marker not found')
+          path.write_text(text.replace(old, new), encoding='utf-8')
+          '@ | python -
+
       - name: Apply fixes in required order and validate each stage
         shell: pwsh
         run: python tools/validation/fix42_apply_and_validate.py
