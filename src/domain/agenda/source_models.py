@@ -42,6 +42,15 @@ def _text(value: object) -> str:
     return str(value or "").strip()
 
 
+def _bool(value: object, field_name: str) -> bool:
+    if isinstance(value, bool):
+        return value
+    try:
+        return bool(int(value))
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field_name} must be bool-compatible.") from exc
+
+
 @dataclass(frozen=True)
 class AgendaCalendarSource:
     entity_type: str
@@ -186,16 +195,58 @@ class ReturnedShareAgendaSource:
 
 
 @dataclass(frozen=True)
+class DocumentLockAgendaSource:
+    contract_id: int
+
+    contract_no: str = ""
+    contract_type: str = ""
+    platform: str = ""
+
+    is_locked: bool | int = True
+    locked_by_staff_id: int | None = None
+    locked_by_device_name: str = ""
+    locked_by_full_name: str = ""
+    locked_at: str = ""
+    updated_at: str = ""
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "contract_id", _positive_int(self.contract_id, "contract_id"))
+        object.__setattr__(self, "is_locked", _bool(self.is_locked, "is_locked"))
+        object.__setattr__(
+            self,
+            "locked_by_staff_id",
+            _optional_positive_int(self.locked_by_staff_id, "locked_by_staff_id"),
+        )
+        for field_name in (
+            "contract_no",
+            "contract_type",
+            "platform",
+            "locked_by_device_name",
+            "locked_by_full_name",
+            "locked_at",
+            "updated_at",
+        ):
+            object.__setattr__(self, field_name, _text(getattr(self, field_name)))
+        if not self.locked_at:
+            raise ValueError("locked_at must be a non-empty timestamp string.")
+
+
+@dataclass(frozen=True)
 class AgendaSourceBundle:
     calendar: tuple[AgendaCalendarSource, ...] = ()
     returned_shares: tuple[ReturnedShareAgendaSource, ...] = ()
+    document_locks: tuple[DocumentLockAgendaSource, ...] = ()
 
     def __post_init__(self) -> None:
         calendar = tuple(self.calendar or ())
         returned_shares = tuple(self.returned_shares or ())
+        document_locks = tuple(self.document_locks or ())
         if any(not isinstance(source, AgendaCalendarSource) for source in calendar):
             raise TypeError("calendar must contain only AgendaCalendarSource values.")
         if any(not isinstance(source, ReturnedShareAgendaSource) for source in returned_shares):
             raise TypeError("returned_shares must contain only ReturnedShareAgendaSource values.")
+        if any(not isinstance(source, DocumentLockAgendaSource) for source in document_locks):
+            raise TypeError("document_locks must contain only DocumentLockAgendaSource values.")
         object.__setattr__(self, "calendar", calendar)
         object.__setattr__(self, "returned_shares", returned_shares)
+        object.__setattr__(self, "document_locks", document_locks)
