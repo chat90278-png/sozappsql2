@@ -8,8 +8,17 @@ from typing import Any
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
-    QComboBox, QDialog, QFrame, QGridLayout, QHBoxLayout, QHeaderView,
-    QLabel, QLineEdit, QPushButton, QTableWidget, QTableWidgetItem,
+    QComboBox,
+    QDialog,
+    QFrame,
+    QGridLayout,
+    QHBoxLayout,
+    QHeaderView,
+    QLabel,
+    QLineEdit,
+    QPushButton,
+    QTableWidget,
+    QTableWidgetItem,
     QVBoxLayout,
 )
 
@@ -40,6 +49,56 @@ TABLE_LABELS = {
     "components": "Bileşen",
 }
 
+P95_HELP = (
+    "Bu değer teknik olarak p95'tir. Başarılı ölçümlerin %95'i burada gösterilen "
+    "süreden daha hızlı tamamlanmıştır. En sıra dışı yavaş %5'lik bölüm, genel "
+    "kullanım deneyimini yanıltmaması için ana değere dahil edilmez."
+)
+
+SUMMARY_DEFINITIONS = (
+    ("contracts", "Sözleşme", "STS dosyasındaki sözleşme sayısı."),
+    ("systems", "Sistem", "STS dosyasındaki sistem sayısı."),
+    ("deliveries", "Teslimat", "STS dosyasındaki teslimat sayısı."),
+    ("components", "Bileşen", "STS dosyasındaki bileşen sayısı."),
+    (
+        "main_size",
+        "Ana veri dosyası",
+        "Asıl .sts veritabanı dosyasının diskte kapladığı alan.",
+    ),
+    (
+        "wal_size",
+        "Geçici kayıt alanı",
+        "SQLite'ın kayıt güvenliği için kullandığı geçici alan. Bu alanın dolu "
+        "olması normaldir ve tek başına hata anlamına gelmez. Teknik adı: WAL.",
+    ),
+    (
+        "total_size",
+        "Toplam disk kullanımı",
+        "Ana veri dosyası, geçici kayıt alanı ve yardımcı SQLite dosyalarının toplamı.",
+    ),
+    (
+        "largest",
+        "En büyük iş grubu",
+        "Sözleşme, sistem, teslimat ve bileşen grupları içindeki en yüksek kayıt sayısı.",
+    ),
+    ("measurements", "Toplam ölçüm", "Seçilen dönemde kaydedilen performans ölçümü sayısı."),
+    (
+        "failure_rate",
+        "Başarısız işlem oranı",
+        "Seçilen dönemde hata ile sonuçlanan ölçümlerin toplam ölçümlere oranı.",
+    ),
+    (
+        "attention",
+        "Dikkat gereken",
+        "Normal sınırların dışında kalan veya başarısız olan işlem türü sayısı.",
+    ),
+    (
+        "slowest",
+        "En çok zorlanan işlem",
+        "Kendi normal sınırına göre en fazla yavaşlayan işlem türü.",
+    ),
+)
+
 
 class MetricCard(QFrame):
     def __init__(self, operation: str, parent=None):
@@ -55,6 +114,7 @@ class MetricCard(QFrame):
         top = QHBoxLayout()
         title = QLabel(str(info["label"]))
         title.setObjectName("perfCardTitle")
+        title.setToolTip(str(info.get("description") or ""))
         self.badge = QLabel("Ölçüm yok")
         self.badge.setAlignment(Qt.AlignCenter)
         top.addWidget(title)
@@ -64,11 +124,13 @@ class MetricCard(QFrame):
 
         self.value = QLabel("-")
         self.value.setObjectName("perfMetricValue")
+        self.value.setToolTip(P95_HELP)
         root.addWidget(self.value)
 
-        hint = QLabel("p95 · başarılı işlemlerin yavaş ucu")
-        hint.setObjectName("perfMuted")
-        root.addWidget(hint)
+        self.explanation = QLabel("Ölçümlerin %95'i bu süreden hızlı")
+        self.explanation.setObjectName("perfMuted")
+        self.explanation.setToolTip(P95_HELP)
+        root.addWidget(self.explanation)
 
         self.detail = QLabel("Son - · Ortalama -")
         self.detail.setObjectName("perfMuted")
@@ -198,7 +260,7 @@ QDialog#performanceTrackingDialog QHeaderView::section {
         title = QLabel("Performans İzleme")
         title.setObjectName("perfHeroTitle")
         description = QLabel(
-            "Gerçek STS işlemlerini p95, son değer, ortalama, örnek sayısı ve hata oranıyla izleyin."
+            "Gerçek STS işlemlerini anlaşılır süreler, son ölçüm, ortalama ve hata oranıyla izleyin."
         )
         description.setObjectName("perfHeroText")
         self.hero_meta = QLabel("Veriler hazırlanıyor...")
@@ -225,8 +287,11 @@ QDialog#performanceTrackingDialog QHeaderView::section {
         layout.addWidget(muted_label("Dönem"))
         self.range_combo = QComboBox()
         for label, key in (
-            ("Bugün", "today"), ("Son 24 saat", "24h"), ("Son 7 gün", "7d"),
-            ("Son 30 gün", "30d"), ("Tümü", "all"),
+            ("Bugün", "today"),
+            ("Son 24 saat", "24h"),
+            ("Son 7 gün", "7d"),
+            ("Son 30 gün", "30d"),
+            ("Tümü", "all"),
         ):
             self.range_combo.addItem(label, key)
         self.range_combo.setCurrentIndex(2)
@@ -244,8 +309,11 @@ QDialog#performanceTrackingDialog QHeaderView::section {
         layout.addWidget(muted_label("Durum"))
         self.status_combo = QComboBox()
         for label, key in (
-            ("Tüm durumlar", ""), ("Normal", "ok"), ("Dikkat", "warning"),
-            ("Kritik", "critical"), ("Başarısız", "failed"),
+            ("Tüm durumlar", ""),
+            ("Normal", "ok"),
+            ("Dikkat", "warning"),
+            ("Kritik", "critical"),
+            ("Başarısız", "failed"),
         ):
             self.status_combo.addItem(label, key)
         self.status_combo.currentIndexChanged.connect(self.apply_filter)
@@ -271,23 +339,22 @@ QDialog#performanceTrackingDialog QHeaderView::section {
         grid = QGridLayout()
         grid.setHorizontalSpacing(14)
         self.summary_values = {}
-        definitions = (
-            ("contracts", "Sözleşme"), ("systems", "Sistem"),
-            ("deliveries", "Teslimat"), ("components", "Bileşen"),
-            ("main_size", "Ana STS"), ("wal_size", "WAL"),
-            ("total_size", "Toplam disk"), ("largest", "En büyük iş grubu"),
-            ("measurements", "Ölçüm"), ("failure_rate", "Başarısızlık"),
-            ("attention", "Dikkat gereken"), ("slowest", "En zorlanan"),
-        )
-        for index, (key, title) in enumerate(definitions):
+        self.summary_labels = {}
+        for index, (key, title, tooltip) in enumerate(SUMMARY_DEFINITIONS):
             box = QVBoxLayout()
             box.setSpacing(1)
-            box.addWidget(muted_label(title))
+            title_label = muted_label(title)
+            title_label.setToolTip(tooltip)
+            self.summary_labels[key] = title_label
+            box.addWidget(title_label)
+
             value = QLabel("-")
             value.setObjectName("perfSummaryValue")
             value.setWordWrap(True)
+            value.setToolTip(tooltip)
             self.summary_values[key] = value
             box.addWidget(value)
+
             grid.addLayout(box, index // 6, index % 6)
             grid.setColumnStretch(index % 6, 1)
         layout.addLayout(grid)
@@ -344,7 +411,8 @@ QDialog#performanceTrackingDialog QHeaderView::section {
             try:
                 self.db_stats = (
                     dict(self.store.database_stats())
-                    if hasattr(self.store, "database_stats") else {}
+                    if hasattr(self.store, "database_stats")
+                    else {}
                 )
             except Exception as exc:
                 self.db_stats = {"error": str(exc)}
@@ -375,7 +443,10 @@ QDialog#performanceTrackingDialog QHeaderView::section {
 
         disk = dict(self.report.get("disk_usage") or {})
         self.summary_values["main_size"].setText(format_bytes(disk.get("main_bytes")))
-        self.summary_values["wal_size"].setText(format_bytes(disk.get("wal_bytes")))
+        wal_bytes = int(disk.get("wal_bytes") or 0)
+        self.summary_values["wal_size"].setText(
+            format_bytes(wal_bytes) if wal_bytes > 0 else "Kullanılmıyor"
+        )
         self.summary_values["total_size"].setText(format_bytes(disk.get("total_bytes")))
 
         if any(business_counts.values()):
@@ -430,7 +501,8 @@ QDialog#performanceTrackingDialog QHeaderView::section {
             if operation_filter and operation != operation_filter:
                 continue
             state = (
-                "failed" if not bool(item.get("success", True))
+                "failed"
+                if not bool(item.get("success", True))
                 else perf_tracker.classify_duration(operation, item.get("duration_ms"))
             )
             if status_filter and state != status_filter:
@@ -451,7 +523,9 @@ QDialog#performanceTrackingDialog QHeaderView::section {
 
         self.table.setRowCount(len(rows))
         for row_index, (item, operation, state, detail) in enumerate(rows):
-            label, foreground, _background, _border = STATUS.get(state, STATUS["unknown"])
+            label, foreground, _background, _border = STATUS.get(
+                state, STATUS["unknown"]
+            )
             values = (
                 display_timestamp(item.get("ts")),
                 str(perf_tracker.operation_info(operation)["label"]),
