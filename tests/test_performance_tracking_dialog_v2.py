@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from PySide6.QtWidgets import QApplication
@@ -44,6 +45,7 @@ def test_performance_dialog_uses_real_telemetry_and_business_counts(tmp_path: Pa
             assert perf_tracker.record(operation, sts_path, duration)
 
     dialog = PerformanceTrackingDialog(FakePerformanceStore(sts_path))
+    dialog.show()
     app.processEvents()
 
     assert dialog.metric_cards[perf_tracker.OP_DB_OPEN].value.text() != "-"
@@ -54,6 +56,13 @@ def test_performance_dialog_uses_real_telemetry_and_business_counts(tmp_path: Pa
     assert dialog.summary_values["measurements"].text() == "12"
     assert dialog.table.rowCount() == 12
     assert dialog.table.columnCount() == 6
+
+    preview_path = str(os.environ.get("PERFORMANCE_PREVIEW_PATH") or "").strip()
+    if preview_path:
+        target = Path(preview_path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        assert dialog.grab().save(str(target), "PNG")
+        assert target.exists() and target.stat().st_size > 0
 
     dialog.close()
     dialog.deleteLater()
