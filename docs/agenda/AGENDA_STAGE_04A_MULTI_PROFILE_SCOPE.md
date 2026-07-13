@@ -31,7 +31,7 @@ The permission snapshot remains the exact active `current_staff.permissions` sna
 
 - `manager` selects MANAGEMENT + ALL_VISIBLE.
 - `viewer` selects VIEW_ONLY + ALL_VISIBLE.
-- the exact system-admin session shape (`is_admin=True`, `id=0`, positive `admin_id`) selects SYSTEM + ALL_VISIBLE.
+- the exact system-admin session shape (`is_admin=True`, `id=0`, positive `admin_id`) selects SYSTEM + ALL_VISIBLE presentation, but has no persistent `staff.id` agenda-state identity.
 - `personnel`, legacy `staff`, empty and custom roles select PERSONAL + RESPONSIBLE.
 
 Unknown/custom roles fail safely to PERSONAL and receive no permission grant.
@@ -47,7 +47,24 @@ Unknown/custom roles fail safely to PERSONAL and receive no permission grant.
 
 Profile permissions are exactly the immutable permission snapshot supplied by auth.
 
-A manager or system profile without `view_contracts` still produces an empty agenda because the service top-level permission gate remains authoritative.
+A manager without `view_contracts` produces an empty agenda because the service top-level permission gate remains authoritative.
+
+Exact system-admin sessions are fail-closed for Agenda load regardless of injected permissions because `system_admins.id` is not a `staff.id`. Their context keeps SYSTEM + ALL_VISIBLE presentation but uses `staff_id=None`, so no source/provider/state query is executed.
+
+## System-Admin Principal / State Safety
+
+`auth.build_system_admin_session(...)` produces `id=0`, a positive `admin_id`, `is_admin=True` and no `permissions` field. `admin_id` belongs to `system_admins`; it is not a key in `staff`.
+
+`staff_agenda_state.staff_id` has a foreign key to `staff(id)`. Therefore the Stage 4A-R1 contract is:
+
+- SYSTEM profile and ALL_VISIBLE presentation foundation remain available;
+- exact system-admin `AgendaContext.staff_id` is `None`;
+- `admin_id` is never reused as `staff_id`;
+- system-admin Agenda load returns a SYSTEM-profile empty result before source/provider/state access;
+- mark-seen, snooze and clear-snooze reject the interaction before repository mutation;
+- operational SYSTEM Agenda support is not accepted in Stage 4A.
+
+Persistent system-admin Agenda state requires a separate principal-aware design. No shadow staff row, synthetic `staff.id=0`, foreign-key bypass or fake interaction success is used.
 
 ## Contract Scope
 
@@ -111,8 +128,8 @@ Provider `build(...)` remains a pure projection and keeps its existing key, vers
 - Manager with `view_contracts` + `edit_contracts`: all-current-STS deadline/TBD/returned-share items.
 - Manager without `view_contracts`: MANAGEMENT profile, empty result.
 - Manager without `edit_contracts`: all-current-STS deadline/TBD; no returned share.
-- Exact system profile with `view_contracts` + `edit_contracts`: all-visible operational foundation.
-- Exact system profile without `edit_contracts`: deadline/TBD only.
+- Exact system-admin session: SYSTEM + ALL_VISIBLE presentation foundation, but Agenda load is currently safe-empty because no persistent `staff.id` identity exists.
+- Explicit permissions on an exact system-admin session do not enable source/provider/state access.
 - Custom role: PERSONAL + RESPONSIBLE; permissions alone determine provider visibility.
 - Explicit contract override: only override IDs, with both scope queries skipped.
 
@@ -139,7 +156,8 @@ Source tests cover:
 - all-contract source reads and database immutability;
 - provider capability methods;
 - generic disabled-provider orchestration;
-- PERSONAL/VIEW_ONLY/MANAGEMENT/SYSTEM scope behavior;
+- PERSONAL/VIEW_ONLY/MANAGEMENT scope behavior;
+- SYSTEM profile fail-closed identity behavior;
 - viewer and read-only personnel exclusions;
 - facade profile compatibility and unchanged public signature.
 
@@ -171,6 +189,7 @@ Main integration remains blocked pending:
 - current-main reconciliation;
 - automatic schema-upgrade engine review;
 - explicit v17→v18 migration/fingerprint support;
+- Stage 4A-R1 principal/state correction validation;
 - Stage 4A runtime differential validation;
 - final current-main runtime and visual smoke;
 - separate manager authorization.
