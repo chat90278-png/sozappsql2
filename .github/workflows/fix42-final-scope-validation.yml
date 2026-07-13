@@ -1,0 +1,65 @@
+name: Fix42 Final Scope Validation
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  validate:
+    runs-on: windows-latest
+    env:
+      QT_QPA_PLATFORM: offscreen
+      PYTHONUTF8: "1"
+      PYTHONPATH: "."
+    steps:
+      - name: Checkout exact fix branch
+        uses: actions/checkout@v4
+        with:
+          ref: fix/close-baseline-42-tests
+          fetch-depth: 0
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install pytest==8.4.2
+
+      - name: Prepare and compile validation harness
+        shell: pwsh
+        run: |
+          @'
+          from pathlib import Path
+          path = Path("tools/validation/fix42_final_scope_validate.py")
+          text = path.read_text(encoding="utf-8")
+          text = text.replace("'</n        '", "'\n        '")
+          path.write_text(text, encoding="utf-8")
+          '@ | python -
+          python -m py_compile tools/validation/junit_summary.py tools/validation/fix42_final_scope_validate.py
+
+      - name: Run final validation
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python tools/validation/fix42_final_scope_validate.py
+
+      - name: Upload final evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fix42-final-scope-${{ github.sha }}
+          path: |
+            _validation/fix42-final
+            _validation/selftest
+          if-no-files-found: error
+          retention-days: 90
