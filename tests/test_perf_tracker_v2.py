@@ -141,3 +141,33 @@ def test_disk_usage_includes_wal_and_shm(tmp_path: Path):
         "shm_bytes": 25,
         "total_bytes": 175,
     }
+
+
+def test_versioned_sts_files_share_logical_lineage(tmp_path: Path):
+    first = tmp_path / "STS-A1__v001__2026-07-13_08-00.sts"
+    second = tmp_path / "STS-A1__v002__2026-07-13_09-00.sts"
+    first.write_bytes(b"SQLite format 3\x00")
+    second.write_bytes(b"SQLite format 3\x00")
+
+    assert perf_tracker.source_path_key(first) != perf_tracker.source_path_key(second)
+    assert perf_tracker.source_lineage_key(first) == perf_tracker.source_lineage_key(second)
+
+    assert perf_tracker.record(perf_tracker.OP_DB_OPEN, first, 100)
+    records = perf_tracker.load_records(second, last_n=20)
+
+    assert len(records) == 1
+    assert records[0]["source_file"] == first.name
+
+
+def test_loader_reads_rotated_log_backups(tmp_path: Path, monkeypatch):
+    sts_path = tmp_path / "sample.sts"
+    sts_path.write_bytes(b"SQLite format 3\x00")
+    monkeypatch.setattr(perf_tracker, "MAX_LOG_BYTES", 1)
+
+    assert perf_tracker.record(perf_tracker.OP_DB_OPEN, sts_path, 100)
+    assert perf_tracker.record(perf_tracker.OP_DB_OPEN, sts_path, 200)
+
+    status = perf_tracker.load_records_with_status(sts_path, last_n=20)
+
+    assert [row["duration_ms"] for row in status["records"]] == [100.0, 200.0]
+    assert status["log_files_read"] == 2
