@@ -9,6 +9,6 @@ try:
 
     install_delivery_schedule_slicer_fix()
 except Exception:
-    # Dialog paketinin yüklenmesi hiçbir zaman bu uyumluluk katmanına bağlı
-    # olmamalıdır. Ayrıntılı hata, rapor oluşturma sırasında kullanıcıya döner.
+    # Dialog paketi her koşulda yüklenmeye devam etsin. Bu uyumluluk katmanı
+    # kurulamazsa mevcut güvenilir, dilimleyicisiz export akışı değişmeden kalır.
     pass
