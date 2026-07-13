@@ -270,3 +270,26 @@ def test_source_repository_does_not_mutate_database(db):
     repo.list_returned_share_sources([ids["c1"]])
     repo.load_personal_sources([ids["c1"]])
     assert db.conn.total_changes == before
+
+
+def test_list_all_contract_ids_returns_every_contract(db):
+    ids = _seed(db)
+    assert AgendaSourceRepository(db).list_all_contract_ids() == frozenset({ids["c1"], ids["c2"]})
+
+
+def test_list_all_contract_ids_is_deterministic(db):
+    ids = _seed(db)
+    repo = AgendaSourceRepository(db)
+    assert repo.list_all_contract_ids() == repo.list_all_contract_ids()
+    assert tuple(sorted(repo.list_all_contract_ids())) == tuple(sorted({ids["c1"], ids["c2"]}))
+
+
+def test_list_all_contract_ids_empty_database(db):
+    assert AgendaSourceRepository(db).list_all_contract_ids() == frozenset()
+
+
+def test_list_all_contract_ids_does_not_mutate_database(db):
+    _seed(db)
+    before = db.conn.total_changes
+    AgendaSourceRepository(db).list_all_contract_ids()
+    assert db.conn.total_changes == before
