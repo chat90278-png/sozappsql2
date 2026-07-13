@@ -16,6 +16,7 @@ from analysis_center.analysis_builder_qt import AnalysisFilterRowWidget
 from analysis_center.analysis_dashboard_workspace import DashboardWorkspaceStore
 from analysis_center.analysis_models import VisualSettings
 from analysis_center.analysis_qt_window import AnalysisCenterWindow
+from tests.qt_wait_helpers import wait_until_ready
 
 
 @pytest.fixture(scope="module")
@@ -33,6 +34,7 @@ def _open_builder(qt_app, tmp_path):
         settings=_settings(),
         workspace_store=DashboardWorkspaceStore(tmp_path / "dashboards"),
     )
+    wait_until_ready(window, qt_app)
     window.show()
     row = window._item_ids.index(ANALYSIS_BUILDER_ID)
     window.navigation.setCurrentRow(row)

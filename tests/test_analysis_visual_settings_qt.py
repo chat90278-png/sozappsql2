@@ -15,6 +15,7 @@ from analysis_center.analysis_builder import ANALYSIS_BUILDER_ID
 from analysis_center.analysis_dashboard_workspace import DashboardWorkspaceStore
 from analysis_center.analysis_models import VisualSettings
 from analysis_center.analysis_qt_window import AnalysisCenterWindow, _AnalysisChartWidget
+from tests.qt_wait_helpers import wait_until_ready
 from analysis_center.analysis_repository import MemoryAnalysisRepository
 from analysis_center.analysis_visual_settings import CHART_PALETTES
 
@@ -35,6 +36,7 @@ def _open_builder(qt_app, tmp_path):
         workspace_store=DashboardWorkspaceStore(tmp_path / "dashboards"),
         analysis_repository=MemoryAnalysisRepository(),
     )
+    wait_until_ready(window, qt_app)
     window.show()
     window.navigation.setCurrentRow(window._item_ids.index(ANALYSIS_BUILDER_ID))
     qt_app.processEvents()
@@ -182,6 +184,7 @@ def test_saved_visual_settings_hydrate_and_reload_in_builder(qt_app, tmp_path):
         workspace_store=DashboardWorkspaceStore(tmp_path / "dashboards"),
         analysis_repository=repository,
     )
+    wait_until_ready(window, qt_app)
     window.show()
     try:
         window.navigation.setCurrentRow(window._item_ids.index(ANALYSIS_BUILDER_ID))

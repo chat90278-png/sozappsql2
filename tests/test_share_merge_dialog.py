@@ -44,12 +44,19 @@ def _conflict_dialog(tmp_path: Path, *, apply_callback=None, preflight_callback=
     return dialog, source, share, metadata
 
 
+def _conflict_combos(dialog: ShareMergeDialog) -> list[QComboBox]:
+    combos = [
+        combo
+        for target_id, combo in dialog._decision_combos.items()
+        if (dialog.controller.item_by_target(target_id) and dialog.controller.item_by_target(target_id).is_conflict)
+    ]
+    if not combos:
+        raise AssertionError("conflict combo not found")
+    return combos
+
+
 def _conflict_combo(dialog: ShareMergeDialog) -> QComboBox:
-    for target_id, combo in dialog._decision_combos.items():
-        item = dialog.controller.item_by_target(target_id)
-        if item and item.is_conflict:
-            return combo
-    raise AssertionError("conflict combo not found")
+    return _conflict_combos(dialog)[0]
 
 
 def _choose(combo: QComboBox, decision: MergeDecisionKind) -> None:
@@ -67,13 +74,20 @@ def test_dialog_instantiation_unresolved_conflict_and_explicit_decision(qapp, tm
         assert not dialog.apply_btn.isEnabled()
         assert "tüm çakışmalar" in dialog.status_label.text()
 
-        combo = _conflict_combo(dialog)
-        assert combo.currentData() is None
-        _choose(combo, MergeDecisionKind.LOCAL_KEEP)
+        combos = _conflict_combos(dialog)
+        assert len(combos) > 1
+        initial_unresolved = dialog.controller.resolved_plan.summary["unresolved_conflict_count"]
+        assert all(combo.currentData() is None for combo in combos)
 
-        assert dialog.controller.explicit_decisions
-        assert next(iter(dialog.controller.explicit_decisions.values())) == MergeDecisionKind.LOCAL_KEEP
+        _choose(combos[0], MergeDecisionKind.LOCAL_KEEP)
+        assert dialog.controller.resolved_plan.summary["unresolved_conflict_count"] == initial_unresolved - 1
+        assert not dialog.apply_btn.isEnabled()
+
+        for combo in combos[1:]:
+            _choose(combo, MergeDecisionKind.LOCAL_KEEP)
+        assert set(dialog.controller.explicit_decisions.values()) == {MergeDecisionKind.LOCAL_KEEP}
         assert dialog.controller.resolved_plan.summary["unresolved_conflict_count"] == 0
+        assert dialog.controller.resolved_plan.summary["structural_issue_count"] == 0
         assert dialog.apply_btn.isEnabled()
     finally:
         dialog.close(); source.db.close(); share.db.close()
@@ -108,11 +122,15 @@ def test_document_keep_both_visibility_uses_allowed_decisions(qapp, tmp_path):
 def test_skip_partial_warning_and_button_state(qapp, tmp_path):
     dialog, source, share, _metadata = _conflict_dialog(tmp_path)
     try:
-        combo = _conflict_combo(dialog)
-        _choose(combo, MergeDecisionKind.SKIP)
+        combos = _conflict_combos(dialog)
+        _choose(combos[0], MergeDecisionKind.SKIP)
+        for combo in combos[1:]:
+            _choose(combo, MergeDecisionKind.LOCAL_KEEP)
         assert dialog.controller.resolved_plan.is_partial
+        assert dialog.controller.resolved_plan.summary["unresolved_conflict_count"] == 0
+        assert dialog.controller.resolved_plan.summary["structural_issue_count"] == 0
         assert dialog.apply_btn.isEnabled()
-        assert dialog.partial_warning.isVisible()
+        assert not dialog.partial_warning.isHidden()
     finally:
         dialog.close(); source.db.close(); share.db.close()
 
@@ -132,7 +150,8 @@ def test_duplicate_submit_busy_guard_and_failure_state(qapp, monkeypatch, tmp_pa
     monkeypatch.setattr(QMessageBox, "exec", lambda self: warnings.append((self.windowTitle(), self.text(), self.informativeText())) or QMessageBox.AcceptRole)
     monkeypatch.setattr(dialog, "_confirm_apply", lambda _resolved: True)
     try:
-        _choose(_conflict_combo(dialog), MergeDecisionKind.LOCAL_KEEP)
+        for combo in _conflict_combos(dialog):
+            _choose(combo, MergeDecisionKind.LOCAL_KEEP)
         dialog._set_busy(True, "busy")
         dialog._submit()
         assert calls == {"preflight": 0, "apply": 0}

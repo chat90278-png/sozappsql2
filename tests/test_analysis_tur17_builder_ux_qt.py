@@ -17,6 +17,7 @@ from analysis_center.analysis_dashboard_workspace import DashboardWorkspaceStore
 from analysis_center.analysis_models import VisualSettings
 from analysis_center.analysis_preview_qt import AnalysisPreviewCardHost
 from analysis_center.analysis_qt_window import AnalysisCenterWindow, _AnalysisChartWidget
+from tests.qt_wait_helpers import wait_until_ready
 from analysis_center.analysis_repository import MemoryAnalysisRepository
 
 
@@ -32,6 +33,7 @@ def _open_builder(qt_app, tmp_path):
         workspace_store=DashboardWorkspaceStore(tmp_path / "dashboards"),
         analysis_repository=MemoryAnalysisRepository(),
     )
+    wait_until_ready(window, qt_app)
     window.resize(1700, 1000)
     window.show()
     window.navigation.setCurrentRow(window._item_ids.index(ANALYSIS_BUILDER_ID))
