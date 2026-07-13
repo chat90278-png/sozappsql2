@@ -4,7 +4,11 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from src.domain.agenda.constants import AgendaPresentationProfileCode
+from src.domain.agenda.constants import (
+    AgendaContractScopeCode,
+    AgendaPresentationProfileCode,
+)
+from src.domain.agenda.models import AgendaContext, AgendaPresentationProfile
 from src.services.agenda_context_factory import (
     AgendaContextBuildError,
     PersonalAgendaContextFactory,
@@ -128,3 +132,174 @@ def test_missing_permissions_can_use_real_enrichment_signature(monkeypatch):
 def test_missing_permissions_without_db_path_remains_empty():
     context = PersonalAgendaContextFactory().build(_staff(permissions=None))
     assert context.permissions == frozenset()
+
+
+def test_personnel_profile_uses_responsible_scope():
+    context = PersonalAgendaContextFactory().build(_staff(role="personnel"))
+    assert context.presentation_profile.code == AgendaPresentationProfileCode.PERSONAL
+    assert context.contract_scope == AgendaContractScopeCode.RESPONSIBLE
+
+
+def test_legacy_staff_role_uses_personal_profile():
+    context = PersonalAgendaContextFactory().build(_staff(role="staff", role_name="staff"))
+    assert context.presentation_profile.code == AgendaPresentationProfileCode.PERSONAL
+    assert context.contract_scope == AgendaContractScopeCode.RESPONSIBLE
+
+
+def test_manager_profile_uses_all_visible_scope():
+    context = PersonalAgendaContextFactory().build(
+        _staff(role="manager", role_name="manager", permissions={"view_contracts"})
+    )
+    assert context.presentation_profile.code == AgendaPresentationProfileCode.MANAGEMENT
+    assert context.presentation_profile.display_name == "Yönetim kapsamı"
+    assert context.contract_scope == AgendaContractScopeCode.ALL_VISIBLE
+
+
+def test_viewer_profile_uses_all_visible_scope():
+    context = PersonalAgendaContextFactory().build(
+        _staff(role="viewer", role_name="viewer", permissions={"view_contracts"})
+    )
+    assert context.presentation_profile.code == AgendaPresentationProfileCode.VIEW_ONLY
+    assert context.presentation_profile.display_name == "Salt okunur kapsam"
+    assert context.contract_scope == AgendaContractScopeCode.ALL_VISIBLE
+
+
+def test_exact_system_admin_identity_uses_system_profile():
+    context = PersonalAgendaContextFactory().build(
+        {
+            "id": 0,
+            "admin_id": 14,
+            "full_name": "System Admin",
+            "device_name": "admin-device",
+            "is_admin": True,
+            "is_active": 1,
+            "permissions": {"view_contracts", "edit_contracts"},
+        }
+    )
+    assert context.staff_id == 14
+    assert context.presentation_profile.code == AgendaPresentationProfileCode.SYSTEM
+    assert context.presentation_profile.display_name == "Sistem kapsamı"
+    assert context.contract_scope == AgendaContractScopeCode.ALL_VISIBLE
+
+
+def test_admin_role_string_without_exact_admin_identity_is_personal():
+    context = PersonalAgendaContextFactory().build(
+        _staff(role="admin", role_name="admin", permissions={"view_contracts"})
+    )
+    assert context.presentation_profile.code == AgendaPresentationProfileCode.PERSONAL
+    assert context.contract_scope == AgendaContractScopeCode.RESPONSIBLE
+
+
+def test_custom_role_falls_back_to_personal_profile():
+    context = PersonalAgendaContextFactory().build(
+        _staff(role="custom_x", role_name="custom_x", permissions={"edit_contracts"})
+    )
+    assert context.presentation_profile.code == AgendaPresentationProfileCode.PERSONAL
+    assert context.contract_scope == AgendaContractScopeCode.RESPONSIBLE
+
+
+def test_role_does_not_grant_view_contracts():
+    for role in ("manager", "viewer", "custom_x"):
+        context = PersonalAgendaContextFactory().build(
+            _staff(role=role, role_name=role, permissions=set())
+        )
+        assert "view_contracts" not in context.permissions
+        assert "view_contracts" not in context.presentation_profile.permissions
+
+
+def test_role_does_not_grant_edit_contracts():
+    for role in ("manager", "viewer", "custom_x"):
+        context = PersonalAgendaContextFactory().build(
+            _staff(role=role, role_name=role, permissions={"view_contracts"})
+        )
+        assert "edit_contracts" not in context.permissions
+        assert "edit_contracts" not in context.presentation_profile.permissions
+
+
+def test_profile_permissions_are_exact_snapshot():
+    context = PersonalAgendaContextFactory().build(
+        _staff(role="manager", permissions={"view_contracts", "custom_permission"})
+    )
+    assert context.permissions == frozenset({"view_contracts", "custom_permission"})
+    assert context.presentation_profile.permissions == context.permissions
+
+
+@pytest.mark.parametrize(
+    "staff",
+    [
+        _staff(role="personnel"),
+        _staff(role="manager", role_name="manager"),
+        _staff(role="viewer", role_name="viewer"),
+        {
+            "id": 0,
+            "admin_id": 14,
+            "full_name": "System Admin",
+            "device_name": "admin-device",
+            "is_admin": True,
+            "is_active": 1,
+            "permissions": {"view_contracts"},
+        },
+    ],
+)
+def test_explicit_contract_override_is_preserved_for_all_profiles(staff):
+    context = PersonalAgendaContextFactory().build(
+        staff,
+        personal_contract_ids=[9, 4, 9],
+    )
+    assert context.personal_contract_ids == frozenset({4, 9})
+
+
+def test_system_admin_profile_does_not_create_permissions():
+    context = PersonalAgendaContextFactory().build(
+        {
+            "id": 0,
+            "admin_id": 3,
+            "is_admin": True,
+            "is_active": 1,
+            "permissions": set(),
+        }
+    )
+    assert context.presentation_profile.code == AgendaPresentationProfileCode.SYSTEM
+    assert context.permissions == frozenset()
+    assert context.presentation_profile.permissions == frozenset()
+
+
+def test_agenda_context_default_scope_is_responsible_and_string_normalizes():
+    profile = AgendaPresentationProfile(
+        code=AgendaPresentationProfileCode.PERSONAL,
+        display_name="Personal",
+        description="Personal",
+        permissions=frozenset({"view_contracts"}),
+    )
+    default_context = AgendaContext(
+        now=datetime(2026, 7, 13, 10, 0),
+        today=datetime(2026, 7, 13).date(),
+        presentation_profile=profile,
+        staff_id=1,
+    )
+    assert default_context.contract_scope == AgendaContractScopeCode.RESPONSIBLE
+    normalized = AgendaContext(
+        now=datetime(2026, 7, 13, 10, 0),
+        today=datetime(2026, 7, 13).date(),
+        presentation_profile=profile,
+        staff_id=1,
+        contract_scope="all_visible",
+    )
+    assert normalized.contract_scope == AgendaContractScopeCode.ALL_VISIBLE
+
+
+def test_agenda_context_invalid_scope_is_rejected():
+    profile = AgendaPresentationProfile(
+        code=AgendaPresentationProfileCode.PERSONAL,
+        display_name="Personal",
+        description="Personal",
+        permissions=frozenset(),
+    )
+    with pytest.raises(ValueError, match="contract_scope"):
+        AgendaContext(
+            now=datetime(2026, 7, 13, 10, 0),
+            today=datetime(2026, 7, 13).date(),
+            presentation_profile=profile,
+            staff_id=1,
+            contract_scope="team",
+        )
