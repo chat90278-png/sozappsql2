@@ -18,19 +18,25 @@ from src.models.share_models import SHARE_STATUS_MERGED, SHARE_STATUS_RETURNED
 NOW = datetime(2026, 7, 12, 12, 0, 0)
 
 
-def _context() -> AgendaContext:
+def _context(
+    *,
+    permissions=frozenset({"view_contracts", "edit_contracts"}),
+    profile_code=AgendaPresentationProfileCode.PERSONAL,
+    role="personnel",
+) -> AgendaContext:
     profile = AgendaPresentationProfile(
-        code=AgendaPresentationProfileCode.PERSONAL,
-        display_name="Personal",
-        description="Personal",
-        permissions=frozenset({"view_contracts"}),
+        code=profile_code,
+        display_name="Profile",
+        description="Profile",
+        permissions=frozenset(permissions),
     )
     return AgendaContext(
         now=NOW,
         today=date(2026, 7, 12),
         presentation_profile=profile,
+        current_staff={"id": 7, "role": role, "permissions": frozenset(permissions)},
         staff_id=7,
-        permissions=frozenset({"view_contracts"}),
+        permissions=frozenset(permissions),
     )
 
 
@@ -198,3 +204,35 @@ def test_version_change_resurfaces_as_new():
     assert new_item.version != old_item.version
     assert decision.visible is True
     assert decision.is_new is True
+
+
+def test_returned_share_enabled_with_edit_contracts():
+    assert ReturnedShareAgendaProvider().is_enabled(
+        _context(permissions={"view_contracts", "edit_contracts"})
+    ) is True
+
+
+def test_returned_share_disabled_with_view_only_permission():
+    assert ReturnedShareAgendaProvider().is_enabled(
+        _context(permissions={"view_contracts"})
+    ) is False
+
+
+def test_returned_share_role_manager_does_not_enable_without_edit_contracts():
+    assert ReturnedShareAgendaProvider().is_enabled(
+        _context(
+            permissions={"view_contracts"},
+            profile_code=AgendaPresentationProfileCode.MANAGEMENT,
+            role="manager",
+        )
+    ) is False
+
+
+def test_returned_share_system_profile_does_not_enable_without_edit_contracts():
+    assert ReturnedShareAgendaProvider().is_enabled(
+        _context(
+            permissions={"view_contracts"},
+            profile_code=AgendaPresentationProfileCode.SYSTEM,
+            role="admin",
+        )
+    ) is False
