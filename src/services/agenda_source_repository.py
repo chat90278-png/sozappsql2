@@ -5,6 +5,7 @@ from collections.abc import Collection, Sequence
 from src.domain.agenda.source_models import (
     AgendaCalendarSource,
     AgendaSourceBundle,
+    DocumentLockAgendaSource,
     ReturnedShareAgendaSource,
 )
 from src.models.share_models import SHARE_STATUS_RETURNED
@@ -289,6 +290,51 @@ class AgendaSourceRepository:
             for row in rows
         )
 
+    def list_document_lock_sources(
+        self,
+        contract_ids: Collection[int],
+    ) -> tuple[DocumentLockAgendaSource, ...]:
+        ids = _normalize_contract_ids(contract_ids)
+        return self._list_document_lock_sources(ids, self._platform_names_by_contract(ids))
+
+    def _list_document_lock_sources(
+        self,
+        ids: Sequence[int],
+        platforms_by_contract: dict[int, tuple[str, ...]],
+    ) -> tuple[DocumentLockAgendaSource, ...]:
+        if not ids:
+            return ()
+        placeholders = ",".join("?" for _ in ids)
+        rows = self.conn.execute(
+            f"""
+            SELECT dl.contract_id,c.contract_no,c.contract_type,dl.is_locked,
+                   dl.locked_by_staff_id,dl.locked_by_device_name,
+                   dl.locked_by_full_name,dl.locked_at,dl.updated_at
+            FROM document_locks AS dl
+            JOIN contracts AS c ON c.id=dl.contract_id
+            WHERE dl.contract_id IN ({placeholders})
+              AND dl.is_locked=1
+              AND dl.locked_at IS NOT NULL
+            ORDER BY LOWER(TRIM(c.contract_no)),c.contract_no,dl.contract_id
+            """,
+            list(ids),
+        ).fetchall()
+        return tuple(
+            DocumentLockAgendaSource(
+                contract_id=row[0],
+                contract_no=row[1],
+                contract_type=row[2],
+                platform=" / ".join(platforms_by_contract.get(int(row[0]), ())),
+                is_locked=row[3],
+                locked_by_staff_id=row[4],
+                locked_by_device_name=row[5],
+                locked_by_full_name=row[6],
+                locked_at=row[7],
+                updated_at=row[8],
+            )
+            for row in rows
+        )
+
     def load_personal_sources(
         self,
         contract_ids: Collection[int],
@@ -300,4 +346,5 @@ class AgendaSourceRepository:
         return AgendaSourceBundle(
             calendar=self._list_calendar_sources(ids, platforms_by_contract),
             returned_shares=self._list_returned_share_sources(ids, platforms_by_contract),
+            document_locks=self._list_document_lock_sources(ids, platforms_by_contract),
         )
