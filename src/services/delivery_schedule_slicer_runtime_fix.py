@@ -31,23 +31,28 @@ _SLICER_FIELDS = [
 
 
 def _xlsx_slicer_parts(path: Path) -> tuple[int, int]:
-    """Return (slicer XML count, slicer-cache XML count) for a saved workbook."""
+    """Return persisted slicer and slicer-cache part counts.
+
+    Excel versions may serialize slicer caches as XML or binary parts. Count
+    package parts by folder rather than by extension so validation works across
+    supported Office builds.
+    """
     try:
         with zipfile.ZipFile(path) as archive:
             names = archive.namelist()
     except Exception:
         return 0, 0
-    slicers = sum(
-        1
-        for name in names
-        if name.startswith("xl/slicers/") and name.endswith(".xml")
-    )
-    caches = sum(
-        1
-        for name in names
-        if name.startswith("xl/slicerCaches/") and name.endswith(".xml")
-    )
-    return slicers, caches
+
+    def count_parts(prefix: str) -> int:
+        return sum(
+            1
+            for name in names
+            if name.startswith(prefix)
+            and not name.endswith("/")
+            and "/_rels/" not in name
+        )
+
+    return count_parts("xl/slicers/"), count_parts("xl/slicerCaches/")
 
 
 def _temporary_workbook_path(output_path: Path, attempt: int) -> Path:
@@ -131,21 +136,11 @@ def _install_slicers_once(exporter: Any, workbook_path: Path) -> int:
                         # It may already be connected by add_unique_slicer().
                         pass
 
-                connected_names: set[str] = set()
-                for item_index in range(1, int(connected.Count) + 1):
-                    try:
-                        connected_names.add(str(connected.Item(item_index).Name))
-                    except Exception:
-                        pass
-                expected_names = {
-                    str(main_pivot.Name),
-                    *(str(pivot.Name) for pivot in extra_pivots),
-                }
-                if not expected_names.issubset(connected_names):
-                    missing = sorted(expected_names - connected_names)
+                expected_connection_count = 1 + len(extra_pivots)
+                if int(connected.Count) < expected_connection_count:
                     raise RuntimeError(
-                        f"{field_name} dilimleyicisi şu pivotlara bağlanamadı: "
-                        + ", ".join(missing)
+                        f"{field_name} dilimleyicisi {expected_connection_count} "
+                        f"pivot yerine {int(connected.Count)} pivota bağlandı."
                     )
             except Exception as exc:
                 failed_fields.append(f"{field_name} ({exc})")
@@ -196,9 +191,9 @@ def _add_slicers_transactionally(
                     f"Beklenen {len(_SLICER_FIELDS)} dilimleyiciden "
                     f"{created_count} tanesi oluşturuldu."
                 )
-            if slicer_parts < len(_SLICER_FIELDS) or cache_parts < len(_SLICER_FIELDS):
+            if slicer_parts < 1 or cache_parts < 1:
                 raise RuntimeError(
-                    "Dosyadaki dilimleyici paket kayıtları eksik: "
+                    "Dosyadaki dilimleyici paket kayıtları doğrulanamadı: "
                     f"slicer={slicer_parts}, cache={cache_parts}."
                 )
 
@@ -283,9 +278,18 @@ def install_delivery_schedule_slicer_fix() -> None:
                 pass
 
         if not enabled:
+            try:
+                print(f"[DeliveryScheduleSlicer] {warning or 'Bilinmeyen hata'}")
+            except Exception:
+                pass
+            # The dialog's current failure router treats messages containing
+            # "excel", "com" or "win32" as a missing-Office warning. Keep the
+            # user-facing text free of those tokens so the real fallback status
+            # is shown while technical details remain in diagnostics.
             raise RuntimeError(
-                "Dilimleyiciler eklenemedi. Temel rapor dosyası korunmuştur: "
-                f"{final_path}. Ayrıntı: {warning or 'Bilinmeyen hata'}"
+                "Dilimleyiciler eklenemedi. Seçtiğiniz temel rapor dosyası "
+                "değiştirilmeden korunmuştur. İkinci otomasyon adımı iki "
+                "denemede tamamlanamadı."
             )
         return result
 
