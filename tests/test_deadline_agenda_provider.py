@@ -13,19 +13,25 @@ from src.domain.agenda.source_models import (
 from src.models.share_models import SHARE_STATUS_RETURNED
 
 
-def _context(today=date(2026, 7, 11)):
+def _context(
+    today=date(2026, 7, 11),
+    *,
+    permissions=frozenset({"view_contracts"}),
+    role="personnel",
+):
     profile = AgendaPresentationProfile(
         code=AgendaPresentationProfileCode.PERSONAL,
         display_name="Personal",
         description="Personal",
-        permissions=frozenset({"view_contracts"}),
+        permissions=frozenset(permissions),
     )
     return AgendaContext(
         now=datetime.combine(today, datetime.min.time()),
         today=today,
         presentation_profile=profile,
+        current_staff={"id": 1, "role": role, "permissions": frozenset(permissions)},
         staff_id=1,
-        permissions=frozenset({"view_contracts"}),
+        permissions=frozenset(permissions),
     )
 
 
@@ -138,3 +144,17 @@ def test_deadline_boundaries():
 def test_deadline_provider_ignores_returned_share_sources():
     bundle = _bundle(returned_shares=(_returned(),))
     assert DeadlineAgendaProvider().build(_context(), bundle) == ()
+
+
+def test_deadline_provider_enabled_with_view_contracts():
+    assert DeadlineAgendaProvider().is_enabled(_context(permissions={"view_contracts"})) is True
+
+
+def test_deadline_provider_disabled_without_view_contracts():
+    assert DeadlineAgendaProvider().is_enabled(_context(permissions=set())) is False
+
+
+def test_deadline_provider_role_does_not_enable_it():
+    assert DeadlineAgendaProvider().is_enabled(
+        _context(permissions=set(), role="manager")
+    ) is False
