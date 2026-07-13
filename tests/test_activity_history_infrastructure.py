@@ -510,14 +510,13 @@ def test_representative_production_mutations_persist_business_and_audit(tmp_path
         }
         assert {
             "platform_created",
-            "user_created",
             "users_updated",
-            "component_created",
             "components_updated",
             "contract_created",
             "document_added",
             "contract_deleted",
         } <= actions
+        assert {"user_created", "user_updated", "user_deleted", "component_created", "component_updated"}.isdisjoint(actions)
     finally:
         reopened.close()
 

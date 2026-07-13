@@ -23,7 +23,12 @@ class STSIndexWorker(QObject):
         store = None
         try:
             self.progress.emit("Sözleşme indeksi hazırlanıyor...")
-            store = STSStore(self.path, actor="Index Worker", source="STS Index Worker")
+            store = STSStore(
+                self.path,
+                actor="Index Worker",
+                source="STS Index Worker",
+                actor_context={"actor_type": "SYSTEM", "actor_display_name": "Index Worker"},
+            )
             index = [dict(row) for row in store.build_contract_index()]
             self.finished.emit(index)
         except Exception as exc:

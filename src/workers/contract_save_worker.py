@@ -44,7 +44,9 @@ class ContractSaveWorker(QObject):
         old_start_row: int = 0,
         start_row: int = 0,
         actor: str = "",
-        store=None,   # Excel: bellekteki wb'yi atlatmak için. STS: path+actor için okunur.
+        actor_context=None,
+        session_id: str = "",
+        store=None,   # Excel: bellekteki wb'yi atlatmak için. STS: path+actor/context için okunur.
     ):
         super().__init__()
         self.path = Path(path)
@@ -58,7 +60,15 @@ class ContractSaveWorker(QObject):
         self.old_start_row = old_start_row
         self.start_row = start_row
         self.actor = actor or "Sistem"
+        self.actor_context = dict(actor_context or {})
+        self.session_id = str(session_id or "")
         self._store = store
+        if self._store is not None and hasattr(self._store, "current_actor_context"):
+            inherited = self._store.current_actor_context()
+            if not self.actor_context:
+                self.actor_context = dict(inherited or {})
+            if not self.session_id:
+                self.session_id = str((inherited or {}).get("session_id") or "")
 
     def _open_store(self):
         """
@@ -82,7 +92,13 @@ class ContractSaveWorker(QObject):
 
             # Geç import — döngüsel bağımlılığı önler, ExcelStore olmayan ortamlarda çalışır.
             from src.services.sts_store import STSStore  # noqa: PLC0415
-            store = STSStore(self.path, actor=actor, source="Contract Save Worker")
+            store = STSStore(
+                self.path,
+                actor=actor,
+                source="Contract Save Worker",
+                actor_context=self.actor_context or None,
+                session_id=self.session_id or None,
+            )
             return store, True  # opened_new=True → finally'de kapat
 
         # ── Excel yolu (değişmedi) ─────────────────────────────────────────

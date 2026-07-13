@@ -2661,7 +2661,12 @@ class ContractWorkWindow(QDialog):
 
             if temp_path.exists():
                 temp_path.unlink()
-            share_store = STSStore(temp_path, actor="Sözleşme Paylaşımı")
+            share_store = STSStore(
+                temp_path,
+                actor="Sözleşme Paylaşımı",
+                actor_context=staff if isinstance(staff, dict) else None,
+                session_id=(self.store.current_actor_context().get("session_id") if hasattr(self.store, "current_actor_context") else None),
+            )
             share_ci = copy.deepcopy(self.ci)
             share_ci.entry_start_row = 0
             setattr(share_ci, "id", 0)

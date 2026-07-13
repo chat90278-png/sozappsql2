@@ -13,6 +13,7 @@ import time
 import traceback
 import tempfile
 import zipfile
+import uuid
 import unicodedata
 import logging
 from pathlib import Path
@@ -942,6 +943,9 @@ class MainWindow(QMainWindow):
         self.path = Path(initial_path) if initial_path else (store.path if store else Path(DEFAULT_FILE))
         self.store = store
         self.current_staff = current_staff or auth.current_staff
+        self.activity_session_id = uuid.uuid4().hex
+        if store is not None and hasattr(store, "set_actor_context") and isinstance(self.current_staff, dict):
+            store.set_actor_context(self.current_staff, session_id=self.activity_session_id)
         self.contract_index = contract_index if contract_index is not None else []
         self._tag_color_map_cache: Optional[Dict[str, str]] = None
         self._use_contract_table_view = False  # Feature flag: True yapılırsa QTableView kullanılır
@@ -1216,7 +1220,9 @@ class MainWindow(QMainWindow):
         self.current_staff = admin_staff
         auth.current_staff = admin_staff
         actor_name = str(admin_staff.get("full_name") or admin_staff.get("admin_name") or "Sistem Yöneticisi")
-        if self.store is not None and hasattr(self.store, "actor"):
+        if self.store is not None and hasattr(self.store, "set_actor_context"):
+            self.store.set_actor_context(admin_staff, session_id=self.activity_session_id)
+        elif self.store is not None and hasattr(self.store, "actor"):
             self.store.actor = actor_name
         self._propagate_current_staff_to_open_windows(admin_staff)
         self._refresh_permission_actions()
@@ -1228,7 +1234,9 @@ class MainWindow(QMainWindow):
                 continue
             try:
                 widget.current_staff = staff
-                if getattr(widget, "store", None) is self.store and hasattr(widget.store, "actor"):
+                if getattr(widget, "store", None) is self.store and hasattr(widget.store, "set_actor_context"):
+                    widget.store.set_actor_context(staff, session_id=self.activity_session_id)
+                elif getattr(widget, "store", None) is self.store and hasattr(widget.store, "actor"):
                     widget.store.actor = str(staff.get("full_name") or "Sistem Yöneticisi")
             except Exception:
                 pass
@@ -3023,7 +3031,12 @@ class MainWindow(QMainWindow):
                     "İşlem öncesi aynı klasöre otomatik yedek alınacaktır. "
                     "Güncellenen dosya eski uygulamalarda açılmayabilir.",
                 )
-            self.store = STSStore(self.path, actor=actor)
+            self.store = STSStore(
+                self.path,
+                actor=actor,
+                actor_context=self.current_staff if isinstance(self.current_staff, dict) else None,
+                session_id=self.activity_session_id,
+            )
         except STSMigrationError as exc:
             _log.exception("STS migration hatası: %s", getattr(exc, "technical_detail", ""))
             backup_text = f"\n\nYedek dosya: {exc.backup_path}" if getattr(exc, "backup_path", None) else ""

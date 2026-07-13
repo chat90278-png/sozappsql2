@@ -19,6 +19,8 @@ from src.services.activity_history_infra import (
     MAX_ACTIVITY_MESSAGE_LENGTH,
     UNKNOWN_ACTOR,
     activity_json,
+    infer_activity_category,
+    normalize_actor_type,
     normalize_activity_category,
     normalize_activity_status,
     normalize_activity_text,
@@ -1168,7 +1170,7 @@ CREATE TABLE IF NOT EXISTS activity_logs(
             contract_no_snapshot or contract_no, max_length=MAX_ACTIVITY_FIELD_LENGTH
         )
         operation_text = normalize_activity_text(operation_id, max_length=MAX_ACTIVITY_FIELD_LENGTH)
-        actor_type_text = normalize_activity_text(actor_type, max_length=64)
+        actor_type_text = normalize_actor_type(actor_type, default="UNKNOWN") or "UNKNOWN"
         session_text = normalize_activity_text(session_id, max_length=MAX_ACTIVITY_FIELD_LENGTH)
 
         try:
@@ -1199,7 +1201,7 @@ CREATE TABLE IF NOT EXISTS activity_logs(
                     activity_json(after),
                     activity_json(payload),
                     utc_now_iso(),
-                    normalize_activity_category(category),
+                    infer_activity_category(action_text, category),
                     normalize_activity_status(status),
                     operation_text or None,
                     actor_type_text or None,

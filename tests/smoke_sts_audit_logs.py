@@ -71,7 +71,12 @@ with TemporaryDirectory() as td:
     assert store.delete_contract_file(document_id)
     store.delete_contract("AKINCI", contract.no)
     actions = {row[0] for row in store.db.conn.execute("SELECT action FROM activity_logs")}
-    assert {"contract_created", "contract_updated", "contract_tags_updated", "system_created", "system_updated", "system_component_updated", "delivery_created", "delivery_updated", "delivery_status_changed", "document_added", "document_deleted", "contract_deleted"} <= actions
+    assert {
+        "contract_created", "contract_updated", "system_created", "system_updated",
+        "delivery_created", "delivery_updated", "document_added",
+        "document_deleted", "contract_deleted",
+    } <= actions
+    assert {"contract_tags_updated", "system_component_updated", "delivery_status_changed"}.isdisjoint(actions)
     user_logs = store.db.conn.execute("SELECT actor,device_name FROM activity_logs WHERE action='contract_created'").fetchone()
     assert user_logs[:] == ("Kullanıcı", device_name())
 

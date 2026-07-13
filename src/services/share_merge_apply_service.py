@@ -31,6 +31,7 @@ from src.models.share_models import (
 )
 from src.services.share_package_service import read_share_base_snapshot, validate_share_package
 from src.services.sts_database import device_name, now_iso
+from src.services.activity_history_infra import activity_json, actor_context_from_principal, utc_now_iso
 
 _log = logging.getLogger(__name__)
 
@@ -155,6 +156,10 @@ class _ApplyContext:
     operations_hash: str
     actor: str
     current_staff_id: int
+    actor_type: str = "UNKNOWN"
+    current_admin_id: int = 0
+    session_id: str = ""
+    operation_id: str = ""
 
 
 def apply_resolved_share_merge(
@@ -171,6 +176,22 @@ def apply_resolved_share_merge(
     share_path = Path(share_path)
     actor = _actor_from_staff(current_staff, source_store_or_conn)
     staff_id = _staff_id(current_staff)
+    inherited_context = {}
+    if hasattr(source_store_or_conn, "current_actor_context"):
+        try:
+            inherited_context = dict(source_store_or_conn.current_actor_context() or {})
+        except Exception:
+            inherited_context = {}
+    if isinstance(current_staff, dict):
+        structured_actor = actor_context_from_principal(
+            current_staff,
+            fallback_actor=actor,
+            session_id=inherited_context.get("session_id"),
+        )
+    elif inherited_context:
+        structured_actor = dict(inherited_context)
+    else:
+        structured_actor = actor_context_from_principal(None, fallback_actor=actor)
 
     validation_data = _preflight_validate(conn, source_store_or_conn, share_path, resolved_plan, allow_partial=allow_partial)
     metadata = validation_data["metadata"]
@@ -198,6 +219,10 @@ def apply_resolved_share_merge(
         operations_hash=operations_hash,
         actor=actor,
         current_staff_id=staff_id,
+        actor_type=str(structured_actor.get("actor_type") or "UNKNOWN"),
+        current_admin_id=int(structured_actor.get("actor_admin_id") or 0),
+        session_id=str(structured_actor.get("session_id") or ""),
+        operation_id=uuid.uuid4().hex,
     )
     operation_results: list[AppliedMergeOperationResult] = []
     applied_ids: list[str] = []
@@ -1067,8 +1092,20 @@ def _insert_audit_log(ctx: _ApplyContext, status: str, rev_before: int, rev_afte
         "revision_after": rev_after,
         "backup_path": backup_path,
     }
+    actor_type = str(getattr(ctx, "actor_type", "UNKNOWN") or "UNKNOWN")
+    actor_staff_id = int(getattr(ctx, "current_staff_id", 0) or 0) or None
+    actor_admin_id = int(getattr(ctx, "current_admin_id", 0) or 0) or None
+    operation_id = str(getattr(ctx, "operation_id", "") or uuid.uuid4().hex)
+    session_id = str(getattr(ctx, "session_id", "") or "") or None
     ctx.source.execute(
-        "INSERT INTO activity_logs(created_at,actor,source,device_name,action,entity_type,entity_id,entity_key,contract_no,message,payload_json) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+        """
+        INSERT INTO activity_logs(
+            created_at,actor,source,device_name,action,entity_type,entity_id,entity_key,
+            contract_no,message,payload_json,occurred_at_utc,category,status,operation_id,
+            actor_type,actor_staff_id,actor_admin_id,actor_display_name,session_id,contract_id,
+            contract_no_snapshot,event_schema_version
+        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """,
         (
             now_iso(),
             ctx.actor,
@@ -1080,7 +1117,19 @@ def _insert_audit_log(ctx: _ApplyContext, status: str, rev_before: int, rev_afte
             ctx.contract_merge_uid,
             ctx.contract_no,
             "Paylaşım merge operasyonları uygulandı",
-            json.dumps(payload, ensure_ascii=False, sort_keys=True),
+            activity_json(payload),
+            utc_now_iso(),
+            "USER",
+            "SUCCESS",
+            operation_id,
+            actor_type,
+            actor_staff_id,
+            actor_admin_id,
+            ctx.actor,
+            session_id,
+            int(getattr(ctx, "contract_id", 0) or 0) or None,
+            ctx.contract_no,
+            1,
         ),
     )
 

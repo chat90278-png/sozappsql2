@@ -6,18 +6,28 @@ import mimetypes
 import os
 import uuid
 from contextlib import contextmanager
+from functools import wraps
+from contextvars import ContextVar
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Tuple
 from src.config.app_config import MAX_CONTRACT_FILE_SIZE_BYTES
 from src.models.app_models import ComponentDef, ContractInfo, DeliveryInfo, SystemInfo, TagDef
 from src.models.share_models import SHARE_STATUS_OPEN, SHARE_PACKAGE_STATUSES, SharePackageRegistryEntry
 from src.domain.flexible_date import is_tbd_contract_no
 from src.domain.contract_snapshot import build_contract_snapshot, hash_contract_snapshot
-from src.services.sts_database import STSDatabase, now_iso
+from src.services.sts_database import STSDatabase, now_iso, should_audit_sql, sql_operation
 from src.services.activity_history_infra import (
+    ActivityOperation,
     MAX_ACTIVITY_FIELD_LENGTH,
     UNKNOWN_ACTOR,
+    actor_context_from_principal,
+    build_changed_fields,
+    infer_activity_category,
+    normalize_actor_context,
+    normalize_activity_category,
     normalize_activity_text,
+    safe_positive_int,
+    stable_activity_value,
 )
 from src.services import perf_tracker
 from src import auth
@@ -34,15 +44,164 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _activity_scoped(name: str, category: str | None = None):
+    def decorator(func):
+        @wraps(func)
+        def wrapped(self, *args, **kwargs):
+            with self.activity_operation(name=name, category=category):
+                return func(self, *args, **kwargs)
+        return wrapped
+    return decorator
+
+
 class STSStore:
-    def __init__(self, path: Path | str, actor: str = "Kullanıcı", source: str = "Main UI"):
+    def __init__(
+        self,
+        path: Path | str,
+        actor: str = "Kullanıcı",
+        source: str = "Main UI",
+        *,
+        actor_context: Mapping[str, Any] | None = None,
+        session_id: str | None = None,
+    ):
         self.path = Path(path)
-        self.actor = str(actor or "Kullanıcı")
         self.source = str(source or "Main UI")
+        self._session_id = normalize_activity_text(session_id, max_length=MAX_ACTIVITY_FIELD_LENGTH) or uuid.uuid4().hex
+        principal = dict(actor_context or {})
+        if principal and any(
+            key in principal
+            for key in ("actor_type", "actor_staff_id", "actor_admin_id", "actor_display_name")
+        ):
+            structured = normalize_actor_context(
+                principal,
+                fallback_actor=actor,
+                session_id=self._session_id,
+            )
+        elif principal:
+            structured = actor_context_from_principal(
+                principal,
+                fallback_actor=actor,
+                session_id=self._session_id,
+            )
+        elif isinstance(getattr(auth, "current_staff", None), dict):
+            structured = actor_context_from_principal(
+                auth.current_staff,
+                fallback_actor=actor,
+                session_id=self._session_id,
+            )
+        else:
+            structured = normalize_actor_context(
+                {
+                    "actor_type": "UNKNOWN",
+                    "actor_display_name": actor,
+                    "session_id": self._session_id,
+                },
+                fallback_actor=actor,
+                session_id=self._session_id,
+            )
+        self.actor_context = structured
+        self.actor = str(structured.get("actor_display_name") or actor or UNKNOWN_ACTOR)
         self.db = STSDatabase(self.path, source=self.source)
         self._id_cache = {"platform": {}, "component": {}, "user": {}, "tag": {}}
+        self._activity_operation_stack: ContextVar[tuple[ActivityOperation, ...]] = ContextVar(
+            f"sts_activity_operation_{id(self)}", default=()
+        )
 
-    def current_actor(self) -> str: return self.actor
+    def current_actor(self) -> str:
+        return str(self.actor_context.get("actor_display_name") or self.actor or UNKNOWN_ACTOR)
+
+    def current_actor_context(self) -> dict[str, Any]:
+        return dict(self.actor_context)
+
+    def set_actor_context(
+        self,
+        actor_context: Mapping[str, Any] | None,
+        *,
+        session_id: str | None = None,
+    ) -> dict[str, Any]:
+        effective_session = normalize_activity_text(
+            session_id or self._session_id, max_length=MAX_ACTIVITY_FIELD_LENGTH
+        ) or self._session_id
+        principal = dict(actor_context or {})
+        if principal and any(
+            key in principal
+            for key in ("actor_type", "actor_staff_id", "actor_admin_id", "actor_display_name")
+        ):
+            structured = normalize_actor_context(
+                principal,
+                fallback_actor=self.actor,
+                session_id=effective_session,
+            )
+        else:
+            structured = actor_context_from_principal(
+                principal,
+                fallback_actor=self.actor,
+                session_id=effective_session,
+            )
+        self._session_id = effective_session
+        self.actor_context = structured
+        self.actor = str(structured.get("actor_display_name") or UNKNOWN_ACTOR)
+        return dict(structured)
+
+    def _active_activity_operation(self) -> ActivityOperation | None:
+        stack = self._activity_operation_stack.get()
+        return stack[-1] if stack else None
+
+    @contextmanager
+    def activity_operation(
+        self,
+        *,
+        name: str = "",
+        actor_context: Mapping[str, Any] | None = None,
+        category: str | None = None,
+        contract_id: int | None = None,
+        platform: str | None = None,
+        contract_no: str | None = None,
+        operation_id: str | None = None,
+        new_operation: bool = False,
+    ):
+        stack = self._activity_operation_stack.get()
+        parent = stack[-1] if stack else None
+        explicit_id = normalize_activity_text(operation_id, max_length=MAX_ACTIVITY_FIELD_LENGTH)
+        effective_id = explicit_id or (
+            uuid.uuid4().hex if new_operation or parent is None else parent.operation_id
+        )
+        inherited_actor = dict(parent.actor_context or {}) if parent else dict(self.actor_context)
+        if actor_context is not None:
+            supplied = dict(actor_context or {})
+            if any(
+                key in supplied
+                for key in ("actor_type", "actor_staff_id", "actor_admin_id", "actor_display_name")
+            ):
+                inherited_actor = normalize_actor_context(
+                    supplied,
+                    fallback_actor=inherited_actor.get("actor_display_name") or self.current_actor(),
+                    session_id=supplied.get("session_id") or inherited_actor.get("session_id") or self._session_id,
+                )
+            else:
+                inherited_actor = actor_context_from_principal(
+                    supplied,
+                    fallback_actor=inherited_actor.get("actor_display_name") or self.current_actor(),
+                    session_id=supplied.get("session_id") or inherited_actor.get("session_id") or self._session_id,
+                )
+        operation = ActivityOperation(
+            operation_id=effective_id,
+            name=normalize_activity_text(name, max_length=128),
+            actor_context=inherited_actor,
+            category=normalize_activity_category(category) or (parent.category if parent else None),
+            contract_id=safe_positive_int(contract_id) or (parent.contract_id if parent else None),
+            platform=normalize_activity_text(platform, max_length=MAX_ACTIVITY_FIELD_LENGTH) or (parent.platform if parent else None),
+            contract_no=normalize_activity_text(contract_no, max_length=MAX_ACTIVITY_FIELD_LENGTH) or (parent.contract_no if parent else None),
+            session_id=normalize_activity_text(
+                inherited_actor.get("session_id") or (parent.session_id if parent else self._session_id),
+                max_length=MAX_ACTIVITY_FIELD_LENGTH,
+            ) or self._session_id,
+        )
+        token = self._activity_operation_stack.set(stack + (operation,))
+        try:
+            yield operation
+        finally:
+            self._activity_operation_stack.reset(token)
     def save(self): self.db.conn.commit()
     def reload_from_disk(self):
         self.db.close(); self.db = STSDatabase(self.path, source=self.source)
@@ -184,23 +343,55 @@ class STSStore:
 
 
     def _log(self, action: str, **kwargs):
+        operation = self._active_activity_operation()
+        context_actor = dict(operation.actor_context or {}) if operation else dict(self.actor_context)
+
         explicit_actor = normalize_activity_text(
             kwargs.get("actor"), max_length=MAX_ACTIVITY_FIELD_LENGTH
         )
-        current_actor = ""
-        if not explicit_actor:
+        explicit_display = normalize_activity_text(
+            kwargs.get("actor_display_name"), max_length=MAX_ACTIVITY_FIELD_LENGTH
+        )
+        actor_name = explicit_display or explicit_actor or normalize_activity_text(
+            context_actor.get("actor_display_name"), max_length=MAX_ACTIVITY_FIELD_LENGTH
+        )
+        if not actor_name:
             try:
-                current_actor = normalize_activity_text(
+                actor_name = normalize_activity_text(
                     self.current_actor(), max_length=MAX_ACTIVITY_FIELD_LENGTH
                 )
             except Exception:
                 _LOG.exception("STSStore.current_actor failed while preparing activity event")
-        actor_name = explicit_actor or current_actor
         if not explicit_actor and actor_name.casefold() == "kullanıcı":
             actor_name = ""
         actor_name = actor_name or UNKNOWN_ACTOR
+
         kwargs["actor"] = actor_name
-        kwargs.setdefault("actor_display_name", actor_name)
+        kwargs["actor_display_name"] = actor_name
+        kwargs.setdefault("actor_type", context_actor.get("actor_type") or "UNKNOWN")
+        kwargs.setdefault("actor_staff_id", context_actor.get("actor_staff_id"))
+        kwargs.setdefault("actor_admin_id", context_actor.get("actor_admin_id"))
+        kwargs.setdefault(
+            "session_id",
+            (operation.session_id if operation else None)
+            or context_actor.get("session_id")
+            or self._session_id,
+        )
+        if operation is not None:
+            kwargs.setdefault("operation_id", operation.operation_id)
+            kwargs.setdefault("category", operation.category)
+            kwargs.setdefault("contract_id", operation.contract_id)
+            kwargs.setdefault("platform", operation.platform)
+            kwargs.setdefault("contract_no", operation.contract_no)
+        if kwargs.get("category") is None:
+            kwargs["category"] = infer_activity_category(action)
+        if kwargs.get("changed_fields") is None and (
+            kwargs.get("before") is not None or kwargs.get("after") is not None
+        ):
+            kwargs["changed_fields"] = build_changed_fields(
+                kwargs.get("before") if isinstance(kwargs.get("before"), Mapping) else {},
+                kwargs.get("after") if isinstance(kwargs.get("after"), Mapping) else {},
+            )
         return self.db.add_log(action=action, **kwargs)
 
     def list_logs(
@@ -256,30 +447,72 @@ class STSStore:
         cid = self._resolve_contract_id(platform, contract_no, contract_type)
         if cid is None:
             return {"contract_id": None, "is_locked": 0}
-        state = auth.lock_documents(self.db.conn, cid, current_staff or {})
-        self._log(
-            "documents_locked",
-            entity_type="document_lock",
-            source="Document Manager",
-            message="Belgeler kilitlendi",
-            payload={"contract_id": cid, "locked_by_device_name": (current_staff or {}).get("device_name")},
-            actor=str((current_staff or {}).get("full_name") or self.current_actor()),
+        staff = dict(current_staff or {})
+        before = auth.get_document_lock_state(self.db.conn, cid)
+        same_owner = (
+            int(before.get("is_locked") or 0) == 1
+            and safe_positive_int(before.get("locked_by_staff_id")) == safe_positive_int(staff.get("id") or staff.get("staff_id"))
+            and str(before.get("locked_by_device_name") or "") == str(staff.get("device_name") or "")
         )
+        if same_owner:
+            return before
+        with self.activity_operation(
+            name="documents_lock",
+            actor_context=staff,
+            category="USER",
+            contract_id=cid,
+            platform=platform,
+            contract_no=contract_no,
+        ):
+            state = auth.lock_documents(self.db.conn, cid, staff)
+            self._log(
+                "documents_locked",
+                entity_type="document_lock",
+                entity_id=cid,
+                source="Document Manager",
+                message="Belgeler kilitlendi",
+                before={
+                    "is_locked": bool(before.get("is_locked")),
+                    "locked_by_staff_id": before.get("locked_by_staff_id"),
+                    "locked_by_device_name": before.get("locked_by_device_name"),
+                },
+                after={
+                    "is_locked": bool(state.get("is_locked")),
+                    "locked_by_staff_id": state.get("locked_by_staff_id"),
+                    "locked_by_device_name": state.get("locked_by_device_name"),
+                },
+            )
         return state
 
     def unlock_documents(self, platform: str, contract_no: str, actor=None, contract_type: str = "Ana Sözleşme") -> dict:
         cid = self._resolve_contract_id(platform, contract_no, contract_type)
         if cid is None:
             return {"contract_id": None, "is_locked": 0}
-        state = auth.unlock_documents(self.db.conn, cid)
-        self._log(
-            "documents_unlocked",
-            entity_type="document_lock",
-            source="Document Manager",
-            message="Belgeler kilidi açıldı",
-            payload={"contract_id": cid},
-            actor=str(actor or self.current_actor()),
-        )
+        before = auth.get_document_lock_state(self.db.conn, cid)
+        if int(before.get("is_locked") or 0) == 0:
+            return before
+        with self.activity_operation(
+            name="documents_unlock",
+            category="USER",
+            contract_id=cid,
+            platform=platform,
+            contract_no=contract_no,
+        ):
+            state = auth.unlock_documents(self.db.conn, cid)
+            self._log(
+                "documents_unlocked",
+                entity_type="document_lock",
+                entity_id=cid,
+                source="Document Manager",
+                message="Belgeler kilidi açıldı",
+                before={
+                    "is_locked": True,
+                    "locked_by_staff_id": before.get("locked_by_staff_id"),
+                    "locked_by_device_name": before.get("locked_by_device_name"),
+                },
+                after={"is_locked": False},
+                actor=str(actor or self.current_actor()),
+            )
         return state
 
     def supports_activity_logs(self):
@@ -391,6 +624,33 @@ class STSStore:
     def supports_database_management(self):
         return True
 
+    def add_sql_query_log(self, sql: str, duration_ms: int, affected_rows: int = 0) -> bool:
+        operation = sql_operation(sql)
+        if not should_audit_sql(operation):
+            return False
+        context = self.current_actor_context()
+        event_id = self.db.add_log(
+            "sql_query_executed",
+            entity_type="database",
+            actor=self.current_actor(),
+            actor_display_name=self.current_actor(),
+            actor_type=context.get("actor_type"),
+            actor_staff_id=context.get("actor_staff_id"),
+            actor_admin_id=context.get("actor_admin_id"),
+            session_id=context.get("session_id"),
+            source="SQL Terminal",
+            category="TECHNICAL",
+            message="SQL terminal üzerinden veri değiştiren sorgu çalıştırıldı",
+            payload={
+                "operation": operation,
+                "duration_ms": int(duration_ms or 0),
+                "changed": True,
+                "affected_rows": int(affected_rows or 0),
+            },
+        )
+        return event_id is not None
+
+
     def preview_table(self, table_name, limit=100):
         return self.db.preview_table(table_name, limit)
 
@@ -433,76 +693,190 @@ class STSStore:
         old = str(old_name or "").strip()
         new = str(new_name or "").strip()
         if not old or not new:
-            return
-        ts = now_iso()
-        if sort_order is None:
-            self.db.conn.execute(
-                "UPDATE platforms SET name=?,display_name=?,is_active=?,is_excluded=?,updated_at=? WHERE name=?",
-                (new, new, 1 if is_active else 0, 1 if is_excluded else 0, ts, old),
-            )
-        else:
-            self.db.conn.execute(
-                "UPDATE platforms SET name=?,display_name=?,is_active=?,is_excluded=?,sort_order=?,updated_at=? WHERE name=?",
-                (new, new, 1 if is_active else 0, 1 if is_excluded else 0, int(sort_order or 0), ts, old),
-            )
-        self.db.conn.commit()
-        self._clear_id_cache("platform")
-        self._log("platform_updated", entity_type="platform", entity_key=new, platform=new, message="Platform güncellendi", before={"name": old}, after={"name": new, "is_active": bool(is_active), "is_excluded": bool(is_excluded)})
-        if logo_source:
-            raw = Path(logo_source).read_bytes()
-            ext = Path(logo_source).suffix.lower().lstrip('.')
-            self.set_platform_logo_bytes(new, raw, ext=ext)
+            return None
+        row = self.db.conn.execute(
+            "SELECT id,name,is_active,is_excluded,sort_order FROM platforms WHERE name=?",
+            (old,),
+        ).fetchone()
+        if not row:
+            return None
+        before = {
+            "name": str(row["name"] or ""),
+            "is_active": bool(row["is_active"]),
+            "is_excluded": bool(row["is_excluded"]),
+            "sort_order": int(row["sort_order"] or 0),
+        }
+        after = {
+            "name": new,
+            "is_active": bool(is_active),
+            "is_excluded": bool(is_excluded),
+            "sort_order": before["sort_order"] if sort_order is None else int(sort_order or 0),
+        }
+        changed = stable_activity_value(before) != stable_activity_value(after)
+        with self.activity_operation(name="platform_update", category="MANAGEMENT", platform=new):
+            if changed:
+                with self.db.tx():
+                    self.db.conn.execute(
+                        "UPDATE platforms SET name=?,display_name=?,is_active=?,is_excluded=?,sort_order=?,updated_at=? WHERE id=?",
+                        (new, new, int(after["is_active"]), int(after["is_excluded"]), after["sort_order"], now_iso(), int(row["id"])),
+                    )
+                    self._log(
+                        "platform_updated",
+                        entity_type="platform",
+                        entity_id=int(row["id"]),
+                        entity_key=new,
+                        platform=new,
+                        message="Platform güncellendi",
+                        before=before,
+                        after=after,
+                    )
+                self._clear_id_cache("platform")
+            if logo_source:
+                raw = Path(logo_source).read_bytes()
+                ext = Path(logo_source).suffix.lower().lstrip(".")
+                self.set_platform_logo_bytes(new, raw, ext=ext)
+        return None
 
     def create_platform(self, name, logo_source=None):
         nm = str(name or "").strip()
         if not nm:
-            return
-        ts = now_iso()
-        next_order = int(self.db.conn.execute("SELECT COALESCE(MAX(sort_order), -1) + 1 FROM platforms").fetchone()[0] or 0)
-        self.db.conn.execute("INSERT OR IGNORE INTO platforms(name,display_name,sort_order,created_at,updated_at) VALUES(?,?,?,?,?)", (nm, nm, next_order, ts, ts))
-        self.db.conn.commit()
-        self._clear_id_cache("platform")
-        self._log("platform_created", entity_type="platform", entity_key=nm, platform=nm, message=f"Platform oluşturuldu: {nm}")
-        if logo_source:
-            raw = Path(logo_source).read_bytes()
-            ext = Path(logo_source).suffix.lower().lstrip('.')
-            self.set_platform_logo_bytes(nm, raw, ext=ext)
+            return None
+        existing = self.db.conn.execute("SELECT id FROM platforms WHERE name=?", (nm,)).fetchone()
+        with self.activity_operation(name="platform_create", category="MANAGEMENT", platform=nm):
+            if not existing:
+                next_order = int(self.db.conn.execute("SELECT COALESCE(MAX(sort_order), -1) + 1 FROM platforms").fetchone()[0] or 0)
+                ts = now_iso()
+                with self.db.tx():
+                    cursor = self.db.conn.execute(
+                        "INSERT OR IGNORE INTO platforms(name,display_name,sort_order,created_at,updated_at) VALUES(?,?,?,?,?)",
+                        (nm, nm, next_order, ts, ts),
+                    )
+                    if cursor.rowcount:
+                        platform_id = int(cursor.lastrowid)
+                        self._log(
+                            "platform_created",
+                            entity_type="platform",
+                            entity_id=platform_id,
+                            entity_key=nm,
+                            platform=nm,
+                            message=f"Platform oluşturuldu: {nm}",
+                            after={"name": nm, "sort_order": next_order},
+                        )
+                self._clear_id_cache("platform")
+            if logo_source:
+                raw = Path(logo_source).read_bytes()
+                ext = Path(logo_source).suffix.lower().lstrip(".")
+                self.set_platform_logo_bytes(nm, raw, ext=ext)
+        return None
 
     def delete_platform(self, name):
         nm = str(name or "").strip()
-        with self.db.tx():
-            self.db.conn.execute("DELETE FROM platforms WHERE name=?", (nm,))
-            self._log("platform_deleted", entity_type="platform", entity_key=nm, platform=nm, message=f"Platform silindi: {nm}")
+        if not nm:
+            return None
+        row = self.db.conn.execute(
+            "SELECT id,name,is_active,is_excluded,sort_order FROM platforms WHERE name=?",
+            (nm,),
+        ).fetchone()
+        if not row:
+            return None
+        with self.activity_operation(name="platform_delete", category="MANAGEMENT", platform=nm):
+            with self.db.tx():
+                cursor = self.db.conn.execute("DELETE FROM platforms WHERE id=?", (int(row["id"]),))
+                if cursor.rowcount:
+                    self._log(
+                        "platform_deleted",
+                        entity_type="platform",
+                        entity_id=int(row["id"]),
+                        entity_key=nm,
+                        platform=nm,
+                        message=f"Platform silindi: {nm}",
+                        before={
+                            "name": str(row["name"] or ""),
+                            "is_active": bool(row["is_active"]),
+                            "is_excluded": bool(row["is_excluded"]),
+                            "sort_order": int(row["sort_order"] or 0),
+                        },
+                    )
         self._clear_id_cache("platform")
+        return None
+
     def load_excluded_platforms(self):
         return [r[0] for r in self.db.conn.execute("SELECT name FROM platforms WHERE is_excluded=1").fetchall()]
     def save_excluded_platforms(self, excluded):
-        ex = set(excluded or [])
-        for p in self.platform_names() + list(ex):
-            self.db.conn.execute("UPDATE platforms SET is_excluded=? WHERE name=?", (1 if p in ex else 0, p))
-        self.db.conn.commit()
-        self._log("platform_exclusions_updated", entity_type="platform", message="Platform dışlamaları güncellendi", payload={"excluded": sorted(list(ex))})
+        requested = {str(item or "").strip() for item in (excluded or []) if str(item or "").strip()}
+        current = {str(row[0]) for row in self.db.conn.execute("SELECT name FROM platforms WHERE is_excluded=1")}
+        if requested == current:
+            return False
+        with self.activity_operation(name="platform_exclusions", category="MANAGEMENT"):
+            with self.db.tx():
+                self.db.conn.execute("UPDATE platforms SET is_excluded=0 WHERE is_excluded<>0")
+                if requested:
+                    marks = ",".join("?" for _ in requested)
+                    self.db.conn.execute(
+                        f"UPDATE platforms SET is_excluded=1 WHERE name IN ({marks})",
+                        tuple(sorted(requested)),
+                    )
+                self._log(
+                    "platform_exclusions_updated",
+                    entity_type="platform",
+                    message="Platform dışlamaları güncellendi",
+                    before={"excluded": sorted(current)},
+                    after={"excluded": sorted(requested)},
+                )
+        return True
+
     def get_platform_logo_bytes(self, platform):
         r=self.db.conn.execute("SELECT logo_blob FROM platforms WHERE name=?",(platform,)).fetchone(); return r[0] if r else None
     def set_platform_logo_bytes(self, platform, data, ext=None):
+        name = str(platform or "").strip()
         raw = bytes(data or b"")
         if len(raw) > 2 * 1024 * 1024:
             raise ValueError("Logo dosyası 2 MB üstünde olamaz.")
-        extv = str(ext or "").lower().strip().lstrip('.')
+        extv = str(ext or "").lower().strip().lstrip(".")
         if extv and extv not in {"png", "jpg", "jpeg", "bmp", "webp", "svg"}:
             extv = ""
+        row = self.db.conn.execute(
+            "SELECT id,logo_blob,logo_ext FROM platforms WHERE name=?", (name,)
+        ).fetchone()
+        if not row:
+            return False
+        before_raw = bytes(row["logo_blob"] or b"")
+        before_ext = str(row["logo_ext"] or "")
+        if before_raw == raw and before_ext == extv:
+            return False
         mime = mimetypes.types_map.get(f".{extv}", "application/octet-stream") if extv else "application/octet-stream"
-        ts = now_iso()
-        self.db.conn.execute("UPDATE platforms SET logo_blob=?,logo_ext=?,logo_mime=?,logo_updated_at=?,updated_at=? WHERE name=?", (raw, extv or None, mime, ts, ts, platform))
-        self.db.conn.commit()
-        self._log("platform_logo_updated", entity_type="platform", entity_key=str(platform or ""), platform=str(platform or ""), message="Platform logosu güncellendi", payload={"ext": extv, "size": len(raw)})
+        with self.activity_operation(name="platform_logo", category="MANAGEMENT", platform=name):
+            with self.db.tx():
+                ts = now_iso()
+                self.db.conn.execute(
+                    "UPDATE platforms SET logo_blob=?,logo_ext=?,logo_mime=?,logo_updated_at=?,updated_at=? WHERE id=?",
+                    (raw, extv or None, mime, ts, ts, int(row["id"])),
+                )
+                self._log(
+                    "platform_logo_updated",
+                    entity_type="platform",
+                    entity_id=int(row["id"]),
+                    entity_key=name,
+                    platform=name,
+                    message="Platform logosu güncellendi",
+                    before={"ext": before_ext, "size": len(before_raw), "sha256": hashlib.sha256(before_raw).hexdigest() if before_raw else ""},
+                    after={"ext": extv, "size": len(raw), "sha256": hashlib.sha256(raw).hexdigest() if raw else ""},
+                )
+        return True
 
     def load_users(self, active_only=True):
         q="SELECT name,yi_yd,active,note FROM users"+(" WHERE active=1" if active_only else "")+" ORDER BY name"
         return [{"name":r[0],"yi_yd":r[1] or "Yİ","active":bool(r[2]),"note":r[3] or ""} for r in self.db.conn.execute(q)]
     def write_users(self, users_payload, actor=None):
         ts = now_iso()
-        before_users = {str(row["name"]): {"yi_yd": row["yi_yd"] or "Yİ", "active": bool(row["active"]), "note": row["note"] or ""} for row in self.db.conn.execute("SELECT name,yi_yd,active,note FROM users")}
+        before_users = {
+            str(row["name"]): {
+                "yi_yd": row["yi_yd"] or "Yİ",
+                "active": bool(row["active"]),
+                "note": row["note"] or "",
+            }
+            for row in self.db.conn.execute("SELECT name,yi_yd,active,note FROM users")
+        }
         rows = []
         seen = set()
         for u in list(users_payload or []):
@@ -515,29 +889,43 @@ class STSStore:
             seen.add(key)
             yi_yd = str((u.get("yi_yd") if isinstance(u, dict) else getattr(u, "yi_yd", "Yİ")) or "Yİ").strip().upper()
             yi_yd = "YD" if yi_yd == "YD" else "Yİ"
-            active_val = (u.get("active") if isinstance(u, dict) else getattr(u, "active", True))
+            active_val = u.get("active") if isinstance(u, dict) else getattr(u, "active", True)
             active = 1 if bool(active_val) else 0
             note = str((u.get("note") if isinstance(u, dict) else getattr(u, "note", "")) or "")
             rows.append((name, yi_yd, active, note, ts, ts))
-        with self.db.tx():
-            keep = []
-            for row in rows:
-                self.db.conn.execute("INSERT INTO users(name,yi_yd,active,note,created_at,updated_at) VALUES(?,?,?,?,?,?) ON CONFLICT(name) DO UPDATE SET yi_yd=excluded.yi_yd,active=excluded.active,note=excluded.note,updated_at=excluded.updated_at", row)
-                keep.append(row[0])
-            if keep:
-                marks = ",".join("?" for _ in keep)
-                self.db.conn.execute(f"DELETE FROM users WHERE name NOT IN ({marks})", keep)
-            else:
-                self.db.conn.execute("DELETE FROM users")
-        self._clear_id_cache("user")
+        after_users = {
+            name: {"yi_yd": yi_yd, "active": bool(active), "note": note}
+            for name, yi_yd, active, note, _created, _updated in rows
+        }
+        if stable_activity_value(before_users) == stable_activity_value(after_users):
+            return False
         audit_actor = actor or self.current_actor()
-        after_users = {name: {"yi_yd": yi_yd, "active": bool(active), "note": note} for name, yi_yd, active, note, _created, _updated in rows}
-        for name in sorted(set(before_users) | set(after_users)):
-            before_user, after_user = before_users.get(name), after_users.get(name)
-            action = "user_created" if before_user is None else ("user_deleted" if after_user is None else ("user_updated" if before_user != after_user else ""))
-            if action:
-                self._log(action, entity_type="user", entity_key=name, source="Main UI", message={"user_created": "Kullanıcı eklendi", "user_updated": "Kullanıcı güncellendi", "user_deleted": "Kullanıcı silindi"}[action], before=before_user, after=after_user, actor=audit_actor)
-        self._log("users_updated", entity_type="user", message="Kullanıcı listesi güncellendi", payload={"count": len(rows)}, actor=audit_actor)
+        with self.activity_operation(name="users_update", category="MANAGEMENT"):
+            with self.db.tx():
+                keep = []
+                for row in rows:
+                    self.db.conn.execute(
+                        "INSERT INTO users(name,yi_yd,active,note,created_at,updated_at) VALUES(?,?,?,?,?,?) "
+                        "ON CONFLICT(name) DO UPDATE SET yi_yd=excluded.yi_yd,active=excluded.active,note=excluded.note,updated_at=excluded.updated_at",
+                        row,
+                    )
+                    keep.append(row[0])
+                if keep:
+                    marks = ",".join("?" for _ in keep)
+                    self.db.conn.execute(f"DELETE FROM users WHERE name NOT IN ({marks})", keep)
+                else:
+                    self.db.conn.execute("DELETE FROM users")
+                changes = build_changed_fields(before_users, after_users)
+                self._log(
+                    "users_updated",
+                    entity_type="user",
+                    message="Kullanıcı listesi güncellendi",
+                    payload={"count": len(rows), "changed_count": len(changes)},
+                    changed_fields=changes,
+                    actor=audit_actor,
+                )
+        self._clear_id_cache("user")
+        return True
 
     def load_components(self):
         out=[]
@@ -577,15 +965,69 @@ class STSStore:
     def delete_component(self, name):
         nm = str(name or "").strip()
         if not nm:
-            return
-        with self.db.tx():
-            self.db.conn.execute("DELETE FROM components WHERE name=?", (nm,))
-            self._log("component_deleted", entity_type="component", entity_key=nm, message="Bileşen silindi")
+            return False
+        row = self.db.conn.execute(
+            "SELECT id,name,version,unit,active,usage,note,display_order FROM components WHERE name=?",
+            (nm,),
+        ).fetchone()
+        if not row:
+            return False
+        with self.activity_operation(name="component_delete", category="MANAGEMENT"):
+            with self.db.tx():
+                cursor = self.db.conn.execute("DELETE FROM components WHERE id=?", (int(row["id"]),))
+                if cursor.rowcount:
+                    self._log(
+                        "component_deleted",
+                        entity_type="component",
+                        entity_id=int(row["id"]),
+                        entity_key=nm,
+                        message="Bileşen silindi",
+                        before={
+                            "name": str(row["name"] or ""),
+                            "version": str(row["version"] or ""),
+                            "unit": str(row["unit"] or "Adet"),
+                            "active": bool(row["active"]),
+                            "usage": float(row["usage"] or 1),
+                            "note": str(row["note"] or ""),
+                            "display_order": int(row["display_order"] or 0),
+                        },
+                    )
         self._clear_id_cache("component")
+        return True
+
     def write_components(self, components_payload, actor=None):
         ts = now_iso()
-        before_components = {str(row["name"]): {"version": row["version"] or "", "unit": row["unit"] or "Adet", "active": bool(row["active"]), "usage": float(row["usage"] or 1), "note": row["note"] or ""} for row in self.db.conn.execute("SELECT name,version,unit,active,usage,note FROM components")}
-        existing_orders = {str(row["name"]): int(row["display_order"]) for row in self.db.conn.execute("SELECT name,display_order FROM components WHERE display_order IS NOT NULL")}
+
+        def current_snapshot():
+            snapshot = {}
+            rows = self.db.conn.execute(
+                "SELECT id,name,version,unit,active,usage,note,display_order FROM components"
+            ).fetchall()
+            for row in rows:
+                platforms = {
+                    str(item[0]): bool(item[1])
+                    for item in self.db.conn.execute(
+                        "SELECT p.name,cp.enabled FROM component_platforms cp "
+                        "JOIN platforms p ON p.id=cp.platform_id WHERE cp.component_id=?",
+                        (int(row["id"]),),
+                    )
+                }
+                snapshot[str(row["name"])] = {
+                    "version": str(row["version"] or ""),
+                    "unit": str(row["unit"] or "Adet"),
+                    "active": bool(row["active"]),
+                    "usage": float(row["usage"] or 1),
+                    "note": str(row["note"] or ""),
+                    "display_order": int(row["display_order"] if row["display_order"] is not None else row["id"]),
+                    "platforms": dict(sorted(platforms.items())),
+                }
+            return snapshot
+
+        before_components = current_snapshot()
+        existing_orders = {
+            str(row["name"]): int(row["display_order"])
+            for row in self.db.conn.execute("SELECT name,display_order FROM components WHERE display_order IS NOT NULL")
+        }
         next_order = int(self.db.conn.execute("SELECT COALESCE(MAX(display_order), -1) + 1 FROM components").fetchone()[0] or 0)
         normalized = []
         seen = set()
@@ -599,71 +1041,124 @@ class STSStore:
             seen.add(key)
             version = str((c.get("version") if isinstance(c, dict) else getattr(c, "version", "")) or "")
             unit = str((c.get("unit") if isinstance(c, dict) else getattr(c, "unit", "Adet")) or "Adet")
-            active = 1 if bool((c.get("active") if isinstance(c, dict) else getattr(c, "active", True))) else 0
+            active = 1 if bool(c.get("active") if isinstance(c, dict) else getattr(c, "active", True)) else 0
             usage = float((c.get("usage") if isinstance(c, dict) else getattr(c, "usage", 1)) or 1)
             note = str((c.get("note") if isinstance(c, dict) else getattr(c, "note", "")) or "")
             raw_order = c.get("display_order") if isinstance(c, dict) else getattr(c, "display_order", None)
-            if raw_order is None or str(raw_order).strip() == "":
-                display_order = existing_orders.get(name)
-            else:
-                display_order = int(raw_order)
+            display_order = existing_orders.get(name) if raw_order is None or str(raw_order).strip() == "" else int(raw_order)
             if display_order is None:
                 display_order = next_order
                 next_order += 1
-            platforms = dict((c.get("platforms") if isinstance(c, dict) else getattr(c, "platforms", {})) or {})
+            platforms = {
+                str(platform): bool(enabled)
+                for platform, enabled in dict((c.get("platforms") if isinstance(c, dict) else getattr(c, "platforms", {})) or {}).items()
+            }
             normalized.append((name, version, unit, active, usage, note, display_order, platforms))
-        self._clear_id_cache("component")
-        with self.db.tx():
-            keep = []
-            for name, version, unit, active, usage, note, display_order, platforms in normalized:
-                self.db.conn.execute("INSERT INTO components(name,version,unit,active,usage,note,display_order,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(name) DO UPDATE SET version=excluded.version,unit=excluded.unit,active=excluded.active,usage=excluded.usage,note=excluded.note,display_order=excluded.display_order,updated_at=excluded.updated_at",(name,version,unit,active,usage,note,display_order,ts,ts))
-                cid = self.get_component_id(name)
-                keep.append(cid)
-                self.db.conn.execute("DELETE FROM component_platforms WHERE component_id=?", (cid,))
-                for platform, enabled in platforms.items():
-                    pid = self.get_platform_id(platform)
-                    if pid is not None:
-                        self.db.conn.execute("INSERT INTO component_platforms(component_id,platform_id,enabled) VALUES(?,?,?)", (cid, pid, 1 if bool(enabled) else 0))
-            if keep:
-                marks = ",".join("?" for _ in keep)
-                self.db.conn.execute(f"DELETE FROM components WHERE id NOT IN ({marks})", keep)
-            else:
-                self.db.conn.execute("DELETE FROM components")
-        self._clear_id_cache("component")
+        after_components = {
+            name: {
+                "version": version,
+                "unit": unit,
+                "active": bool(active),
+                "usage": float(usage),
+                "note": note,
+                "display_order": int(display_order),
+                "platforms": dict(sorted(platforms.items())),
+            }
+            for name, version, unit, active, usage, note, display_order, platforms in normalized
+        }
+        if stable_activity_value(before_components) == stable_activity_value(after_components):
+            return False
         audit_actor = actor or self.current_actor()
-        after_components = {name: {"version": version, "unit": unit, "active": bool(active), "usage": float(usage), "note": note} for name, version, unit, active, usage, note, _display_order, _platforms in normalized}
-        for name in sorted(set(before_components) | set(after_components)):
-            before_component, after_component = before_components.get(name), after_components.get(name)
-            action = "component_created" if before_component is None else ("component_deleted" if after_component is None else ("component_updated" if before_component != after_component else ""))
-            if action:
-                self._log(action, entity_type="component", entity_key=name, source="Main UI", message={"component_created": "Bileşen eklendi", "component_updated": "Bileşen güncellendi", "component_deleted": "Bileşen silindi"}[action], before=before_component, after=after_component, actor=audit_actor)
-        self._log("components_updated", entity_type="component", message="Bileşen listesi güncellendi", payload={"count": len(normalized)}, actor=audit_actor)
-
+        self._clear_id_cache("component")
+        with self.activity_operation(name="components_update", category="MANAGEMENT"):
+            with self.db.tx():
+                keep = []
+                for name, version, unit, active, usage, note, display_order, platforms in normalized:
+                    self.db.conn.execute(
+                        "INSERT INTO components(name,version,unit,active,usage,note,display_order,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?) "
+                        "ON CONFLICT(name) DO UPDATE SET version=excluded.version,unit=excluded.unit,active=excluded.active,usage=excluded.usage,note=excluded.note,display_order=excluded.display_order,updated_at=excluded.updated_at",
+                        (name, version, unit, active, usage, note, display_order, ts, ts),
+                    )
+                    cid = self.get_component_id(name)
+                    keep.append(cid)
+                    self.db.conn.execute("DELETE FROM component_platforms WHERE component_id=?", (cid,))
+                    for platform, enabled in platforms.items():
+                        pid = self.get_platform_id(platform)
+                        if pid is not None:
+                            self.db.conn.execute(
+                                "INSERT INTO component_platforms(component_id,platform_id,enabled) VALUES(?,?,?)",
+                                (cid, pid, 1 if enabled else 0),
+                            )
+                if keep:
+                    marks = ",".join("?" for _ in keep)
+                    self.db.conn.execute(f"DELETE FROM components WHERE id NOT IN ({marks})", keep)
+                else:
+                    self.db.conn.execute("DELETE FROM components")
+                changes = build_changed_fields(before_components, after_components)
+                self._log(
+                    "components_updated",
+                    entity_type="component",
+                    message="Bileşen listesi güncellendi",
+                    payload={"count": len(normalized), "changed_count": len(changes)},
+                    changed_fields=changes,
+                    actor=audit_actor,
+                )
+        self._clear_id_cache("component")
+        return True
 
     def update_component_order(self, ordered_component_ids: list[int]) -> None:
-        ts = now_iso()
         ids = [int(x) for x in (ordered_component_ids or []) if int(x or 0) > 0]
-        with self.db.tx():
-            for order, component_id in enumerate(ids):
-                self.db.conn.execute(
-                    "UPDATE components SET display_order=?, updated_at=? WHERE id=?",
-                    (order, ts, component_id),
+        current = {
+            int(row["id"]): int(row["display_order"] if row["display_order"] is not None else row["id"])
+            for row in self.db.conn.execute("SELECT id,display_order FROM components")
+        }
+        changed = [(component_id, current.get(component_id), order) for order, component_id in enumerate(ids) if current.get(component_id) != order]
+        if not changed:
+            return None
+        with self.activity_operation(name="component_order", category="MANAGEMENT"):
+            with self.db.tx():
+                ts = now_iso()
+                for order, component_id in enumerate(ids):
+                    self.db.conn.execute(
+                        "UPDATE components SET display_order=?, updated_at=? WHERE id=?",
+                        (order, ts, component_id),
+                    )
+                self._log(
+                    "component_order_updated",
+                    entity_type="component",
+                    message="Bileşen sırası güncellendi",
+                    before={"component_ids": [item[0] for item in sorted(current.items(), key=lambda pair: pair[1])]},
+                    after={"component_ids": ids},
                 )
         self._clear_id_cache("component")
-        self._log("component_order_updated", entity_type="component", message="Bileşen sırası güncellendi", payload={"component_ids": ids})
+        return None
 
     def update_platform_order(self, ordered_platform_ids: list[int]) -> None:
-        ts = now_iso()
         ids = [int(x) for x in (ordered_platform_ids or []) if int(x or 0) > 0]
-        with self.db.tx():
-            for order, platform_id in enumerate(ids):
-                self.db.conn.execute(
-                    "UPDATE platforms SET sort_order=?, updated_at=? WHERE id=?",
-                    (order, ts, platform_id),
+        current = {
+            int(row["id"]): int(row["sort_order"] if row["sort_order"] is not None else row["id"])
+            for row in self.db.conn.execute("SELECT id,sort_order FROM platforms")
+        }
+        changed = [(platform_id, current.get(platform_id), order) for order, platform_id in enumerate(ids) if current.get(platform_id) != order]
+        if not changed:
+            return None
+        with self.activity_operation(name="platform_order", category="MANAGEMENT"):
+            with self.db.tx():
+                ts = now_iso()
+                for order, platform_id in enumerate(ids):
+                    self.db.conn.execute(
+                        "UPDATE platforms SET sort_order=?, updated_at=? WHERE id=?",
+                        (order, ts, platform_id),
+                    )
+                self._log(
+                    "platform_order_updated",
+                    entity_type="platform",
+                    message="Platform sırası güncellendi",
+                    before={"platform_ids": [item[0] for item in sorted(current.items(), key=lambda pair: pair[1])]},
+                    after={"platform_ids": ids},
                 )
         self._clear_id_cache("platform")
-        self._log("platform_order_updated", entity_type="platform", message="Platform sırası güncellendi", payload={"platform_ids": ids})
-
+        return None
 
     def assigned_components(self, platform: str) -> List[str]:
         p = str(platform or "").strip()
@@ -822,64 +1317,148 @@ class STSStore:
         return self.load_tags(active_only=active_only)
 
     def write_tags(self, tags, actor=None):
+        before = {
+            str(row["name"]): {"color": str(row["color"] or "#3B82F6"), "kind": str(row["kind"] or "contract")}
+            for row in self.db.conn.execute("SELECT name,color,kind FROM tags")
+        }
+        normalized = {}
+        seen = set()
+        for tag in list(tags or []):
+            name = self._tag_name_of(tag)
+            if not name:
+                continue
+            key = self._normalize_label(name)
+            if key in seen:
+                continue
+            seen.add(key)
+            normalized[name] = {
+                "color": str((tag.get("color") if isinstance(tag, dict) else getattr(tag, "color", "#3B82F6")) or "#3B82F6"),
+                "kind": str((tag.get("kind") if isinstance(tag, dict) else getattr(tag, "kind", "contract")) or "contract"),
+            }
+        if stable_activity_value(before) == stable_activity_value(normalized):
+            return False
         ts = now_iso()
-        keep = []
         with self.db.tx():
-            seen = set()
-            for t in list(tags or []):
-                name = self._tag_name_of(t)
-                if not name:
-                    continue
-                key = self._normalize_label(name)
-                if key in seen:
-                    continue
-                seen.add(key); keep.append(name)
-                color = str((t.get("color") if isinstance(t, dict) else getattr(t, "color", "#3B82F6")) or "#3B82F6")
-                kind = str((t.get("kind") if isinstance(t, dict) else getattr(t, "kind", "contract")) or "contract")
-                self.db.conn.execute("INSERT INTO tags(name,color,kind,created_at,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(name) DO UPDATE SET color=excluded.color,kind=excluded.kind,updated_at=excluded.updated_at", (name, color, kind, ts, ts))
-            if keep:
-                marks = ",".join("?" for _ in keep)
-                self.db.conn.execute(f"DELETE FROM tags WHERE name NOT IN ({marks})", keep)
+            for name, data in normalized.items():
+                self.db.conn.execute(
+                    "INSERT INTO tags(name,color,kind,created_at,updated_at) VALUES(?,?,?,?,?) "
+                    "ON CONFLICT(name) DO UPDATE SET color=excluded.color,kind=excluded.kind,updated_at=excluded.updated_at",
+                    (name, data["color"], data["kind"], ts, ts),
+                )
+            if normalized:
+                marks = ",".join("?" for _ in normalized)
+                self.db.conn.execute(f"DELETE FROM tags WHERE name NOT IN ({marks})", tuple(normalized))
             else:
                 self.db.conn.execute("DELETE FROM tags")
         self._clear_id_cache("tag")
+        return True
 
     write_tag_defs = write_tags
 
     def upsert_tag_def(self, tag):
-        ts = now_iso()
         name = self._tag_name_of(tag)
         if not name:
-            return
+            return False
         color = str((tag.get("color") if isinstance(tag, dict) else getattr(tag, "color", "#3B82F6")) or "#3B82F6")
         kind = str((tag.get("kind") if isinstance(tag, dict) else getattr(tag, "kind", "contract")) or "contract")
-        row = self.db.conn.execute("SELECT id FROM tags WHERE name=?", (name,)).fetchone()
-        with self.db.tx():
-            if row:
-                self.db.conn.execute("UPDATE tags SET color=?, kind=?, updated_at=? WHERE id=?", (color, kind, ts, row[0]))
-            else:
-                self.db.conn.execute("INSERT INTO tags(name,color,kind,created_at,updated_at) VALUES(?,?,?,?,?)", (name, color, kind, ts, ts))
+        row = self.db.conn.execute("SELECT id,name,color,kind FROM tags WHERE name=?", (name,)).fetchone()
+        before = {"name": name, "color": str(row["color"] or "#3B82F6"), "kind": str(row["kind"] or "contract")} if row else None
+        after = {"name": name, "color": color, "kind": kind}
+        if before is not None and stable_activity_value(before) == stable_activity_value(after):
+            return False
+        with self.activity_operation(name="tag_upsert", category="MANAGEMENT"):
+            with self.db.tx():
+                ts = now_iso()
+                if row:
+                    self.db.conn.execute("UPDATE tags SET color=?,kind=?,updated_at=? WHERE id=?", (color, kind, ts, int(row["id"])))
+                    action = "tag_updated"
+                else:
+                    cursor = self.db.conn.execute("INSERT INTO tags(name,color,kind,created_at,updated_at) VALUES(?,?,?,?,?)", (name, color, kind, ts, ts))
+                    action = "tag_created"
+                    row = {"id": int(cursor.lastrowid)}
+                self._log(
+                    action,
+                    entity_type="tag",
+                    entity_id=int(row["id"]),
+                    entity_key=name,
+                    message="Etiket oluşturuldu" if action == "tag_created" else "Etiket güncellendi",
+                    before=before,
+                    after=after,
+                )
         self._clear_id_cache("tag")
-        self._log("tag_upserted", entity_type="tag", entity_key=name, message="Etiket güncellendi", actor=getattr(self, "current_actor", lambda: "Sistem")())
+        return True
 
     def delete_tag_def(self, tag_or_name):
         nm = self._tag_name_of(tag_or_name)
         if not nm:
-            return
-        with self.db.tx():
-            self.db.conn.execute("DELETE FROM tags WHERE name=?", (nm,))
+            return False
+        row = self.db.conn.execute("SELECT id,name,color,kind FROM tags WHERE name=?", (nm,)).fetchone()
+        if not row:
+            return False
+        with self.activity_operation(name="tag_delete", category="MANAGEMENT"):
+            with self.db.tx():
+                cursor = self.db.conn.execute("DELETE FROM tags WHERE id=?", (int(row["id"]),))
+                if cursor.rowcount:
+                    self._log(
+                        "tag_deleted",
+                        entity_type="tag",
+                        entity_id=int(row["id"]),
+                        entity_key=nm,
+                        message="Etiket silindi",
+                        before={"name": nm, "color": str(row["color"] or ""), "kind": str(row["kind"] or "")},
+                    )
         self._clear_id_cache("tag")
-        self._log("tag_deleted", entity_type="tag", entity_key=nm, message="Etiket silindi")
+        return True
 
     def load_tag_snapshot(self):
         return self.load_tag_defs(active_only=False), self.all_contract_tags_map()
 
     def write_tag_snapshot(self, tags, assignments_by_key, actor=None):
-        self.write_tags(tags, actor=actor)
-        for key, vals in (assignments_by_key or {}).items():
-            p, no, ctype = key if isinstance(key, tuple) else key.split("|")
-            self.save_contract_tags(p, no, ctype, vals or [], actor=actor)
-        self._log("tag_snapshot_updated", entity_type="tag", message="Etiket snapshot güncellendi", actor=actor or self.current_actor())
+        before_tags, before_assignments = self.load_tag_snapshot()
+        before_tag_map = {
+            self._tag_name_of(item): {
+                "color": str(getattr(item, "color", "#3B82F6") or "#3B82F6"),
+                "kind": str(getattr(item, "kind", "contract") or "contract"),
+            }
+            for item in before_tags
+            if self._tag_name_of(item)
+        }
+        before_assignment_map = {
+            "|".join(map(str, key)): sorted(self._tag_name_of(item) for item in values if self._tag_name_of(item))
+            for key, values in before_assignments.items()
+        }
+        requested_tag_map = {}
+        for item in list(tags or []):
+            name = self._tag_name_of(item)
+            if not name:
+                continue
+            requested_tag_map[name] = {
+                "color": str((item.get("color") if isinstance(item, dict) else getattr(item, "color", "#3B82F6")) or "#3B82F6"),
+                "kind": str((item.get("kind") if isinstance(item, dict) else getattr(item, "kind", "contract")) or "contract"),
+            }
+        requested_assignment_map = {}
+        for key, values in (assignments_by_key or {}).items():
+            parts = key if isinstance(key, tuple) else tuple(str(key).split("|"))
+            requested_assignment_map["|".join(map(str, parts))] = sorted(
+                self._tag_name_of(item) for item in (values or []) if self._tag_name_of(item)
+            )
+        if stable_activity_value(before_tag_map) == stable_activity_value(requested_tag_map) and stable_activity_value(before_assignment_map) == stable_activity_value(requested_assignment_map):
+            return False
+        with self.activity_operation(name="tag_snapshot", category="MANAGEMENT"):
+            with self.db.tx():
+                self.write_tags(tags, actor=actor)
+                for key, vals in (assignments_by_key or {}).items():
+                    p, no, ctype = key if isinstance(key, tuple) else str(key).split("|")
+                    self.save_contract_tags(p, no, ctype, vals or [], actor=actor, emit_log=False)
+                self._log(
+                    "tag_snapshot_updated",
+                    entity_type="tag",
+                    message="Etiket snapshot güncellendi",
+                    before={"tags": before_tag_map, "assignments": before_assignment_map},
+                    after={"tags": requested_tag_map, "assignments": requested_assignment_map},
+                    actor=actor or self.current_actor(),
+                )
+        return True
 
     def all_contract_tags_map(self):
         out = {}
@@ -923,33 +1502,66 @@ class STSStore:
             out.append({"name": name, "color": str(r[1] or "#3B82F6"), "kind": str(r[2] or "contract")})
         return out
 
-    def save_contract_tags(self, platform, contract_no, contract_type, tags, actor=None):
+    def save_contract_tags(self, platform, contract_no, contract_type, tags, actor=None, *, emit_log=True):
         cid = self._find_contract_id(platform, contract_no, contract_type)
         if not cid:
-            return
+            return False
+        current_names = sorted(
+            str(row[0])
+            for row in self.db.conn.execute(
+                "SELECT t.name FROM contract_tags ct JOIN tags t ON t.id=ct.tag_id WHERE ct.contract_id=? ORDER BY t.name",
+                (cid,),
+            )
+        )
         names = []
         seen = set()
-        for t in list(tags or []):
-            nm = self._tag_name_of(t)
+        for tag in list(tags or []):
+            nm = self._tag_name_of(tag)
             if not nm:
                 continue
             key = self._normalize_label(nm)
             if key in seen:
                 continue
             seen.add(key)
-            names.append((nm, t))
-        ts = now_iso()
-        with self.db.tx():
-            self.db.conn.execute("DELETE FROM contract_tags WHERE contract_id=?", (cid,))
-            for nm, t in names:
-                row = self.db.conn.execute("SELECT id FROM tags WHERE name=?", (nm,)).fetchone()
-                if not row:
-                    color = str((t.get("color") if isinstance(t, dict) else getattr(t, "color", "#3B82F6")) or "#3B82F6")
-                    kind = str((t.get("kind") if isinstance(t, dict) else getattr(t, "kind", "contract")) or "contract")
-                    self.db.conn.execute("INSERT INTO tags(name,color,kind,created_at,updated_at) VALUES(?,?,?,?,?)", (nm, color, kind, ts, ts))
-                self.db.conn.execute("INSERT OR IGNORE INTO contract_tags(contract_id,tag_id) VALUES(?,?)", (cid, self.get_tag_id(nm)))
-        self._log("contract_tags_updated", entity_type="contract", entity_id=cid, platform=str(platform or ""), contract_no=str(contract_no or ""), source="Tag Manager", message="Sözleşme etiketleri güncellendi", payload={"count": len(names)}, actor=actor or self.current_actor())
-
+            names.append((nm, tag))
+        requested_names = sorted(name for name, _ in names)
+        if current_names == requested_names:
+            return False
+        with self.activity_operation(
+            name="contract_tags",
+            category="USER",
+            contract_id=cid,
+            platform=str(platform or ""),
+            contract_no=str(contract_no or ""),
+        ):
+            with self.db.tx():
+                ts = now_iso()
+                self.db.conn.execute("DELETE FROM contract_tags WHERE contract_id=?", (cid,))
+                for nm, tag in names:
+                    row = self.db.conn.execute("SELECT id FROM tags WHERE name=?", (nm,)).fetchone()
+                    if not row:
+                        color = str((tag.get("color") if isinstance(tag, dict) else getattr(tag, "color", "#3B82F6")) or "#3B82F6")
+                        kind = str((tag.get("kind") if isinstance(tag, dict) else getattr(tag, "kind", "contract")) or "contract")
+                        cursor = self.db.conn.execute("INSERT INTO tags(name,color,kind,created_at,updated_at) VALUES(?,?,?,?,?)", (nm, color, kind, ts, ts))
+                        tag_id = int(cursor.lastrowid)
+                    else:
+                        tag_id = int(row["id"])
+                    self.db.conn.execute("INSERT OR IGNORE INTO contract_tags(contract_id,tag_id) VALUES(?,?)", (cid, tag_id))
+                if emit_log:
+                    self._log(
+                        "contract_tags_updated",
+                        entity_type="contract",
+                        entity_id=cid,
+                        platform=str(platform or ""),
+                        contract_no=str(contract_no or ""),
+                        source="Tag Manager",
+                        message="Sözleşme etiketleri güncellendi",
+                        before={"tags": current_names},
+                        after={"tags": requested_names},
+                        actor=actor or self.current_actor(),
+                    )
+        self._clear_id_cache("tag")
+        return True
 
     def _folder_path_from_rows(self, folder_id, rows_by_id: dict[int, dict]) -> str:
         if not folder_id:
@@ -1025,6 +1637,7 @@ class STSStore:
                 return candidate
             index += 1
 
+    @_activity_scoped("document_folder_create", "USER")
     def create_contract_file_folder(self, platform, contract_no, contract_type=None, parent_id=None, name="Yeni Klasör"):
         cid = self._find_contract_id(platform, contract_no, contract_type)
         if not cid:
@@ -1051,6 +1664,7 @@ class STSStore:
         )
         return {"id": folder_id, "contract_id": cid, "parent_id": parent_id, "name": folder_name, "path": folder_path, "created_at": ts, "updated_at": ts}
 
+    @_activity_scoped("document_folder_rename", "USER")
     def rename_contract_file_folder(self, folder_id, new_name: str):
         row = self.db.conn.execute(
             "SELECT id,contract_id,merge_uid,parent_id,name,created_at,updated_at FROM contract_file_folders WHERE id=?",
@@ -1097,6 +1711,7 @@ class STSStore:
             out.append(item)
         return out
 
+    @_activity_scoped("document_add", "USER")
     def add_contract_file(self, platform, contract_no, file_path, contract_type=None, note="", folder_id=None):
         cid = self._find_contract_id(platform, contract_no, contract_type)
         if not cid:
@@ -1175,6 +1790,7 @@ class STSStore:
         target.write_bytes(content)
         return {"filename": filename, "mime_type": mime_type, "target_path": str(target), "size_bytes": len(content)}
 
+    @_activity_scoped("document_folder_delete", "USER")
     def delete_contract_file_folder(self, folder_id):
         row = self.db.conn.execute(
             "SELECT id,contract_id,parent_id,name FROM contract_file_folders WHERE id=?",
@@ -1234,6 +1850,7 @@ class STSStore:
         )
         return True
 
+    @_activity_scoped("document_delete", "USER")
     def delete_contract_file(self, file_id):
         before = self.db.conn.execute("SELECT id,contract_id,folder_id,filename,size_bytes,note FROM contract_files WHERE id=?", (int(file_id),)).fetchone()
         with self.db.tx():
@@ -1243,6 +1860,7 @@ class STSStore:
             self._log("document_deleted", entity_type="document", entity_id=int(file_id), source="Document Manager", message="Belge silindi", before=dict(before) if before else None)
         return deleted
 
+    @_activity_scoped("document_move", "USER")
     def move_contract_file(self, file_id: int, target_folder_id):
         """Dosyayı hedef klasöre taşı. target_folder_id=None köke taşır."""
         row = self.db.conn.execute(
@@ -1253,28 +1871,30 @@ class STSStore:
             raise ValueError("Dosya bulunamadı.")
         file_data = dict(row)
         contract_id = int(file_data["contract_id"])
-
         real_target = None
         if target_folder_id not in (None, "", 0):
             real_target = self._validate_contract_folder_id(contract_id, target_folder_id)
-
-        ts = now_iso()
+        old_target = safe_positive_int(file_data.get("folder_id"))
+        if old_target == safe_positive_int(real_target):
+            return True
         with self.db.tx():
             self.db.conn.execute(
                 "UPDATE contract_files SET folder_id=?, updated_at=? WHERE id=?",
-                (real_target, ts, int(file_id)),
+                (real_target, now_iso(), int(file_id)),
             )
-        self._log(
-            "document_moved",
-            entity_type="document",
-            entity_id=int(file_id),
-            source="Document Manager",
-            message="Belge taşındı",
-            before={"folder_id": file_data.get("folder_id")},
-            after={"folder_id": real_target},
-        )
+            self._log(
+                "document_moved",
+                entity_type="document",
+                entity_id=int(file_id),
+                contract_id=contract_id,
+                source="Document Manager",
+                message="Belge taşındı",
+                before={"folder_id": file_data.get("folder_id")},
+                after={"folder_id": real_target},
+            )
         return True
 
+    @_activity_scoped("document_folder_move", "USER")
     def move_contract_file_folder(self, folder_id: int, target_parent_id):
         """Klasörü hedef parent altına taşı. target_parent_id=None köke taşır."""
         row = self.db.conn.execute(
@@ -1289,6 +1909,9 @@ class STSStore:
         real_parent = None
         if target_parent_id not in (None, "", 0):
             real_parent = self._validate_contract_folder_id(contract_id, target_parent_id)
+
+        if safe_positive_int(folder_data.get("parent_id")) == safe_positive_int(real_parent):
+            return True
 
         # Klasörün kendi alt ağacına taşınmasını engelle
         if real_parent is not None:
@@ -1787,7 +2410,27 @@ class STSStore:
         if not row:
             row=self.db.conn.execute("SELECT id,status,note,completion_date,acceptance_date,revision,merge_uid FROM contracts WHERE platform_id=? AND contract_no=? AND contract_type=?",(platform_id,ci.no,ctype)).fetchone()
         before_snapshot_hash = hash_contract_snapshot(build_contract_snapshot(self.db.conn, int(row[0]))) if row else ""
-        before_contract = {"status": row[1] or "", "note": row[2] or "", "completion_date": row[3] or "", "acceptance_date": row[4] or ""} if row else None
+        before_contract = None
+        if row:
+            before_row = self.db.conn.execute(
+                "SELECT contract_no,yi_yd,contract_type,status,signed_date,t0_date,t0_months,completion_date,acceptance_date,note,responsible_engineer_id FROM contracts WHERE id=?",
+                (int(row[0]),),
+            ).fetchone()
+            before_contract = {
+                "contract_no": str(before_row["contract_no"] or ""),
+                "yi_yd": str(before_row["yi_yd"] or ""),
+                "contract_type": str(before_row["contract_type"] or ""),
+                "status": str(before_row["status"] or ""),
+                "signature_date": str(before_row["signed_date"] or ""),
+                "t0_date": str(before_row["t0_date"] or ""),
+                "t0_months": int(before_row["t0_months"] or 0),
+                "completion_date": str(before_row["completion_date"] or ""),
+                "acceptance_date": str(before_row["acceptance_date"] or ""),
+                "note": str(before_row["note"] or ""),
+                "responsible_engineer_id": safe_positive_int(before_row["responsible_engineer_id"]),
+                "users": sorted(self._contract_users(int(row[0])), key=self._normalize_label),
+                "platform_ids": sorted(self.get_contract_platform_ids(int(row[0]))),
+            }
         old_systems = {}
         old_deliveries = {}
         if row:
@@ -1948,46 +2591,149 @@ class STSStore:
         ci.entry_start_row = int(cid or 0)
         setattr(ci, "id", int(cid or 0))
         setattr(ci, "contract_id", int(cid or 0))
-        after_contract = {"status": str(ci.status or ""), "note": str(ci.note or ""), "completion_date": str(ci.completion_date or ""), "acceptance_date": str(ci.acceptance_date or "")}
-        self._log("contract_updated" if row else "contract_created", entity_type="contract", entity_id=cid, platform=str(ci.platform or ""), contract_no=str(ci.no or ""), source="Contract Detail", message="Sözleşme ana bilgileri güncellendi" if row else "Sözleşme oluşturuldu", before=before_contract, after=after_contract, payload={"system_count":len(systems or []),"delivery_count":sum(len(v or []) for v in (deliveries or {}).values()),"component_count":sum(len((x.components or {})) for x in (systems or []))}, actor=self.current_actor())
-        if before_contract and before_contract.get("status") != after_contract.get("status"):
-            self._log("contract_status_changed", entity_type="contract", entity_id=cid, platform=str(ci.platform or ""), contract_no=str(ci.no or ""), source="Contract Detail", message="Sözleşme durumu güncellendi", before={"status": before_contract.get("status")}, after={"status": after_contract.get("status")}, actor=self.current_actor())
-        new_systems = {str(system.name): {"status": str(system.status or ""), "completion_date": str(system.completion_date or ""), "acceptance_date": str(system.acceptance_date or ""), "components": {str(name): float(qty or 0) for name, qty in (system.components or {}).items() if float(qty or 0) > 0}} for system in (systems or [])}
-        for name in sorted(set(new_systems) | set(old_systems)):
-            before_system, after_system = old_systems.get(name), new_systems.get(name)
-            if before_system is None:
-                self._log("system_created", entity_type="system", entity_key=name, contract_no=str(ci.no or ""), source="System Editor", message="Sistem eklendi", after=after_system)
-            elif after_system is None:
-                self._log("system_deleted", entity_type="system", entity_key=name, contract_no=str(ci.no or ""), source="System Editor", message="Sistem silindi", before=before_system)
-            elif before_system != after_system:
-                self._log("system_updated", entity_type="system", entity_key=name, contract_no=str(ci.no or ""), source="System Editor", message="Sistem güncellendi", before=before_system, after=after_system)
-                if before_system.get("components") != after_system.get("components"):
-                    self._log("system_component_updated", entity_type="system", entity_key=name, contract_no=str(ci.no or ""), source="System Editor", message="Sistem bileşenleri güncellendi", before={"components": before_system.get("components")}, after={"components": after_system.get("components")})
-        new_deliveries = {(str(system_label), str(delivery.name)): {"status": str(delivery.status or ""), "planned_acceptance_date": str(getattr(delivery, "planned_acceptance_date", "") or ""), "acceptance_date": str(delivery.acceptance_date or ""), "note": str(delivery.note or ""), "components": {name: {"planned": float((delivery.planned or {}).get(name, 0) or 0), "delivered": float((delivery.delivered or {}).get(name, 0) or 0)} for name in set((delivery.planned or {})) | set((delivery.delivered or {})) if float((delivery.planned or {}).get(name, 0) or 0) > 0 or float((delivery.delivered or {}).get(name, 0) or 0) > 0}} for system_label, items in (deliveries or {}).items() for delivery in (items or [])}
-        for key in sorted(set(new_deliveries) | set(old_deliveries)):
-            before_delivery, after_delivery = old_deliveries.get(key), new_deliveries.get(key)
-            before_compare = {name: value for name, value in (before_delivery or {}).items() if name != "id"}
-            entity_key = f"{key[0]} / {key[1]}"
-            if before_delivery is None:
-                self._log("delivery_created", entity_type="delivery", entity_key=entity_key, contract_no=str(ci.no or ""), source="Delivery Editor", message="Teslimat eklendi", after=after_delivery)
-            elif after_delivery is None:
-                self._log("delivery_deleted", entity_type="delivery", entity_id=before_delivery.get("id"), entity_key=entity_key, contract_no=str(ci.no or ""), source="Delivery Editor", message="Teslimat silindi", before=before_delivery)
-            elif before_compare != after_delivery:
-                self._log("delivery_updated", entity_type="delivery", entity_key=entity_key, contract_no=str(ci.no or ""), source="Delivery Editor", message="Teslimat güncellendi", before=before_compare, after=after_delivery)
-                if before_compare.get("status") != after_delivery.get("status"):
-                    self._log("delivery_status_changed", entity_type="delivery", entity_key=entity_key, contract_no=str(ci.no or ""), source="Delivery Editor", message="Teslimat durumu güncellendi", before={"status": before_compare.get("status")}, after={"status": after_delivery.get("status")})
+        after_contract = {
+            "contract_no": str(ci.no or ""),
+            "yi_yd": str(ci.yi_yd or ""),
+            "contract_type": str(ctype or ""),
+            "status": str(ci.status or ""),
+            "signature_date": str(ci.signature_date or ""),
+            "t0_date": str(ci.t0_date or ""),
+            "t0_months": int(ci.t0_months or 0),
+            "completion_date": str(ci.completion_date or ""),
+            "acceptance_date": str(ci.acceptance_date or ""),
+            "note": str(ci.note or ""),
+            "responsible_engineer_id": safe_positive_int(responsible_engineer_id),
+            "users": sorted(users, key=self._normalize_label),
+            "platform_ids": sorted(selected_platform_ids or [platform_id]),
+        }
+        new_systems = {
+            str(system.name): {
+                "status": str(system.status or ""),
+                "completion_date": str(system.completion_date or ""),
+                "acceptance_date": str(system.acceptance_date or ""),
+                "components": {
+                    str(name): float(qty or 0)
+                    for name, qty in (system.components or {}).items()
+                    if float(qty or 0) > 0
+                },
+            }
+            for system in (systems or [])
+        }
+        new_deliveries = {
+            (str(system_label), str(delivery.name)): {
+                "status": str(delivery.status or ""),
+                "planned_acceptance_date": str(getattr(delivery, "planned_acceptance_date", "") or ""),
+                "acceptance_date": str(delivery.acceptance_date or ""),
+                "note": str(delivery.note or ""),
+                "components": {
+                    name: {
+                        "planned": float((delivery.planned or {}).get(name, 0) or 0),
+                        "delivered": float((delivery.delivered or {}).get(name, 0) or 0),
+                    }
+                    for name in set((delivery.planned or {})) | set((delivery.delivered or {}))
+                    if float((delivery.planned or {}).get(name, 0) or 0) > 0
+                    or float((delivery.delivered or {}).get(name, 0) or 0) > 0
+                },
+            }
+            for system_label, items in (deliveries or {}).items()
+            for delivery in (items or [])
+        }
+        top_changes = build_changed_fields(before_contract or {}, after_contract, set_like_fields={"users", "platform_ids"})
+        with self.activity_operation(
+            name="contract_save_events",
+            category="USER",
+            contract_id=int(cid),
+            platform=str(ci.platform or ""),
+            contract_no=str(ci.no or ""),
+        ):
+            if not row:
+                self._log(
+                    "contract_created",
+                    entity_type="contract",
+                    entity_id=cid,
+                    source="Contract Detail",
+                    message="Sözleşme oluşturuldu",
+                    after=after_contract,
+                    changed_fields=top_changes,
+                    payload={
+                        "system_count": len(systems or []),
+                        "delivery_count": sum(len(values or []) for values in (deliveries or {}).values()),
+                        "component_count": sum(len((item.components or {})) for item in (systems or [])),
+                    },
+                    actor=self.current_actor(),
+                )
+            elif top_changes:
+                self._log(
+                    "contract_updated",
+                    entity_type="contract",
+                    entity_id=cid,
+                    source="Contract Detail",
+                    message="Sözleşme ana bilgileri güncellendi",
+                    before=before_contract,
+                    after=after_contract,
+                    changed_fields=top_changes,
+                    actor=self.current_actor(),
+                )
+
+            for name in sorted(set(new_systems) | set(old_systems)):
+                before_system, after_system = old_systems.get(name), new_systems.get(name)
+                if before_system is None:
+                    self._log(
+                        "system_created", entity_type="system", entity_key=name,
+                        source="System Editor", message="Sistem eklendi", after=after_system,
+                    )
+                elif after_system is None:
+                    self._log(
+                        "system_deleted", entity_type="system", entity_key=name,
+                        source="System Editor", message="Sistem silindi", before=before_system,
+                    )
+                elif stable_activity_value(before_system) != stable_activity_value(after_system):
+                    self._log(
+                        "system_updated", entity_type="system", entity_key=name,
+                        source="System Editor", message="Sistem güncellendi",
+                        before=before_system, after=after_system,
+                    )
+
+            for key in sorted(set(new_deliveries) | set(old_deliveries)):
+                before_delivery, after_delivery = old_deliveries.get(key), new_deliveries.get(key)
+                before_compare = {name: value for name, value in (before_delivery or {}).items() if name != "id"}
+                entity_key = f"{key[0]} / {key[1]}"
+                if before_delivery is None:
+                    self._log(
+                        "delivery_created", entity_type="delivery", entity_key=entity_key,
+                        source="Delivery Editor", message="Teslimat eklendi", after=after_delivery,
+                    )
+                elif after_delivery is None:
+                    self._log(
+                        "delivery_deleted", entity_type="delivery", entity_id=before_delivery.get("id"),
+                        entity_key=entity_key, source="Delivery Editor", message="Teslimat silindi",
+                        before=before_delivery,
+                    )
+                elif stable_activity_value(before_compare) != stable_activity_value(after_delivery):
+                    self._log(
+                        "delivery_updated", entity_type="delivery", entity_key=entity_key,
+                        source="Delivery Editor", message="Teslimat güncellendi",
+                        before=before_compare, after=after_delivery,
+                    )
         return cid
 
     def write_contract(self, ci, systems, deliveries, old_contract_no=None, old_start_row=None):
-        """Persist one contract and its audit events under one transaction owner."""
-        with self.db.tx():
-            return self._write_contract_in_transaction(
-                ci,
-                systems,
-                deliveries,
-                old_contract_no=old_contract_no,
-                old_start_row=old_start_row,
-            )
+        """Persist one contract and its grouped audit events under one transaction owner."""
+        with self.activity_operation(
+            name="contract_save",
+            category="USER",
+            contract_id=safe_positive_int(getattr(ci, "contract_id", None) or getattr(ci, "id", None) or getattr(ci, "entry_start_row", None)),
+            platform=str(getattr(ci, "platform", "") or ""),
+            contract_no=str(getattr(ci, "no", "") or ""),
+        ):
+            with self.db.tx():
+                return self._write_contract_in_transaction(
+                    ci,
+                    systems,
+                    deliveries,
+                    old_contract_no=old_contract_no,
+                    old_start_row=old_start_row,
+                )
 
     def load_contract_structure(self, platform, contract_no=None, start_row=None, contract_type=None, platform_id=None):
         # Backward compatible call style remains: load_contract_structure(platform_name, contract_no, ...).
@@ -2091,16 +2837,39 @@ class STSStore:
         return result
 
     def delete_contract(self, platform, contract_no, start_row=None, actor=None, progress_cb=None):
-        row=self.db.conn.execute("SELECT id FROM contracts WHERE platform_id=? AND contract_no=? ORDER BY id LIMIT 1",(self.get_platform_id(platform),contract_no)).fetchone()
-        if not row: return {"platform":platform,"contract_no":contract_no,"start_row":0,"end_row":0,"deleted_rows":0}
-        cid=row[0]
-        before = self.db.conn.execute("SELECT contract_no,contract_type,status,completion_date,acceptance_date FROM contracts WHERE id=?", (cid,)).fetchone()
-        with self.db.tx():
-            self.db.conn.execute("DELETE FROM contracts WHERE id=?",(cid,))
-            self._log("contract_deleted", entity_type="contract", entity_id=cid, platform=str(platform or ""), contract_no=str(contract_no or ""), source="Contract Detail", message="Sözleşme silindi", before=dict(before) if before else None, actor=actor or self.current_actor())
-        return {"platform":platform,"contract_no":contract_no,"start_row":cid,"end_row":cid,"deleted_rows":1}
+        row = self.db.conn.execute(
+            "SELECT id FROM contracts WHERE platform_id=? AND contract_no=? ORDER BY id LIMIT 1",
+            (self.get_platform_id(platform), contract_no),
+        ).fetchone()
+        if not row:
+            return {"platform": platform, "contract_no": contract_no, "start_row": 0, "end_row": 0, "deleted_rows": 0}
+        cid = int(row[0])
+        before = self.db.conn.execute(
+            "SELECT contract_no,contract_type,status,completion_date,acceptance_date,note FROM contracts WHERE id=?",
+            (cid,),
+        ).fetchone()
+        with self.activity_operation(
+            name="contract_delete",
+            category="USER",
+            contract_id=cid,
+            platform=str(platform or ""),
+            contract_no=str(contract_no or ""),
+        ):
+            with self.db.tx():
+                cursor = self.db.conn.execute("DELETE FROM contracts WHERE id=?", (cid,))
+                if cursor.rowcount:
+                    self._log(
+                        "contract_deleted",
+                        entity_type="contract",
+                        entity_id=cid,
+                        source="Contract Detail",
+                        message="Sözleşme silindi",
+                        before=dict(before) if before else None,
+                        actor=actor or self.current_actor(),
+                    )
+        return {"platform": platform, "contract_no": contract_no, "start_row": cid, "end_row": cid, "deleted_rows": 1}
 
-    # ---- Unit tracking helpers ----
+
     def get_unit_tracking_components(self) -> dict:
         """Kuyruk no / seri no takibi için özel etiket tanımlı bileşenleri {name: label} olarak döner."""
         out = {}

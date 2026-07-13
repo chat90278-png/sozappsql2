@@ -1063,7 +1063,7 @@ QLabel#sqlHint { color:#94a3b8; font-size:11px; }
                 self._set_sql_status(f"Sorgu tamamlandı. Etkilenen satır: {row_count} | Çalışma süresi: {ms} ms")
                 self.refresh_all()
             if changed:
-                self.store.db.add_sql_query_log(sql, duration_ms=ms, affected_rows=row_count)
+                self.store.add_sql_query_log(sql, duration_ms=ms, affected_rows=row_count)
         except Exception as exc:
             try:
                 conn.rollback()
