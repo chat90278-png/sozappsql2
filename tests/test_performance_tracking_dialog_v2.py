@@ -48,12 +48,20 @@ def test_performance_dialog_uses_real_telemetry_and_business_counts(tmp_path: Pa
     dialog.show()
     app.processEvents()
 
-    assert dialog.metric_cards[perf_tracker.OP_DB_OPEN].value.text() != "-"
+    db_card = dialog.metric_cards[perf_tracker.OP_DB_OPEN]
+    assert db_card.value.text() != "-"
+    assert db_card.explanation.text() == "Ölçümlerin %95'i bu süreden hızlı"
+    assert "p95" not in db_card.explanation.text().casefold()
+    assert "p95" in db_card.explanation.toolTip().casefold()
+
     assert dialog.metric_cards[perf_tracker.OP_CONTRACT_SAVE].badge.text() == "Normal"
     assert dialog.summary_values["contracts"].text() == "4"
     assert dialog.summary_values["systems"].text() == "11"
     assert dialog.summary_values["deliveries"].text() == "16"
     assert dialog.summary_values["measurements"].text() == "12"
+    assert dialog.summary_labels["wal_size"].text() == "Geçici kayıt alanı"
+    assert dialog.summary_values["wal_size"].text() == "Kullanılmıyor"
+    assert "WAL" in dialog.summary_labels["wal_size"].toolTip()
     assert dialog.table.rowCount() == 12
     assert dialog.table.columnCount() == 6
 
