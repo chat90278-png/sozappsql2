@@ -3537,7 +3537,16 @@ class MainWindow(QMainWindow):
                 platform=str(getattr(work.ci, "platform", "") or platform),
             ),
         )
-        return True
+        # DİKKAT: Burada True dönmek, tarih.py'deki _on_detail()'in
+        # refresh_data(rebuild_index=True) çağırmasına (takvimin TÜM yılını
+        # DB'den yeniden çekip 365+ gün hücresini sıfırdan yeniden inşa etmesine)
+        # sebep oluyordu — sözleşme sadece GÖRÜNTÜLENDİĞİNDE bile, hiçbir veri
+        # değişmese dahi. Bu, "sözleşme açma" ile arka planda tetiklenen ağır
+        # senkron takvim yeniden-çizimi arasındaki gecikmenin asıl kaynağıydı.
+        # Gerçek bir kayıt/onay zaten yukarıdaki on_accepted callback'i üzerinden
+        # kendi doğru yenilemesini (request_refresh) tetikliyor; bu yüzden burada
+        # sadece pencerenin açıldığını "veri değişti" gibi işaretlememek gerekir.
+        return False
 
     def new_contract(self):
         if not self.require_permission_ui("create_contracts", "Sözleşme Ekleme"):
