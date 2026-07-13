@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Collection, Sequence
+from datetime import datetime
 
+from src.domain.agenda.activity import CONTRACT_ACTIVITY_FIELDS_BY_ACTION
 from src.domain.agenda.source_models import (
+    ActivityAgendaSource,
     AgendaCalendarSource,
     AgendaSourceBundle,
     DocumentLockAgendaSource,
@@ -37,6 +41,26 @@ def _normalize_contract_ids(values: Collection[int]) -> list[int]:
         seen.add(contract_id)
         result.append(contract_id)
     return sorted(result)
+
+
+def _activity_since_value(value: datetime | str | None) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
+    normalized = str(value or "").strip()
+    return normalized or None
+
+
+def _json_object(value: object) -> dict | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = json.loads(text)
+    except (TypeError, ValueError):
+        return None
+    return parsed if isinstance(parsed, dict) else None
 
 
 class AgendaSourceRepository:
@@ -335,9 +359,87 @@ class AgendaSourceRepository:
             for row in rows
         )
 
+    def list_activity_sources(
+        self,
+        contract_ids: Collection[int],
+        *,
+        activity_since: datetime | str | None = None,
+    ) -> tuple[ActivityAgendaSource, ...]:
+        ids = _normalize_contract_ids(contract_ids)
+        return self._list_activity_sources(
+            ids,
+            self._platform_names_by_contract(ids),
+            activity_since=activity_since,
+        )
+
+    def _list_activity_sources(
+        self,
+        ids: Sequence[int],
+        platforms_by_contract: dict[int, tuple[str, ...]],
+        *,
+        activity_since: datetime | str | None = None,
+    ) -> tuple[ActivityAgendaSource, ...]:
+        if not ids:
+            return ()
+        placeholders = ",".join("?" for _ in ids)
+        action_placeholders = ",".join("?" for _ in CONTRACT_ACTIVITY_FIELDS_BY_ACTION)
+        cutoff = _activity_since_value(activity_since)
+        cutoff_sql = " AND l.created_at > ?" if cutoff is not None else ""
+        parameters: list[object] = [*ids, *CONTRACT_ACTIVITY_FIELDS_BY_ACTION]
+        if cutoff is not None:
+            parameters.append(cutoff)
+
+        rows = self.conn.execute(
+            f"""
+            SELECT l.id,l.created_at,l.actor,l.source,l.device_name,l.action,
+                   l.entity_type,l.entity_id,l.message,l.before_json,l.after_json,
+                   c.id,c.contract_no,c.contract_type
+            FROM activity_logs AS l
+            JOIN contracts AS c ON TRIM(l.entity_id)=CAST(c.id AS TEXT)
+            WHERE c.id IN ({placeholders})
+              AND l.entity_type='contract'
+              AND l.action IN ({action_placeholders})
+              AND l.created_at IS NOT NULL
+              AND TRIM(l.created_at)<>''
+              {cutoff_sql}
+            ORDER BY l.created_at DESC,l.id DESC
+            """,
+            parameters,
+        ).fetchall()
+
+        sources: list[ActivityAgendaSource] = []
+        for row in rows:
+            before_values = _json_object(row[9])
+            after_values = _json_object(row[10])
+            if before_values is None or after_values is None:
+                continue
+            contract_id = int(row[11])
+            sources.append(
+                ActivityAgendaSource(
+                    log_id=row[0],
+                    contract_id=contract_id,
+                    action=row[5],
+                    created_at=row[1],
+                    contract_no=row[12],
+                    contract_type=row[13],
+                    platform=" / ".join(platforms_by_contract.get(contract_id, ())),
+                    entity_type=row[6],
+                    entity_id=row[7],
+                    actor_name=row[2],
+                    device_name=row[4],
+                    log_source=row[3],
+                    message=row[8],
+                    before_values=before_values,
+                    after_values=after_values,
+                )
+            )
+        return tuple(sources)
+
     def load_personal_sources(
         self,
         contract_ids: Collection[int],
+        *,
+        activity_since: datetime | str | None = None,
     ) -> AgendaSourceBundle:
         ids = _normalize_contract_ids(contract_ids)
         if not ids:
@@ -347,4 +449,9 @@ class AgendaSourceRepository:
             calendar=self._list_calendar_sources(ids, platforms_by_contract),
             returned_shares=self._list_returned_share_sources(ids, platforms_by_contract),
             document_locks=self._list_document_lock_sources(ids, platforms_by_contract),
+            activities=self._list_activity_sources(
+                ids,
+                platforms_by_contract,
+                activity_since=activity_since,
+            ),
         )
