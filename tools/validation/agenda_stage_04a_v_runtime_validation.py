@@ -1,3 +1,176 @@
 from __future__ import annotations
-import base64,zlib
-exec(compile(zlib.decompress(base64.b64decode('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')), __file__, 'exec'))
+import argparse, hashlib, json, os, platform, subprocess, sys, tempfile, traceback
+import xml.etree.ElementTree as ET
+from collections import defaultdict
+from datetime import datetime, timedelta
+from pathlib import Path
+
+B="bc5feca2aa755b4e12c98b9932810778ec08d6cb"
+P="973c96af0bc431029a0d027ec39dea3e5261e275"
+TMP={".github/workflows/agenda-stage-04a-v-runtime-validation.yml","tools/validation/agenda_stage_04a_v_runtime_validation.py"}
+NOW=datetime(2026,7,13,12,0,0)
+
+def req(x,m):
+    if not x: raise AssertionError(m)
+def text(x): return json.dumps(x,ensure_ascii=False,indent=2,sort_keys=True,default=str)
+def jdump(p,x): p.write_text(text(x),encoding="utf-8")
+def run(cmd,cwd,log,env=None):
+    e=os.environ.copy(); e.update(env or {})
+    r=subprocess.run(cmd,cwd=cwd,env=e,text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,errors="replace")
+    log.write_text("$ "+subprocess.list2cmdline(cmd)+f"\nexit_code={r.returncode}\n\n"+r.stdout,encoding="utf-8")
+    return r
+def gout(cwd,*a):
+    r=subprocess.run(["git",*a],cwd=cwd,text=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+    req(r.returncode==0,f"git {' '.join(a)}: {r.stderr}"); return r.stdout.strip()
+def jsum(p):
+    root=ET.parse(p).getroot(); cases=list(root.iter("testcase"))
+    nodes=sorted({f"{c.get('classname','')}::{c.get('name','')}" for c in cases if c.find("failure") is not None or c.find("error") is not None})
+    return {"tests":len(cases),"failures":sum(c.find("failure") is not None for c in cases),"errors":sum(c.find("error") is not None for c in cases),"skipped":sum(c.find("skipped") is not None for c in cases),"nodes":nodes}
+def sha(p):
+    b=p.read_bytes(); return {"bytes":len(b),"sha256":hashlib.sha256(b).hexdigest()}
+
+class CS:
+    def __init__(self,x): self.x=x; self.p=[]; self.a=[]; self.l=[]
+    def list_personal_contract_ids(self,i): self.p.append(i); return self.x.list_personal_contract_ids(i)
+    def list_all_contract_ids(self): self.a.append(1); return self.x.list_all_contract_ids()
+    def load_personal_sources(self,ids): self.l.append(sorted(ids)); return self.x.load_personal_sources(ids)
+class ST:
+    def __init__(self,x): self.x=x; self.c=defaultdict(list)
+    def _f(self,n,*a,**k): self.c[n].append([list(a),k]); return getattr(self.x,n)(*a,**k)
+    def get_states(self,*a,**k): return self._f("get_states",*a,**k)
+    def touch_presented(self,*a,**k): return self._f("touch_presented",*a,**k)
+    def mark_seen(self,*a,**k): return self._f("mark_seen",*a,**k)
+    def snooze(self,*a,**k): return self._f("snooze",*a,**k)
+    def clear_snooze(self,*a,**k): return self._f("clear_snooze",*a,**k)
+class CP:
+    def __init__(self,x): self.x=x; self.code=x.code; self.e=0; self.b=0
+    def is_enabled(self,c): self.e+=1; return self.x.is_enabled(c)
+    def build(self,c,s): self.b+=1; return self.x.build(c,s)
+class OFF:
+    code="off"
+    def __init__(self): self.e=0; self.b=0
+    def is_enabled(self,c): self.e+=1; return False
+    def build(self,c,s): self.b+=1; return ()
+def calls(s,st,ps): return {"source":{"personal":s.p,"all":len(s.a),"load":s.l},"state":dict(st.c),"providers":{p.code:{"enabled":p.e,"build":p.b} for p in ps}}
+
+def seed(db):
+    from src.models.share_models import SHARE_STATUS_RETURNED
+    c=db.conn
+    with db.tx():
+        roles={r["name"]:int(r["id"]) for r in c.execute("select id,name from roles")}
+        c.execute("insert into roles(name,display_name,is_system) values('custom_agenda','Custom',0)")
+        roles["custom_agenda"]=c.execute("select id from roles where name='custom_agenda'").fetchone()[0]
+        for rn,allow in {"personnel":{"view_contracts","edit_contracts"},"viewer":{"view_contracts"},"manager":{"view_contracts","edit_contracts"},"custom_agenda":{"view_contracts"}}.items():
+            for code in ("view_contracts","edit_contracts"):
+                c.execute("insert into role_permissions(role_id,permission_code,is_allowed) values(?,?,?) on conflict(role_id,permission_code) do update set is_allowed=excluded.is_allowed",(roles[rn],code,int(code in allow)))
+        ids={}
+        for k,rn in (("personnel","personnel"),("viewer","viewer"),("manager","manager"),("custom","custom_agenda")):
+            ids[k]=c.execute("insert into staff(device_name,full_name,password_hash,role,role_id,is_active) values(?,?,?,?,?,1)",(f"v-{k}",k,"x",rn,roles[rn])).lastrowid
+        pf=c.execute("insert into platforms(name,display_name,is_active) values('V','V',1)").lastrowid
+        ids["c1"]=c.execute("insert into contracts(platform_id,contract_no,contract_type,status,completion_date,merge_uid,revision) values(?,?,?,?,?,?,?)",(pf,"C1","Ana","Açık","2026-07-14","m1",1)).lastrowid
+        ids["c2"]=c.execute("insert into contracts(platform_id,contract_no,contract_type,status,completion_date,merge_uid,revision) values(?,?,?,?,?,?,?)",(pf,"C2","Ana","Açık","TBD","m2",1)).lastrowid
+        c.execute("insert into contract_responsible_engineers(contract_id,staff_id,is_primary) values(?,?,1)",(ids["c1"],ids["personnel"]))
+        c.execute("insert into contract_responsible_engineers(contract_id,staff_id,is_primary) values(?,?,1)",(ids["c2"],ids["custom"]))
+        c.execute("""insert into share_packages(share_package_id,contract_id,contract_merge_uid,source_contract_revision,permission_mode,share_format_version,snapshot_format_version,base_snapshot_sha256,created_at,created_by_staff_id,created_by_full_name,exported_filename,status,last_imported_at,last_imported_by_staff_id,last_remote_snapshot_sha256,return_count) values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",("pkg",ids["c1"],"m1",1,"edit",2,1,"h","2026-07-12",ids["personnel"],"P","p.sts",SHARE_STATUS_RETURNED,"2026-07-12",ids["personnel"],"rh",1))
+        c.execute("""insert into staff_agenda_state(staff_id,agenda_key,first_presented_at,last_presented_at,seen_at,seen_version,created_at,updated_at) values(?,?,?,?,?,?,?,?)""",(ids["personnel"],"collision:seed","2026-07-01","2026-07-02","2026-07-03","V1","2026-07-01","2026-07-03"))
+    req(ids["personnel"]==1,"staff collision id not 1"); return {k:int(v) for k,v in ids.items()}
+
+def sess(ids,k,perms,role): return {"id":ids[k],"role":role,"full_name":k,"device_name":f"v-{k}","is_active":1,"permissions":frozenset(perms)}
+def runtime(feature,ev):
+    os.chdir(feature); sys.path.insert(0,str(feature))
+    from src import auth
+    from src.domain.agenda.constants import AgendaContractScopeCode as S, AgendaPresentationProfileCode as R
+    from src.domain.agenda.providers import DeadlineAgendaProvider,ReturnedShareAgendaProvider,UnknownDateAgendaProvider
+    from src.services.agenda_context_factory import PersonalAgendaContextFactory
+    from src.services.agenda_source_repository import AgendaSourceRepository
+    from src.services.agenda_state_repository import AgendaStateRepository
+    from src.services.personal_agenda_facade import PersonalAgendaFacade,AgendaInteractionError
+    from src.services.staff_agenda_service import StaffAgendaService
+    from src.services.sts_database import STSDatabase,CURRENT_SCHEMA_VERSION
+    out={"status":"FAIL"}
+    with tempfile.TemporaryDirectory() as td:
+        db=STSDatabase(Path(td)/"v.sts",source="04A-V"); ids=seed(db); req(CURRENT_SCHEMA_VERSION==18,"schema")
+        F=PersonalAgendaContextFactory(now_provider=lambda:NOW)
+        def one(ss,prof,scope,contracts,override=(),touch=False,off=False):
+            sr=CS(AgendaSourceRepository(db)); st=ST(AgendaStateRepository(db))
+            ps=[CP(DeadlineAgendaProvider()),CP(ReturnedShareAgendaProvider()),CP(UnknownDateAgendaProvider())]+([OFF()] if off else [])
+            ctx=F.build(ss,now=NOW,personal_contract_ids=override); req(ctx.presentation_profile.code==prof,"profile"); req(ctx.contract_scope==scope,"scope")
+            res=StaffAgendaService(db,state_repository=st,source_repository=sr,providers=ps).build(ctx,touch_presented=touch)
+            req({i.contract_id for i in res.items}==set(contracts),"contracts")
+            return ctx,res,calls(sr,st,ps)
+        p=sess(ids,"personnel",{"view_contracts","edit_contracts"},"personnel")
+        v=sess(ids,"viewer",{"view_contracts"},"viewer")
+        m=sess(ids,"manager",{"view_contracts","edit_contracts"},"manager")
+        x=sess(ids,"custom",{"view_contracts"},"custom_agenda")
+        _,pr,pc=one(p,R.PERSONAL,S.RESPONSIBLE,{ids["c1"]})
+        _,vr,vc=one(v,R.VIEW_ONLY,S.ALL_VISIBLE,{ids["c1"],ids["c2"]}); req("returned_share" not in {i.kind for i in vr.items},"viewer share")
+        _,mr,mc=one(m,R.MANAGEMENT,S.ALL_VISIBLE,{ids["c1"],ids["c2"]},off=True); req({"deadline","unknown_date","returned_share"}<={i.kind for i in mr.items},"manager kinds"); req(mc["source"]["load"] and len(mc["source"]["load"])==1,"load once"); req(mc["providers"]["off"]["build"]==0,"off build")
+        xc,xr,xx=one(x,R.PERSONAL,S.RESPONSIBLE,{ids["c2"]}); req(xc.permissions==frozenset({"view_contracts"}),"custom synthesis")
+        _,orr,oc=one(p,R.PERSONAL,S.RESPONSIBLE,{ids["c2"]},override={ids["c2"]}); req(not oc["source"]["personal"] and oc["source"]["all"]==0 and oc["source"]["load"]==[[ids["c2"]]],"override")
+        nv=dict(m); nv["permissions"]=frozenset(); _,nvr,nvc=one(nv,R.MANAGEMENT,S.ALL_VISIBLE,set()); req(nvc["source"]=={"personal":[],"all":0,"load":[]} and all(z=={"enabled":0,"build":0} for z in nvc["providers"].values()),"no view")
+        mv=dict(m); mv["permissions"]=frozenset({"view_contracts"}); _,mvr,mvc=one(mv,R.MANAGEMENT,S.ALL_VISIBLE,{ids["c1"],ids["c2"]}); req("returned_share" not in {i.kind for i in mvr.items},"no edit")
+        pv=dict(p); pv["permissions"]=frozenset({"view_contracts"}); _,pvr,pvc=one(pv,R.PERSONAL,S.RESPONSIBLE,{ids["c1"]}); req("returned_share" not in {i.kind for i in pvr.items},"p no edit")
+        trace=[]; db.conn.set_trace_callback(trace.append); bc=db.conn.total_changes; bt=db.conn.in_transaction; allids=AgendaSourceRepository(db).list_all_contract_ids(); at=db.conn.in_transaction; ac=db.conn.total_changes; db.conn.set_trace_callback(None)
+        req(allids==frozenset({ids["c1"],ids["c2"]}) and bc==ac and bt==at and trace and all(q.lstrip().upper().startswith("SELECT") for q in trace),"readonly")
+        _,r0,c0=one(pv,R.PERSONAL,S.RESPONSIBLE,{ids["c1"]},touch=False); req(not c0["state"].get("touch_presented"),"touch false")
+        _,r1,c1=one(pv,R.PERSONAL,S.RESPONSIBLE,{ids["c1"]},touch=True); req(len(c1["state"].get("touch_presented",[]))==1 and c1["state"]["touch_presented"][0][0][0]==ids["personnel"],"touch true")
+        before=dict(db.conn.execute("select * from staff_agenda_state where staff_id=1 and agenda_key='collision:seed'").fetchone())
+        auth.create_system_admin(db.conn,"root","pw"); row=auth.verify_system_admin_login(db.conn,"root","pw"); sa=auth.build_system_admin_session(row,"sys")
+        req(sa["id"]==0 and sa["admin_id"]==1 and sa["is_admin"] is True and sa["is_active"]==1 and "permissions" not in sa,"session")
+        sc=F.build(sa,now=NOW); req(sc.presentation_profile.code==R.SYSTEM and sc.contract_scope==S.ALL_VISIBLE and sc.staff_id is None and sc.permissions==frozenset() and sc.current_staff["id"]==0 and sc.current_staff["admin_id"]==1,"system context")
+        def guard(ss,override=()):
+            sr=CS(AgendaSourceRepository(db)); st=ST(AgendaStateRepository(db)); ps=[CP(DeadlineAgendaProvider()),CP(ReturnedShareAgendaProvider()),CP(UnknownDateAgendaProvider())]
+            svc=StaffAgendaService(db,state_repository=st,source_repository=sr,providers=ps); fac=PersonalAgendaFacade(db,context_factory=F,agenda_service=svc,state_repository=st)
+            snap=fac.load(ss,now=NOW,personal_contract_ids=override); req(not snap.all_items and not sr.p and not sr.a and not sr.l and not st.c and all(q.e==q.b==0 for q in ps),"system load")
+            return fac,st,calls(sr,st,ps)
+        _,_,sg=guard(sa); inj={**sa,"permissions":frozenset({"view_contracts","edit_contracts"})}; fac,ist,ig=guard(inj); _,_,og=guard(inj,{ids["c1"]})
+        item=mr.items[0]
+        for ss in (sa,{**sa,"permissions":frozenset({"view_contracts"})}):
+            for op in ("mark_seen","snooze","clear_snooze"):
+                try:
+                    if op=="mark_seen": fac.mark_seen(ss,item,seen_at=NOW)
+                    elif op=="snooze": fac.snooze(ss,item,until=NOW+timedelta(days=1),now=NOW)
+                    else: fac.clear_snooze(ss,item)
+                    raise AssertionError("interaction success")
+                except AgendaInteractionError: pass
+        req(not ist.c,"interaction state")
+        fk=[list(r) for r in db.conn.execute("pragma foreign_key_list(staff_agenda_state)")]; req(any(r[2]=="staff" and r[3]=="staff_id" and r[4]=="id" for r in fk),"fk")
+        after=dict(db.conn.execute("select * from staff_agenda_state where staff_id=1 and agenda_key='collision:seed'").fetchone()); req(before==after,"collision row")
+        out={"status":"PASS","schema":18,"ids":ids,"personnel":pc,"viewer":vc,"manager":mc,"custom":xx,"override":oc,"manager_no_view":nvc,"manager_view_no_edit":mvc,"personnel_view_no_edit":pvc,"readonly":{"ids":sorted(allids),"before_changes":bc,"after_changes":ac,"before_tx":bt,"after_tx":at,"trace":trace},"state":{"touch_false":c0,"touch_true":c1},"system":{"session":sa,"context":{"profile":str(sc.presentation_profile.code),"scope":str(sc.contract_scope),"staff_id":sc.staff_id,"permissions":list(sc.permissions)},"real":sg,"injected":ig,"override":og,"interactions":dict(ist.c),"fk":fk,"collision_before":before,"collision_after":after}}
+        db.close()
+    jdump(ev/"real-scope-capability-smoke.json",out); jdump(ev/"system-admin-fail-closed-smoke.json",out["system"])
+    (ev/"real-scope-capability-smoke.log").write_text("PASS\n",encoding="utf-8"); (ev/"system-admin-fail-closed-smoke.log").write_text("PASS\n",encoding="utf-8")
+    return out
+
+def main():
+    a=argparse.ArgumentParser(); a.add_argument("--baseline",required=True); a.add_argument("--feature",required=True); a.add_argument("--evidence",required=True); z=a.parse_args()
+    b=Path(z.baseline).resolve(); f=Path(z.feature).resolve(); e=Path(z.evidence).resolve(); e.mkdir(parents=True,exist_ok=True)
+    gates={}; errs=[]
+    try:
+        bh=gout(b,"rev-parse","HEAD"); fh=gout(f,"rev-parse","HEAD"); ch=[x for x in gout(f,"diff","--name-only",P,fh).splitlines() if x]
+        req(bh==B and set(ch)==TMP and len(ch)==2,"refs/diff"); d={"baseline":bh,"product":P,"feature":fh,"changed":ch}; jdump(e/"ref-preflight.json",d); (e/"ref-preflight.txt").write_text(text(d),encoding="utf-8"); gates["preflight"]={"status":"PASS",**d}
+    except Exception as x: errs.append("preflight "+repr(x)); gates["preflight"]={"status":"FAIL","error":repr(x)}
+    try:
+        q={"baseline":sha(b/"requirements.txt"),"feature":sha(f/"requirements.txt")}; q["equal"]=q["baseline"]==q["feature"]; req(q["equal"],"requirements"); jdump(e/"requirements-parity.json",q); (e/"requirements-parity.txt").write_text(text(q),encoding="utf-8"); gates["requirements"]={"status":"PASS",**q}
+    except Exception as x: errs.append("requirements "+repr(x)); gates["requirements"]={"status":"FAIL","error":repr(x)}
+    env={"platform":platform.platform(),"python":sys.version}
+    for n,c in (("pip",[sys.executable,"-m","pip","--version"]),("pytest",[sys.executable,"-m","pytest","--version"]),("pyside",[sys.executable,"-c","import PySide6;print(PySide6.__version__)"])):
+        r=run(c,f,e/(n+".log")); env[n]={"exit":r.returncode,"output":r.stdout.strip()}; req(r.returncode==0,n)
+    jdump(e/"environment.json",env); (e/"environment.txt").write_text(text(env),encoding="utf-8"); gates["environment"]={"status":"PASS",**env}
+    r=run([sys.executable,"-m","compileall","-q","src","tests"],f,e/"compile.log"); gates["compile"]={"status":"PASS" if r.returncode==0 else "FAIL","exit":r.returncode}; errs+=[] if r.returncode==0 else ["compile"]
+    files=["tests/test_agenda_context_factory.py","tests/test_agenda_source_repository.py","tests/test_deadline_agenda_provider.py","tests/test_unknown_date_agenda_provider.py","tests/test_returned_share_agenda_provider.py","tests/test_staff_agenda_service.py","tests/test_personal_agenda_facade.py","tests/test_agenda_lifecycle.py","tests/test_agenda_models.py","tests/test_agenda_state_repository.py","tests/test_sts_database_transactions.py"]+[x for x in ["tests/test_agenda_presentation.py","tests/test_agenda_compact_widget.py","tests/test_agenda_detail_window.py","tests/test_main_page_agenda_integration.py"] if (f/x).exists()]
+    tx=e/"targeted.xml"; r=run([sys.executable,"-m","pytest","-q",*files,f"--junitxml={tx}"],f,e/"targeted.log",{"QT_QPA_PLATFORM":"offscreen"}); ts=jsum(tx); ok=r.returncode==0 and ts["failures"]==ts["errors"]==0; gates["targeted"]={"status":"PASS" if ok else "FAIL","exit":r.returncode,**ts}; errs+=[] if ok else ["targeted"]
+    try: runtime(f,e); gates["runtime_smokes"]={"status":"PASS"}
+    except Exception as x: errs.append("runtime "+repr(x)); gates["runtime_smokes"]={"status":"FAIL","error":repr(x)}; (e/"runtime-error.log").write_text(traceback.format_exc(),encoding="utf-8")
+    for n,p in (("schema","tests/smoke_sts_agenda_schema.py"),("database","tests/smoke_sts_database.py")):
+        if not (f/p).exists(): gates[n]={"status":"FAIL","error":"missing"}; errs.append(n); continue
+        r=run([sys.executable,p],f,e/(n+"-smoke.log")); ok=r.returncode==0 and ("schema_version=18" in r.stdout or n=="database"); gates[n]={"status":"PASS" if ok else "FAIL","exit":r.returncode,"schema_version":18,"tail":r.stdout[-1000:]}; errs+=[] if ok else [n]
+    full={}
+    for n,cwd in (("baseline",b),("feature",f)):
+        x=e/(n+"-full.xml"); r=run([sys.executable,"-m","pytest","-q",f"--junitxml={x}"],cwd,e/(n+"-full.log"),{"QT_QPA_PLATFORM":"offscreen"}); s=jsum(x); valid=r.returncode in (0,1) and s["tests"]>0; full[n]={"valid":valid,"exit":r.returncode,**s}; errs+=[] if valid else [n+" full"]
+    fo=sorted(set(full["feature"]["nodes"])-set(full["baseline"]["nodes"])); diff={"baseline":full["baseline"],"feature":full["feature"],"feature_only":fo,"feature_only_count":len(fo)}; jdump(e/"differential-summary.json",diff); (e/"differential-summary.txt").write_text(text(diff),encoding="utf-8"); gates["differential"]={"status":"PASS" if not fo else "FAIL",**diff}; errs+=[] if not fo else ["feature only"]
+    ok=not errs and all(v["status"]=="PASS" for v in gates.values()); summary={"status":"PASS" if ok else "FAIL","gates":gates,"errors":errs}; jdump(e/"validation-summary.json",summary); (e/"validation-summary.txt").write_text(json.dumps(summary,ensure_ascii=False,indent=2,default=str),encoding="utf-8")
+    gs=os.getenv("GITHUB_STEP_SUMMARY")
+    if gs: Path(gs).write_text("# Agenda Stage 4A-V\n\n"+f"**Final: {summary['status']}**\n\n"+"|Gate|Result|\n|---|---|\n"+"\n".join(f"|{k}|{v['status']}|" for k,v in gates.items())+"\n",encoding="utf-8")
+    return 0 if ok else 1
+if __name__=="__main__": raise SystemExit(main())
