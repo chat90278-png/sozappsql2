@@ -282,15 +282,11 @@ def install_delivery_schedule_slicer_fix() -> None:
                 print(f"[DeliveryScheduleSlicer] {warning or 'Bilinmeyen hata'}")
             except Exception:
                 pass
-            # The dialog's current failure router treats messages containing
-            # "excel", "com" or "win32" as a missing-Office warning. Keep the
-            # user-facing text free of those tokens so the real fallback status
-            # is shown while technical details remain in diagnostics.
-            raise RuntimeError(
-                "Dilimleyiciler eklenemedi. Seçtiğiniz temel rapor dosyası "
-                "değiştirilmeden korunmuştur. İkinci otomasyon adımı iki "
-                "denemede tamamlanamadı."
-            )
+            # The base report is already complete and valid. Preserve the
+            # existing successful-export contract and expose the optional
+            # slicer failure through result metadata instead of turning the
+            # whole operation into a failure.
+            result["partial_success"] = True
         return result
 
     exporter.export_delivery_schedule_report = export_with_safe_slicers
