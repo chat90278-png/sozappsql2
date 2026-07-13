@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+from datetime import datetime
+
 import pytest
 
 from src.domain.agenda.source_models import AgendaSourceBundle
@@ -128,6 +131,56 @@ def _insert_lock(
                 locked_at,
                 updated_at,
             ),
+        )
+
+
+def _insert_activity(
+    db: STSDatabase,
+    *,
+    contract_id: int,
+    action: str = "contract_updated",
+    created_at: str = "2026-07-13 10:00:00",
+    entity_type: str = "contract",
+    entity_id: str | None = None,
+    actor: str = "Actor",
+    source: str = "Unit Test",
+    device_name: str = "DEVICE",
+    message: str = "message",
+    before: object = None,
+    after: object = None,
+    raw_before_json: str | None = None,
+    raw_after_json: str | None = None,
+    contract_no: str | None = None,
+    payload_json: str | None = None,
+) -> int:
+    before = {"completion_date": "2026-07-01"} if before is None else before
+    after = {"completion_date": "2026-07-02"} if after is None else after
+    before_json = raw_before_json if raw_before_json is not None else json.dumps(before, ensure_ascii=False)
+    after_json = raw_after_json if raw_after_json is not None else json.dumps(after, ensure_ascii=False)
+    with db.tx():
+        return int(
+            db.conn.execute(
+                """
+                INSERT INTO activity_logs(
+                    created_at,actor,source,device_name,action,entity_type,entity_id,
+                    contract_no,message,before_json,after_json,payload_json
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    created_at,
+                    actor,
+                    source,
+                    device_name,
+                    action,
+                    entity_type,
+                    str(contract_id) if entity_id is None else entity_id,
+                    contract_no,
+                    message,
+                    before_json,
+                    after_json,
+                    payload_json,
+                ),
+            ).lastrowid
         )
 
 
@@ -439,3 +492,228 @@ def test_load_personal_sources_contains_all_source_families_with_one_platform_lo
     assert bundle.returned_shares
     assert bundle.document_locks
     assert calls == [(ids["c1"],)]
+
+
+def test_activity_valid_rows_and_exact_metadata(db):
+    ids = _seed(db)
+    update_id = _insert_activity(
+        db,
+        contract_id=ids["c1"],
+        action="contract_updated",
+        created_at="2026-07-13 10:00:00",
+        actor=" Actor Name ",
+        source=" Save Contract ",
+        device_name=" DEVICE-1 ",
+        message=" Changed dates ",
+        before={"completion_date": "2026-07-01", "acceptance_date": None},
+        after={"completion_date": "2026-07-02", "acceptance_date": "2026-07-03"},
+    )
+    status_id = _insert_activity(
+        db,
+        contract_id=ids["c1"],
+        action="contract_status_changed",
+        created_at="2026-07-13 11:00:00",
+        before={"status": "Açık"},
+        after={"status": "Kapalı"},
+    )
+
+    sources = AgendaSourceRepository(db).list_activity_sources([ids["c1"]])
+    assert [source.log_id for source in sources] == [status_id, update_id]
+    status, update = sources
+    assert status.action == "contract_status_changed"
+    assert update.action == "contract_updated"
+    assert update.contract_id == ids["c1"]
+    assert update.created_at == "2026-07-13 10:00:00"
+    assert update.actor_name == "Actor Name"
+    assert update.device_name == "DEVICE-1"
+    assert update.log_source == "Save Contract"
+    assert update.message == "Changed dates"
+    assert dict(update.before_values) == {"completion_date": "2026-07-01", "acceptance_date": None}
+    assert dict(update.after_values) == {"completion_date": "2026-07-02", "acceptance_date": "2026-07-03"}
+    assert update.contract_no == "C-2"
+    assert update.contract_type == "Ana"
+    assert update.platform == "alpha / Zulu"
+
+
+@pytest.mark.parametrize(
+    "action",
+    ["contract_created", "system_updated", "delivery_updated", "documents_locked", "unsupported_action"],
+)
+def test_activity_action_whitelist_excludes_unsupported_rows(db, action):
+    ids = _seed(db)
+    _insert_activity(db, contract_id=ids["c1"], action=action)
+    assert AgendaSourceRepository(db).list_activity_sources([ids["c1"]]) == ()
+
+
+@pytest.mark.parametrize(
+    ("entity_type", "entity_id"),
+    [
+        ("system", None),
+        ("contract", ""),
+        ("contract", "abc"),
+        ("contract", "1x"),
+        ("contract", "01"),
+    ],
+)
+def test_activity_requires_exact_contract_entity_identity(db, entity_type, entity_id):
+    ids = _seed(db)
+    value = entity_id
+    if value == "1x":
+        value = f"{ids['c1']}x"
+    elif value == "01":
+        value = f"0{ids['c1']}"
+    _insert_activity(
+        db,
+        contract_id=ids["c1"],
+        entity_type=entity_type,
+        entity_id=value,
+        contract_no="C-2",
+    )
+    assert AgendaSourceRepository(db).list_activity_sources([ids["c1"]]) == ()
+
+
+def test_activity_contract_no_never_resolves_identity_and_duplicate_numbers_stay_exact(db):
+    ids = _seed(db)
+    with db.tx():
+        db.conn.execute("UPDATE contracts SET contract_no='C-2' WHERE id=?", (ids["c2"],))
+    _insert_activity(db, contract_id=ids["c1"], entity_id="", contract_no="C-2")
+    first = _insert_activity(db, contract_id=ids["c1"], created_at="2026-07-13 12:00:00")
+    second = _insert_activity(db, contract_id=ids["c2"], created_at="2026-07-13 13:00:00")
+
+    scoped = AgendaSourceRepository(db).list_activity_sources([ids["c1"]])
+    assert [source.log_id for source in scoped] == [first]
+    all_sources = AgendaSourceRepository(db).list_activity_sources([ids["c1"], ids["c2"]])
+    assert [source.log_id for source in all_sources] == [second, first]
+    assert [source.contract_id for source in all_sources] == [ids["c2"], ids["c1"]]
+
+
+@pytest.mark.parametrize(
+    ("raw_before", "raw_after"),
+    [
+        ("", "{}"),
+        ("{}", ""),
+        ("{broken", "{}"),
+        ("{}", "{broken"),
+        ("[]", "{}"),
+        ("{}", "[]"),
+        ("1", "{}"),
+        ("{}", "true"),
+    ],
+)
+def test_activity_json_policy_skips_empty_invalid_array_and_scalar(db, raw_before, raw_after):
+    ids = _seed(db)
+    _insert_activity(
+        db,
+        contract_id=ids["c1"],
+        raw_before_json=raw_before,
+        raw_after_json=raw_after,
+    )
+    assert AgendaSourceRepository(db).list_activity_sources([ids["c1"]]) == ()
+
+
+def test_activity_valid_json_object_is_accepted_without_parsing_payload_or_message(db):
+    ids = _seed(db)
+    log_id = _insert_activity(
+        db,
+        contract_id=ids["c1"],
+        before={"completion_date": "old"},
+        after={"completion_date": "new"},
+        message='{"status":"fake"}',
+        payload_json='{"completion_date":"fake"}',
+    )
+    source = AgendaSourceRepository(db).list_activity_sources([ids["c1"]])[0]
+    assert source.log_id == log_id
+    assert dict(source.before_values) == {"completion_date": "old"}
+    assert dict(source.after_values) == {"completion_date": "new"}
+    assert source.message == '{"status":"fake"}'
+
+
+def test_activity_cutoff_and_order_are_strict_and_deterministic(db):
+    ids = _seed(db)
+    old_id = _insert_activity(db, contract_id=ids["c1"], created_at="2026-07-05 11:59:59")
+    equal_id = _insert_activity(db, contract_id=ids["c1"], created_at="2026-07-05 12:00:00")
+    first_new = _insert_activity(db, contract_id=ids["c1"], created_at="2026-07-06 12:00:00")
+    second_new = _insert_activity(db, contract_id=ids["c1"], created_at="2026-07-06 12:00:00")
+    latest = _insert_activity(db, contract_id=ids["c1"], created_at="2026-07-07 12:00:00")
+    repo = AgendaSourceRepository(db)
+
+    expected = [latest, second_new, first_new]
+    assert [source.log_id for source in repo.list_activity_sources(
+        [ids["c1"]], activity_since=datetime(2026, 7, 5, 12, 0, 0)
+    )] == expected
+    assert [source.log_id for source in repo.list_activity_sources(
+        [ids["c1"]], activity_since=" 2026-07-05 12:00:00 "
+    )] == expected
+    assert old_id not in expected and equal_id not in expected
+
+
+def test_activity_empty_ids_duplicate_input_and_read_only_contract(db):
+    ids = _seed(db)
+    log_id = _insert_activity(db, contract_id=ids["c1"])
+    repo = AgendaSourceRepository(db)
+    trace: list[str] = []
+    db.conn.set_trace_callback(trace.append)
+    try:
+        assert repo.list_activity_sources([]) == ()
+    finally:
+        db.conn.set_trace_callback(None)
+    assert trace == []
+
+    before_changes = db.conn.total_changes
+    before_transaction = db.conn.in_transaction
+    trace = []
+    db.conn.set_trace_callback(trace.append)
+    try:
+        sources = repo.list_activity_sources([ids["c1"], ids["c1"]])
+    finally:
+        db.conn.set_trace_callback(None)
+    assert [source.log_id for source in sources] == [log_id]
+    assert db.conn.total_changes == before_changes
+    assert db.conn.in_transaction == before_transaction
+    assert trace
+    assert all(statement.lstrip().upper().startswith("SELECT") for statement in trace)
+    activity_selects = [statement for statement in trace if "FROM activity_logs AS l" in statement]
+    assert len(activity_selects) == 1
+    assert all(" staff " not in statement.lower() for statement in activity_selects)
+
+
+def test_activity_bundle_preserves_all_families_and_forwards_cutoff_once(db, monkeypatch):
+    ids = _seed(db)
+    _insert_share(db, contract_id=ids["c1"], package_id="pkg-activity-bundle")
+    _insert_lock(db, contract_id=ids["c1"], staff_id=ids["staff1"])
+    log_id = _insert_activity(db, contract_id=ids["c1"], created_at="2026-07-13 10:00:00")
+    repo = AgendaSourceRepository(db)
+    platform_calls: list[tuple[int, ...]] = []
+    activity_calls: list[object] = []
+    original_platform = repo._platform_names_by_contract
+    original_activity = repo._list_activity_sources
+
+    def counted_platform(contract_ids):
+        platform_calls.append(tuple(contract_ids))
+        return original_platform(contract_ids)
+
+    def counted_activity(contract_ids, platforms, *, activity_since=None):
+        activity_calls.append(activity_since)
+        return original_activity(contract_ids, platforms, activity_since=activity_since)
+
+    monkeypatch.setattr(repo, "_platform_names_by_contract", counted_platform)
+    monkeypatch.setattr(repo, "_list_activity_sources", counted_activity)
+    cutoff = datetime(2026, 7, 5, 12, 0, 0)
+    bundle = repo.load_personal_sources([ids["c1"]], activity_since=cutoff)
+    assert bundle.calendar
+    assert bundle.returned_shares
+    assert bundle.document_locks
+    assert [source.log_id for source in bundle.activities] == [log_id]
+    assert platform_calls == [(ids["c1"],)]
+    assert activity_calls == [cutoff]
+
+
+def test_load_personal_sources_empty_contract_ids_is_query_free(db):
+    repo = AgendaSourceRepository(db)
+    trace: list[str] = []
+    db.conn.set_trace_callback(trace.append)
+    try:
+        assert repo.load_personal_sources([], activity_since=datetime(2026, 7, 5)) == AgendaSourceBundle()
+    finally:
+        db.conn.set_trace_callback(None)
+    assert trace == []
