@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from src import auth
 from src.domain.agenda.constants import (
     AgendaContractScopeCode,
     AgendaPresentationProfileCode,
@@ -164,22 +165,39 @@ def test_viewer_profile_uses_all_visible_scope():
     assert context.contract_scope == AgendaContractScopeCode.ALL_VISIBLE
 
 
-def test_exact_system_admin_identity_uses_system_profile():
-    context = PersonalAgendaContextFactory().build(
-        {
-            "id": 0,
-            "admin_id": 14,
-            "full_name": "System Admin",
-            "device_name": "admin-device",
-            "is_admin": True,
-            "is_active": 1,
-            "permissions": {"view_contracts", "edit_contracts"},
-        }
+def test_exact_auth_system_admin_session_has_no_staff_state_identity():
+    session = auth.build_system_admin_session(
+        {"id": 7, "admin_name": "root", "is_active": 1},
+        "admin-device",
     )
-    assert context.staff_id == 14
+    assert session["id"] == 0
+    assert session["admin_id"] == 7
+    assert session["is_admin"] is True
+    assert "permissions" not in session
+
+    context = PersonalAgendaContextFactory().build(session)
+    assert context.staff_id is None
     assert context.presentation_profile.code == AgendaPresentationProfileCode.SYSTEM
     assert context.presentation_profile.display_name == "Sistem kapsamı"
     assert context.contract_scope == AgendaContractScopeCode.ALL_VISIBLE
+    assert context.current_staff["id"] == 0
+    assert context.current_staff["admin_id"] == 7
+    assert context.permissions == frozenset()
+
+
+def test_system_admin_explicit_permissions_do_not_create_staff_identity():
+    session = auth.build_system_admin_session(
+        {"id": 11, "admin_name": "root", "is_active": 1},
+        "admin-device",
+    )
+    session["permissions"] = {"view_contracts", "edit_contracts"}
+    context = PersonalAgendaContextFactory().build(session)
+
+    assert context.staff_id is None
+    assert context.presentation_profile.code == AgendaPresentationProfileCode.SYSTEM
+    assert context.contract_scope == AgendaContractScopeCode.ALL_VISIBLE
+    assert context.permissions == frozenset({"view_contracts", "edit_contracts"})
+    assert context.current_staff["admin_id"] == 11
 
 
 def test_admin_role_string_without_exact_admin_identity_is_personal():
@@ -262,6 +280,7 @@ def test_system_admin_profile_does_not_create_permissions():
     assert context.presentation_profile.code == AgendaPresentationProfileCode.SYSTEM
     assert context.permissions == frozenset()
     assert context.presentation_profile.permissions == frozenset()
+    assert context.staff_id is None
 
 
 def test_agenda_context_default_scope_is_responsible_and_string_normalizes():
