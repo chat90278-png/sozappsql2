@@ -4,6 +4,7 @@ from collections import Counter
 from collections.abc import Sequence
 from datetime import datetime
 
+from src.domain.agenda.constants import AgendaContractScopeCode
 from src.domain.agenda.lifecycle import AgendaLifecycleEngine
 from src.domain.agenda.models import AgendaContext, AgendaItem, AgendaResult
 from src.domain.agenda.priority import severity_rank
@@ -83,11 +84,15 @@ class StaffAgendaService:
             raise ValueError("context.staff_id must be a positive integer.")
         staff_id = int(context.staff_id)
 
-        contract_ids = (
-            context.personal_contract_ids
-            if context.personal_contract_ids
-            else self.source_repository.list_personal_contract_ids(staff_id)
-        )
+        if context.personal_contract_ids:
+            contract_ids = context.personal_contract_ids
+        elif context.contract_scope == AgendaContractScopeCode.RESPONSIBLE:
+            contract_ids = self.source_repository.list_personal_contract_ids(staff_id)
+        elif context.contract_scope == AgendaContractScopeCode.ALL_VISIBLE:
+            contract_ids = self.source_repository.list_all_contract_ids()
+        else:
+            raise ValueError(f"Unsupported agenda contract scope: {context.contract_scope}")
+
         if not contract_ids:
             return self._empty(context)
 
@@ -97,6 +102,8 @@ class StaffAgendaService:
         for provider in self.providers:
             provider_code = str(getattr(provider, "code", "") or "").strip()
             try:
+                if not provider.is_enabled(context):
+                    continue
                 built = tuple(provider.build(context, sources))
             except Exception as exc:
                 raise AgendaBuildError(
