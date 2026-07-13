@@ -10,6 +10,7 @@ on:
       - "tests/test_perf_tracker_v2.py"
       - "tests/test_performance_tracking_dialog_v2.py"
       - "tests/test_contract_save_telemetry_runtime_fix.py"
+      - "tests/test_performance_monitoring_release_gate.py"
       - ".github/workflows/performance-telemetry-tests.yml"
   push:
     paths:
@@ -20,6 +21,7 @@ on:
       - "tests/test_perf_tracker_v2.py"
       - "tests/test_performance_tracking_dialog_v2.py"
       - "tests/test_contract_save_telemetry_runtime_fix.py"
+      - "tests/test_performance_monitoring_release_gate.py"
       - ".github/workflows/performance-telemetry-tests.yml"
 
 permissions:
@@ -67,6 +69,7 @@ jobs:
           python -m py_compile tests/test_perf_tracker_v2.py
           python -m py_compile tests/test_performance_tracking_dialog_v2.py
           python -m py_compile tests/test_contract_save_telemetry_runtime_fix.py
+          python -m py_compile tests/test_performance_monitoring_release_gate.py
 
       - name: Run focused telemetry and dialog tests
         id: focused_tests
@@ -78,6 +81,7 @@ jobs:
             tests/test_perf_tracker_v2.py \
             tests/test_performance_tracking_dialog_v2.py \
             tests/test_contract_save_telemetry_runtime_fix.py \
+            tests/test_performance_monitoring_release_gate.py \
             > performance-test-output.txt 2>&1
 
       - name: Run full repository suite for diagnostics
