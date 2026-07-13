@@ -50,9 +50,12 @@ jobs:
           text = path.read_text(encoding='utf-8')
           old = 'assert dialog.partial_warning.isVisible()'
           new = 'assert not dialog.partial_warning.isHidden()'
-          if old not in text and new not in text:
-              raise SystemExit('partial warning assertion marker not found')
-          path.write_text(text.replace(old, new), encoding='utf-8')
+          if new not in text:
+              index = text.rfind(old)
+              if index < 0:
+                  raise SystemExit('partial warning assertion marker not found')
+              text = text[:index] + new + text[index + len(old):]
+          path.write_text(text, encoding='utf-8')
           '@ | python -
 
       - name: Apply fixes in required order and validate each stage
