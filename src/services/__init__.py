@@ -1,7 +1,11 @@
 """Service package compatibility helpers."""
 from __future__ import annotations
 
+import logging
 from typing import Any
+
+
+_LOG = logging.getLogger(__name__)
 
 
 def _clean_text(value: Any) -> str:
@@ -173,4 +177,17 @@ def _patch_sts_store() -> None:
     STSStore.update_linked_sd_contract_numbers = update_linked_sd_contract_numbers
 
 
+def _install_activity_history_infrastructure() -> None:
+    try:
+        from . import sts_database as sts_database_module
+        from .activity_history_infra import install_activity_history_infrastructure
+        from .sts_store import STSStore
+
+        install_activity_history_infrastructure(sts_database_module, STSStore)
+    except Exception:
+        _LOG.exception("Activity History infrastructure could not be installed")
+        raise
+
+
 _patch_sts_store()
+_install_activity_history_infrastructure()
