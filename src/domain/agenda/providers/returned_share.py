@@ -15,6 +15,9 @@ def _version(source: ReturnedShareAgendaSource) -> str:
 class ReturnedShareAgendaProvider:
     code = "returned_share"
 
+    def is_enabled(self, context: AgendaContext) -> bool:
+        return "edit_contracts" in context.permissions
+
     def build(
         self,
         context: AgendaContext,
