@@ -12,6 +12,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import threading
 import time
 import uuid
@@ -35,6 +36,11 @@ LOG_SCHEMA_VERSION = 2
 MAX_LOG_BYTES = 5 * 1024 * 1024
 LOG_BACKUP_COUNT = 3
 DEFAULT_MIN_SAMPLE_COUNT = 3
+
+_VERSIONED_STEM_RE = re.compile(
+    r"^(?P<base>.+?)__v\d+__\d{4}-\d{2}-\d{2}_\d{2}-\d{2}$",
+    re.IGNORECASE,
+)
 
 OPERATION_CATALOG: Dict[str, Dict[str, Any]] = {
     OP_DB_OPEN: {
@@ -145,6 +151,19 @@ def source_path_key(path: Path | str) -> str:
     return hashlib.sha256(_normalized_path(path).encode("utf-8", errors="replace")).hexdigest()[:20]
 
 
+def _lineage_stem(path: Path | str) -> str:
+    stem = Path(path).stem
+    match = _VERSIONED_STEM_RE.match(stem)
+    return str(match.group("base") if match else stem).casefold()
+
+
+def source_lineage_key(path: Path | str) -> str:
+    p = Path(path).expanduser()
+    parent = _normalized_path(p.parent)
+    raw = f"{parent}|{_lineage_stem(p)}"
+    return hashlib.sha256(raw.encode("utf-8", errors="replace")).hexdigest()[:20]
+
+
 def operation_info(operation: str) -> Dict[str, Any]:
     op = str(operation or "unknown")
     info = dict(_DEFAULT_OPERATION)
@@ -203,7 +222,8 @@ def record(
     # Reserved fields are owned by the tracker and cannot be overwritten by meta.
     for reserved in {
         "schema_version", "ts", "op", "duration_ms", "success",
-        "source_path_key", "source_file", "session_id", "pid", "thread",
+        "source_path_key", "source_lineage_key", "source_file",
+        "session_id", "pid", "thread",
     }:
         metadata.pop(reserved, None)
 
@@ -214,6 +234,7 @@ def record(
         "duration_ms": round(duration, 3),
         "success": bool(success),
         "source_path_key": source_path_key(path),
+        "source_lineage_key": source_lineage_key(path),
         "source_file": path.name,
         "session_id": _session_id,
         "pid": os.getpid(),
@@ -285,15 +306,23 @@ def _record_matches_source(
     record_data: Dict[str, Any],
     data_path: Path,
     expected_key: str,
+    expected_lineage_key: str,
     allow_legacy: bool,
 ) -> bool:
     record_key = str(record_data.get("source_path_key") or "").strip()
+    if record_key == expected_key:
+        return True
+
+    record_lineage = str(record_data.get("source_lineage_key") or "").strip()
+    if record_lineage:
+        return record_lineage == expected_lineage_key
+
     if record_key:
-        return record_key == expected_key
+        return False
 
     source_file = str(record_data.get("source_file") or "").strip()
     if source_file:
-        return source_file.casefold() == data_path.name.casefold()
+        return _lineage_stem(source_file) == _lineage_stem(data_path)
 
     return allow_legacy
 
@@ -304,6 +333,15 @@ def _legacy_records_are_unambiguous(data_path: Path) -> bool:
         return len(sts_files) <= 1
     except OSError:
         return False
+
+
+def _log_files_for_read(log_path: Path) -> list[Path]:
+    files = [
+        log_path.with_name(f"{log_path.name}.{index}")
+        for index in range(LOG_BACKUP_COUNT, 0, -1)
+    ]
+    files.append(log_path)
+    return [candidate for candidate in files if candidate.exists()]
 
 
 def load_records_with_status(
@@ -320,47 +358,62 @@ def load_records_with_status(
         "invalid_lines": 0,
         "read_error": "",
         "legacy_records_included": False,
+        "log_files_read": 0,
     }
-    if not log_path.exists():
+    log_files = _log_files_for_read(log_path)
+    if not log_files:
         return result
 
     expected_key = source_path_key(path)
+    expected_lineage_key = source_lineage_key(path)
     allow_legacy = _legacy_records_are_unambiguous(path)
     now = datetime.now().astimezone()
     range_start = _range_start(range_key, now)
     records: list[Dict[str, Any]] = []
 
-    try:
-        with open(log_path, encoding="utf-8") as stream:
-            for line in stream:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    item = json.loads(line)
-                except (TypeError, ValueError, json.JSONDecodeError):
-                    result["invalid_lines"] += 1
-                    continue
-                if not isinstance(item, dict):
-                    result["invalid_lines"] += 1
-                    continue
-                if not _record_matches_source(item, path, expected_key, allow_legacy):
-                    continue
-                if not item.get("source_path_key"):
-                    result["legacy_records_included"] = True
-                duration = _finite_duration(item.get("duration_ms"))
-                if duration is None:
-                    result["invalid_lines"] += 1
-                    continue
-                item["duration_ms"] = duration
-                item["success"] = bool(item.get("success", True))
-                timestamp = _parse_timestamp(item.get("ts"))
-                if range_start is not None and (timestamp is None or timestamp < range_start):
-                    continue
-                records.append(item)
-    except OSError as exc:
-        result["read_error"] = str(exc)
-        return result
+    read_errors = []
+    for candidate in log_files:
+        try:
+            with open(candidate, encoding="utf-8") as stream:
+                result["log_files_read"] += 1
+                for line in stream:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        item = json.loads(line)
+                    except (TypeError, ValueError):
+                        result["invalid_lines"] += 1
+                        continue
+                    if not isinstance(item, dict):
+                        result["invalid_lines"] += 1
+                        continue
+                    if not _record_matches_source(
+                        item,
+                        path,
+                        expected_key,
+                        expected_lineage_key,
+                        allow_legacy,
+                    ):
+                        continue
+                    if not item.get("source_path_key"):
+                        result["legacy_records_included"] = True
+                    duration = _finite_duration(item.get("duration_ms"))
+                    if duration is None:
+                        result["invalid_lines"] += 1
+                        continue
+                    item["duration_ms"] = duration
+                    item["success"] = bool(item.get("success", True))
+                    timestamp = _parse_timestamp(item.get("ts"))
+                    if range_start is not None and (
+                        timestamp is None or timestamp < range_start
+                    ):
+                        continue
+                    records.append(item)
+        except OSError as exc:
+            read_errors.append(f"{candidate.name}: {exc}")
+
+    result["read_error"] = "; ".join(read_errors)
 
     if last_n and int(last_n) > 0:
         records = records[-int(last_n):]
