@@ -9,8 +9,6 @@ on:
       - "tests/test_performance_tracking_dialog_v2.py"
       - ".github/workflows/performance-telemetry-tests.yml"
   push:
-    branches:
-      - main
     paths:
       - "src/services/perf_tracker.py"
       - "src/ui/dialogs/performance_tracking.py"
