@@ -506,10 +506,10 @@ def test_activity_mark_seen_then_load_is_visible_and_not_new():
     facade.mark_seen(_staff(), item, seen_at=datetime(2026, 7, 11, 10, 0))
     snapshot = facade.load(_staff(), now=datetime(2026, 7, 11, 10, 30))
     assert snapshot.all_items == (item,)
-    assert snapshot.result.active_count == 1
-    assert snapshot.result.new_count == 0
-    assert item.key not in snapshot.result.new_keys
-    assert snapshot.result.states_by_key[item.key].seen_version == item.version
+    assert snapshot.active_count == 1
+    assert snapshot.new_count == 0
+    assert item.key not in snapshot.new_keys
+    assert snapshot.states_by_key[item.key].seen_version == item.version
 
 
 def test_activity_event_snooze_is_rejected_without_state_mutation():
