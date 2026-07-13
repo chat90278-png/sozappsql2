@@ -6,6 +6,7 @@ on:
       - "src/services/perf_tracker.py"
       - "src/ui/dialogs/performance_tracking.py"
       - "tests/test_perf_tracker_v2.py"
+      - "tests/test_performance_tracking_dialog_v2.py"
       - ".github/workflows/performance-telemetry-tests.yml"
   push:
     branches:
@@ -14,15 +15,18 @@ on:
       - "src/services/perf_tracker.py"
       - "src/ui/dialogs/performance_tracking.py"
       - "tests/test_perf_tracker_v2.py"
+      - "tests/test_performance_tracking_dialog_v2.py"
       - ".github/workflows/performance-telemetry-tests.yml"
 
 permissions:
   contents: read
 
 jobs:
-  telemetry-core:
+  telemetry-and-ui:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
+    env:
+      QT_QPA_PLATFORM: offscreen
 
     steps:
       - name: Checkout
@@ -34,14 +38,18 @@ jobs:
           python-version: "3.11"
           cache: pip
 
-      - name: Install test dependency
-        run: python -m pip install --upgrade pytest
+      - name: Install test dependencies
+        run: python -m pip install --upgrade pytest PySide6==6.11.1
 
       - name: Compile changed modules
         run: |
           python -m py_compile src/services/perf_tracker.py
           python -m py_compile src/ui/dialogs/performance_tracking.py
           python -m py_compile tests/test_perf_tracker_v2.py
+          python -m py_compile tests/test_performance_tracking_dialog_v2.py
 
-      - name: Run telemetry regression tests
-        run: python -m pytest -q tests/test_perf_tracker_v2.py
+      - name: Run telemetry and dialog regression tests
+        run: |
+          python -m pytest -q \
+            tests/test_perf_tracker_v2.py \
+            tests/test_performance_tracking_dialog_v2.py
