@@ -18,12 +18,7 @@ with TemporaryDirectory() as td:
     path = root / "audit.sts"
     store = STSStore(path)
     logs = store.list_logs(limit=10)
-    created = next(item for item in logs if item["action"] == "database_created")
-    assert created["actor"] == "Sistem"
-    assert created["source"] == "Main UI"
-    assert created["device_name"] == device_name()
-    assert re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", created["created_at"])
-    assert created["created_at"][:16] == datetime.now().strftime("%Y-%m-%d %H:%M")
+    assert logs == []
     assert re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", now_iso())
     assert format_log_timestamp("2026-06-01T05:53:06") == "2026-06-01 05:53:06"
 
@@ -37,7 +32,7 @@ with TemporaryDirectory() as td:
     store.db.conn.commit()
     assert store.db.add_sql_query_log("CREATE TABLE audit_sql_target(id INTEGER PRIMARY KEY, name TEXT)", duration_ms=3, affected_rows=0)
     sql_log = store.db.conn.execute("SELECT * FROM activity_logs WHERE action='sql_query_executed' ORDER BY id DESC LIMIT 1").fetchone()
-    assert sql_log["actor"] == "Kullanıcı"
+    assert sql_log["actor"] == "Kimliği belirlenemedi"
     assert sql_log["source"] == "SQL Terminal"
     assert sql_log["device_name"] == device_name()
     payload = json.loads(sql_log["payload_json"])
@@ -46,8 +41,8 @@ with TemporaryDirectory() as td:
         "duration_ms": 3,
         "changed": True,
         "affected_rows": 0,
-        "query_preview": "CREATE TABLE audit_sql_target(id INTEGER PRIMARY KEY, name TEXT)",
     }
+    assert "query_preview" not in payload
 
     for statement, operation in [
         ("INSERT INTO audit_sql_target(id,name) VALUES(1,'x')", "INSERT"),
@@ -91,11 +86,17 @@ with TemporaryDirectory() as td:
 
     upgraded = STSDatabase(legacy_path)
     columns = {row[1] for row in upgraded.conn.execute("PRAGMA table_info(activity_logs)")}
-    assert {"source", "device_name"} <= columns
+    assert {
+        "source", "device_name", "occurred_at_utc", "category", "status",
+        "operation_id", "actor_type", "actor_staff_id", "actor_admin_id",
+        "actor_display_name", "session_id", "contract_id",
+        "platform_name_snapshot", "contract_no_snapshot",
+        "changed_fields_json", "technical_payload_json", "event_schema_version",
+    } <= columns
     old = upgraded.conn.execute("SELECT created_at,actor,source,device_name FROM activity_logs WHERE action='legacy_action'").fetchone()
     assert old[:] == ("2026-06-01T05:53:06", "", None, None)
-    migration = upgraded.conn.execute("SELECT actor,source,device_name FROM activity_logs WHERE action='schema_migrated' ORDER BY id DESC LIMIT 1").fetchone()
-    assert migration[:] == ("Sistem", "Migration", device_name())
+    migration = upgraded.conn.execute("SELECT 1 FROM activity_logs WHERE action='schema_migrated' LIMIT 1").fetchone()
+    assert migration is None
     upgraded.close()
 
 print("ok")

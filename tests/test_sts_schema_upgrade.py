@@ -179,11 +179,12 @@ def test_v14_runs_exact_registry_chain_and_creates_verified_backup(tmp_path: Pat
 
     assert result.status == "upgraded"
     assert result.from_version == 14
-    assert result.to_version == CURRENT_SCHEMA_VERSION == 17
+    assert result.to_version == CURRENT_SCHEMA_VERSION == 18
     assert result.applied_migrations == (
         "v14_to_v15_share_package_registry",
         "v15_to_v16_merge_result_audit",
         "v16_to_v17_share_cancellation_audit",
+        "v17_to_v18_activity_history_infrastructure",
     )
     assert result.backup_path is not None
     assert result.backup_path.exists()
@@ -213,8 +214,9 @@ def test_v16_runs_only_v16_to_v17(tmp_path: Path):
 
     assert result.applied_migrations == (
         "v16_to_v17_share_cancellation_audit",
+        "v17_to_v18_activity_history_infrastructure",
     )
-    assert read_sts_schema_version(path) == 17
+    assert read_sts_schema_version(path) == 18
     assert {
         "cancelled_at",
         "cancelled_by_staff_id",

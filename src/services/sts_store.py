@@ -1,6 +1,7 @@
 from __future__ import annotations
 import hashlib
 import json
+import logging
 import mimetypes
 import os
 import uuid
@@ -13,8 +14,16 @@ from src.models.share_models import SHARE_STATUS_OPEN, SHARE_PACKAGE_STATUSES, S
 from src.domain.flexible_date import is_tbd_contract_no
 from src.domain.contract_snapshot import build_contract_snapshot, hash_contract_snapshot
 from src.services.sts_database import STSDatabase, now_iso
+from src.services.activity_history_infra import (
+    MAX_ACTIVITY_FIELD_LENGTH,
+    UNKNOWN_ACTOR,
+    normalize_activity_text,
+)
 from src.services import perf_tracker
 from src import auth
+
+
+_LOG = logging.getLogger(__name__)
 
 
 def sha256_file(path: Path) -> str:
@@ -175,10 +184,46 @@ class STSStore:
 
 
     def _log(self, action: str, **kwargs):
-        self.db.add_log(action=action, **kwargs)
+        explicit_actor = normalize_activity_text(
+            kwargs.get("actor"), max_length=MAX_ACTIVITY_FIELD_LENGTH
+        )
+        current_actor = ""
+        if not explicit_actor:
+            try:
+                current_actor = normalize_activity_text(
+                    self.current_actor(), max_length=MAX_ACTIVITY_FIELD_LENGTH
+                )
+            except Exception:
+                _LOG.exception("STSStore.current_actor failed while preparing activity event")
+        actor_name = explicit_actor or current_actor
+        if not explicit_actor and actor_name.casefold() == "kullanıcı":
+            actor_name = ""
+        actor_name = actor_name or UNKNOWN_ACTOR
+        kwargs["actor"] = actor_name
+        kwargs.setdefault("actor_display_name", actor_name)
+        return self.db.add_log(action=action, **kwargs)
 
-    def list_logs(self, limit=500, action=None, entity_type=None, platform=None, contract_no=None, search=None):
-        return self.db.list_logs(limit=limit, action=action, entity_type=entity_type, platform=platform, contract_no=contract_no, search=search)
+    def list_logs(
+        self,
+        limit=500,
+        action=None,
+        entity_type=None,
+        platform=None,
+        contract_no=None,
+        search=None,
+        category=None,
+        operation_id=None,
+    ):
+        return self.db.list_logs(
+            limit=limit,
+            action=action,
+            entity_type=entity_type,
+            platform=platform,
+            contract_no=contract_no,
+            search=search,
+            category=category,
+            operation_id=operation_id,
+        )
 
 
     def _resolve_contract_id(self, platform: str, contract_no: str, contract_type: str = "Ana Sözleşme") -> int | None:
@@ -1709,7 +1754,7 @@ class STSStore:
                 selected_platform_ids.append(int(pid))
         return selected_platform_ids
 
-    def write_contract(self, ci, systems, deliveries, old_contract_no=None, old_start_row=None):
+    def _write_contract_in_transaction(self, ci, systems, deliveries, old_contract_no=None, old_start_row=None):
         ts=now_iso(); ctype=ci.contract_type
         selected_platform_ids = self._contract_platform_ids_from_info(ci)
         platform_id = int(selected_platform_ids[0]) if selected_platform_ids else self.get_platform_id(ci.platform, create=True)
@@ -1892,7 +1937,11 @@ class STSStore:
                                 )
         after_snapshot_hash = hash_contract_snapshot(build_contract_snapshot(self.db.conn, int(cid or 0)))
         if row and before_snapshot_hash and after_snapshot_hash != before_snapshot_hash:
-            self.db.conn.execute("UPDATE contracts SET revision=COALESCE(revision,1)+1,updated_at=? WHERE id=?", (ts, int(cid)))
+            with self.db.tx():
+                self.db.conn.execute(
+                    "UPDATE contracts SET revision=COALESCE(revision,1)+1,updated_at=? WHERE id=?",
+                    (ts, int(cid)),
+                )
         current = self.db.conn.execute("SELECT merge_uid,revision FROM contracts WHERE id=?", (int(cid),)).fetchone()
         if current:
             setattr(ci, "merge_uid", str(current[0] or "")); setattr(ci, "revision", int(current[1] or 1))
@@ -1928,6 +1977,17 @@ class STSStore:
                 if before_compare.get("status") != after_delivery.get("status"):
                     self._log("delivery_status_changed", entity_type="delivery", entity_key=entity_key, contract_no=str(ci.no or ""), source="Delivery Editor", message="Teslimat durumu güncellendi", before={"status": before_compare.get("status")}, after={"status": after_delivery.get("status")})
         return cid
+
+    def write_contract(self, ci, systems, deliveries, old_contract_no=None, old_start_row=None):
+        """Persist one contract and its audit events under one transaction owner."""
+        with self.db.tx():
+            return self._write_contract_in_transaction(
+                ci,
+                systems,
+                deliveries,
+                old_contract_no=old_contract_no,
+                old_start_row=old_start_row,
+            )
 
     def load_contract_structure(self, platform, contract_no=None, start_row=None, contract_type=None, platform_id=None):
         # Backward compatible call style remains: load_contract_structure(platform_name, contract_no, ...).

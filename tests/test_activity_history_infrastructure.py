@@ -10,11 +10,14 @@ import pytest
 
 from src.services.activity_history_infra import (
     ACTIVITY_SCHEMA_VERSION,
+    MAX_ACTIVITY_FIELD_LENGTH,
     MAX_ACTIVITY_JSON_BYTES,
+    MAX_ACTIVITY_MESSAGE_LENGTH,
     REDACTED_VALUE,
     activity_json,
     sanitize_activity_value,
 )
+from src.models.app_models import ContractInfo
 from src.services.share_merge_apply_service import _insert_audit_log
 from src.services.sts_database import CURRENT_SCHEMA_VERSION, STSDatabase
 from src.services.sts_store import STSStore
@@ -317,3 +320,237 @@ def test_share_merge_audit_insert_remains_inside_caller_transaction(tmp_path):
         assert _count(db, "share_merge_applied") == 0
     finally:
         db.close()
+
+
+
+def test_activity_behavior_is_defined_directly_in_source_files():
+    database_source = Path("src/services/sts_database.py").read_text(encoding="utf-8")
+    helper_source = Path("src/services/activity_history_infra.py").read_text(encoding="utf-8")
+    package_source = Path("src/services/__init__.py").read_text(encoding="utf-8")
+    store_source = Path("src/services/sts_store.py").read_text(encoding="utf-8")
+
+    assert "CURRENT_SCHEMA_VERSION = 18" in database_source
+    assert STSDatabase.add_log.__module__ == "src.services.sts_database"
+    assert STSDatabase.tx.__module__ == "src.services.sts_database"
+    assert STSDatabase.list_logs.__module__ == "src.services.sts_database"
+    assert STSStore._log.__module__ == "src.services.sts_store"
+    assert "install_activity_history_infrastructure" not in helper_source
+    assert "_install_activity_history_infrastructure" not in package_source
+    assert "_patch_add_log" not in helper_source
+    assert "def add_log(" in database_source
+    assert "def _log(" in store_source
+
+    constructor_source = database_source[
+        database_source.index("class STSDatabase:") : database_source.index("    def close(")
+    ]
+    assert "database_opened" not in constructor_source
+    assert "database_created" not in constructor_source
+    assert "schema_migrated" not in constructor_source
+
+
+def test_externally_opened_transaction_is_not_committed_by_add_log(tmp_path):
+    db = STSDatabase(tmp_path / "external.sts")
+    try:
+        db.conn.execute("BEGIN IMMEDIATE")
+        event_id = db.add_log("external_transaction", actor="Ayşe")
+        assert isinstance(event_id, int)
+        assert _count(db) == 1
+
+        reader = sqlite3.connect(db.path)
+        try:
+            assert reader.execute("SELECT COUNT(*) FROM activity_logs").fetchone()[0] == 0
+        finally:
+            reader.close()
+
+        db.conn.rollback()
+        assert _count(db) == 0
+    finally:
+        db.close()
+
+
+def test_empty_action_and_structured_field_validation(tmp_path, caplog):
+    db = STSDatabase(tmp_path / "validation.sts")
+    try:
+        with caplog.at_level(logging.ERROR, logger="src.services.sts_database"):
+            assert db.add_log("", strict=False) is None
+        assert "action is empty" in caplog.text
+        with pytest.raises(ValueError):
+            db.add_log("", strict=True)
+
+        event_id = db.add_log(
+            "x" * 500,
+            source="s" * 1000,
+            device="d" * 1000,
+            entity_type="e" * 500,
+            entity_key="k" * 1000,
+            message="m" * 5000,
+            platform_name_snapshot="p" * 1000,
+            contract_no_snapshot="c" * 1000,
+            operation_id="o" * 1000,
+            session_id="i" * 1000,
+            category="INVALID",
+            status=" success ",
+            actor_staff_id=0,
+            actor_admin_id="invalid",
+            contract_id=-1,
+            event_schema_version=0,
+        )
+        row = db.conn.execute("SELECT * FROM activity_logs WHERE id=?", (event_id,)).fetchone()
+        assert len(row["action"]) == 128
+        assert len(row["source"]) == MAX_ACTIVITY_FIELD_LENGTH
+        assert len(row["device_name"]) == MAX_ACTIVITY_FIELD_LENGTH
+        assert len(row["entity_type"]) == 128
+        assert len(row["entity_key"]) == MAX_ACTIVITY_FIELD_LENGTH
+        assert len(row["message"]) == MAX_ACTIVITY_MESSAGE_LENGTH
+        assert len(row["platform_name_snapshot"]) == MAX_ACTIVITY_FIELD_LENGTH
+        assert len(row["contract_no_snapshot"]) == MAX_ACTIVITY_FIELD_LENGTH
+        assert len(row["operation_id"]) == MAX_ACTIVITY_FIELD_LENGTH
+        assert len(row["session_id"]) == MAX_ACTIVITY_FIELD_LENGTH
+        assert row["category"] is None
+        assert row["status"] == "SUCCESS"
+        assert row["actor_staff_id"] is None
+        assert row["actor_admin_id"] is None
+        assert row["contract_id"] is None
+        assert row["event_schema_version"] == 1
+    finally:
+        db.close()
+
+
+def test_string_paths_are_redacted_and_sql_literals_are_not_persisted(tmp_path):
+    payload = {
+        "backup_path": "/home/private/user/yedekler/backup.sts",
+        "source_path": r"C:\\Users\\Private\\source.xlsx",
+        "nested": {"output_path": "/tmp/secret/report.xlsx"},
+    }
+    sanitized = sanitize_activity_value(payload)
+    assert sanitized["backup_path"] == {"name": "backup.sts", "path_redacted": True}
+    assert sanitized["source_path"] == {"name": "source.xlsx", "path_redacted": True}
+    assert sanitized["nested"]["output_path"] == {"name": "report.xlsx", "path_redacted": True}
+
+    db = STSDatabase(tmp_path / "sql.sts")
+    try:
+        secret_sql = (
+            "UPDATE staff SET password_hash='HASH-SECRET', token='TOKEN-SECRET', "
+            "invite_code='INVITE-SECRET', full_name='Kişisel Ad', payload=X'ABCD' WHERE id=1"
+        )
+        assert db.add_sql_query_log(secret_sql, duration_ms=7, affected_rows=1)
+        row = db.conn.execute(
+            "SELECT actor,payload_json FROM activity_logs WHERE action='sql_query_executed'"
+        ).fetchone()
+        payload_data = json.loads(row["payload_json"])
+        assert payload_data == {
+            "affected_rows": 1,
+            "changed": True,
+            "duration_ms": 7,
+            "operation": "UPDATE",
+        }
+        serialized = json.dumps(dict(row), ensure_ascii=False)
+        for secret in ("HASH-SECRET", "TOKEN-SECRET", "INVITE-SECRET", "Kişisel Ad", "ABCD"):
+            assert secret not in serialized
+        assert "query_preview" not in payload_data
+    finally:
+        db.close()
+
+
+def test_representative_production_mutations_persist_business_and_audit(tmp_path):
+    path = tmp_path / "representative.sts"
+    store = STSStore(path, actor="Test Kullanıcısı")
+    try:
+        store.create_platform("AKINCI")
+        assert store.db.conn.in_transaction is False
+        store.write_users(
+            [{"name": "Kullanıcı A", "yi_yd": "Yİ", "active": True, "note": ""}]
+        )
+        assert store.db.conn.in_transaction is False
+        store.write_components(
+            [{
+                "name": "GÖVDE",
+                "version": "1",
+                "unit": "Adet",
+                "active": True,
+                "usage": 1,
+                "note": "",
+                "platforms": {"AKINCI": True},
+            }]
+        )
+        assert store.db.conn.in_transaction is False
+        contract = ContractInfo(
+            no="AKN-AUDIT-001",
+            platform="AKINCI",
+            user="Kullanıcı A",
+            yi_yd="Yİ",
+            contract_type="Ana Sözleşme",
+            signature_date="",
+            t0_date="",
+            t0_months=0,
+            completion_date="",
+        )
+        store.write_contract(contract, [], {})
+        assert store.db.conn.in_transaction is False
+        source_file = tmp_path / "belge.txt"
+        source_file.write_text("audit", encoding="utf-8")
+        document_id = store.add_contract_file(
+            "AKINCI", contract.no, source_file, contract.contract_type
+        )
+        assert document_id
+        assert store.db.conn.in_transaction is False
+        store.delete_contract("AKINCI", contract.no)
+        assert store.db.conn.in_transaction is False
+    finally:
+        store.db.close()
+
+    reopened = STSDatabase(path)
+    try:
+        assert reopened.conn.execute("SELECT COUNT(*) FROM platforms").fetchone()[0] == 1
+        assert reopened.conn.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 1
+        assert reopened.conn.execute("SELECT COUNT(*) FROM components").fetchone()[0] == 1
+        actions = {
+            row[0]
+            for row in reopened.conn.execute("SELECT action FROM activity_logs").fetchall()
+        }
+        assert {
+            "platform_created",
+            "user_created",
+            "users_updated",
+            "component_created",
+            "components_updated",
+            "contract_created",
+            "document_added",
+            "contract_deleted",
+        } <= actions
+    finally:
+        reopened.close()
+
+
+def test_contract_update_does_not_leave_hidden_transaction_or_database_lock(tmp_path):
+    path = tmp_path / "contract-lock.sts"
+    store = STSStore(path, actor="Test Kullanıcısı")
+    try:
+        store.create_platform("AKINCI")
+        contract = ContractInfo(
+            no="AKN-LOCK-001",
+            platform="AKINCI",
+            user="",
+            yi_yd="Yİ",
+            contract_type="Ana Sözleşme",
+            signature_date="",
+            t0_date="",
+            t0_months=0,
+            completion_date="",
+        )
+        store.write_contract(contract, [], {})
+        contract.note = "Revision değişikliği"
+        store.write_contract(contract, [], {})
+        assert store.db.conn.in_transaction is False
+
+        second_writer = sqlite3.connect(path, timeout=1)
+        try:
+            second_writer.execute(
+                "INSERT INTO activity_logs(created_at,actor,action) VALUES(?,?,?)",
+                ("2026-07-13 10:00:00", "İkinci Bağlantı", "second_writer"),
+            )
+            second_writer.commit()
+        finally:
+            second_writer.close()
+    finally:
+        store.db.close()

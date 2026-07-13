@@ -1,5 +1,6 @@
 from __future__ import annotations
 import json
+import logging
 import sqlite3
 import platform as platform_module
 import re
@@ -8,10 +9,26 @@ import uuid
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import List
+from typing import Any, List
 
 from src.auth import ensure_document_locks_table, ensure_staff_table
 from src.services import perf_tracker
+from src.services.activity_history_infra import (
+    ACTIVITY_EVENT_SCHEMA_VERSION,
+    MAX_ACTIVITY_FIELD_LENGTH,
+    MAX_ACTIVITY_MESSAGE_LENGTH,
+    UNKNOWN_ACTOR,
+    activity_json,
+    normalize_activity_category,
+    normalize_activity_status,
+    normalize_activity_text,
+    normalize_event_schema_version,
+    safe_positive_int,
+    utc_now_iso,
+)
+
+
+_LOG = logging.getLogger(__name__)
 
 
 def now_iso() -> str:
@@ -43,10 +60,6 @@ def should_audit_sql(sql_or_operation: str) -> bool:
     return operation not in {"", "SELECT", "PRAGMA", "WITH", "EXPLAIN"}
 
 
-def sql_query_preview(sql: str, limit: int = 200) -> str:
-    return " ".join(str(sql or "").split())[:max(1, int(limit or 200))]
-
-
 def quote_identifier(identifier: str) -> str:
     return '"' + str(identifier or "").replace('"', '""') + '"'
 
@@ -54,7 +67,36 @@ def quote_identifier(identifier: str) -> str:
 LEGACY_CONTRACT_PARENT_NO_COLUMN = "parent_contract_" "no"
 LEGACY_CONTRACT_USERS_COLUMN = "user_" "names"
 LEGACY_DELIVERY_SYSTEM_LABEL_COLUMN = "system_" "name"
-CURRENT_SCHEMA_VERSION = 17
+CURRENT_SCHEMA_VERSION = 18
+
+ACTIVITY_LOG_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("occurred_at_utc", "TEXT"),
+    ("category", "TEXT"),
+    ("status", "TEXT"),
+    ("operation_id", "TEXT"),
+    ("actor_type", "TEXT"),
+    ("actor_staff_id", "INTEGER"),
+    ("actor_admin_id", "INTEGER"),
+    ("actor_display_name", "TEXT"),
+    ("session_id", "TEXT"),
+    ("contract_id", "INTEGER"),
+    ("platform_name_snapshot", "TEXT"),
+    ("contract_no_snapshot", "TEXT"),
+    ("changed_fields_json", "TEXT"),
+    ("technical_payload_json", "TEXT"),
+    ("event_schema_version", "INTEGER DEFAULT 1"),
+)
+
+ACTIVITY_LOG_INDEX_SQL: tuple[str, ...] = (
+    "CREATE INDEX IF NOT EXISTS idx_activity_logs_occurred_id ON activity_logs(occurred_at_utc DESC, id DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_activity_logs_category_occurred ON activity_logs(category, occurred_at_utc DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_activity_logs_actor_staff_occurred ON activity_logs(actor_staff_id, occurred_at_utc DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_activity_logs_operation_id ON activity_logs(operation_id)",
+    "CREATE INDEX IF NOT EXISTS idx_activity_logs_action_occurred ON activity_logs(action, occurred_at_utc DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_activity_logs_entity_occurred ON activity_logs(entity_type, entity_id, occurred_at_utc DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_activity_logs_contract_occurred ON activity_logs(contract_id, occurred_at_utc DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_activity_logs_platform_occurred ON activity_logs(platform_id, occurred_at_utc DESC)",
+)
 
 
 class STSMigrationError(RuntimeError):
@@ -146,6 +188,8 @@ class STSDatabase:
     def __init__(self, path: Path | str, source: str = "Main UI"):
         self.path = Path(path)
         self.source = str(source or "Main UI")
+        self._tx_depth = 0
+        self._savepoint_counter = 0
         database_existed = self.path.exists()
         self.migration_backup_path: Path | None = None
         self.migration_from_version: int | None = None
@@ -209,14 +253,11 @@ class STSDatabase:
                     backup_path=self.migration_backup_path,
                     technical_detail=str(exc),
                 ) from exc
-        if migrated:
-            self.add_log("schema_migrated", entity_type="database", message="Veritabanı şeması güncellendi", actor="Sistem", source="Migration", payload={"columns": migrated, "backup_path": str(self.migration_backup_path or "")})
-        self.add_log(
-            "database_opened" if database_existed else "database_created",
-            entity_type="database",
-            message="Veritabanı açıldı" if database_existed else "Veritabanı oluşturuldu",
-            actor="Sistem",
-            source=self.source,
+        _LOG.info(
+            "STS database initialized file=%s migrated=%s source=%s",
+            self.path.name,
+            bool(migrated),
+            self.source,
         )
 
     def close(self):
@@ -228,30 +269,33 @@ class STSDatabase:
 
     @contextmanager
     def tx(self):
-        """Transaction context manager.
-
-        Ust uste cagrildiginda (ornegin batch_save() icinde write_contract())
-        ic cagrı SAVEPOINT kullanir — dis transaction'i erken kapatmaz.
-        Bu sayede dis kod rollback yapabilir, atomicity korunur.
-        """
-        if self.conn.in_transaction:
-            # Zaten acik bir transaction var — SAVEPOINT ile ic transaction ac
-            sp = f"_tx_{id(self) & 0xFFFF}"
-            self.conn.execute(f"SAVEPOINT {sp}")
-            try:
-                yield
-                self.conn.execute(f"RELEASE SAVEPOINT {sp}")
-            except Exception:
-                self.conn.execute(f"ROLLBACK TO SAVEPOINT {sp}")
-                self.conn.execute(f"RELEASE SAVEPOINT {sp}")
-                raise
-        else:
-            try:
-                yield
+        """Own the outer transaction and use unique savepoints for nesting."""
+        owns_transaction = not self.conn.in_transaction
+        savepoint: str | None = None
+        self._tx_depth += 1
+        try:
+            if owns_transaction:
+                self.conn.execute("BEGIN")
+            else:
+                self._savepoint_counter += 1
+                savepoint = f"_sts_tx_{id(self):x}_{self._savepoint_counter}"
+                self.conn.execute(f"SAVEPOINT {savepoint}")
+            yield
+            if savepoint:
+                self.conn.execute(f"RELEASE SAVEPOINT {savepoint}")
+            elif owns_transaction:
                 self.conn.commit()
-            except Exception:
+        except Exception:
+            if savepoint:
+                try:
+                    self.conn.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
+                finally:
+                    self.conn.execute(f"RELEASE SAVEPOINT {savepoint}")
+            elif owns_transaction:
                 self.conn.rollback()
-                raise
+            raise
+        finally:
+            self._tx_depth = max(0, self._tx_depth - 1)
 
     def _table_columns(self, table: str) -> set[str]:
         rows = self.conn.execute(f"PRAGMA table_info({quote_identifier(table)})").fetchall()
@@ -582,6 +626,8 @@ class STSDatabase:
         create_if("activity_logs", ("action",), "CREATE INDEX IF NOT EXISTS idx_logs_action ON activity_logs(action)")
         create_if("activity_logs", ("entity_type", "entity_id"), "CREATE INDEX IF NOT EXISTS idx_logs_entity ON activity_logs(entity_type,entity_id)")
         create_if("activity_logs", ("platform_id", "contract_no"), "CREATE INDEX IF NOT EXISTS idx_activity_logs_platform_contract ON activity_logs(platform_id, contract_no)")
+        for sql in ACTIVITY_LOG_INDEX_SQL:
+            self.conn.execute(sql)
         create_if("contract_platforms", ("contract_id",), "CREATE INDEX IF NOT EXISTS idx_contract_platforms_contract ON contract_platforms(contract_id)")
         create_if("contract_platforms", ("platform_id",), "CREATE INDEX IF NOT EXISTS idx_contract_platforms_platform ON contract_platforms(platform_id)")
         create_if("contract_responsible_engineers", ("contract_id",), "CREATE INDEX IF NOT EXISTS idx_contract_resp_eng_contract ON contract_responsible_engineers(contract_id)")
@@ -608,7 +654,39 @@ CREATE TABLE IF NOT EXISTS delivery_components(id INTEGER PRIMARY KEY AUTOINCREM
 CREATE TABLE IF NOT EXISTS contract_tags(id INTEGER PRIMARY KEY AUTOINCREMENT,contract_id INTEGER NOT NULL,tag_id INTEGER NOT NULL,UNIQUE(contract_id,tag_id),FOREIGN KEY(contract_id) REFERENCES contracts(id) ON DELETE CASCADE,FOREIGN KEY(tag_id) REFERENCES tags(id) ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS contract_file_folders(id INTEGER PRIMARY KEY AUTOINCREMENT,contract_id INTEGER NOT NULL,merge_uid TEXT NOT NULL DEFAULT '',parent_id INTEGER,name TEXT NOT NULL,created_at TEXT,updated_at TEXT,UNIQUE(contract_id,parent_id,name),FOREIGN KEY(contract_id) REFERENCES contracts(id) ON DELETE CASCADE,FOREIGN KEY(parent_id) REFERENCES contract_file_folders(id) ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS contract_files(id INTEGER PRIMARY KEY AUTOINCREMENT,contract_id INTEGER NOT NULL,merge_uid TEXT NOT NULL DEFAULT '',folder_id INTEGER,filename TEXT NOT NULL,original_path TEXT,file_ext TEXT,mime_type TEXT,size_bytes INTEGER NOT NULL DEFAULT 0,sha256 TEXT DEFAULT '',content_blob BLOB NOT NULL,note TEXT,created_at TEXT,updated_at TEXT,FOREIGN KEY(contract_id) REFERENCES contracts(id) ON DELETE CASCADE,FOREIGN KEY(folder_id) REFERENCES contract_file_folders(id) ON DELETE SET NULL);
-CREATE TABLE IF NOT EXISTS activity_logs(id INTEGER PRIMARY KEY AUTOINCREMENT,created_at TEXT NOT NULL,actor TEXT,source TEXT,device_name TEXT,action TEXT NOT NULL,entity_type TEXT,entity_id TEXT,entity_key TEXT,platform_id INTEGER,contract_no TEXT,message TEXT,before_json TEXT,after_json TEXT,payload_json TEXT,FOREIGN KEY(platform_id) REFERENCES platforms(id) ON DELETE SET NULL);
+CREATE TABLE IF NOT EXISTS activity_logs(
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT NOT NULL,
+    actor TEXT,
+    source TEXT,
+    device_name TEXT,
+    action TEXT NOT NULL,
+    entity_type TEXT,
+    entity_id TEXT,
+    entity_key TEXT,
+    platform_id INTEGER,
+    contract_no TEXT,
+    message TEXT,
+    before_json TEXT,
+    after_json TEXT,
+    payload_json TEXT,
+    occurred_at_utc TEXT,
+    category TEXT,
+    status TEXT,
+    operation_id TEXT,
+    actor_type TEXT,
+    actor_staff_id INTEGER,
+    actor_admin_id INTEGER,
+    actor_display_name TEXT,
+    session_id TEXT,
+    contract_id INTEGER,
+    platform_name_snapshot TEXT,
+    contract_no_snapshot TEXT,
+    changed_fields_json TEXT,
+    technical_payload_json TEXT,
+    event_schema_version INTEGER DEFAULT 1,
+    FOREIGN KEY(platform_id) REFERENCES platforms(id) ON DELETE SET NULL
+);
             """
         )
         if self._migrate_contract_user_bridge():
@@ -705,7 +783,7 @@ CREATE TABLE IF NOT EXISTS activity_logs(id INTEGER PRIMARY KEY AUTOINCREMENT,cr
             self.conn.execute("CREATE INDEX IF NOT EXISTS idx_contract_platforms_contract ON contract_platforms(contract_id)")
             self.conn.execute("CREATE INDEX IF NOT EXISTS idx_contract_platforms_platform ON contract_platforms(platform_id)")
             self.conn.execute("CREATE INDEX IF NOT EXISTS idx_systems_contract_platform ON systems(contract_id, platform_id)")
-    
+
         # Existing v2 files may predate the sortable platform/component manager.
         platform_sort_added = self._ensure_column("platforms", "sort_order", "INTEGER DEFAULT 0")
         if platform_sort_added:
@@ -734,6 +812,10 @@ CREATE TABLE IF NOT EXISTS activity_logs(id INTEGER PRIMARY KEY AUTOINCREMENT,cr
         # Audit metadata columns were added after the initial activity log schema.
         for column in ("source", "device_name"):
             if self._ensure_column("activity_logs", column, "TEXT"):
+                migrated.append(f"activity_logs.{column}")
+        # Schema v18: structured, transaction-safe Activity History fields.
+        for column, ddl in ACTIVITY_LOG_COLUMNS:
+            if self._ensure_column("activity_logs", column, ddl):
                 migrated.append(f"activity_logs.{column}")
         # Document folders were added after embedded contract files shipped.
         if self._ensure_column("contract_files", "folder_id", "INTEGER"):
@@ -1022,64 +1104,207 @@ CREATE TABLE IF NOT EXISTS activity_logs(id INTEGER PRIMARY KEY AUTOINCREMENT,cr
         row = self.conn.execute("SELECT id FROM platforms WHERE name=?", (name,)).fetchone()
         return int(row[0]) if row else None
 
-    def add_log(self, action: str, entity_type: str = "", entity_key: str = "", message: str = "", payload: dict | None = None,
-                actor: str | None = None, source: str | None = None, device: str | None = None,
-                entity_id: str | int | None = None, platform: str | None = None,
-                contract_no: str | None = None, before: dict | None = None, after: dict | None = None):
+    def add_log(
+        self,
+        action: str,
+        entity_type: str = "",
+        entity_key: str = "",
+        message: str = "",
+        payload: dict | None = None,
+        actor: str | None = None,
+        source: str | None = None,
+        device: str | None = None,
+        entity_id: str | int | None = None,
+        platform: str | None = None,
+        contract_no: str | None = None,
+        before: dict | None = None,
+        after: dict | None = None,
+        *,
+        category: str | None = None,
+        status: str | None = "SUCCESS",
+        operation_id: str | None = None,
+        actor_type: str | None = None,
+        actor_staff_id: int | None = None,
+        actor_admin_id: int | None = None,
+        actor_display_name: str | None = None,
+        session_id: str | None = None,
+        contract_id: int | None = None,
+        platform_name_snapshot: str | None = None,
+        contract_no_snapshot: str | None = None,
+        changed_fields: Any = None,
+        technical_payload: Any = None,
+        event_schema_version: int = ACTIVITY_EVENT_SCHEMA_VERSION,
+        strict: bool | None = None,
+    ) -> int | None:
+        transaction_active = bool(self.conn.in_transaction or self._tx_depth > 0)
+        effective_strict = transaction_active if strict is None else bool(strict)
+        action_text = normalize_activity_text(action, max_length=128)
+        if not action_text:
+            error = ValueError("Activity action boş olamaz.")
+            _LOG.error("Activity event rejected because action is empty")
+            if effective_strict:
+                raise error
+            return None
+
+        actor_name = normalize_activity_text(
+            actor_display_name or actor, max_length=MAX_ACTIVITY_FIELD_LENGTH
+        ) or UNKNOWN_ACTOR
+        source_text = normalize_activity_text(
+            source or self.source or "Main UI", max_length=MAX_ACTIVITY_FIELD_LENGTH
+        ) or "Main UI"
+        device_text = normalize_activity_text(
+            device or device_name(), max_length=MAX_ACTIVITY_FIELD_LENGTH
+        ) or "-"
+        entity_type_text = normalize_activity_text(entity_type, max_length=128)
+        entity_key_text = normalize_activity_text(entity_key, max_length=MAX_ACTIVITY_FIELD_LENGTH)
+        entity_id_text = normalize_activity_text(
+            "" if entity_id is None else entity_id, max_length=128
+        )
+        message_text = normalize_activity_text(message, max_length=MAX_ACTIVITY_MESSAGE_LENGTH)
+        platform_text = normalize_activity_text(
+            platform_name_snapshot or platform, max_length=MAX_ACTIVITY_FIELD_LENGTH
+        )
+        contract_text = normalize_activity_text(
+            contract_no_snapshot or contract_no, max_length=MAX_ACTIVITY_FIELD_LENGTH
+        )
+        operation_text = normalize_activity_text(operation_id, max_length=MAX_ACTIVITY_FIELD_LENGTH)
+        actor_type_text = normalize_activity_text(actor_type, max_length=64)
+        session_text = normalize_activity_text(session_id, max_length=MAX_ACTIVITY_FIELD_LENGTH)
+
         try:
-            self.conn.execute(
-                "INSERT INTO activity_logs(created_at,actor,source,device_name,action,entity_type,entity_id,entity_key,platform_id,contract_no,message,before_json,after_json,payload_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            cur = self.conn.execute(
+                """
+                INSERT INTO activity_logs(
+                    created_at,actor,source,device_name,action,entity_type,entity_id,entity_key,
+                    platform_id,contract_no,message,before_json,after_json,payload_json,
+                    occurred_at_utc,category,status,operation_id,actor_type,actor_staff_id,
+                    actor_admin_id,actor_display_name,session_id,contract_id,
+                    platform_name_snapshot,contract_no_snapshot,changed_fields_json,
+                    technical_payload_json,event_schema_version
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
                 (
-                    now_iso(), actor or "Kullanıcı", source or self.source or "Main UI", device or device_name(), action or "", entity_type or "", "" if entity_id is None else str(entity_id),
-                    entity_key or "", self._platform_id(platform), contract_no or "", message or "",
-                    json.dumps(before, ensure_ascii=False) if before is not None else None,
-                    json.dumps(after, ensure_ascii=False) if after is not None else None,
-                    json.dumps(payload, ensure_ascii=False) if payload is not None else None,
-                )
+                    now_iso(),
+                    actor_name,
+                    source_text,
+                    device_text,
+                    action_text,
+                    entity_type_text,
+                    entity_id_text,
+                    entity_key_text,
+                    self._platform_id(platform_text),
+                    contract_text,
+                    message_text,
+                    activity_json(before),
+                    activity_json(after),
+                    activity_json(payload),
+                    utc_now_iso(),
+                    normalize_activity_category(category),
+                    normalize_activity_status(status),
+                    operation_text or None,
+                    actor_type_text or None,
+                    safe_positive_int(actor_staff_id),
+                    safe_positive_int(actor_admin_id),
+                    actor_name,
+                    session_text or None,
+                    safe_positive_int(contract_id),
+                    platform_text or None,
+                    contract_text or None,
+                    activity_json(changed_fields),
+                    activity_json(technical_payload),
+                    normalize_event_schema_version(event_schema_version),
+                ),
             )
-            self.conn.commit()
+            event_id = int(cur.lastrowid)
+            if not transaction_active:
+                self.conn.commit()
+            return event_id
         except Exception:
-            pass
+            _LOG.exception(
+                "Activity event insert failed action=%s source=%s transaction_active=%s",
+                action_text,
+                source_text,
+                transaction_active,
+            )
+            if not transaction_active:
+                try:
+                    self.conn.rollback()
+                except Exception:
+                    _LOG.exception("Activity event rollback failed")
+            if effective_strict:
+                raise
+            return None
 
     def add_sql_query_log(self, sql: str, duration_ms: int, affected_rows: int = 0) -> bool:
         operation = sql_operation(sql)
         if not should_audit_sql(operation):
             return False
-        self.add_log(
+        event_id = self.add_log(
             "sql_query_executed",
             entity_type="database",
-            actor="Kullanıcı",
+            actor=UNKNOWN_ACTOR,
             source="SQL Terminal",
+            category="TECHNICAL",
             message="SQL terminal üzerinden veri değiştiren sorgu çalıştırıldı",
             payload={
                 "operation": operation,
                 "duration_ms": int(duration_ms or 0),
                 "changed": True,
                 "affected_rows": int(affected_rows or 0),
-                "query_preview": sql_query_preview(sql),
             },
         )
-        return True
+        return event_id is not None
 
-    def list_logs(self, limit: int = 500, action: str | None = None, entity_type: str | None = None,
-                  platform: str | None = None, contract_no: str | None = None, search: str | None = None):
+    def list_logs(
+        self,
+        limit: int = 500,
+        action: str | None = None,
+        entity_type: str | None = None,
+        platform: str | None = None,
+        contract_no: str | None = None,
+        search: str | None = None,
+        category: str | None = None,
+        operation_id: str | None = None,
+    ):
         q = "SELECT l.*, p.name AS platform FROM activity_logs l LEFT JOIN platforms p ON p.id=l.platform_id WHERE 1=1"
-        params = []
+        params: list[Any] = []
         if action:
-            q += " AND l.action=?"; params.append(action)
+            q += " AND l.action=?"
+            params.append(normalize_activity_text(action, max_length=128))
         if entity_type:
-            q += " AND l.entity_type=?"; params.append(entity_type)
+            q += " AND l.entity_type=?"
+            params.append(normalize_activity_text(entity_type, max_length=128))
         if platform:
-            q += " AND p.name=?"; params.append(platform)
+            platform_filter = normalize_activity_text(platform, max_length=MAX_ACTIVITY_FIELD_LENGTH)
+            q += " AND (p.name=? OR l.platform_name_snapshot=?)"
+            params.extend([platform_filter, platform_filter])
         if contract_no:
-            q += " AND l.contract_no=?"; params.append(contract_no)
+            q += " AND COALESCE(NULLIF(l.contract_no_snapshot,''),l.contract_no)=?"
+            params.append(normalize_activity_text(contract_no, max_length=MAX_ACTIVITY_FIELD_LENGTH))
+        if category:
+            category_filter = normalize_activity_category(category)
+            if category_filter is None:
+                return []
+            q += " AND l.category=?"
+            params.append(category_filter)
+        if operation_id:
+            q += " AND l.operation_id=?"
+            params.append(normalize_activity_text(operation_id, max_length=MAX_ACTIVITY_FIELD_LENGTH))
         if search:
-            q += " AND (l.message LIKE ? OR l.entity_key LIKE ? OR l.actor LIKE ? OR l.source LIKE ? OR l.device_name LIKE ? OR l.action LIKE ? OR p.name LIKE ? OR l.contract_no LIKE ?)"
-            s = f"%{search}%"; params.extend([s, s, s, s, s, s, s, s])
-        q += " ORDER BY l.created_at DESC"
+            q += (
+                " AND (l.message LIKE ? OR l.entity_key LIKE ? OR "
+                "COALESCE(NULLIF(l.actor_display_name,''),l.actor) LIKE ? OR l.source LIKE ? OR "
+                "l.device_name LIKE ? OR l.action LIKE ? OR "
+                "COALESCE(p.name,l.platform_name_snapshot,'') LIKE ? OR "
+                "COALESCE(NULLIF(l.contract_no_snapshot,''),l.contract_no) LIKE ?)"
+            )
+            value = f"%{normalize_activity_text(search, max_length=MAX_ACTIVITY_MESSAGE_LENGTH)}%"
+            params.extend([value] * 8)
+        q += " ORDER BY COALESCE(NULLIF(l.occurred_at_utc,''),l.created_at) DESC, l.id DESC"
         if limit and int(limit) > 0:
-            q += " LIMIT ?"; params.append(int(limit))
-        return [dict(r) for r in self.conn.execute(q, params).fetchall()]
+            q += " LIMIT ?"
+            params.append(int(limit))
+        return [dict(row) for row in self.conn.execute(q, params).fetchall()]
 
 
     def list_user_tables(self) -> List[str]:

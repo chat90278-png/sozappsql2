@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import Callable, Literal
 
 from src.services.sts_database import (
+    ACTIVITY_LOG_COLUMNS,
+    ACTIVITY_LOG_INDEX_SQL,
     CURRENT_SCHEMA_VERSION,
     STSDatabase,
     STSMigrationError,
@@ -169,10 +171,40 @@ def _migrate_16_to_17(conn: sqlite3.Connection) -> None:
     )
 
 
+def _migrate_17_to_18(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS activity_logs(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at TEXT NOT NULL,
+            actor TEXT,
+            source TEXT,
+            device_name TEXT,
+            action TEXT NOT NULL,
+            entity_type TEXT,
+            entity_id TEXT,
+            entity_key TEXT,
+            platform_id INTEGER,
+            contract_no TEXT,
+            message TEXT,
+            before_json TEXT,
+            after_json TEXT,
+            payload_json TEXT
+        )
+        """
+    )
+    _require_columns(conn, "activity_logs", {"id", "created_at", "action"})
+    for name, ddl in ACTIVITY_LOG_COLUMNS:
+        _ensure_column(conn, "activity_logs", name, ddl)
+    for sql in ACTIVITY_LOG_INDEX_SQL:
+        conn.execute(sql)
+
+
 MIGRATIONS: tuple[MigrationStep, ...] = (
     MigrationStep(14, 15, "v14_to_v15_share_package_registry", _migrate_14_to_15),
     MigrationStep(15, 16, "v15_to_v16_merge_result_audit", _migrate_15_to_16),
     MigrationStep(16, 17, "v16_to_v17_share_cancellation_audit", _migrate_16_to_17),
+    MigrationStep(17, 18, "v17_to_v18_activity_history_infrastructure", _migrate_17_to_18),
 )
 
 _MIGRATIONS_BY_FROM: dict[int, MigrationStep] = {

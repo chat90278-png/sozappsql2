@@ -188,8 +188,37 @@ _V17_COLUMNS = (
     "cancelled_by_full_name",
 )
 
+_V18_ACTIVITY_COLUMNS = (
+    "occurred_at_utc",
+    "category",
+    "status",
+    "operation_id",
+    "actor_type",
+    "actor_staff_id",
+    "actor_admin_id",
+    "actor_display_name",
+    "session_id",
+    "contract_id",
+    "platform_name_snapshot",
+    "contract_no_snapshot",
+    "changed_fields_json",
+    "technical_payload_json",
+    "event_schema_version",
+)
+
+_V18_ACTIVITY_INDEXES = (
+    "idx_activity_logs_occurred_id",
+    "idx_activity_logs_category_occurred",
+    "idx_activity_logs_actor_staff_occurred",
+    "idx_activity_logs_operation_id",
+    "idx_activity_logs_action_occurred",
+    "idx_activity_logs_entity_occurred",
+    "idx_activity_logs_contract_occurred",
+    "idx_activity_logs_platform_occurred",
+)
+
 FINGERPRINT_MIN_VERSION = VERSIONED_MIGRATION_FLOOR
-FINGERPRINT_MAX_VERSION = 17
+FINGERPRINT_MAX_VERSION = CURRENT_SCHEMA_VERSION
 FINGERPRINT_VERSIONS = tuple(
     range(FINGERPRINT_MIN_VERSION, FINGERPRINT_MAX_VERSION + 1)
 )
@@ -246,6 +275,13 @@ def schema_fingerprint_for_version(version: int) -> SchemaFingerprint:
             "share_packages",
             _V17_COLUMNS,
         )
+    if version >= 18:
+        columns = _merge_required_columns(
+            columns,
+            "activity_logs",
+            _V18_ACTIVITY_COLUMNS,
+        )
+        indexes.update(_V18_ACTIVITY_INDEXES)
 
     return SchemaFingerprint(
         version=version,
