@@ -35,6 +35,13 @@ jobs:
           python -m pip install -r requirements.txt
           python -m pip install pytest==8.4.2
 
+      - name: Download original Agenda validation evidence
+        uses: actions/download-artifact@v4
+        with:
+          run-id: 29229958946
+          github-token: ${{ github.token }}
+          path: _validation/original-agenda
+
       - name: Prepare and compile validation harness
         shell: pwsh
         run: |
@@ -43,6 +50,19 @@ jobs:
           path = Path("tools/validation/fix42_final_scope_validate.py")
           text = path.read_text(encoding="utf-8")
           text = text.replace("'</n        '", "'\n        '")
+          old = '''def download_original_artifact() -> tuple[Path, Path]:
+              token = os.environ.get("GITHUB_TOKEN", "").strip()
+          '''
+          new = '''def download_original_artifact() -> tuple[Path, Path]:
+              existing_baseline = next(iter(ORIGINAL.rglob("baseline-full.xml")), None)
+              existing_feature = next(iter(ORIGINAL.rglob("feature-full.xml")), None)
+              if existing_baseline is not None and existing_feature is not None:
+                  return existing_baseline, existing_feature
+              token = os.environ.get("GITHUB_TOKEN", "").strip()
+          '''
+          if old not in text:
+              raise SystemExit("download function patch marker not found")
+          text = text.replace(old, new, 1)
           path.write_text(text, encoding="utf-8")
           '@ | python -
           python -m py_compile tools/validation/junit_summary.py tools/validation/fix42_final_scope_validate.py
