@@ -71,6 +71,7 @@ jobs:
           $ErrorActionPreference = "Stop"
           python -m pip install --upgrade pip
           python -m pip install -r "_validation/feature/requirements.txt"
+          python -m pip install "pytest==8.4.2"
 
       - name: Run differential validation
         shell: pwsh
