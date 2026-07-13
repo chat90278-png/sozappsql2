@@ -58,6 +58,16 @@ class AgendaSourceRepository:
         ).fetchall()
         return frozenset(int(row[0]) for row in rows)
 
+    def list_all_contract_ids(self) -> frozenset[int]:
+        rows = self.conn.execute(
+            """
+            SELECT id
+            FROM contracts
+            ORDER BY id
+            """
+        ).fetchall()
+        return frozenset(int(row[0]) for row in rows if int(row[0]) > 0)
+
     def _platform_names_by_contract(self, ids: Sequence[int]) -> dict[int, tuple[str, ...]]:
         if not ids:
             return {}
