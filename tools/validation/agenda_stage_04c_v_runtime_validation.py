@@ -22,11 +22,14 @@ old_need = 'need={L[x]for x in("up","sa","sb","new","7n","7","7o","inv","t1","t2
 new_need = 'need={L[x]for x in("up","sa","sb","equal","nested","status_in_update","new","7n","7","7o","inv","t1","t2")}'
 old_fields = 'q({f for(l,f)in by if l==L["up"]}=={"completion_date","acceptance_date"}and{f for(l,f)in by if l==L["sa"]}=={"status"},"fields")'
 new_fields = 'q({f for(l,f)in by if l==L["up"]}=={"completion_date","acceptance_date"}and{f for(l,f)in by if l==L["sa"]}=={"status"}and not any(l in {L["equal"],L["nested"],L["status_in_update"]}for(l,f)in by),"fields")'
+old_viewer = 'q(any(x.kind=="activity"for x in sv(view)[1])and not any(x.kind in("returned_share","document_lock")for x in sv(view)[1]),"viewer")'
+new_viewer = 'q(any(x.kind=="activity"for x in sv(view)[1].items)and not any(x.kind in("returned_share","document_lock")for x in sv(view)[1].items),"viewer")'
 
 for old, new, label in (
     (old_seed, new_seed, "seed boundary"),
     (old_need, new_need, "repository accepted set"),
     (old_fields, new_fields, "provider exclusions"),
+    (old_viewer, new_viewer, "viewer result items"),
 ):
     if source.count(old) != 1:
         raise RuntimeError(f"Unable to patch {label}: expected one exact match.")
