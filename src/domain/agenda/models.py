@@ -6,6 +6,7 @@ from types import MappingProxyType
 from typing import Any, Mapping
 
 from src.domain.agenda.constants import (
+    AgendaContractScopeCode,
     AgendaLifecycleType,
     AgendaPresentationProfileCode,
     AgendaSeverity,
@@ -108,9 +109,19 @@ class AgendaContext:
     staff_id: int | None = None
     permissions: frozenset[str] = field(default_factory=frozenset)
     personal_contract_ids: frozenset[int] = field(default_factory=frozenset)
+    contract_scope: AgendaContractScopeCode = AgendaContractScopeCode.RESPONSIBLE
 
     def __post_init__(self) -> None:
         staff_snapshot = None if self.current_staff is None else MappingProxyType(dict(self.current_staff))
         object.__setattr__(self, "current_staff", staff_snapshot)
         object.__setattr__(self, "permissions", frozenset(str(code) for code in self.permissions))
         object.__setattr__(self, "personal_contract_ids", frozenset(int(contract_id) for contract_id in self.personal_contract_ids))
+        try:
+            scope = (
+                self.contract_scope
+                if isinstance(self.contract_scope, AgendaContractScopeCode)
+                else AgendaContractScopeCode(str(self.contract_scope or "").strip().upper())
+            )
+        except ValueError as exc:
+            raise ValueError("contract_scope must be a valid AgendaContractScopeCode.") from exc
+        object.__setattr__(self, "contract_scope", scope)
