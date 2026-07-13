@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 import sqlite3
+from collections import Counter
 from datetime import datetime, timedelta
 
 import pytest
@@ -139,7 +140,7 @@ class _StateAwareAgendaService(_PermissionAwareAgendaService):
             items=items,
             new_count=len(new_keys),
             active_count=len(items),
-            counts_by_kind={item.kind: len(items)} if items else {},
+            counts_by_kind=dict(Counter(current.kind for current in items)),
             new_keys=new_keys,
             states_by_key=states,
         )
