@@ -70,8 +70,9 @@ Main yalnız bilgi amaçlı kaydedildi; differential baseline yapılmadı.
 - Head: `feature/gundemim-agenda-system`
 - Base: `main`
 - Draft: `true`
-- Merge: **yasak / yapılmadı**
-- Cleanup sonunda **CLOSED / UNMERGED** olarak doğrulanacaktır.
+- Final PR state: **CLOSED**
+- Merged: **false**
+- Closed at: `2026-07-13T08:36:17Z`
 
 ## 8. Run, job ve artifact
 
@@ -549,19 +550,18 @@ Baseline ve feature failure/error setleri birebir aynı.
 
 ## 25. Cleanup ve final diff
 
-Evidence artifact incelendi.
+Evidence artifact incelendi ve cleanup tamamlandı.
 
-Cleanup finalizasyonunda:
-
-- draft PR #330 merge edilmeden kapatılacak;
-- temporary workflow silinecek;
-- temporary validator silinecek;
-- temporary paths 404 olarak doğrulanacak;
-- açık Stage 4B-V temporary PR kalmadığı doğrulanacak;
-- final compare yalnız `docs/agenda/AGENDA_STAGE_04B_RUNTIME_VALIDATION.md` gösterecek;
-- main write olmadığı doğrulanacak.
-
-Bu bölüm cleanup sonrası aynı dokümanda final duruma güncellenecektir.
+- Draft PR #330 **CLOSED / UNMERGED**.
+- `.github/workflows/agenda-stage-04b-v-runtime-validation.yml` silindi.
+- `tools/validation/agenda_stage_04b_v_runtime_validation.py` silindi.
+- Temporary cleanup deletion head: `d34ffc8171eed124b509ed99695cd405eb92fdd6`
+- Product base `8088d2e65bbf7daee3ff07667e0f438b2099e96e` ile feature final tree compare exact changed path:
+  - `docs/agenda/AGENDA_STAGE_04B_RUNTIME_VALIDATION.md`
+- Allowlist dışı final path: `0`
+- Temporary paths branch tree'sinde yoktur.
+- Açık Stage 4B-V temporary PR kalmamıştır.
+- Main'e write yapılmamıştır.
 
 ## 26. Gate decision
 
