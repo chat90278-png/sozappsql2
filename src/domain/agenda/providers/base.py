@@ -9,6 +9,9 @@ from src.domain.agenda.source_models import AgendaSourceBundle
 class AgendaProvider(Protocol):
     code: str
 
+    def is_enabled(self, context: AgendaContext) -> bool:
+        ...
+
     def build(
         self,
         context: AgendaContext,
