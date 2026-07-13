@@ -93,6 +93,44 @@ def _insert_share(
         )
 
 
+def _insert_lock(
+    db: STSDatabase,
+    *,
+    contract_id: int,
+    is_locked: int = 1,
+    staff_id: int | None = None,
+    device_name: str = "LOCK-DEVICE",
+    full_name: str = "Lock Owner",
+    locked_at: str | None = "2026-07-13 09:00:00",
+    updated_at: str = "2026-07-13 09:05:00",
+) -> None:
+    with db.tx():
+        db.conn.execute(
+            """
+            INSERT INTO document_locks(
+                contract_id,is_locked,locked_by_staff_id,locked_by_device_name,
+                locked_by_full_name,locked_at,updated_at
+            ) VALUES(?,?,?,?,?,?,?)
+            ON CONFLICT(contract_id) DO UPDATE SET
+                is_locked=excluded.is_locked,
+                locked_by_staff_id=excluded.locked_by_staff_id,
+                locked_by_device_name=excluded.locked_by_device_name,
+                locked_by_full_name=excluded.locked_by_full_name,
+                locked_at=excluded.locked_at,
+                updated_at=excluded.updated_at
+            """,
+            (
+                contract_id,
+                is_locked,
+                staff_id,
+                device_name,
+                full_name,
+                locked_at,
+                updated_at,
+            ),
+        )
+
+
 def test_personal_contract_ids_include_only_selected_staff(db):
     ids = _seed(db)
     repo = AgendaSourceRepository(db)
@@ -268,6 +306,7 @@ def test_source_repository_does_not_mutate_database(db):
     repo.list_personal_contract_ids(ids["staff1"])
     repo.list_calendar_sources([ids["c1"]])
     repo.list_returned_share_sources([ids["c1"]])
+    repo.list_document_lock_sources([ids["c1"]])
     repo.load_personal_sources([ids["c1"]])
     assert db.conn.total_changes == before
 
@@ -293,3 +332,110 @@ def test_list_all_contract_ids_does_not_mutate_database(db):
     before = db.conn.total_changes
     AgendaSourceRepository(db).list_all_contract_ids()
     assert db.conn.total_changes == before
+
+
+def test_document_lock_source_requires_active_row_and_locked_timestamp(db):
+    ids = _seed(db)
+    _insert_lock(db, contract_id=ids["c1"], staff_id=ids["staff1"])
+    _insert_lock(db, contract_id=ids["c2"], is_locked=0, staff_id=ids["staff2"])
+    sources = AgendaSourceRepository(db).list_document_lock_sources([ids["c1"], ids["c2"]])
+    assert [source.contract_id for source in sources] == [ids["c1"]]
+
+    with db.tx():
+        db.conn.execute(
+            "UPDATE document_locks SET is_locked=1,locked_at=NULL WHERE contract_id=?",
+            (ids["c2"],),
+        )
+    assert AgendaSourceRepository(db).list_document_lock_sources([ids["c2"]]) == ()
+
+
+def test_document_lock_sources_respect_supplied_contract_scope(db):
+    ids = _seed(db)
+    _insert_lock(db, contract_id=ids["c1"], staff_id=ids["staff1"])
+    _insert_lock(db, contract_id=ids["c2"], staff_id=ids["staff2"])
+    sources = AgendaSourceRepository(db).list_document_lock_sources([ids["c1"]])
+    assert {source.contract_id for source in sources} == {ids["c1"]}
+
+
+def test_document_lock_source_carries_exact_owner_and_contract_metadata(db):
+    ids = _seed(db)
+    _insert_lock(
+        db,
+        contract_id=ids["c1"],
+        staff_id=ids["staff1"],
+        device_name=" DEVICE-1 ",
+        full_name=" Owner One ",
+        locked_at="2026-07-13 08:00:00",
+        updated_at="2026-07-13 08:05:00",
+    )
+    source = AgendaSourceRepository(db).list_document_lock_sources([ids["c1"]])[0]
+    assert source.contract_no == "C-2"
+    assert source.contract_type == "Ana"
+    assert source.platform == "alpha / Zulu"
+    assert source.is_locked is True
+    assert source.locked_by_staff_id == ids["staff1"]
+    assert source.locked_by_device_name == "DEVICE-1"
+    assert source.locked_by_full_name == "Owner One"
+    assert source.locked_at == "2026-07-13 08:00:00"
+    assert source.updated_at == "2026-07-13 08:05:00"
+
+
+def test_document_lock_sources_are_deterministic_and_deduplicate_input_ids(db):
+    ids = _seed(db)
+    _insert_lock(db, contract_id=ids["c1"], staff_id=ids["staff1"])
+    _insert_lock(db, contract_id=ids["c2"], staff_id=ids["staff2"])
+    sources = AgendaSourceRepository(db).list_document_lock_sources(
+        [ids["c1"], ids["c2"], ids["c1"]]
+    )
+    assert [source.contract_no for source in sources] == ["C-1", "C-2"]
+    assert len(sources) == 2
+
+
+def test_document_lock_empty_ids_perform_no_query(db):
+    repo = AgendaSourceRepository(db)
+    trace: list[str] = []
+    db.conn.set_trace_callback(trace.append)
+    try:
+        assert repo.list_document_lock_sources([]) == ()
+    finally:
+        db.conn.set_trace_callback(None)
+    assert trace == []
+
+
+def test_document_lock_read_path_is_read_only(db):
+    ids = _seed(db)
+    _insert_lock(db, contract_id=ids["c1"], staff_id=ids["staff1"])
+    repo = AgendaSourceRepository(db)
+    before_changes = db.conn.total_changes
+    before_transaction = db.conn.in_transaction
+    trace: list[str] = []
+    db.conn.set_trace_callback(trace.append)
+    try:
+        sources = repo.list_document_lock_sources([ids["c1"]])
+    finally:
+        db.conn.set_trace_callback(None)
+    assert sources
+    assert db.conn.total_changes == before_changes
+    assert db.conn.in_transaction == before_transaction
+    assert trace
+    assert all(statement.lstrip().upper().startswith("SELECT") for statement in trace)
+
+
+def test_load_personal_sources_contains_all_source_families_with_one_platform_lookup(db, monkeypatch):
+    ids = _seed(db)
+    _insert_share(db, contract_id=ids["c1"], package_id="pkg-all")
+    _insert_lock(db, contract_id=ids["c1"], staff_id=ids["staff1"])
+    repo = AgendaSourceRepository(db)
+    original = repo._platform_names_by_contract
+    calls: list[tuple[int, ...]] = []
+
+    def counted(contract_ids):
+        calls.append(tuple(contract_ids))
+        return original(contract_ids)
+
+    monkeypatch.setattr(repo, "_platform_names_by_contract", counted)
+    bundle = repo.load_personal_sources([ids["c1"]])
+    assert bundle.calendar
+    assert bundle.returned_shares
+    assert bundle.document_locks
+    assert calls == [(ids["c1"],)]
