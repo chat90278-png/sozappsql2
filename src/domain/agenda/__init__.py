@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from src.domain.agenda.constants import (
+    AgendaContractScopeCode,
     AgendaLifecycleType,
     AgendaPresentationProfileCode,
     AgendaSeverity,
@@ -42,6 +43,7 @@ __all__ = [
     "AGENDA_SEVERITY_RANK",
     "AgendaCalendarSource",
     "AgendaContext",
+    "AgendaContractScopeCode",
     "AgendaItem",
     "AgendaItemState",
     "AgendaLifecycleDecision",
