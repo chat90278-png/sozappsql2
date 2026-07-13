@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+from src.domain.agenda.activity import (
+    ACTIVITY_PROVIDER_CODE,
+    ACTIVITY_SOURCE_LOOKBACK_DAYS,
+    CONTRACT_ACTIVITY_FIELD_PRESENTATION,
+    CONTRACT_ACTIVITY_FIELDS_BY_ACTION,
+    activity_source_cutoff,
+)
 from src.domain.agenda.constants import (
     AgendaContractScopeCode,
     AgendaLifecycleType,
@@ -28,6 +35,7 @@ from src.domain.agenda.presentation import (
 )
 from src.domain.agenda.priority import AGENDA_SEVERITY_RANK, severity_rank
 from src.domain.agenda.providers import (
+    ActivityAgendaProvider,
     AgendaProvider,
     DeadlineAgendaProvider,
     DocumentLockAgendaProvider,
@@ -35,6 +43,7 @@ from src.domain.agenda.providers import (
     UnknownDateAgendaProvider,
 )
 from src.domain.agenda.source_models import (
+    ActivityAgendaSource,
     AgendaCalendarSource,
     AgendaSourceBundle,
     DocumentLockAgendaSource,
@@ -42,7 +51,11 @@ from src.domain.agenda.source_models import (
 )
 
 __all__ = [
+    "ACTIVITY_PROVIDER_CODE",
+    "ACTIVITY_SOURCE_LOOKBACK_DAYS",
     "AGENDA_SEVERITY_RANK",
+    "ActivityAgendaProvider",
+    "ActivityAgendaSource",
     "AgendaCalendarSource",
     "AgendaContext",
     "AgendaContractScopeCode",
@@ -58,6 +71,8 @@ __all__ = [
     "AgendaResult",
     "AgendaSeverity",
     "AgendaSourceBundle",
+    "CONTRACT_ACTIVITY_FIELD_PRESENTATION",
+    "CONTRACT_ACTIVITY_FIELDS_BY_ACTION",
     "DeadlineAgendaProvider",
     "DeadlineStage",
     "DocumentLockAgendaProvider",
@@ -65,6 +80,7 @@ __all__ = [
     "ReturnedShareAgendaProvider",
     "ReturnedShareAgendaSource",
     "UnknownDateAgendaProvider",
+    "activity_source_cutoff",
     "build_agenda_key",
     "deadline_stage_for_remaining_days",
     "deadline_stage_rank",
