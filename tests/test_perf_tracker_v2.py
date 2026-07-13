@@ -38,7 +38,7 @@ def test_records_are_isolated_by_sts_source(tmp_path: Path):
     assert second_records[0]["source_path_key"] == perf_tracker.source_path_key(second)
 
 
-def test_compute_stats_reports_percentiles_and_failures():
+def test_compute_stats_reports_success_latency_and_failures_separately():
     records = [
         {
             "op": perf_tracker.OP_CONTRACT_SAVE,
@@ -52,13 +52,36 @@ def test_compute_stats_reports_percentiles_and_failures():
     stat = perf_tracker.compute_stats(records)[perf_tracker.OP_CONTRACT_SAVE]
 
     assert stat["count"] == 5
+    assert stat["latency_count"] == 4
+    assert stat["successes"] == 4
     assert stat["failures"] == 1
     assert stat["failure_rate"] == 20.0
-    assert stat["avg_ms"] == 30.0
-    assert stat["p50_ms"] == 30.0
-    assert stat["p95_ms"] == 48.0
+    assert stat["avg_ms"] == 25.0
+    assert stat["p50_ms"] == 25.0
+    assert stat["p95_ms"] == 38.5
+    assert stat["failed_avg_ms"] == 50.0
     assert stat["last_ms"] == 50.0
     assert stat["last_success"] is False
+    assert stat["status"] == "warning"
+
+
+def test_all_failed_operation_has_failed_status():
+    records = [
+        {
+            "op": perf_tracker.OP_CONTRACT_OPEN,
+            "duration_ms": duration,
+            "success": False,
+            "ts": f"2026-07-13T08:00:{index:02d}+03:00",
+        }
+        for index, duration in enumerate([900, 1100, 1300])
+    ]
+
+    stat = perf_tracker.compute_stats(records)[perf_tracker.OP_CONTRACT_OPEN]
+
+    assert stat["successes"] == 0
+    assert stat["failures"] == 3
+    assert stat["status"] == "failed"
+    assert stat["failed_avg_ms"] == 1100.0
 
 
 def test_summary_status_requires_enough_samples():
