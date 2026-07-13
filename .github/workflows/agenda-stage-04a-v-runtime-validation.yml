@@ -1,0 +1,94 @@
+name: Agenda Stage 04A-V Runtime Validation
+
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - synchronize
+      - reopened
+
+permissions:
+  contents: read
+  actions: read
+  pull-requests: read
+
+jobs:
+  validate:
+    if: github.event.pull_request.head.ref == 'feature/gundemim-agenda-system'
+    runs-on: windows-latest
+    timeout-minutes: 180
+
+    steps:
+      - name: Checkout exact feature head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Materialize exact baseline and feature refs
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $baseline = "bc5feca2aa755b4e12c98b9932810778ec08d6cb"
+          $product = "973c96af0bc431029a0d027ec39dea3e5261e275"
+          $feature = "${{ github.event.pull_request.head.sha }}"
+
+          New-Item -ItemType Directory -Force -Path "_validation/evidence" | Out-Null
+
+          git cat-file -e "$baseline^{commit}"
+          git cat-file -e "$product^{commit}"
+          git cat-file -e "$feature^{commit}"
+
+          git worktree add --detach "_validation/baseline" $baseline
+          git worktree add --detach "_validation/feature" $feature
+
+          $changed = @(git diff --name-only $product $feature)
+          $expected = @(
+            ".github/workflows/agenda-stage-04a-v-runtime-validation.yml",
+            "tools/validation/agenda_stage_04a_v_runtime_validation.py"
+          )
+          if (($changed.Count -ne 2) -or (Compare-Object -ReferenceObject ($expected | Sort-Object) -DifferenceObject ($changed | Sort-Object))) {
+            throw "Temporary diff allowlist mismatch. Actual: $($changed -join ', ')"
+          }
+
+          @{
+            baseline = $baseline
+            product_head = $product
+            feature_head = $feature
+            changed_paths = $changed
+          } | ConvertTo-Json -Depth 4 | Out-File -Encoding utf8 "_validation/evidence/materialization.json"
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install feature dependencies
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          python -m pip install --upgrade pip
+          python -m pip install -r "_validation/feature/requirements.txt"
+
+      - name: Run differential validation
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
+          PYTHONUTF8: "1"
+        run: |
+          $ErrorActionPreference = "Continue"
+          python "_validation/feature/tools/validation/agenda_stage_04a_v_runtime_validation.py" `
+            --baseline "_validation/baseline" `
+            --feature "_validation/feature" `
+            --evidence "_validation/evidence"
+          exit $LASTEXITCODE
+
+      - name: Upload validation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agenda-stage-04a-v-evidence
+          path: _validation/evidence
+          if-no-files-found: error
