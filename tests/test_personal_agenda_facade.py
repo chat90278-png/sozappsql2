@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 
 import pytest
 
+from src import auth
 from src.domain.agenda.constants import (
     AgendaLifecycleType,
     AgendaPresentationProfileCode,
@@ -340,20 +341,63 @@ def test_facade_viewer_load_uses_view_only_profile():
     assert service.calls[0][0].presentation_profile.code == AgendaPresentationProfileCode.VIEW_ONLY
 
 
-def test_facade_system_admin_load_uses_system_profile():
-    facade, _repo, service = _facade(_item())
-    snapshot = facade.load(
-        {
-            "id": 0,
-            "admin_id": 9,
-            "is_admin": True,
-            "is_active": 1,
-            "full_name": "System Admin",
-            "permissions": {"view_contracts", "edit_contracts"},
-        }
+def test_real_system_admin_session_load_is_safe_empty():
+    facade, repo, service = _facade(_item(), service_class=_PermissionAwareAgendaService)
+    session = auth.build_system_admin_session(
+        {"id": 9, "admin_name": "root", "is_active": 1},
+        "admin-device",
     )
+
+    snapshot = facade.load(session)
+    context = service.calls[0][0]
     assert snapshot.profile.code == AgendaPresentationProfileCode.SYSTEM
-    assert service.calls[0][0].staff_id == 9
+    assert snapshot.all_items == ()
+    assert context.staff_id is None
+    assert context.permissions == frozenset()
+    assert repo.mark_seen_calls == []
+    assert repo.snooze_calls == []
+    assert repo.clear_calls == []
+
+
+def _system_admin_session_with_view_permission():
+    session = auth.build_system_admin_session(
+        {"id": 9, "admin_name": "root", "is_active": 1},
+        "admin-device",
+    )
+    session["permissions"] = {"view_contracts"}
+    return session
+
+
+def test_system_admin_mark_seen_is_rejected_without_state_write():
+    facade, repo, _service = _facade()
+    with pytest.raises(AgendaInteractionError, match="valid current staff identity"):
+        facade.mark_seen(_system_admin_session_with_view_permission(), _item())
+    assert repo.mark_seen_calls == []
+    assert repo.snooze_calls == []
+    assert repo.clear_calls == []
+
+
+def test_system_admin_snooze_is_rejected_without_state_write():
+    facade, repo, _service = _facade()
+    with pytest.raises(AgendaInteractionError, match="valid current staff identity"):
+        facade.snooze(
+            _system_admin_session_with_view_permission(),
+            _item(),
+            until=datetime(2026, 7, 12, 10, 0),
+            now=datetime(2026, 7, 11, 10, 0),
+        )
+    assert repo.mark_seen_calls == []
+    assert repo.snooze_calls == []
+    assert repo.clear_calls == []
+
+
+def test_system_admin_clear_snooze_is_rejected_without_state_write():
+    facade, repo, _service = _facade()
+    with pytest.raises(AgendaInteractionError, match="valid current staff identity"):
+        facade.clear_snooze(_system_admin_session_with_view_permission(), _item())
+    assert repo.mark_seen_calls == []
+    assert repo.snooze_calls == []
+    assert repo.clear_calls == []
 
 
 def test_facade_keeps_legacy_class_and_load_signature():
