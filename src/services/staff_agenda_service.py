@@ -11,6 +11,7 @@ from src.domain.agenda.priority import severity_rank
 from src.domain.agenda.providers import (
     AgendaProvider,
     DeadlineAgendaProvider,
+    DocumentLockAgendaProvider,
     ReturnedShareAgendaProvider,
     UnknownDateAgendaProvider,
 )
@@ -54,6 +55,7 @@ class StaffAgendaService:
         self.providers = tuple(providers) if providers is not None else (
             DeadlineAgendaProvider(),
             ReturnedShareAgendaProvider(),
+            DocumentLockAgendaProvider(),
             UnknownDateAgendaProvider(),
         )
         self.lifecycle_engine = lifecycle_engine or AgendaLifecycleEngine()
