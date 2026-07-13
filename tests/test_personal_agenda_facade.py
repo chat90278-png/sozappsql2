@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import inspect
 import sqlite3
 from datetime import datetime, timedelta
 
 import pytest
 
-from src.domain.agenda.constants import AgendaLifecycleType, AgendaSeverity
+from src.domain.agenda.constants import (
+    AgendaLifecycleType,
+    AgendaPresentationProfileCode,
+    AgendaSeverity,
+)
 from src.domain.agenda.models import AgendaItem, AgendaItemState, AgendaResult
 from src.services.agenda_context_factory import PersonalAgendaContextFactory
 from src.services.personal_agenda_facade import (
@@ -98,10 +103,26 @@ class _FakeAgendaService:
         )
 
 
+class _PermissionAwareAgendaService(_FakeAgendaService):
+    def build(self, context, *, touch_presented=True):
+        self.calls.append((context, touch_presented))
+        items = self.items if "view_contracts" in context.permissions else ()
+        return AgendaResult(
+            profile=context.presentation_profile,
+            items=items,
+            new_count=len(items),
+            active_count=len(items),
+            counts_by_kind={"test": len(items)} if items else {},
+            new_keys=frozenset(item.key for item in items),
+            states_by_key={},
+        )
+
+
 def _staff(**overrides):
     value = {
         "id": 5,
         "full_name": "Test Personel",
+        "role": "personnel",
         "is_active": 1,
         "permissions": {"view_contracts"},
     }
@@ -131,9 +152,9 @@ def _item(
     )
 
 
-def _facade(item=None):
+def _facade(item=None, *, service_class=_FakeAgendaService):
     repo = _FakeStateRepository()
-    service = _FakeAgendaService(repo, items=(() if item is None else (item,)))
+    service = service_class(repo, items=(() if item is None else (item,)))
     facade = PersonalAgendaFacade(
         _FakeDB(),
         context_factory=PersonalAgendaContextFactory(
@@ -298,3 +319,75 @@ def test_sensitive_fields_do_not_reach_service_context():
     context = service.calls[0][0]
     for field_name in ("password_hash", "password", "token", "secret"):
         assert field_name not in context.current_staff
+
+
+def test_facade_manager_load_uses_management_profile():
+    facade, _repo, service = _facade(_item())
+    snapshot = facade.load(
+        _staff(role="manager", role_name="manager", permissions={"view_contracts", "edit_contracts"})
+    )
+    context = service.calls[0][0]
+    assert snapshot.profile.code == AgendaPresentationProfileCode.MANAGEMENT
+    assert context.presentation_profile.code == AgendaPresentationProfileCode.MANAGEMENT
+
+
+def test_facade_viewer_load_uses_view_only_profile():
+    facade, _repo, service = _facade(_item())
+    snapshot = facade.load(
+        _staff(role="viewer", role_name="viewer", permissions={"view_contracts"})
+    )
+    assert snapshot.profile.code == AgendaPresentationProfileCode.VIEW_ONLY
+    assert service.calls[0][0].presentation_profile.code == AgendaPresentationProfileCode.VIEW_ONLY
+
+
+def test_facade_system_admin_load_uses_system_profile():
+    facade, _repo, service = _facade(_item())
+    snapshot = facade.load(
+        {
+            "id": 0,
+            "admin_id": 9,
+            "is_admin": True,
+            "is_active": 1,
+            "full_name": "System Admin",
+            "permissions": {"view_contracts", "edit_contracts"},
+        }
+    )
+    assert snapshot.profile.code == AgendaPresentationProfileCode.SYSTEM
+    assert service.calls[0][0].staff_id == 9
+
+
+def test_facade_keeps_legacy_class_and_load_signature():
+    assert PersonalAgendaFacade.__name__ == "PersonalAgendaFacade"
+    signature = inspect.signature(PersonalAgendaFacade.load)
+    assert "personal_contract_ids" in signature.parameters
+    assert signature.parameters["personal_contract_ids"].default == ()
+
+
+def test_facade_explicit_contract_override():
+    facade, _repo, service = _facade(_item())
+    facade.load(
+        _staff(role="manager", role_name="manager"),
+        personal_contract_ids=[11, 11, 4],
+    )
+    context = service.calls[0][0]
+    assert context.personal_contract_ids == frozenset({4, 11})
+
+
+def test_facade_role_without_permission_returns_empty():
+    facade, _repo, service = _facade(_item(), service_class=_PermissionAwareAgendaService)
+    snapshot = facade.load(
+        _staff(role="manager", role_name="manager", permissions={"edit_contracts"})
+    )
+    assert snapshot.all_items == ()
+    assert snapshot.profile.code == AgendaPresentationProfileCode.MANAGEMENT
+    assert service.calls[0][0].permissions == frozenset({"edit_contracts"})
+
+
+def test_facade_does_not_grant_permissions_from_role():
+    facade, _repo, service = _facade(_item(), service_class=_PermissionAwareAgendaService)
+    facade.load(
+        _staff(role="manager", role_name="manager", permissions=set())
+    )
+    context = service.calls[0][0]
+    assert context.permissions == frozenset()
+    assert context.presentation_profile.permissions == frozenset()
