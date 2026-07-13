@@ -5,7 +5,10 @@ from datetime import datetime
 from typing import Any
 
 from src import auth
-from src.domain.agenda.constants import AgendaPresentationProfileCode
+from src.domain.agenda.constants import (
+    AgendaContractScopeCode,
+    AgendaPresentationProfileCode,
+)
 from src.domain.agenda.models import AgendaContext, AgendaPresentationProfile
 
 
@@ -64,6 +67,68 @@ def _contract_id_snapshot(values: Collection[int]) -> frozenset[int]:
     return frozenset(result)
 
 
+def _is_exact_system_admin(snapshot: Mapping[str, Any]) -> bool:
+    if snapshot.get("is_admin") is not True:
+        return False
+    try:
+        session_id = int(snapshot.get("id"))
+        admin_id = int(snapshot.get("admin_id"))
+    except (TypeError, ValueError):
+        return False
+    return session_id == 0 and admin_id > 0
+
+
+def resolve_agenda_profile(
+    current_staff_snapshot: Mapping[str, Any],
+    permissions: frozenset[str],
+) -> tuple[AgendaPresentationProfile, AgendaContractScopeCode]:
+    if _is_exact_system_admin(current_staff_snapshot):
+        return (
+            AgendaPresentationProfile(
+                code=AgendaPresentationProfileCode.SYSTEM,
+                display_name="Sistem kapsamı",
+                description="Mevcut STS genelinde sistem ve operasyon istisnaları.",
+                permissions=permissions,
+            ),
+            AgendaContractScopeCode.ALL_VISIBLE,
+        )
+
+    role = str(
+        current_staff_snapshot.get("role_name")
+        or current_staff_snapshot.get("role")
+        or ""
+    ).strip().casefold()
+    if role == "manager":
+        return (
+            AgendaPresentationProfile(
+                code=AgendaPresentationProfileCode.MANAGEMENT,
+                display_name="Yönetim kapsamı",
+                description="Mevcut STS genelinde operasyonel dikkat isteyen maddeler.",
+                permissions=permissions,
+            ),
+            AgendaContractScopeCode.ALL_VISIBLE,
+        )
+    if role == "viewer":
+        return (
+            AgendaPresentationProfile(
+                code=AgendaPresentationProfileCode.VIEW_ONLY,
+                display_name="Salt okunur kapsam",
+                description="Mevcut STS genelinde salt okunur gündem maddeleri.",
+                permissions=permissions,
+            ),
+            AgendaContractScopeCode.ALL_VISIBLE,
+        )
+    return (
+        AgendaPresentationProfile(
+            code=AgendaPresentationProfileCode.PERSONAL,
+            display_name="Kişisel kapsam",
+            description="Sorumlu olduğunuz sözleşmelerde dikkat isteyen maddeler.",
+            permissions=permissions,
+        ),
+        AgendaContractScopeCode.RESPONSIBLE,
+    )
+
+
 class PersonalAgendaContextFactory:
     def __init__(self, *, now_provider: Callable[[], datetime] | None = None):
         self.now_provider = now_provider
@@ -81,7 +146,6 @@ class PersonalAgendaContextFactory:
             raise AgendaContextBuildError("current_staff must be a mapping.")
 
         original_snapshot = dict(current_staff)
-        staff_id = _positive_int(original_snapshot.get("id"), "current_staff.id")
         try:
             is_active = int(original_snapshot.get("is_active", 1))
         except (TypeError, ValueError) as exc:
@@ -89,8 +153,14 @@ class PersonalAgendaContextFactory:
         if is_active == 0:
             raise AgendaContextBuildError("Inactive staff cannot build an agenda context.")
 
+        system_admin = _is_exact_system_admin(original_snapshot)
+        if system_admin:
+            staff_id = _positive_int(original_snapshot.get("admin_id"), "current_staff.admin_id")
+        else:
+            staff_id = _positive_int(original_snapshot.get("id"), "current_staff.id")
+
         enriched_snapshot = dict(original_snapshot)
-        if enriched_snapshot.get("permissions") is None:
+        if enriched_snapshot.get("permissions") is None and not system_admin:
             db_or_path = enriched_snapshot.get("db_path") or enriched_snapshot.get("_db_path")
             if db_or_path is not None:
                 enriched = auth.enrich_staff_permissions(db_or_path, enriched_snapshot)
@@ -103,9 +173,10 @@ class PersonalAgendaContextFactory:
             for key, value in enriched_snapshot.items()
             if str(key).casefold() not in _SENSITIVE_STAFF_FIELDS
         }
-        safe_staff_snapshot["id"] = staff_id
         safe_staff_snapshot["is_active"] = is_active
         safe_staff_snapshot["permissions"] = permissions
+        if not system_admin:
+            safe_staff_snapshot["id"] = staff_id
 
         effective_now = now
         if effective_now is None and self.now_provider is not None:
@@ -114,11 +185,9 @@ class PersonalAgendaContextFactory:
             effective_now = datetime.now()
         normalized_now = _normalize_now(effective_now)
 
-        profile = AgendaPresentationProfile(
-            code=AgendaPresentationProfileCode.PERSONAL,
-            display_name="Kişisel kapsam",
-            description="Sorumlu olduğunuz sözleşmelerde dikkat isteyen maddeler.",
-            permissions=permissions,
+        profile, contract_scope = resolve_agenda_profile(
+            safe_staff_snapshot,
+            permissions,
         )
 
         return AgendaContext(
@@ -129,4 +198,12 @@ class PersonalAgendaContextFactory:
             staff_id=staff_id,
             permissions=permissions,
             personal_contract_ids=_contract_id_snapshot(personal_contract_ids),
+            contract_scope=contract_scope,
         )
+
+
+__all__ = [
+    "AgendaContextBuildError",
+    "PersonalAgendaContextFactory",
+    "resolve_agenda_profile",
+]
