@@ -4,7 +4,7 @@ from collections import Counter
 from collections.abc import Sequence
 from datetime import datetime
 
-from src.domain.agenda.constants import AgendaContractScopeCode
+from src.domain.agenda.constants import AgendaContractScopeCode, AgendaPresentationProfileCode
 from src.domain.agenda.lifecycle import AgendaLifecycleEngine
 from src.domain.agenda.models import AgendaContext, AgendaItem, AgendaResult
 from src.domain.agenda.priority import severity_rank
@@ -79,6 +79,14 @@ class StaffAgendaService:
         touch_presented: bool = True,
     ) -> AgendaResult:
         if "view_contracts" not in context.permissions:
+            return self._empty(context)
+        if (
+            context.presentation_profile.code == AgendaPresentationProfileCode.SYSTEM
+            and context.staff_id is None
+        ):
+            # Exact system-admin sessions have a system_admins.id, not a staff.id.
+            # Until a principal-aware agenda-state model exists, do not query
+            # sources/providers or touch staff_agenda_state.
             return self._empty(context)
         if context.staff_id is None or int(context.staff_id) <= 0:
             raise ValueError("context.staff_id must be a positive integer.")
