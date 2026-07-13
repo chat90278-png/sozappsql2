@@ -121,12 +121,12 @@ class ContractStatusSummaryWidget(QFrame):
         "QFrame#contractStatusSummaryWidget{"
         "background:#ffffff; border:1.5px solid #d8e2ed; border-radius:12px;}"
         "QFrame#contractStatusSummaryWidget:hover{"
-        "border-color:#397bd8; background:#ffffff;}"
+        "border-color:#397bd8; background:#fafcff;}"
         # Panel widget'ları (QLabel değil, sadece QWidget container'lar)
         "QWidget#contractStatusContent{"
         "background:#ffffff; border:none;}"
         "QFrame#contractStatusSummaryWidget:hover QWidget#contractStatusContent{"
-        "background:#ffffff;}"
+        "background:#fafcff;}"
         "QWidget#contractStatusTotalPanel{"
         "background:transparent; border:none; border-right:1px solid #e2e8f0;}"
         # ContractStatusBar ve diğer anonim child QWidget'lar
@@ -135,7 +135,7 @@ class ContractStatusSummaryWidget(QFrame):
         "QFrame#contractStatusSummaryWidget QWidget#contractStatusContent{"
         "background:#ffffff;}"
         "QFrame#contractStatusSummaryWidget:hover QWidget#contractStatusContent{"
-        "background:#ffffff;}"
+        "background:#fafcff;}"
         # Tüm QLabel'ların arka planı şeffaf — global #e8eef5 sızmaz
         "QFrame#contractStatusSummaryWidget QLabel{"
         "background:transparent; border:none;}"
@@ -163,8 +163,8 @@ class ContractStatusSummaryWidget(QFrame):
         self._summary = ContractStatusSummary()
         self.setObjectName("contractStatusSummaryWidget")
         self.setAttribute(Qt.WA_StyledBackground, True)
-        self.setFixedHeight(112)
-        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        self.setFixedSize(460, 112)
+        self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         self.setStyleSheet(self._QSS)
         self._build()
         self.set_summary(self._summary)
@@ -261,7 +261,7 @@ class ContractStatusSummaryWidget(QFrame):
         label.setTextFormat(Qt.RichText)
         label.setAlignment(Qt.AlignCenter)
         label.setMinimumWidth(0)
-        label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
         return label
 
     @staticmethod

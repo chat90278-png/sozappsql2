@@ -19,6 +19,7 @@ from analysis_center.analysis_dashboard_geometry import GridGeometry
 from analysis_center.analysis_dashboard_workspace import CUSTOM_DASHBOARD_ID, DashboardWorkspaceStore
 from analysis_center.analysis_models import VisualSettings
 from analysis_center.analysis_qt_window import AnalysisCenterWindow
+from tests.qt_wait_helpers import wait_until_ready
 
 
 @pytest.fixture(scope="module")
@@ -39,6 +40,7 @@ def test_analysis_center_window_renders_dashboard_and_tur9_analysis_screens(qt_a
         settings=_settings(),
         workspace_store=DashboardWorkspaceStore(tmp_path / "dashboards"),
     )
+    wait_until_ready(window, qt_app)
     try:
         assert window.navigation.count() == 8
         assert window.current_item_id() == CUSTOM_DASHBOARD_ID
@@ -55,6 +57,7 @@ def test_analysis_center_refresh_preserves_selected_screen(qt_app, tmp_path):
         settings=_settings(),
         workspace_store=DashboardWorkspaceStore(tmp_path / "dashboards"),
     )
+    wait_until_ready(window, qt_app)
     try:
         platform_row = window._item_ids.index("platform_analysis")
         window.navigation.setCurrentRow(platform_row)
@@ -68,6 +71,7 @@ def test_analysis_center_refresh_preserves_selected_screen(qt_app, tmp_path):
 def test_analysis_center_pins_live_card_to_persistent_dashboard_without_engine_refresh(qt_app, tmp_path):
     store = DashboardWorkspaceStore(tmp_path / "dashboards")
     window = AnalysisCenterWindow(settings=_settings(), workspace_store=store)
+    wait_until_ready(window, qt_app)
     try:
         executive = next(item for item in window._dashboard_items if item.item_id == "executive_summary")
         source_card = executive.cards[0]
@@ -110,6 +114,7 @@ def _button_texts(window):
 def test_dashboard_edit_mode_real_mouse_drag_resize_history_and_cancel(qt_app, tmp_path):
     store = DashboardWorkspaceStore(tmp_path / "dashboards")
     window = AnalysisCenterWindow(settings=_settings(), workspace_store=store)
+    wait_until_ready(window, qt_app)
     try:
         _pin_dashboard_cards(
             window,
@@ -188,6 +193,7 @@ def test_dashboard_edit_mode_real_mouse_drag_resize_history_and_cancel(qt_app, t
 def test_dashboard_edit_save_persists_and_reset_cancel_restores_saved_layout(qt_app, tmp_path):
     store = DashboardWorkspaceStore(tmp_path / "dashboards")
     window = AnalysisCenterWindow(settings=_settings(), workspace_store=store)
+    wait_until_ready(window, qt_app)
     try:
         _pin_dashboard_cards(window, ["exec_total_contracts", "exec_status_distribution"])
         window.show()
@@ -243,6 +249,7 @@ def test_dashboard_mouse_preview_does_not_persist_or_reload_analysis_payload(qt_
 
     store = CountingStore(tmp_path / "dashboards")
     window = AnalysisCenterWindow(settings=_settings(), workspace_store=store)
+    wait_until_ready(window, qt_app)
     try:
         _pin_dashboard_cards(window, ["exec_total_contracts", "exec_upcoming_deadlines"])
         baseline_save_calls = store.save_calls
@@ -278,6 +285,7 @@ def test_dashboard_mouse_preview_does_not_persist_or_reload_analysis_payload(qt_
 def test_dashboard_locked_affordances_are_hidden_and_remove_is_undoable(qt_app, tmp_path):
     store = DashboardWorkspaceStore(tmp_path / "dashboards")
     window = AnalysisCenterWindow(settings=_settings(), workspace_store=store)
+    wait_until_ready(window, qt_app)
     try:
         _pin_dashboard_cards(window, ["exec_total_contracts", "exec_upcoming_deadlines"])
         locked = _placement_by_card(window.workspace, "exec_total_contracts")
@@ -319,6 +327,7 @@ def test_dashboard_canvas_viewport_resize_changes_pixel_rect_not_logical_layout(
         settings=_settings(),
         workspace_store=DashboardWorkspaceStore(tmp_path / "dashboards"),
     )
+    wait_until_ready(window, qt_app)
     try:
         _pin_dashboard_cards(window, ["exec_total_contracts", "exec_status_distribution"])
         window.resize(1000, 700)
@@ -348,6 +357,7 @@ def test_dashboard_tur12_edit_chrome_placeholder_and_toolbar_hierarchy(qt_app, t
         settings=_settings(),
         workspace_store=DashboardWorkspaceStore(tmp_path / "dashboards"),
     )
+    wait_until_ready(window, qt_app)
     try:
         _pin_dashboard_cards(window, ["exec_total_contracts", "exec_upcoming_deadlines"])
         window.resize(1200, 800)
@@ -433,6 +443,7 @@ def test_dashboard_auto_scroll_helper_is_bounded_and_canvas_is_idle_safe(qt_app,
         settings=_settings(),
         workspace_store=DashboardWorkspaceStore(tmp_path / "dashboards"),
     )
+    wait_until_ready(window, qt_app)
     try:
         _pin_dashboard_cards(window, ["exec_total_contracts", "exec_upcoming_deadlines"])
         window.resize(900, 420)

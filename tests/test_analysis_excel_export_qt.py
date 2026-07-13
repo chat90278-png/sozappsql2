@@ -16,6 +16,7 @@ from analysis_center.analysis_dashboard_workspace import CUSTOM_DASHBOARD_ID, Da
 from analysis_center.analysis_excel_export import DashboardExcelExportResult
 from analysis_center.analysis_models import VisualSettings
 from analysis_center.analysis_qt_window import AnalysisCenterWindow
+from tests.qt_wait_helpers import wait_until_ready
 
 
 @pytest.fixture(scope="module")
@@ -50,6 +51,7 @@ def test_dashboard_excel_action_visible_normal_hidden_edit_and_does_not_refresh_
         settings=_settings(),
         workspace_store=DashboardWorkspaceStore(tmp_path / "dashboards"),
     )
+    wait_until_ready(window, qt_app)
     try:
         prepared = next(
             card
@@ -131,6 +133,7 @@ def test_dashboard_excel_worker_keeps_qt_event_loop_responsive(
         settings=_settings(),
         workspace_store=DashboardWorkspaceStore(tmp_path / "dashboards-worker"),
     )
+    wait_until_ready(window, qt_app)
     release = threading.Event()
     started = threading.Event()
     try:
