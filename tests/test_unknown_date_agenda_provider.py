@@ -13,19 +13,20 @@ from src.domain.agenda.source_models import (
 from src.models.share_models import SHARE_STATUS_RETURNED
 
 
-def _context():
+def _context(*, permissions=frozenset({"view_contracts"}), role="personnel"):
     profile = AgendaPresentationProfile(
         code=AgendaPresentationProfileCode.PERSONAL,
         display_name="Personal",
         description="Personal",
-        permissions=frozenset({"view_contracts"}),
+        permissions=frozenset(permissions),
     )
     return AgendaContext(
         now=datetime(2026, 7, 11, 12),
         today=date(2026, 7, 11),
         presentation_profile=profile,
+        current_staff={"id": 1, "role": role, "permissions": frozenset(permissions)},
         staff_id=1,
-        permissions=frozenset({"view_contracts"}),
+        permissions=frozenset(permissions),
     )
 
 
@@ -122,3 +123,17 @@ def test_unknown_item_supports_snooze():
 def test_unknown_date_provider_ignores_returned_share_sources():
     bundle = _bundle(returned_shares=(_returned(),))
     assert UnknownDateAgendaProvider().build(_context(), bundle) == ()
+
+
+def test_unknown_provider_enabled_with_view_contracts():
+    assert UnknownDateAgendaProvider().is_enabled(_context(permissions={"view_contracts"})) is True
+
+
+def test_unknown_provider_disabled_without_view_contracts():
+    assert UnknownDateAgendaProvider().is_enabled(_context(permissions=set())) is False
+
+
+def test_unknown_provider_role_does_not_enable_it():
+    assert UnknownDateAgendaProvider().is_enabled(
+        _context(permissions=set(), role="manager")
+    ) is False
