@@ -3,7 +3,6 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Sequence
 from datetime import datetime
-from inspect import signature
 
 from src.domain.agenda.activity import activity_source_cutoff
 from src.domain.agenda.constants import AgendaContractScopeCode, AgendaPresentationProfileCode
@@ -110,16 +109,10 @@ class StaffAgendaService:
         if not contract_ids:
             return self._empty(context)
 
-        load_sources = self.source_repository.load_personal_sources
-        if "activity_since" in signature(load_sources).parameters:
-            sources = load_sources(
-                contract_ids,
-                activity_since=activity_source_cutoff(context.now),
-            )
-        else:
-            # Compatibility for existing source-repository test doubles and
-            # third-party adapters that predate the activity source window.
-            sources = load_sources(contract_ids)
+        sources = self.source_repository.load_personal_sources(
+            contract_ids,
+            activity_since=activity_source_cutoff(context.now),
+        )
         raw_items: list[AgendaItem] = []
         seen_keys: set[str] = set()
         for provider in self.providers:
