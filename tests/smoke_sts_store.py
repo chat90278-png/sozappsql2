@@ -25,7 +25,8 @@ with TemporaryDirectory() as td:
     assert 'platform_logo_updated' in actions
     assert 'users_updated' in actions
     assert 'components_updated' in actions
-    assert 'tag_upserted' in actions
+    assert 'tag_created' in actions
+    assert 'tag_upserted' not in actions
     assert ('contract_created' in actions) or ('contract_updated' in actions)
     assert 'contract_tags_updated' in actions
     assert 'contract_deleted' in actions

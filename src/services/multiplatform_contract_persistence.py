@@ -95,8 +95,7 @@ def install_multiplatform_contract_persistence_fix() -> None:
     original_write_contract = STSStore.write_contract
     setattr(STSStore, _ORIGINAL_WRITE_ATTR, original_write_contract)
 
-    @wraps(original_write_contract)
-    def write_contract_for_active_platform(
+    def _write_contract_for_active_platform_in_transaction(
         self: STSStore,
         ci,
         systems,
@@ -209,6 +208,30 @@ def install_multiplatform_contract_persistence_fix() -> None:
                 ci.primary_platform = str(primary_row.get("platform_name") or "")
 
         return contract_id
+
+    @wraps(original_write_contract)
+    def write_contract_for_active_platform(
+        self: STSStore,
+        ci,
+        systems,
+        deliveries,
+        old_contract_no=None,
+        old_start_row=None,
+    ):
+        # Platform ID creation may start an implicit SQLite transaction before
+        # the Activity History writer enters its own db.tx() scope. Own the
+        # complete adapter transaction so nested savepoints cannot leave a
+        # write lock behind, while caller-owned batch transactions remain in
+        # control when one is already active.
+        with self.db.tx():
+            return _write_contract_for_active_platform_in_transaction(
+                self,
+                ci,
+                systems,
+                deliveries,
+                old_contract_no=old_contract_no,
+                old_start_row=old_start_row,
+            )
 
     STSStore.write_contract = write_contract_for_active_platform
     setattr(STSStore, _PATCH_FLAG, True)

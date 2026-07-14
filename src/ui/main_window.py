@@ -13,6 +13,7 @@ import time
 import traceback
 import tempfile
 import zipfile
+import uuid
 import unicodedata
 import logging
 from pathlib import Path
@@ -942,6 +943,9 @@ class MainWindow(QMainWindow):
         self.path = Path(initial_path) if initial_path else (store.path if store else Path(DEFAULT_FILE))
         self.store = store
         self.current_staff = current_staff or auth.current_staff
+        self.activity_session_id = uuid.uuid4().hex
+        if store is not None and hasattr(store, "set_actor_context") and isinstance(self.current_staff, dict):
+            store.set_actor_context(self.current_staff, session_id=self.activity_session_id)
         self.contract_index = contract_index if contract_index is not None else []
         self._tag_color_map_cache: Optional[Dict[str, str]] = None
         self._use_contract_table_view = False  # Feature flag: True yapılırsa QTableView kullanılır
@@ -1164,20 +1168,30 @@ class MainWindow(QMainWindow):
             lambda: PerformanceTrackingDialog(self.store, self),
         )
 
+    def activity_history_access(self):
+        from src.services.activity_history_policy import resolve_activity_history_access
+
+        return resolve_activity_history_access(
+            self.current_staff,
+            lambda principal, code: auth.has_permission(principal, code, self._permission_db()),
+        )
+
     def open_activity_logs(self):
-        if not self.require_permission_ui("view_action_history", "İşlem Geçmişi"):
+        access = self.activity_history_access()
+        if not access.can_view:
+            QMessageBox.warning(self, "Yetkisiz İşlem", "İşlem geçmişini görüntüleme yetkiniz bulunmuyor.")
             return
         if not self.store:
             QMessageBox.information(self, "Veri dosyası gerekli", "Önce bir STS veri dosyası açın.")
             return
-        if not hasattr(self.store, "list_logs"):
+        if not hasattr(self.store, "query_activity_history"):
             QMessageBox.information(self, "İşlem Geçmişi", "İşlem geçmişi yalnızca STS veri dosyalarında desteklenir.")
             return
         from src.ui.dialogs.activity_logs import ActivityLogDialog
         self.open_or_raise_tool_window(
             "report:activity_logs",
             "İşlem Geçmişi",
-            lambda: ActivityLogDialog(self.store, self),
+            lambda: ActivityLogDialog(self.store, self, access=access),
         )
 
     def _permission_db(self):
@@ -1216,7 +1230,9 @@ class MainWindow(QMainWindow):
         self.current_staff = admin_staff
         auth.current_staff = admin_staff
         actor_name = str(admin_staff.get("full_name") or admin_staff.get("admin_name") or "Sistem Yöneticisi")
-        if self.store is not None and hasattr(self.store, "actor"):
+        if self.store is not None and hasattr(self.store, "set_actor_context"):
+            self.store.set_actor_context(admin_staff, session_id=self.activity_session_id)
+        elif self.store is not None and hasattr(self.store, "actor"):
             self.store.actor = actor_name
         self._propagate_current_staff_to_open_windows(admin_staff)
         self._refresh_permission_actions()
@@ -1228,7 +1244,9 @@ class MainWindow(QMainWindow):
                 continue
             try:
                 widget.current_staff = staff
-                if getattr(widget, "store", None) is self.store and hasattr(widget.store, "actor"):
+                if getattr(widget, "store", None) is self.store and hasattr(widget.store, "set_actor_context"):
+                    widget.store.set_actor_context(staff, session_id=self.activity_session_id)
+                elif getattr(widget, "store", None) is self.store and hasattr(widget.store, "actor"):
                     widget.store.actor = str(staff.get("full_name") or "Sistem Yöneticisi")
             except Exception:
                 pass
@@ -2323,12 +2341,24 @@ class MainWindow(QMainWindow):
                     or self._permission_action_visible("manage_roles")
                 )
             )
+        activity_access = self.activity_history_access() if self._has_permission_context() else None
+        activity_visible = bool(activity_access.can_view) if activity_access is not None else True
         if hasattr(self, "activity_logs_action"):
-            self.activity_logs_action.setVisible(
-                is_admin and self._permission_action_visible("view_action_history")
+            self.activity_logs_action.setVisible(activity_visible)
+        if hasattr(self, "database_management_action"):
+            self.database_management_action.setVisible(
+                is_admin or self._permission_action_visible("access_database_tools")
+            )
+        if hasattr(self, "performance_tracking_action"):
+            self.performance_tracking_action.setVisible(
+                is_admin or self._permission_action_visible("access_database_tools")
             )
         if hasattr(self, "system_menu_action"):
-            self.system_menu_action.setVisible(is_admin)
+            self.system_menu_action.setVisible(
+                is_admin
+                or activity_visible
+                or self._permission_action_visible("access_database_tools")
+            )
 
     def _add_menu_action(self, menu: QMenu, title: str, callback):
         return menu.addAction(title, callback)
@@ -2358,8 +2388,12 @@ class MainWindow(QMainWindow):
 
         self.system_menu = self._add_top_actions_submenu(menu, "Sistem")
         self.system_menu_action = self.system_menu.menuAction()
-        self._add_menu_action(self.system_menu, "Veritabanı Yönetimi", self.open_database_management)
-        self._add_menu_action(self.system_menu, "Performans İzleme", self.open_performance_tracking)
+        self.database_management_action = self._add_menu_action(
+            self.system_menu, "Veritabanı Yönetimi", self.open_database_management
+        )
+        self.performance_tracking_action = self._add_menu_action(
+            self.system_menu, "Performans İzleme", self.open_performance_tracking
+        )
         self.activity_logs_action = self._add_menu_action(self.system_menu, "İşlem Geçmişi", self.open_activity_logs)
 
         help_menu = self._add_top_actions_submenu(menu, "Yardım")
@@ -3023,7 +3057,12 @@ class MainWindow(QMainWindow):
                     "İşlem öncesi aynı klasöre otomatik yedek alınacaktır. "
                     "Güncellenen dosya eski uygulamalarda açılmayabilir.",
                 )
-            self.store = STSStore(self.path, actor=actor)
+            self.store = STSStore(
+                self.path,
+                actor=actor,
+                actor_context=self.current_staff if isinstance(self.current_staff, dict) else None,
+                session_id=self.activity_session_id,
+            )
         except STSMigrationError as exc:
             _log.exception("STS migration hatası: %s", getattr(exc, "technical_detail", ""))
             backup_text = f"\n\nYedek dosya: {exc.backup_path}" if getattr(exc, "backup_path", None) else ""

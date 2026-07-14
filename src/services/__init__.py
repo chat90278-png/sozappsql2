@@ -1,7 +1,11 @@
 """Service package compatibility helpers."""
 from __future__ import annotations
 
+import logging
 from typing import Any
+
+
+_LOG = logging.getLogger(__name__)
 
 
 def _clean_text(value: Any) -> str:
@@ -171,6 +175,7 @@ def _patch_sts_store() -> None:
         return changed
 
     STSStore.update_linked_sd_contract_numbers = update_linked_sd_contract_numbers
+
 
 
 _patch_sts_store()

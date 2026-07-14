@@ -83,6 +83,7 @@ class STSLoadWorker(QObject):
                     self.path,
                     actor="Index Worker",
                     source="STS Index Worker",
+                    actor_context={"actor_type": "SYSTEM", "actor_display_name": "Index Worker"},
                 )
             finally:
                 if store is not None:
