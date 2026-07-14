@@ -1,0 +1,121 @@
+name: Performance telemetry tests
+
+on:
+  pull_request:
+    paths:
+      - "app.py"
+      - "src/services/perf_tracker.py"
+      - "src/services/contract_save_telemetry_runtime_fix.py"
+      - "src/ui/dialogs/performance_tracking.py"
+      - "tests/test_perf_tracker_v2.py"
+      - "tests/test_performance_tracking_dialog_v2.py"
+      - "tests/test_contract_save_telemetry_runtime_fix.py"
+      - "tests/test_performance_monitoring_release_gate.py"
+      - ".github/workflows/performance-telemetry-tests.yml"
+  push:
+    paths:
+      - "app.py"
+      - "src/services/perf_tracker.py"
+      - "src/services/contract_save_telemetry_runtime_fix.py"
+      - "src/ui/dialogs/performance_tracking.py"
+      - "tests/test_perf_tracker_v2.py"
+      - "tests/test_performance_tracking_dialog_v2.py"
+      - "tests/test_contract_save_telemetry_runtime_fix.py"
+      - "tests/test_performance_monitoring_release_gate.py"
+      - ".github/workflows/performance-telemetry-tests.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  telemetry-and-ui:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      QT_QPA_PLATFORM: offscreen
+      PERFORMANCE_PREVIEW_PATH: performance-dialog-preview.png
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install Qt runtime libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libegl1 \
+            libgl1 \
+            libxkbcommon-x11-0
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade \
+            pytest \
+            PySide6==6.11.1 \
+            openpyxl==3.1.5
+
+      - name: Compile changed modules
+        run: |
+          python -m py_compile app.py
+          python -m py_compile src/services/perf_tracker.py
+          python -m py_compile src/services/contract_save_telemetry_runtime_fix.py
+          python -m py_compile src/ui/dialogs/performance_tracking.py
+          python -m py_compile tests/test_perf_tracker_v2.py
+          python -m py_compile tests/test_performance_tracking_dialog_v2.py
+          python -m py_compile tests/test_contract_save_telemetry_runtime_fix.py
+          python -m py_compile tests/test_performance_monitoring_release_gate.py
+
+      - name: Run focused telemetry and dialog tests
+        id: focused_tests
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m pytest -q \
+            tests/test_perf_tracker_v2.py \
+            tests/test_performance_tracking_dialog_v2.py \
+            tests/test_contract_save_telemetry_runtime_fix.py \
+            tests/test_performance_monitoring_release_gate.py \
+            > performance-test-output.txt 2>&1
+
+      - name: Run full repository suite for diagnostics
+        id: full_tests
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m pytest -q > full-test-output.txt 2>&1
+
+      - name: Upload validation artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: performance-validation-artifacts
+          path: |
+            performance-test-output.txt
+            full-test-output.txt
+            performance-dialog-preview.png
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Fail when focused validation fails
+        if: steps.focused_tests.outcome == 'failure'
+        run: |
+          cat performance-test-output.txt
+          exit 1
+
+      - name: Report full-suite diagnostic result
+        if: always()
+        run: |
+          if [ "${{ steps.full_tests.outcome }}" = "failure" ]; then
+            echo "Full repository suite has failures outside this focused workflow's merge gate."
+            tail -n 80 full-test-output.txt
+          else
+            echo "Full repository suite passed."
+          fi

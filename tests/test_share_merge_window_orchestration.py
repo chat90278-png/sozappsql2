@@ -83,6 +83,9 @@ def _fake_window(*, permitted=True, share_mode=False):
     window._current_contract_merge_uid = lambda: calls.append(("merge_uid",)) or "contract-uid"
     window._contract_document_share_stats = lambda: calls.append(("doc_stats",)) or (0, 0)
     window.show_share_history = lambda: calls.append(("history",))
+    window._confirm_active_share_creation = (
+        lambda: ContractWorkWindow._confirm_active_share_creation(window)
+    )
     return window, calls
 
 

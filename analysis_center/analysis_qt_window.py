@@ -5,7 +5,7 @@ import math
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
-from PySide6.QtCore import QPointF, QRectF, QThread, Qt
+from PySide6.QtCore import QPointF, QRectF, QThread, QTimer, Qt
 from PySide6.QtGui import QColor, QFont, QKeySequence, QPainter, QPen, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -45,7 +45,7 @@ from .analysis_excel_export import (
     export_dashboard_collection_excel,
     suggested_dashboard_excel_path,
 )
-from .analysis_excel_export_qt import DashboardExcelExportWorker
+from .analysis_excel_export_qt import DashboardExcelExportThread, DashboardExcelExportWorker
 from .analysis_dashboard_edit import DashboardEditSession
 from .analysis_dashboard_workspace import (
     CUSTOM_DASHBOARD_ID,
@@ -1186,8 +1186,9 @@ class AnalysisCenterWindow(QMainWindow):
             self.controller.analysis_service
         )
         self._dashboard_excel_exporter = export_dashboard_collection_excel
-        self._dashboard_excel_thread: QThread | None = None
+        self._dashboard_excel_thread: DashboardExcelExportThread | None = None
         self._dashboard_excel_worker: DashboardExcelExportWorker | None = None
+        self._dashboard_excel_close_pending = False
         self._dashboard_export_button: QPushButton | None = None
         self._last_dashboard_excel_export_result = None
         self._analysis_library_widget: AnalysisLibraryWidget | None = None
@@ -1614,27 +1615,19 @@ class AnalysisCenterWindow(QMainWindow):
             )
             return
 
-        thread = QThread(self)
-        worker = DashboardExcelExportWorker(
+        thread = DashboardExcelExportThread(
             output_path=selected_path,
             collection=collection,
             registry=self.controller.analysis_service.registry,
             source=self.source,
             workspace_card_count=len(self.workspace.placements),
             exporter=self._dashboard_excel_exporter,
+            parent=self,
         )
-        worker.moveToThread(thread)
-        thread.started.connect(worker.run)
-        worker.finished.connect(self._dashboard_excel_export_finished)
-        worker.failed.connect(self._dashboard_excel_export_failed)
-        worker.finished.connect(thread.quit)
-        worker.failed.connect(thread.quit)
-        worker.finished.connect(worker.deleteLater)
-        worker.failed.connect(worker.deleteLater)
         thread.finished.connect(self._dashboard_excel_export_thread_finished)
-        thread.finished.connect(thread.deleteLater)
         self._dashboard_excel_thread = thread
-        self._dashboard_excel_worker = worker
+        self._dashboard_excel_worker = None
+        self._dashboard_excel_close_pending = False
         self._last_dashboard_excel_export_result = None
         if self._dashboard_export_button is not None:
             self._dashboard_export_button.setEnabled(False)
@@ -1669,18 +1662,48 @@ class AnalysisCenterWindow(QMainWindow):
         QMessageBox.warning(self, "Dashboard Excel", message)
 
     def _dashboard_excel_export_thread_finished(self) -> None:
-        self._dashboard_excel_thread = None
-        self._dashboard_excel_worker = None
-        if self._dashboard_export_button is not None:
-            self._dashboard_export_button.setEnabled(bool(self.workspace.placements))
-        if self._payload:
-            self._update_status(self._payload)
+        thread = self.sender()
+        if not isinstance(thread, DashboardExcelExportThread):
+            thread = self._dashboard_excel_thread
+        if thread is None:
+            return
+
+        is_current = self._dashboard_excel_thread is thread
+        if is_current and not self._dashboard_excel_close_pending:
+            if thread.error is not None:
+                self._dashboard_excel_export_failed(thread.error, thread.traceback_text)
+            elif thread.result is not None:
+                self._dashboard_excel_export_finished(thread.result)
+
+        if is_current:
+            self._dashboard_excel_thread = None
+            self._dashboard_excel_worker = None
+            if self._dashboard_export_button is not None:
+                self._dashboard_export_button.setEnabled(bool(self.workspace.placements))
+            if self._payload and not self._dashboard_excel_close_pending:
+                self._update_status(self._payload)
+
+        close_pending = self._dashboard_excel_close_pending
+        self._dashboard_excel_close_pending = False
+        # The window owns the finished QThread.  Do not also schedule
+        # deleteLater: parent destruction is deterministic and avoids a
+        # PySide wrapper double-lifecycle race during interpreter teardown.
+        if close_pending:
+            QTimer.singleShot(0, self.close)
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt API name
         thread = self._dashboard_excel_thread
         if thread is not None and thread.isRunning():
-            thread.quit()
-            thread.wait()
+            # Exporters are not safely killable.  Never block the GUI forever:
+            # hide/ignore this close and finish it once the bounded background
+            # operation returns.  requestInterruption is advisory for exporters
+            # that choose to support it.
+            self._dashboard_excel_close_pending = True
+            thread.requestInterruption()
+            if not thread.wait(250):
+                self.hide()
+                event.ignore()
+                return
         super().closeEvent(event)
 
     def _build_custom_dashboard_screen(self) -> QWidget:
