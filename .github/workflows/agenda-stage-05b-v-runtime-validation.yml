@@ -12,8 +12,8 @@ permissions:
   contents: write
 
 concurrency:
-  group: agenda-stage-05b-v-runtime-validation
-  cancel-in-progress: false
+  group: agenda-stage-05b-v-runtime-validation-v2
+  cancel-in-progress: true
 
 jobs:
   validate:
@@ -46,7 +46,6 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git fetch --no-tags origin main "$TARGET_BRANCH"
-
           CONTROL_HEAD="$(git rev-parse HEAD)"
           REMOTE_TARGET="$(git rev-parse "origin/$TARGET_BRANCH")"
           REMOTE_MAIN="$(git rev-parse origin/main)"
@@ -59,11 +58,9 @@ jobs:
           rm -rf "$BASELINE_DIR" "$CANDIDATE_DIR"
           git worktree add --detach "$BASELINE_DIR" "$BASELINE_SHA"
           git worktree add --detach "$CANDIDATE_DIR" "$CANDIDATE_SHA"
-
           test "$(git -C "$BASELINE_DIR" rev-parse HEAD)" = "$BASELINE_SHA"
           test "$(git -C "$CANDIDATE_DIR" rev-parse HEAD)" = "$CANDIDATE_SHA"
-          test "$(sha256sum "$BASELINE_DIR/requirements.txt" | awk '{print $1}')" = \
-               "$(sha256sum "$CANDIDATE_DIR/requirements.txt" | awk '{print $1}')"
+          test "$(sha256sum "$BASELINE_DIR/requirements.txt" | awk '{print $1}')" = "$(sha256sum "$CANDIDATE_DIR/requirements.txt" | awk '{print $1}')"
 
           mkdir -p "$GITHUB_WORKSPACE/evidence"
           echo "CONTROL_HEAD=$CONTROL_HEAD" >> "$GITHUB_ENV"
@@ -105,8 +102,7 @@ jobs:
           exec > >(tee "$GITHUB_WORKSPACE/evidence/baseline-full-pytest.log") 2>&1
           set -euo pipefail
           pushd "$BASELINE_DIR"
-          python -m pytest -q \
-            --junitxml="$GITHUB_WORKSPACE/evidence/baseline-full-junit.xml"
+          python -m pytest -q --junitxml="$GITHUB_WORKSPACE/evidence/baseline-full-junit.xml"
           popd
 
       - name: Run candidate targeted schema Agenda Activity suite
@@ -141,8 +137,7 @@ jobs:
           exec > >(tee "$GITHUB_WORKSPACE/evidence/candidate-full-pytest.log") 2>&1
           set -euo pipefail
           pushd "$CANDIDATE_DIR"
-          python -m pytest -q \
-            --junitxml="$GITHUB_WORKSPACE/evidence/candidate-full-junit.xml"
+          python -m pytest -q --junitxml="$GITHUB_WORKSPACE/evidence/candidate-full-junit.xml"
           popd
 
       - name: Apply exact post-Activity merge lineage contract
@@ -154,29 +149,23 @@ jobs:
 
           path = Path('tools/validation/agenda_stage_05b_v_runtime_validation.py')
           text = path.read_text(encoding='utf-8')
-          old = '''        parents = _run("git", "rev-list", "--parents", "-n", "1", candidate_sha, cwd=candidate_root).split()
-        run.require(len(parents) == 3, f"candidate is not a two-parent merge commit: {parents}")
-        run.require(baseline_sha in parents[1:], "current main is not a direct merge parent")
-        return f"parents={parents[1:]}"
-'''
-          new = '''        parents = _run("git", "rev-list", "--parents", "-n", "1", candidate_sha, cwd=candidate_root).split()
-        run.require(len(parents) == 3, f"candidate is not a two-parent merge commit: {parents}")
-        parent_shas = parents[1:]
-        agenda_source_sha = "66681d51877ad09db7379b6bbd7049a7436af1fc"
-        run.require(agenda_source_sha in parent_shas, f"Agenda source is not a direct merge parent: {parent_shas}")
-        target_parent = next(parent for parent in parent_shas if parent != agenda_source_sha)
-        target_lineage = subprocess.run(
-            ["git", "merge-base", "--is-ancestor", baseline_sha, target_parent],
-            cwd=candidate_root,
-            check=False,
-        )
-        run.require(target_lineage.returncode == 0, "current main is not an ancestor of target merge parent")
-        return f"target_parent={target_parent}; agenda_source_parent={agenda_source_sha}"
-'''
+          old = '        run.require(baseline_sha in parents[1:], "current main is not a direct merge parent")'
+          replacement = "\n".join((
+              '        agenda_source_sha = "66681d51877ad09db7379b6bbd7049a7436af1fc"',
+              '        run.require(agenda_source_sha in parents[1:], f"Agenda source is not a direct merge parent: {parents[1:]}")',
+              '        target_parent = next(parent for parent in parents[1:] if parent != agenda_source_sha)',
+              '        target_lineage = subprocess.run(',
+              '            ["git", "merge-base", "--is-ancestor", baseline_sha, target_parent],',
+              '            cwd=candidate_root,',
+              '            check=False,',
+              '        )',
+              '        run.require(target_lineage.returncode == 0, "current main is not an ancestor of target merge parent")',
+          ))
           if old not in text:
-              raise SystemExit('expected lineage block not found')
-          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+              raise SystemExit('expected lineage assertion not found')
+          path.write_text(text.replace(old, replacement, 1), encoding='utf-8')
           PY
+          python -m py_compile tools/validation/agenda_stage_05b_v_runtime_validation.py
 
       - name: Run schema and real PySide6 runtime differential validator
         id: runtime
@@ -184,7 +173,7 @@ jobs:
         run: |
           exec > >(tee "$GITHUB_WORKSPACE/evidence/runtime-validator.log") 2>&1
           set -euo pipefail
-          python tools/validation/agenda_stage_05b_v_runtime_validation.py \
+          timeout 300s python tools/validation/agenda_stage_05b_v_runtime_validation.py \
             --baseline-root "$BASELINE_DIR" \
             --candidate-root "$CANDIDATE_DIR" \
             --output-dir "$GITHUB_WORKSPACE/evidence/runtime" \
@@ -248,7 +237,6 @@ jobs:
           VALIDATED_HEAD="$(git rev-parse HEAD)"
           echo "VALIDATED_HEAD=$VALIDATED_HEAD" >> "$GITHUB_ENV"
           git push origin HEAD:"$TARGET_BRANCH"
-
           git fetch --no-tags origin main "$TARGET_BRANCH"
           test "$(git rev-parse origin/main)" = "$BASELINE_SHA"
           test "$(git rev-parse "origin/$TARGET_BRANCH")" = "$VALIDATED_HEAD"
@@ -297,7 +285,7 @@ jobs:
                 echo
                 echo '## '"$(basename "$log")"' tail'
                 echo '```text'
-                tail -n 120 "$log" 2>/dev/null || echo '(no log)'
+                tail -n 140 "$log" 2>/dev/null || echo '(no log)'
                 echo '```'
             done
             if test -f "$GITHUB_WORKSPACE/evidence/runtime/agenda-stage-05b-v.md"; then
