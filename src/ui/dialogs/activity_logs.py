@@ -1,16 +1,37 @@
 from __future__ import annotations
+
 import json
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QComboBox, QPushButton, QTableWidget, QTableWidgetItem, QHeaderView, QPlainTextEdit
+
+from PySide6.QtWidgets import (
+    QComboBox,
+    QDialog,
+    QHeaderView,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QPlainTextEdit,
+    QPushButton,
+    QTableWidget,
+    QTableWidgetItem,
+    QVBoxLayout,
+)
+
+from src.services.activity_history_policy import ActivityHistoryAccess
+from src.services.activity_history_query import ActivityHistoryQuery
 from src.services.sts_database import format_log_timestamp
 from src.ui.theme import STYLE
 
 
 class ActivityLogDialog(QDialog):
-    def __init__(self, store, parent=None):
+    """Existing Activity History dialog backed by the Phase 3 safe read model."""
+
+    def __init__(self, store, parent=None, *, access: ActivityHistoryAccess | None = None):
+        if access is None or not access.can_view:
+            raise PermissionError("İşlem geçmişi erişimi reddedildi.")
         super().__init__(parent)
         self.store = store
-        self.logs = []
+        self.access = access
+        self.items = []
         self.setWindowTitle("İşlem Geçmişi")
         self.resize(1200, 680)
         self.setStyleSheet(STYLE)
@@ -19,72 +40,150 @@ class ActivityLogDialog(QDialog):
 
     def build(self):
         root = QVBoxLayout(self)
-        title = QLabel("İşlem Geçmişi"); title.setObjectName("mainTitle")
+        title = QLabel("İşlem Geçmişi")
+        title.setObjectName("mainTitle")
         root.addWidget(title)
         root.addWidget(QLabel("STS veri dosyasında kayıtlı değişiklik geçmişini görüntüleyin."))
+
         filt = QHBoxLayout()
-        self.search = QLineEdit(); self.search.setPlaceholderText("Ara..."); self.search.returnPressed.connect(self.refresh_logs)
-        self.platform = QComboBox(); self.platform.addItem("Tümü", "")
-        for p in (self.store.platform_names() if hasattr(self.store, 'platform_names') else []): self.platform.addItem(str(p), str(p))
-        self.action = QComboBox(); self.action.addItem("Tümü", "")
-        self.limit = QComboBox();
-        for t,v in [("100",100),("500",500),("1000",1000),("Tümü",0)]: self.limit.addItem(t,v)
+        self.search = QLineEdit()
+        self.search.setPlaceholderText("Ara...")
+        self.search.returnPressed.connect(self.refresh_logs)
+        self.category = QComboBox()
+        self.category.addItem("Tümü", "")
+        self.category.addItem("Kullanıcı İşlemleri", "USER")
+        self.category.addItem("Yönetim İşlemleri", "MANAGEMENT")
+        if self.access.can_view_technical:
+            self.category.addItem("Teknik Kayıtlar", "TECHNICAL")
+        self.action = QComboBox()
+        self.action.addItem("Tümü", "")
+        self.limit = QComboBox()
+        for text, value in [("50", 50), ("100", 100), ("200", 200)]:
+            self.limit.addItem(text, value)
         self.limit.setCurrentIndex(1)
-        btn = QPushButton("Yenile"); btn.clicked.connect(self.refresh_logs)
-        for w in [self.search, self.platform, self.action, self.limit, btn]: filt.addWidget(w)
+        btn = QPushButton("Yenile")
+        btn.clicked.connect(self.refresh_logs)
+        for widget in (self.search, self.category, self.action, self.limit, btn):
+            filt.addWidget(widget)
         root.addLayout(filt)
-        self.table = QTableWidget(0, 15)
-        self.table.setHorizontalHeaderLabels([
-            "ID", "Tarih", "İşlem Yapan", "İşlem Kaynağı", "Bilgisayar", "İşlem", "Kayıt Türü",
-            "Kayıt ID", "Kayıt Anahtarı", "Platform ID", "Sözleşme No", "Mesaj", "Önce", "Sonra", "Detay",
-        ])
+
+        headers = [
+            "Tarih",
+            "Kategori",
+            "İşlem Yapan",
+            "İşlem",
+            "Durum",
+            "Kayıt Türü",
+            "Platform",
+            "Sözleşme No",
+            "Özet",
+            "Değişen Alanlar",
+        ]
+        if self.access.can_view_technical:
+            headers.extend(["Kaynak", "Bilgisayar", "Oturum", "İşlem Kimliği"])
+        self.table = QTableWidget(0, len(headers))
+        self.table.setHorizontalHeaderLabels(headers)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.table.cellDoubleClicked.connect(self.open_detail)
         root.addWidget(self.table)
 
     def refresh_logs(self):
-        lim = self.limit.currentData()
-        self.logs = self.store.list_logs(limit=int(lim or 0), action=self.action.currentData() or None, platform=self.platform.currentData() or None, search=self.search.text().strip() or None)
-        actions = sorted({str(x.get('action') or '') for x in self.logs if str(x.get('action') or '')})
-        cur = self.action.currentData() or ""
-        self.action.blockSignals(True); self.action.clear(); self.action.addItem("Tümü", "")
-        for a in actions: self.action.addItem(a, a)
-        i = self.action.findData(cur); self.action.setCurrentIndex(i if i>=0 else 0); self.action.blockSignals(False)
-        self.table.setRowCount(len(self.logs))
-        for r,log in enumerate(self.logs):
-            vals = [
-                log.get("id", ""), format_log_timestamp(log.get("created_at", "")), log.get("actor") or "-",
-                log.get("source") or "-", log.get("device_name") or "-", log.get("action") or "-",
-                log.get("entity_type") or "-", log.get("entity_id") or "-", log.get("entity_key") or "-",
-                log.get("platform_id") or "-", log.get("contract_no") or "-", log.get("message") or "-",
-                log.get("before_json") or "-", log.get("after_json") or "-", log.get("payload_json") or "-",
+        category = self.category.currentData() or ""
+        action = self.action.currentData() or ""
+        page = self.store.query_activity_history(
+            ActivityHistoryQuery(
+                categories=(category,) if category else (),
+                actions=(action,) if action else (),
+                search_text=self.search.text().strip(),
+                limit=int(self.limit.currentData() or 100),
+            ),
+            access=self.access,
+            include_technical=self.access.can_view_technical,
+        )
+        self.items = list(page.items)
+        actions = sorted({item.action for item in self.items if item.action})
+        current = self.action.currentData() or ""
+        self.action.blockSignals(True)
+        self.action.clear()
+        self.action.addItem("Tümü", "")
+        for action_name in actions:
+            self.action.addItem(action_name, action_name)
+        index = self.action.findData(current)
+        self.action.setCurrentIndex(index if index >= 0 else 0)
+        self.action.blockSignals(False)
+
+        self.table.setRowCount(len(self.items))
+        for row_index, item in enumerate(self.items):
+            changes = ", ".join(change.field for change in item.changed_fields) or "-"
+            values = [
+                format_log_timestamp(item.occurred_at),
+                item.category,
+                item.actor_display_name,
+                item.action_label,
+                item.status,
+                item.entity_label or item.entity_type or "-",
+                item.platform_name or "-",
+                item.contract_no or "-",
+                item.summary,
+                changes,
             ]
-            for c,v in enumerate(vals): self.table.setItem(r,c,QTableWidgetItem(str(v or '-')))
+            if self.access.can_view_technical:
+                technical = item.technical
+                values.extend(
+                    [
+                        technical.source if technical else "-",
+                        technical.device_name if technical else "-",
+                        technical.session_id if technical else "-",
+                        technical.operation_id if technical else "-",
+                    ]
+                )
+            for column, value in enumerate(values):
+                self.table.setItem(row_index, column, QTableWidgetItem(str(value or "-")))
 
-    def _detail_summary(self, log):
-        parts = []
-        for key in ("before_json", "after_json", "payload_json"):
-            value = log.get(key)
-            if value not in (None, "", "null"):
-                parts.append(f"{key}: {str(value)[:120]}")
-        return " | ".join(parts) or "-"
+    @staticmethod
+    def _pretty(value):
+        if value in (None, "", "null"):
+            return ""
+        try:
+            return json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True)
+        except Exception:
+            return str(value)
 
-    def _pretty(self, txt):
-        if txt in (None, "", "null"): return ""
-        try: return json.dumps(json.loads(txt), ensure_ascii=False, indent=2)
-        except Exception: return str(txt)
-
-    def open_detail(self, row, _col):
-        if row < 0 or row >= len(self.logs): return
-        log = self.logs[row]
-        d = QDialog(self); d.setWindowTitle("Log Detayı"); d.resize(900,650); d.setStyleSheet(STYLE)
-        lay = QVBoxLayout(d)
-        keys=["id","created_at","actor","source","device_name","action","entity_type","entity_id","entity_key","platform","contract_no","message"]
-        for k in keys:
-            value = format_log_timestamp(log.get(k, "")) if k == "created_at" else (log.get(k, "") or "-")
-            lay.addWidget(QLabel(f"{k}: {value}"))
-        for k in ["before_json","after_json","payload_json"]:
-            lay.addWidget(QLabel(k))
-            t=QPlainTextEdit(); t.setReadOnly(True); t.setPlainText(self._pretty(log.get(k))); lay.addWidget(t)
-        d.exec()
+    def open_detail(self, row, _column):
+        if row < 0 or row >= len(self.items):
+            return
+        item = self.items[row]
+        dialog = QDialog(self)
+        dialog.setWindowTitle("İşlem Detayı")
+        dialog.resize(900, 650)
+        dialog.setStyleSheet(STYLE)
+        layout = QVBoxLayout(dialog)
+        for label, value in (
+            ("Tarih", item.occurred_at),
+            ("Kategori", item.category),
+            ("İşlem Yapan", item.actor_display_name),
+            ("İşlem", item.action_label),
+            ("Durum", item.status),
+            ("Özet", item.summary),
+        ):
+            layout.addWidget(QLabel(f"{label}: {value or '-'}"))
+        layout.addWidget(QLabel("Değişen Alanlar"))
+        changed = QPlainTextEdit()
+        changed.setReadOnly(True)
+        changed.setPlainText(
+            self._pretty(
+                [
+                    {"field": change.field, "before": change.before, "after": change.after}
+                    for change in item.changed_fields
+                ]
+            )
+        )
+        layout.addWidget(changed)
+        if self.access.can_view_technical and item.technical is not None:
+            layout.addWidget(QLabel("Teknik Ayrıntılar"))
+            technical = QPlainTextEdit()
+            technical.setReadOnly(True)
+            technical.setPlainText(self._pretty(item.technical.__dict__))
+            layout.addWidget(technical)
+        dialog.exec()

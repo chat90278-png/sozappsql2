@@ -416,6 +416,21 @@ class STSStore:
             operation_id=operation_id,
         )
 
+    def query_activity_history(self, query, *, access, include_technical: bool = False):
+        """Policy-scoped read-model query used by the Activity History UI."""
+        from src.services.activity_history_query import ActivityHistoryQueryService
+
+        return ActivityHistoryQueryService(self.db.conn).query(
+            query, access=access, include_technical=include_technical
+        )
+
+    def get_activity_operation_events(self, operation_id: str, *, access, limit: int = 200):
+        from src.services.activity_history_query import ActivityHistoryQueryService
+
+        return ActivityHistoryQueryService(self.db.conn).get_operation_events(
+            operation_id, access=access, limit=limit
+        )
+
 
     def _resolve_contract_id(self, platform: str, contract_no: str, contract_type: str = "Ana Sözleşme") -> int | None:
         row = self.db.conn.execute(

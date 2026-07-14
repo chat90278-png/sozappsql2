@@ -80,6 +80,10 @@ SENSITIVE_KEYS = frozenset(
         "secret",
         "private_key",
         "content_blob",
+        "raw_sql",
+        "sql_literal",
+        "sql_text",
+        "query_preview",
     }
 )
 PATH_LIKE_KEYS = frozenset(

@@ -1168,20 +1168,30 @@ class MainWindow(QMainWindow):
             lambda: PerformanceTrackingDialog(self.store, self),
         )
 
+    def activity_history_access(self):
+        from src.services.activity_history_policy import resolve_activity_history_access
+
+        return resolve_activity_history_access(
+            self.current_staff,
+            lambda principal, code: auth.has_permission(principal, code, self._permission_db()),
+        )
+
     def open_activity_logs(self):
-        if not self.require_permission_ui("view_action_history", "İşlem Geçmişi"):
+        access = self.activity_history_access()
+        if not access.can_view:
+            QMessageBox.warning(self, "Yetkisiz İşlem", "İşlem geçmişini görüntüleme yetkiniz bulunmuyor.")
             return
         if not self.store:
             QMessageBox.information(self, "Veri dosyası gerekli", "Önce bir STS veri dosyası açın.")
             return
-        if not hasattr(self.store, "list_logs"):
+        if not hasattr(self.store, "query_activity_history"):
             QMessageBox.information(self, "İşlem Geçmişi", "İşlem geçmişi yalnızca STS veri dosyalarında desteklenir.")
             return
         from src.ui.dialogs.activity_logs import ActivityLogDialog
         self.open_or_raise_tool_window(
             "report:activity_logs",
             "İşlem Geçmişi",
-            lambda: ActivityLogDialog(self.store, self),
+            lambda: ActivityLogDialog(self.store, self, access=access),
         )
 
     def _permission_db(self):
@@ -2331,12 +2341,24 @@ class MainWindow(QMainWindow):
                     or self._permission_action_visible("manage_roles")
                 )
             )
+        activity_access = self.activity_history_access() if self._has_permission_context() else None
+        activity_visible = bool(activity_access.can_view) if activity_access is not None else True
         if hasattr(self, "activity_logs_action"):
-            self.activity_logs_action.setVisible(
-                is_admin and self._permission_action_visible("view_action_history")
+            self.activity_logs_action.setVisible(activity_visible)
+        if hasattr(self, "database_management_action"):
+            self.database_management_action.setVisible(
+                is_admin or self._permission_action_visible("access_database_tools")
+            )
+        if hasattr(self, "performance_tracking_action"):
+            self.performance_tracking_action.setVisible(
+                is_admin or self._permission_action_visible("access_database_tools")
             )
         if hasattr(self, "system_menu_action"):
-            self.system_menu_action.setVisible(is_admin)
+            self.system_menu_action.setVisible(
+                is_admin
+                or activity_visible
+                or self._permission_action_visible("access_database_tools")
+            )
 
     def _add_menu_action(self, menu: QMenu, title: str, callback):
         return menu.addAction(title, callback)
@@ -2366,8 +2388,12 @@ class MainWindow(QMainWindow):
 
         self.system_menu = self._add_top_actions_submenu(menu, "Sistem")
         self.system_menu_action = self.system_menu.menuAction()
-        self._add_menu_action(self.system_menu, "Veritabanı Yönetimi", self.open_database_management)
-        self._add_menu_action(self.system_menu, "Performans İzleme", self.open_performance_tracking)
+        self.database_management_action = self._add_menu_action(
+            self.system_menu, "Veritabanı Yönetimi", self.open_database_management
+        )
+        self.performance_tracking_action = self._add_menu_action(
+            self.system_menu, "Performans İzleme", self.open_performance_tracking
+        )
         self.activity_logs_action = self._add_menu_action(self.system_menu, "İşlem Geçmişi", self.open_activity_logs)
 
         help_menu = self._add_top_actions_submenu(menu, "Yardım")
