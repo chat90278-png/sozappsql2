@@ -12,14 +12,13 @@ from src.services.sts_database import (
     CURRENT_SCHEMA_VERSION,
     STSDatabase,
     STSMigrationError,
+    ensure_staff_agenda_state_schema,
     make_migration_backup_path,
     read_sts_schema_version,
 )
 
-
 ProgressCallback = Callable[[int, str], None]
 MigrationCallable = Callable[[sqlite3.Connection], None]
-
 
 @dataclass(frozen=True)
 class MigrationStep:
@@ -43,6 +42,10 @@ def _emit(progress_callback: ProgressCallback | None, percent: int, message: str
         progress_callback(max(0, min(100, int(percent))), str(message or ""))
 
 
+def _quote(identifier: str) -> str:
+    return '"' + str(identifier or "").replace('"', '""') + '"'
+
+
 def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
     row = conn.execute(
         "SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1",
@@ -54,8 +57,14 @@ def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
 def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
     if not _table_exists(conn, table):
         return set()
-    escaped = str(table or "").replace('"', '""')
-    return {str(row[1]) for row in conn.execute(f'PRAGMA table_info("{escaped}")').fetchall()}
+    return {
+        str(row[1])
+        for row in conn.execute(f"PRAGMA table_info({_quote(table)})").fetchall()
+    }
+
+
+
+
 
 
 def _ensure_column(conn: sqlite3.Connection, table: str, name: str, ddl: str) -> bool:
@@ -63,9 +72,7 @@ def _ensure_column(conn: sqlite3.Connection, table: str, name: str, ddl: str) ->
         raise RuntimeError(f"Migration tablosu bulunamadı: {table}")
     if str(name or "") in _table_columns(conn, table):
         return False
-    escaped_table = str(table or "").replace('"', '""')
-    escaped_name = str(name or "").replace('"', '""')
-    conn.execute(f'ALTER TABLE "{escaped_table}" ADD COLUMN "{escaped_name}" {ddl}')
+    conn.execute(f"ALTER TABLE {_quote(table)} ADD COLUMN {_quote(name)} {ddl}")
     return True
 
 
@@ -77,6 +84,12 @@ def _require_columns(conn: sqlite3.Connection, table: str, required: set[str]) -
             f"{table} tablosu beklenen migration yapısıyla uyumlu değil. "
             f"Eksik kolonlar: {', '.join(sorted(missing))}"
         )
+
+
+
+
+# Compatibility export for callers that resolve the canonical helper from the
+# database module after the upgrade layer is imported.
 
 
 def _set_schema_version(conn: sqlite3.Connection, version: int) -> None:
@@ -200,11 +213,16 @@ def _migrate_17_to_18(conn: sqlite3.Connection) -> None:
         conn.execute(sql)
 
 
+def _migrate_18_to_19(conn: sqlite3.Connection) -> None:
+    ensure_staff_agenda_state_schema(conn)
+
+
 MIGRATIONS: tuple[MigrationStep, ...] = (
     MigrationStep(14, 15, "v14_to_v15_share_package_registry", _migrate_14_to_15),
     MigrationStep(15, 16, "v15_to_v16_merge_result_audit", _migrate_15_to_16),
     MigrationStep(16, 17, "v16_to_v17_share_cancellation_audit", _migrate_16_to_17),
     MigrationStep(17, 18, "v17_to_v18_activity_history_infrastructure", _migrate_17_to_18),
+    MigrationStep(18, 19, "v18_to_v19_staff_agenda_state", _migrate_18_to_19),
 )
 
 _MIGRATIONS_BY_FROM: dict[int, MigrationStep] = {
@@ -322,7 +340,6 @@ def _create_verified_backup(
         target = None
         source.close()
         source = None
-
         _validate_sqlite_file(
             backup_path,
             expected_version=from_version,
@@ -423,12 +440,7 @@ def upgrade_sts_file(
     *,
     progress_callback: ProgressCallback | None = None,
 ) -> UpgradeResult:
-    """Upgrade an STS SQLite file to the supported schema version.
-
-    v14 and newer files use the explicit migration registry. Older/unversioned
-    files keep the repository's proven legacy compatibility migration path until
-    their exact historical version boundaries are extracted into the registry.
-    """
+    """Upgrade an STS SQLite file to the supported schema version."""
 
     sts_path = Path(path)
     if not sts_path.exists():
@@ -445,10 +457,7 @@ def upgrade_sts_file(
             technical_detail=str(exc),
         ) from exc
 
-    if (
-        from_version is not None
-        and from_version > CURRENT_SCHEMA_VERSION
-    ):
+    if from_version is not None and from_version > CURRENT_SCHEMA_VERSION:
         raise STSMigrationError(
             f"STS dosyası daha yeni bir şema sürümüyle oluşturulmuş "
             f"(v{from_version}). Bu uygulama en fazla "
@@ -537,10 +546,11 @@ def upgrade_sts_file(
             try:
                 conn.close()
             except Exception as close_exc:
-                if rollback_error:
-                    rollback_error = f"{rollback_error}; close={close_exc}"
-                else:
-                    rollback_error = f"close={close_exc}"
+                rollback_error = (
+                    f"{rollback_error}; close={close_exc}"
+                    if rollback_error
+                    else f"close={close_exc}"
+                )
             conn = None
 
         if backup_path is None:

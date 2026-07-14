@@ -410,11 +410,11 @@ print('ok')
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip().endswith("ok")
 
-def test_schema_version_remains_18_after_integration(tmp_path):
+def test_schema_version_remains_19_after_integration(tmp_path):
     store = STSStore(tmp_path / "schema.sts")
     try:
-        assert CURRENT_SCHEMA_VERSION == 18
-        assert read_sts_schema_version(store.path) == 18
+        assert CURRENT_SCHEMA_VERSION == 19
+        assert read_sts_schema_version(store.path) == 19
     finally:
         store.db.close()
 

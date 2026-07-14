@@ -413,7 +413,7 @@ def test_legacy_list_logs_compatibility_is_preserved(store):
 
 
 def test_schema_version_remains_eighteen():
-    assert CURRENT_SCHEMA_VERSION == 18
+    assert CURRENT_SCHEMA_VERSION == 19
 
 
 def test_policy_can_be_resolved_with_real_permission_codes_only():

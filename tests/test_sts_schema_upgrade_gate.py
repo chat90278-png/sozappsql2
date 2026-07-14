@@ -100,6 +100,10 @@ def _make_historical_database(path: Path, version: int) -> None:
     conn = sqlite3.connect(path)
     try:
         _drop_share_package_indexes(conn)
+        if version <= 17:
+            conn.execute("DROP INDEX IF EXISTS idx_staff_agenda_state_staff")
+            conn.execute("DROP INDEX IF EXISTS idx_staff_agenda_state_snoozed")
+            conn.execute("DROP TABLE IF EXISTS staff_agenda_state")
         conn.execute("DROP TABLE IF EXISTS share_packages")
         if version >= 15:
             _create_share_packages_for_version(conn, version)
@@ -265,6 +269,7 @@ def test_v16_upgrade_is_postflight_validated_as_current_schema(tmp_path: Path):
     assert result.applied_migrations == (
         "v16_to_v17_share_cancellation_audit",
         "v17_to_v18_activity_history_infrastructure",
+        "v18_to_v19_staff_agenda_state",
     )
     assert read_sts_schema_version(path) == CURRENT_SCHEMA_VERSION
     assert (

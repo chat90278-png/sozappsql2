@@ -399,5 +399,5 @@ def test_share_merge_audit_operation_and_rollback_remain_atomic(tmp_path):
         db.close()
 
 
-def test_schema_version_remains_18():
-    assert CURRENT_SCHEMA_VERSION == 18
+def test_schema_version_remains_19():
+    assert CURRENT_SCHEMA_VERSION == 19
