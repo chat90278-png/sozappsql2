@@ -145,6 +145,39 @@ jobs:
             --junitxml="$GITHUB_WORKSPACE/evidence/candidate-full-junit.xml"
           popd
 
+      - name: Apply exact post-Activity merge lineage contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('tools/validation/agenda_stage_05b_v_runtime_validation.py')
+          text = path.read_text(encoding='utf-8')
+          old = '''        parents = _run("git", "rev-list", "--parents", "-n", "1", candidate_sha, cwd=candidate_root).split()
+        run.require(len(parents) == 3, f"candidate is not a two-parent merge commit: {parents}")
+        run.require(baseline_sha in parents[1:], "current main is not a direct merge parent")
+        return f"parents={parents[1:]}"
+'''
+          new = '''        parents = _run("git", "rev-list", "--parents", "-n", "1", candidate_sha, cwd=candidate_root).split()
+        run.require(len(parents) == 3, f"candidate is not a two-parent merge commit: {parents}")
+        parent_shas = parents[1:]
+        agenda_source_sha = "66681d51877ad09db7379b6bbd7049a7436af1fc"
+        run.require(agenda_source_sha in parent_shas, f"Agenda source is not a direct merge parent: {parent_shas}")
+        target_parent = next(parent for parent in parent_shas if parent != agenda_source_sha)
+        target_lineage = subprocess.run(
+            ["git", "merge-base", "--is-ancestor", baseline_sha, target_parent],
+            cwd=candidate_root,
+            check=False,
+        )
+        run.require(target_lineage.returncode == 0, "current main is not an ancestor of target merge parent")
+        return f"target_parent={target_parent}; agenda_source_parent={agenda_source_sha}"
+'''
+          if old not in text:
+              raise SystemExit('expected lineage block not found')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
+
       - name: Run schema and real PySide6 runtime differential validator
         id: runtime
         shell: bash
