@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   probe:
@@ -22,7 +22,7 @@ jobs:
           ref: integration/gundemim-after-activity-20260714
           fetch-depth: 0
 
-      - name: Probe merge without writing repository
+      - name: Probe merge without changing product files
         shell: bash
         run: |
           set -euo pipefail
@@ -42,19 +42,25 @@ jobs:
           set -e
 
           {
-            echo "target_branch=$TARGET_BRANCH"
-            echo "target_head=$TARGET_HEAD"
-            echo "source_branch=$SOURCE_BRANCH"
-            echo "source_head=$SOURCE_HEAD"
-            echo "merge_base=$MERGE_BASE"
-            echo "merge_exit=$MERGE_EXIT"
+            echo '# Gündemim Post-Activity Merge Probe'
             echo
-            echo '[unmerged_paths]'
+            echo '- target_branch: `'$TARGET_BRANCH'`'
+            echo '- target_head: `'$TARGET_HEAD'`'
+            echo '- source_branch: `'$SOURCE_BRANCH'`'
+            echo '- source_head: `'$SOURCE_HEAD'`'
+            echo '- merge_base: `'$MERGE_BASE'`'
+            echo '- merge_exit: `'$MERGE_EXIT'`'
+            echo
+            echo '## Unmerged paths'
+            echo '```text'
             git diff --name-only --diff-filter=U || true
+            echo '```'
             echo
-            echo '[status]'
+            echo '## Merge status'
+            echo '```text'
             git status --short
-          } | tee merge-probe.txt
+            echo '```'
+          } | tee merge-probe.md
 
           if git rev-parse -q --verify MERGE_HEAD >/dev/null; then
             git merge --abort
@@ -62,10 +68,16 @@ jobs:
             git reset --hard HEAD
           fi
 
+          mkdir -p docs/agenda
+          mv merge-probe.md docs/agenda/GUNDEMIM_POST_ACTIVITY_MERGE_PROBE.md
+          git add docs/agenda/GUNDEMIM_POST_ACTIVITY_MERGE_PROBE.md
+          git commit -m 'docs: record post-activity agenda merge probe'
+          git push origin HEAD:"$TARGET_BRANCH"
+
       - name: Upload merge probe evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: gundemim-post-activity-merge-probe
-          path: merge-probe.txt
+          path: docs/agenda/GUNDEMIM_POST_ACTIVITY_MERGE_PROBE.md
           if-no-files-found: error
