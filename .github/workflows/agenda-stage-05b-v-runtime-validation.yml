@@ -1,0 +1,45 @@
+name: Agenda Stage 5B-V Runtime Validation
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: read
+
+jobs:
+  runtime-validation:
+    runs-on: windows-latest
+    timeout-minutes: 120
+    env:
+      QT_QPA_PLATFORM: offscreen
+      PYTHONUTF8: "1"
+      PYTHONHASHSEED: "0"
+      STAGE05BV_ARTIFACT_DIR: ${{ github.workspace }}\\_validation\\artifact
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout integration branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: integration/gundemim-current-main-20260713
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          architecture: x64
+
+      - name: Run Stage 5B-V validator
+        shell: pwsh
+        run: |
+          python tools/validation/agenda_stage_05b_v_runtime_validation.py
+
+      - name: Upload Stage 5B-V evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agenda-stage-05b-v-evidence
+          path: _validation/artifact
+          retention-days: 30
