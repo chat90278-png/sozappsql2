@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import os
 import tempfile
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
+from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -22,6 +23,12 @@ from analysis_center.analysis_visual_settings import AnalysisVisualSettings
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "STS-S-VR-S-NEK---TBD---1__share-edit__2026-07-07_14-04.sts"
+
+
+class FrozenSmokeDate(date):
+    @classmethod
+    def today(cls):
+        return cls(2026, 7, 1)
 
 
 def _settings() -> VisualSettings:
@@ -88,6 +95,7 @@ def _pin_prepared_types(window: AnalysisCenterWindow) -> list[str]:
     return selected
 
 
+@patch("analysis_center.analysis_metrics.date", FrozenSmokeDate)
 def main() -> None:
     assert SOURCE.exists(), SOURCE
     app = QApplication.instance() or QApplication([])
@@ -107,6 +115,7 @@ def main() -> None:
         window.show()
         app.processEvents()
         try:
+            assert window._payload["metrics"]["generated_at"] == "2026-07-01"
             prepared_ids = _pin_prepared_types(window)
             service = window.controller.analysis_service
             saved = [service.create_saved_analysis(definition) for definition in _custom_definitions()]
