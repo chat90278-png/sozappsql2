@@ -7,7 +7,12 @@ import pytest
 
 from src.auth import ensure_staff_table
 from src.services import sts_schema_upgrade as upgrade
-from src.services.sts_database import CURRENT_SCHEMA_VERSION, STSDatabase, read_sts_schema_version
+from src.services.sts_database import (
+    CURRENT_SCHEMA_VERSION,
+    STSDatabase,
+    ensure_staff_agenda_state_schema,
+    read_sts_schema_version,
+)
 from src.services.sts_schema_upgrade_gate import validate_versioned_schema_fingerprint
 
 
@@ -48,7 +53,7 @@ def test_helper_creates_exact_transaction_neutral_contract(tmp_path: Path):
     conn.commit()
 
     conn.execute("BEGIN")
-    created = upgrade.ensure_staff_agenda_state_schema(conn)
+    created = ensure_staff_agenda_state_schema(conn)
     assert conn.in_transaction
     assert created == (
         "staff_agenda_state",
@@ -73,7 +78,7 @@ def test_helper_creates_exact_transaction_neutral_contract(tmp_path: Path):
             'PRAGMA index_info("idx_staff_agenda_state_snoozed")'
         )
     ) == ("staff_id", "snoozed_until")
-    assert upgrade.ensure_staff_agenda_state_schema(conn) == ()
+    assert ensure_staff_agenda_state_schema(conn) == ()
     assert conn.in_transaction
     conn.rollback()
     conn.close()
@@ -82,7 +87,7 @@ def test_helper_creates_exact_transaction_neutral_contract(tmp_path: Path):
 def test_helper_fails_closed_without_staff_parent(tmp_path: Path):
     conn = sqlite3.connect(tmp_path / "missing-parent.sts")
     with pytest.raises(RuntimeError, match="staff"):
-        upgrade.ensure_staff_agenda_state_schema(conn)
+        ensure_staff_agenda_state_schema(conn)
     conn.close()
 
 
@@ -91,7 +96,7 @@ def test_helper_rejects_malformed_preexisting_table(tmp_path: Path):
     ensure_staff_table(conn)
     conn.execute("CREATE TABLE staff_agenda_state(staff_id INTEGER, agenda_key TEXT)")
     with pytest.raises(RuntimeError, match="kolon"):
-        upgrade.ensure_staff_agenda_state_schema(conn)
+        ensure_staff_agenda_state_schema(conn)
     conn.close()
 
 
@@ -121,8 +126,8 @@ def test_state_survives_reopen_and_staff_delete_cascades(tmp_path: Path):
     db = STSDatabase(path)
     try:
         staff_id = db.conn.execute(
-            "INSERT INTO staff(username,password_hash,full_name,is_active,is_admin) "
-            "VALUES('agenda-user','x','Agenda User',1,0)"
+            "INSERT INTO staff(device_name,full_name,password_hash,role,is_active) "
+            "VALUES('agenda-device','Agenda User','x','personnel',1)"
         ).lastrowid
         db.conn.execute(
             "INSERT INTO staff_agenda_state(staff_id,agenda_key,seen_version) "

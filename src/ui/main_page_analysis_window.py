@@ -23,7 +23,7 @@ from src.services.personal_agenda_facade import PersonalAgendaFacade
 from src.ui.agenda_compact_widget import AgendaCompactWidget
 from src.ui.agenda_detail_window import AgendaDetailWindow
 from src.ui.main_page_final_window import MainWindow as CompactMainWindow
-from src.ui.main_window import app_icon_path
+from src.ui.main_window import app_icon_path, qt_obj_alive
 from src.ui.widgets.contract_status_summary import (
     ContractStatusSummary,
     ContractStatusSummaryWidget,
@@ -293,16 +293,14 @@ class MainWindow(CompactMainWindow):
 
     def _install_contract_status_widget(self) -> None:
         calendar_widget = getattr(self, "_cal_widget", None)
-        if calendar_widget is None:
+        if not qt_obj_alive(calendar_widget):
             return
         calendar_card = calendar_widget.parentWidget()
-        calendar_layout = (
-            calendar_card.layout() if calendar_card is not None else None
-        )
+        calendar_layout = calendar_card.layout() if calendar_card is not None else None
         if calendar_layout is None:
             return
         upcoming_scroll = getattr(self, "upcoming_scroll", None)
-        if upcoming_scroll is not None:
+        if qt_obj_alive(upcoming_scroll):
             calendar_layout.removeWidget(upcoming_scroll)
             upcoming_scroll.hide()
         try:
@@ -313,68 +311,54 @@ class MainWindow(CompactMainWindow):
             )
             if calendar_width > 0:
                 calendar_widget.setFixedWidth(calendar_width)
-            calendar_widget.setSizePolicy(
-                QSizePolicy.Fixed,
-                QSizePolicy.Fixed,
-            )
+            calendar_widget.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         except Exception:
-            _log.exception(
-                "Calendar size could not be locked while installing status widget"
-            )
-        self.contract_status_widget = ContractStatusSummaryWidget(calendar_card)
-        self.contract_status_widget.open_analysis_requested.connect(
-            self.open_analysis_center
-        )
+            _log.exception("Calendar size could not be locked while installing status widget")
+        widget = getattr(self, "contract_status_widget", None)
+        if not qt_obj_alive(widget):
+            widget = ContractStatusSummaryWidget(calendar_card)
+            widget.open_analysis_requested.connect(self.open_analysis_center)
+            self.contract_status_widget = widget
+        elif widget.parentWidget() is not calendar_card:
+            widget.setParent(calendar_card)
+        if calendar_layout.indexOf(widget) >= 0:
+            calendar_layout.removeWidget(widget)
+        agenda = getattr(self, "agenda_compact_widget", None)
+        agenda_index = calendar_layout.indexOf(agenda) if qt_obj_alive(agenda) else -1
         calendar_index = calendar_layout.indexOf(calendar_widget)
-        insert_index = calendar_index if calendar_index >= 0 else 1
-        calendar_layout.insertWidget(
-            insert_index,
-            self.contract_status_widget,
-            0,
-            Qt.AlignVCenter,
-        )
+        insert_index = agenda_index if agenda_index >= 0 else calendar_index if calendar_index >= 0 else calendar_layout.count()
+        calendar_layout.insertWidget(insert_index, widget, 0, Qt.AlignVCenter)
 
     def _install_personal_agenda_widget(self) -> None:
         calendar_widget = getattr(self, "_cal_widget", None)
-        if calendar_widget is None:
+        if not qt_obj_alive(calendar_widget):
             return
         calendar_card = calendar_widget.parentWidget()
-        calendar_layout = (
-            calendar_card.layout() if calendar_card is not None else None
-        )
+        calendar_layout = calendar_card.layout() if calendar_card is not None else None
         if calendar_layout is None:
             return
-
-        self.agenda_compact_widget = AgendaCompactWidget(calendar_card)
-        self.agenda_compact_widget.open_details_requested.connect(
-            self._open_agenda_details
-        )
-        self.agenda_compact_widget.open_contract_requested.connect(
-            self._open_agenda_contract
-        )
-        self.agenda_compact_widget.item_dwell_seen_requested.connect(
-            self._agenda_mark_seen
-        )
-        self.agenda_compact_widget.snooze_requested.connect(
-            self._agenda_snooze
-        )
+        widget = getattr(self, "agenda_compact_widget", None)
+        if not qt_obj_alive(widget):
+            widget = AgendaCompactWidget(calendar_card)
+            widget.open_details_requested.connect(self._open_agenda_details)
+            widget.open_contract_requested.connect(self._open_agenda_contract)
+            widget.item_dwell_seen_requested.connect(self._agenda_mark_seen)
+            widget.snooze_requested.connect(self._agenda_snooze)
+            self.agenda_compact_widget = widget
+        elif widget.parentWidget() is not calendar_card:
+            widget.setParent(calendar_card)
+        if calendar_layout.indexOf(widget) >= 0:
+            calendar_layout.removeWidget(widget)
         calendar_index = calendar_layout.indexOf(calendar_widget)
-        insert_index = (
-            calendar_index
-            if calendar_index >= 0
-            else calendar_layout.count()
-        )
-        calendar_layout.insertWidget(
-            insert_index,
-            self.agenda_compact_widget,
-            1,
-            Qt.AlignVCenter,
-        )
-
-        self._agenda_refresh_timer = QTimer(self)
-        self._agenda_refresh_timer.setSingleShot(True)
-        self._agenda_refresh_timer.setInterval(200)
-        self._agenda_refresh_timer.timeout.connect(self.refresh_agenda)
+        insert_index = calendar_index if calendar_index >= 0 else calendar_layout.count()
+        calendar_layout.insertWidget(insert_index, widget, 1, Qt.AlignVCenter)
+        timer = getattr(self, "_agenda_refresh_timer", None)
+        if not qt_obj_alive(timer):
+            timer = QTimer(self)
+            timer.setSingleShot(True)
+            timer.setInterval(200)
+            timer.timeout.connect(self.refresh_agenda)
+            self._agenda_refresh_timer = timer
         self._sync_agenda_permission_visibility()
 
     def _sync_agenda_permission_visibility(self) -> bool:
@@ -387,12 +371,13 @@ class MainWindow(CompactMainWindow):
             )
         except Exception:
             allowed = False
-        if widget is not None:
+        if qt_obj_alive(widget):
             widget.setVisible(allowed)
         if not allowed:
-            detail = getattr(self, "_agenda_detail_window", None)
-            if detail is not None:
-                detail.close()
+            try:
+                self.close_tool_window("agenda:detail")
+            finally:
+                self._agenda_detail_window = None
             self._agenda_snapshot = None
         return allowed
 
@@ -403,10 +388,10 @@ class MainWindow(CompactMainWindow):
         if db is None:
             return None
         if self._agenda_facade is None or self._agenda_bound_db is not db:
-            detail = getattr(self, "_agenda_detail_window", None)
-            if detail is not None:
-                detail.close()
-            self._agenda_detail_window = None
+            try:
+                self.close_tool_window("agenda:detail")
+            finally:
+                self._agenda_detail_window = None
             self._agenda_snapshot = None
             self._agenda_bound_db = db
             self._agenda_facade = PersonalAgendaFacade(db)
@@ -454,39 +439,37 @@ class MainWindow(CompactMainWindow):
         if detail is not None:
             detail.set_snapshot(snapshot)
 
+    def _clear_agenda_detail_reference(self, expected) -> None:
+        if getattr(self, "_agenda_detail_window", None) is expected:
+            self._agenda_detail_window = None
+
+    def _create_agenda_detail_window(self) -> AgendaDetailWindow:
+        detail = AgendaDetailWindow(self)
+        detail.open_contract_requested.connect(self._open_agenda_contract)
+        detail.item_dwell_seen_requested.connect(self._agenda_mark_seen)
+        detail.snooze_requested.connect(self._agenda_snooze)
+        detail.refresh_requested.connect(lambda: self.refresh_agenda(touch_presented=True))
+        detail.destroyed.connect(
+            lambda *_args, expected=detail: self._clear_agenda_detail_reference(expected)
+        )
+        self._agenda_detail_window = detail
+        return detail
+
     def _open_agenda_details(self) -> None:
         if not self._sync_agenda_permission_visibility():
             return
-        detail = getattr(self, "_agenda_detail_window", None)
-        if detail is None:
-            detail = AgendaDetailWindow(self)
-            detail.open_contract_requested.connect(
-                self._open_agenda_contract
-            )
-            detail.item_dwell_seen_requested.connect(
-                self._agenda_mark_seen
-            )
-            detail.snooze_requested.connect(self._agenda_snooze)
-            detail.refresh_requested.connect(
-                lambda: self.refresh_agenda(touch_presented=True)
-            )
-            detail.destroyed.connect(
-                lambda *_args: setattr(
-                    self,
-                    "_agenda_detail_window",
-                    None,
-                )
-            )
-            self._agenda_detail_window = detail
+        detail = self.open_or_raise_tool_window(
+            "agenda:detail",
+            "Gündemim",
+            self._create_agenda_detail_window,
+        )
+        self._agenda_detail_window = detail
         snapshot = getattr(self, "_agenda_snapshot", None)
         if snapshot is not None:
             detail.set_snapshot(snapshot)
         else:
             detail.set_loading(True)
             self.refresh_agenda(touch_presented=True)
-        detail.show()
-        detail.raise_()
-        detail.activateWindow()
         detail.focus_item()
 
     def _agenda_mark_seen(self, item) -> None:
@@ -580,17 +563,17 @@ class MainWindow(CompactMainWindow):
 
     def _reset_agenda_binding(self) -> None:
         timer = getattr(self, "_agenda_refresh_timer", None)
-        if timer is not None:
+        if qt_obj_alive(timer):
             timer.stop()
-        detail = getattr(self, "_agenda_detail_window", None)
-        if detail is not None:
-            detail.close()
-        self._agenda_detail_window = None
+        try:
+            self.close_tool_window("agenda:detail")
+        finally:
+            self._agenda_detail_window = None
         self._agenda_snapshot = None
         self._agenda_facade = None
         self._agenda_bound_db = None
         widget = getattr(self, "agenda_compact_widget", None)
-        if widget is not None:
+        if qt_obj_alive(widget):
             widget.clear()
             widget.hide()
 
@@ -713,9 +696,10 @@ class MainWindow(CompactMainWindow):
 
     def closeEvent(self, event):
         timer = getattr(self, "_agenda_refresh_timer", None)
-        if timer is not None:
+        if qt_obj_alive(timer):
             timer.stop()
-        detail = getattr(self, "_agenda_detail_window", None)
-        if detail is not None:
-            detail.close()
+        try:
+            self.close_tool_window("agenda:detail")
+        finally:
+            self._agenda_detail_window = None
         super().closeEvent(event)

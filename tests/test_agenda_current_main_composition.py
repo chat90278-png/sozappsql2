@@ -79,5 +79,21 @@ def test_file_switch_and_close_cleanup_are_present():
     assert "_reset_agenda_binding" in switch
     assert "super().start_sts_load(path)" in switch
     assert "timer.stop()" in close
-    assert "detail.close()" in close
+    assert 'close_tool_window("agenda:detail")' in close
     assert "super().closeEvent(event)" in close
+
+
+def test_agenda_detail_registry_contract_is_present():
+    source = _text()
+    detail = ast.get_source_segment(source, _method("_open_agenda_details"))
+    assert '"agenda:detail"' in detail
+    assert "open_or_raise_tool_window" in detail
+
+
+def test_status_agenda_and_timer_installs_are_idempotent():
+    source = _text()
+    status = ast.get_source_segment(source, _method("_install_contract_status_widget"))
+    agenda = ast.get_source_segment(source, _method("_install_personal_agenda_widget"))
+    assert "qt_obj_alive(widget)" in status
+    assert "qt_obj_alive(widget)" in agenda
+    assert "qt_obj_alive(timer)" in agenda

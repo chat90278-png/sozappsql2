@@ -29,6 +29,7 @@ with TemporaryDirectory() as td:
         'contract_files': {'contract_id', 'merge_uid', 'folder_id', 'filename', 'original_path', 'file_ext', 'mime_type', 'size_bytes', 'sha256', 'content_blob', 'note', 'created_at', 'updated_at'},
         'activity_logs': {'platform_id', 'entity_type', 'entity_id', 'source', 'device_name'},
         'share_packages': {'share_package_id', 'contract_id', 'contract_merge_uid', 'source_contract_revision', 'permission_mode', 'share_format_version', 'snapshot_format_version', 'base_snapshot_sha256', 'status'},
+        'staff_agenda_state': {'staff_id', 'agenda_key', 'first_presented_at', 'last_presented_at', 'seen_at', 'seen_version', 'snoozed_until', 'snoozed_version', 'snoozed_severity', 'dismissed_at', 'dismissed_version', 'created_at', 'updated_at'},
     }
     for table, columns in expected_columns.items():
         actual = {r[1] for r in db.conn.execute(f'PRAGMA table_info({table})')}
@@ -51,7 +52,7 @@ with TemporaryDirectory() as td:
         'idx_deliveries_contract_id', 'idx_deliveries_system_id', 'idx_deliveries_delivery_user_id', 'idx_deliveries_contract_system',
         'idx_deliveries_acceptance_date', 'idx_delivery_components_component_id', 'idx_contract_file_folders_contract_id', 'idx_contract_file_folders_parent_id', 'idx_contract_files_contract_id', 'idx_contract_files_folder_id', 'idx_contract_files_contract_size_sha256', 'idx_logs_created_at',
         'idx_logs_action', 'idx_logs_entity', 'idx_activity_logs_platform_contract',
-        'idx_staff_role_id', 'idx_document_locks_contract_id', 'idx_contracts_revision', 'idx_share_packages_contract_merge_uid', 'idx_share_packages_contract_status', 'idx_share_packages_created_at', 'ux_contracts_merge_uid', 'ux_systems_merge_uid', 'ux_deliveries_merge_uid', 'ux_contract_file_folders_merge_uid', 'ux_contract_files_merge_uid',
+        'idx_staff_role_id', 'idx_document_locks_contract_id', 'idx_contracts_revision', 'idx_share_packages_contract_merge_uid', 'idx_share_packages_contract_status', 'idx_share_packages_created_at', 'ux_contracts_merge_uid', 'ux_systems_merge_uid', 'ux_deliveries_merge_uid', 'ux_contract_file_folders_merge_uid', 'ux_contract_files_merge_uid', 'idx_staff_agenda_state_staff', 'idx_staff_agenda_state_snoozed',
     }
     actual_indexes = {r[0] for r in db.conn.execute("SELECT name FROM sqlite_master WHERE type='index'")}
     assert expected_indexes <= actual_indexes, expected_indexes - actual_indexes

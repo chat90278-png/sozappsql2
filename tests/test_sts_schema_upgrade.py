@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from src.auth import ensure_staff_table
 from src.services import sts_schema_upgrade as upgrade
 from src.services.sts_database import (
     CURRENT_SCHEMA_VERSION,
@@ -54,6 +55,7 @@ def _create_share_packages_v15(conn: sqlite3.Connection) -> None:
 def _create_versioned_db(path: Path, version: int) -> None:
     conn = sqlite3.connect(path)
     try:
+        ensure_staff_table(conn)
         _set_version(conn, version)
         if version >= 15:
             _create_share_packages_v15(conn)
@@ -179,11 +181,12 @@ def test_v14_runs_exact_registry_chain_and_creates_verified_backup(tmp_path: Pat
 
     assert result.status == "upgraded"
     assert result.from_version == 14
-    assert result.to_version == CURRENT_SCHEMA_VERSION == 17
+    assert result.to_version == CURRENT_SCHEMA_VERSION == 18
     assert result.applied_migrations == (
         "v14_to_v15_share_package_registry",
         "v15_to_v16_merge_result_audit",
         "v16_to_v17_share_cancellation_audit",
+        "v17_to_v18_staff_agenda_state",
     )
     assert result.backup_path is not None
     assert result.backup_path.exists()
@@ -205,7 +208,7 @@ def test_v14_runs_exact_registry_chain_and_creates_verified_backup(tmp_path: Pat
     assert any("Veri bütünlüğü doğrulanıyor" in message for _, message in progress)
 
 
-def test_v16_runs_only_v16_to_v17(tmp_path: Path):
+def test_v16_runs_v16_to_v17_and_v17_to_v18(tmp_path: Path):
     path = tmp_path / "v16.sts"
     _create_versioned_db(path, 16)
 
@@ -213,8 +216,9 @@ def test_v16_runs_only_v16_to_v17(tmp_path: Path):
 
     assert result.applied_migrations == (
         "v16_to_v17_share_cancellation_audit",
+        "v17_to_v18_staff_agenda_state",
     )
-    assert read_sts_schema_version(path) == 17
+    assert read_sts_schema_version(path) == 18
     assert {
         "cancelled_at",
         "cancelled_by_staff_id",

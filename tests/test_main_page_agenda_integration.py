@@ -75,10 +75,11 @@ def test_snooze_uses_facade_preset_and_refreshes():
     assert "refresh_agenda" in source
 
 
-def test_detail_window_reused_or_single_instance():
+def test_detail_window_uses_stable_current_main_registry():
     source = ast.get_source_segment(_source(), _method("_open_agenda_details"))
-    assert "if detail is None" in source
-    assert "self._agenda_detail_window = detail" in source
+    assert "open_or_raise_tool_window" in source
+    assert '"agenda:detail"' in source
+    assert "self._create_agenda_detail_window" in source
 
 
 def test_open_contract_delegates_existing_navigation():
@@ -131,3 +132,11 @@ def test_ui_has_no_raw_agenda_sql_or_state_repository_write():
     assert "AgendaStateRepository" not in source
     assert "staff_agenda_state" not in source
     assert ".execute(" not in source
+
+
+def test_widget_and_timer_installation_are_idempotent_by_construction():
+    status = ast.get_source_segment(_source(), _method("_install_contract_status_widget"))
+    agenda = ast.get_source_segment(_source(), _method("_install_personal_agenda_widget"))
+    assert "qt_obj_alive(widget)" in status
+    assert "qt_obj_alive(widget)" in agenda
+    assert "qt_obj_alive(timer)" in agenda

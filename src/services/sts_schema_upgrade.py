@@ -6,38 +6,17 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Literal
 
-import src.services.sts_database as _sts_database_module
 from src.services.sts_database import (
     CURRENT_SCHEMA_VERSION,
     STSDatabase,
     STSMigrationError,
+    ensure_staff_agenda_state_schema,
     make_migration_backup_path,
     read_sts_schema_version,
 )
 
 ProgressCallback = Callable[[int, str], None]
 MigrationCallable = Callable[[sqlite3.Connection], None]
-
-AGENDA_STATE_COLUMNS: tuple[str, ...] = (
-    "staff_id",
-    "agenda_key",
-    "first_presented_at",
-    "last_presented_at",
-    "seen_at",
-    "seen_version",
-    "snoozed_until",
-    "snoozed_version",
-    "snoozed_severity",
-    "dismissed_at",
-    "dismissed_version",
-    "created_at",
-    "updated_at",
-)
-AGENDA_STATE_INDEXES: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("idx_staff_agenda_state_staff", ("staff_id",)),
-    ("idx_staff_agenda_state_snoozed", ("staff_id", "snoozed_until")),
-)
-
 
 @dataclass(frozen=True)
 class MigrationStep:
@@ -82,17 +61,8 @@ def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
     }
 
 
-def _table_column_info(conn: sqlite3.Connection, table: str) -> list[sqlite3.Row | tuple]:
-    if not _table_exists(conn, table):
-        return []
-    return list(conn.execute(f"PRAGMA table_info({_quote(table)})").fetchall())
 
 
-def _index_columns(conn: sqlite3.Connection, index_name: str) -> tuple[str, ...]:
-    return tuple(
-        str(row[2])
-        for row in conn.execute(f"PRAGMA index_info({_quote(index_name)})").fetchall()
-    )
 
 
 def _ensure_column(conn: sqlite3.Connection, table: str, name: str, ddl: str) -> bool:
@@ -114,129 +84,10 @@ def _require_columns(conn: sqlite3.Connection, table: str, required: set[str]) -
         )
 
 
-def ensure_staff_agenda_state_schema(
-    conn: sqlite3.Connection,
-) -> tuple[str, ...]:
-    """Create and validate the exact v18 staff agenda-state contract.
-
-    Transaction-neutral: this function never commits, rolls back, or opens a
-    second connection. Existing malformed state schemas fail closed.
-    """
-
-    if not _table_exists(conn, "staff") or "id" not in _table_columns(conn, "staff"):
-        raise RuntimeError(
-            "staff_agenda_state oluşturulamadı: staff tablosu veya staff.id eksik."
-        )
-
-    created: list[str] = []
-    existed = _table_exists(conn, "staff_agenda_state")
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS staff_agenda_state(
-            staff_id INTEGER NOT NULL,
-            agenda_key TEXT NOT NULL,
-            first_presented_at TEXT,
-            last_presented_at TEXT,
-            seen_at TEXT,
-            seen_version TEXT NOT NULL DEFAULT '',
-            snoozed_until TEXT,
-            snoozed_version TEXT NOT NULL DEFAULT '',
-            snoozed_severity TEXT NOT NULL DEFAULT '',
-            dismissed_at TEXT,
-            dismissed_version TEXT NOT NULL DEFAULT '',
-            created_at TEXT,
-            updated_at TEXT,
-            PRIMARY KEY(staff_id, agenda_key),
-            FOREIGN KEY(staff_id) REFERENCES staff(id) ON DELETE CASCADE
-        )
-        """
-    )
-    if not existed:
-        created.append("staff_agenda_state")
-
-    existing_indexes = {
-        str(row[0])
-        for row in conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='index'"
-        ).fetchall()
-    }
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_staff_agenda_state_staff "
-        "ON staff_agenda_state(staff_id)"
-    )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_staff_agenda_state_snoozed "
-        "ON staff_agenda_state(staff_id,snoozed_until)"
-    )
-    for index_name, _columns in AGENDA_STATE_INDEXES:
-        if index_name not in existing_indexes:
-            created.append(index_name)
-
-    actual_columns = tuple(
-        str(row[1]) for row in _table_column_info(conn, "staff_agenda_state")
-    )
-    if actual_columns != AGENDA_STATE_COLUMNS:
-        raise RuntimeError(
-            "staff_agenda_state kolon sözleşmesi geçersiz: "
-            f"expected={AGENDA_STATE_COLUMNS}; actual={actual_columns}"
-        )
-
-    pk_columns = tuple(
-        str(row[1])
-        for row in sorted(
-            (
-                row
-                for row in _table_column_info(conn, "staff_agenda_state")
-                if int(row[5] or 0) > 0
-            ),
-            key=lambda row: int(row[5]),
-        )
-    )
-    if pk_columns != ("staff_id", "agenda_key"):
-        raise RuntimeError(
-            "staff_agenda_state primary key sözleşmesi geçersiz: "
-            f"expected=('staff_id', 'agenda_key'); actual={pk_columns}"
-        )
-
-    normalized_fks = [
-        (str(row[3]), str(row[2]), str(row[4]), str(row[6]).upper())
-        for row in conn.execute(
-            'PRAGMA foreign_key_list("staff_agenda_state")'
-        ).fetchall()
-    ]
-    expected_fk = ("staff_id", "staff", "id", "CASCADE")
-    if normalized_fks != [expected_fk]:
-        raise RuntimeError(
-            "staff_agenda_state foreign key sözleşmesi geçersiz: "
-            f"expected={expected_fk}; actual={normalized_fks}"
-        )
-
-    current_indexes = {
-        str(row[0])
-        for row in conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='index'"
-        ).fetchall()
-    }
-    for index_name, expected_columns in AGENDA_STATE_INDEXES:
-        if index_name not in current_indexes:
-            raise RuntimeError(f"staff_agenda_state index eksik: {index_name}")
-        actual_index_columns = _index_columns(conn, index_name)
-        if actual_index_columns != expected_columns:
-            raise RuntimeError(
-                f"{index_name} kolon sırası geçersiz: "
-                f"expected={expected_columns}; actual={actual_index_columns}"
-            )
-
-    if _table_exists(conn, "agenda_items"):
-        raise RuntimeError("Yasak agenda_items tablosu tespit edildi.")
-
-    return tuple(created)
 
 
 # Compatibility export for callers that resolve the canonical helper from the
 # database module after the upgrade layer is imported.
-if not hasattr(_sts_database_module, "ensure_staff_agenda_state_schema"):
-    _sts_database_module.ensure_staff_agenda_state_schema = ensure_staff_agenda_state_schema
 
 
 def _set_schema_version(conn: sqlite3.Connection, version: int) -> None:

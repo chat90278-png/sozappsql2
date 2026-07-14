@@ -212,3 +212,20 @@ STAGE 5B RUNTIME DIFFERENTIAL ACCEPTANCE: PENDING
 STAGE 5B-V INTEGRATION VALIDATION GATE: BLOCKED
 MAIN MERGE GATE: CLOSED
 ```
+
+## Stage 5B-R1 online correction — PASS
+
+- Original candidate: 80b6f927d0c0f3a89e8b2cb7cef603892c60202d
+- Canonical Agenda schema owner: src/services/sts_database.py
+- Runtime monkey-patch: removed
+- Fresh/legacy and explicit 17→18: shared helper
+- Agenda detail registry key: genda:detail
+- Status/Agenda/timer installation: idempotent
+- Compile: PASS
+- Schema targeted tests: PASS
+- UI targeted tests: PASS
+- Full Stage 5B targeted tests: PASS
+- Agenda/database smokes: PASS
+- Full candidate pytest: PASS
+- Stage 5B-V validation gate: OPEN
+- Main Merge Gate: CLOSED

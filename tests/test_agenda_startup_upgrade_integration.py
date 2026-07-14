@@ -59,7 +59,8 @@ def test_main_window_open_sequence_keeps_worker_before_store():
     start = next(
         node
         for node in cls.body
-        if isinstance(node, ast.FunctionDef) and node.name == "start_sts_load"
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "start_sts_load"
     )
     finished = next(
         node
@@ -67,8 +68,22 @@ def test_main_window_open_sequence_keeps_worker_before_store():
         if isinstance(node, ast.FunctionDef)
         and node.name == "_on_sts_load_finished"
     )
-    start_text = ast.get_source_segment(source, start)
-    finished_text = ast.get_source_segment(source, finished)
-    assert "STSLoadWorker" in start_text
-    assert "STSStore" not in start_text
-    assert "STSStore" in finished_text
+
+    def called_names(node: ast.AST) -> set[str]:
+        names: set[str] = set()
+        for item in ast.walk(node):
+            if not isinstance(item, ast.Call):
+                continue
+            func = item.func
+            if isinstance(func, ast.Name):
+                names.add(func.id)
+            elif isinstance(func, ast.Attribute):
+                names.add(func.attr)
+        return names
+
+    start_calls = called_names(start)
+    finished_calls = called_names(finished)
+
+    assert "STSLoadWorker" in start_calls
+    assert "STSStore" not in start_calls
+    assert "STSStore" in finished_calls
