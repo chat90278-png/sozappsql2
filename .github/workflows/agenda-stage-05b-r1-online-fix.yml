@@ -1,0 +1,212 @@
+name: Agenda Stage 5B-R1 Online Fix
+
+on:
+  push:
+    branches:
+      - integration/gundemim-current-main-20260713
+    paths:
+      - ".github/workflows/agenda-stage-05b-r1-online-fix.yml"
+      - "tools/validation/apply_agenda_stage_05b_r1.py"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: agenda-stage-05b-r1-online-fix
+  cancel-in-progress: false
+
+jobs:
+  apply-and-validate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: windows-latest
+    timeout-minutes: 90
+    env:
+      PYTHONUTF8: "1"
+      PYTHONHASHSEED: "0"
+      QT_QPA_PLATFORM: "offscreen"
+
+    steps:
+      - name: Checkout exact integration branch
+        uses: actions/checkout@v4
+        with:
+          ref: integration/gundemim-current-main-20260713
+          fetch-depth: 0
+
+      - name: Verify bootstrap boundary
+        shell: pwsh
+        run: |
+          $expectedParent = "80b6f927d0c0f3a89e8b2cb7cef603892c60202d"
+          $branch = git branch --show-current
+          $parent = git rev-parse HEAD^
+          if ($branch -ne "integration/gundemim-current-main-20260713") {
+            throw "Wrong branch: $branch"
+          }
+          if ($parent -ne $expectedParent) {
+            throw "Bootstrap parent mismatch. expected=$expectedParent actual=$parent"
+          }
+          git cat-file -e "e1ed9a66318e19178f132602d3114a97880fa27f^{commit}"
+          git cat-file -e "b45d6f2e2b2948d1bbf9dcf1f83c8b04386a5c98^{commit}"
+          git merge-base e1ed9a66318e19178f132602d3114a97880fa27f HEAD^
+          git status --short
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install pytest
+
+      - name: Apply exact Stage 5B-R1 corrections
+        run: python tools/validation/apply_agenda_stage_05b_r1.py
+
+      - name: Compile
+        run: python -m compileall -q src tests
+
+      - name: Schema targeted tests
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force validation-output | Out-Null
+          python -m pytest -q `
+            tests/test_sts_schema_upgrade.py `
+            tests/test_sts_schema_upgrade_gate.py `
+            tests/test_sts_schema_upgrade_orchestration.py `
+            tests/test_agenda_schema_v18_integration.py `
+            tests/test_sts_database_transactions.py `
+            --junitxml=validation-output/stage-05b-r1-schema.xml
+
+      - name: UI targeted tests
+        shell: pwsh
+        run: |
+          python -m pytest -q `
+            tests/test_main_page_agenda_integration.py `
+            tests/test_agenda_current_main_composition.py `
+            tests/test_agenda_startup_upgrade_integration.py `
+            tests/test_agenda_compact_widget.py `
+            tests/test_agenda_detail_window.py `
+            tests/test_analysis_qt_integration.py `
+            tests/test_analysis_builder_qt.py `
+            --junitxml=validation-output/stage-05b-r1-ui.xml
+
+      - name: Full Stage 5B targeted tests
+        shell: pwsh
+        run: |
+          python -m pytest -q `
+            tests/test_activity_agenda_provider.py `
+            tests/test_agenda_compact_widget.py `
+            tests/test_agenda_context_factory.py `
+            tests/test_agenda_current_main_composition.py `
+            tests/test_agenda_deadline_stage.py `
+            tests/test_agenda_detail_window.py `
+            tests/test_agenda_keys.py `
+            tests/test_agenda_lifecycle.py `
+            tests/test_agenda_models.py `
+            tests/test_agenda_presentation.py `
+            tests/test_agenda_schema_v18_integration.py `
+            tests/test_agenda_source_repository.py `
+            tests/test_agenda_startup_upgrade_integration.py `
+            tests/test_agenda_state_repository.py `
+            tests/test_deadline_agenda_provider.py `
+            tests/test_document_lock_agenda_provider.py `
+            tests/test_main_page_agenda_integration.py `
+            tests/test_personal_agenda_facade.py `
+            tests/test_returned_share_agenda_provider.py `
+            tests/test_staff_agenda_service.py `
+            tests/test_sts_database_transactions.py `
+            tests/test_sts_schema_upgrade.py `
+            tests/test_sts_schema_upgrade_gate.py `
+            tests/test_sts_schema_upgrade_orchestration.py `
+            tests/test_unknown_date_agenda_provider.py `
+            tests/test_analysis_qt_integration.py `
+            tests/test_analysis_builder_qt.py `
+            tests/test_contract_edit_timing_runtime_fix.py `
+            tests/test_sd_edit_timing_runtime_fix.py `
+            tests/test_contract_save_telemetry_runtime_fix.py `
+            tests/test_delivery_schedule_slicer_runtime_fix.py `
+            --junitxml=validation-output/stage-05b-r1-targeted.xml
+
+      - name: Schema smokes
+        shell: pwsh
+        run: |
+          python tests/smoke_sts_agenda_schema.py
+          python tests/smoke_sts_database.py
+
+      - name: Full candidate pytest
+        run: python -m pytest -q --junitxml=validation-output/stage-05b-r1-full.xml
+
+      - name: Record successful correction
+        shell: pwsh
+        run: |
+          @"
+
+          ## Stage 5B-R1 online correction — PASS
+
+          - Bootstrap parent: `80b6f927d0c0f3a89e8b2cb7cef603892c60202d`
+          - Canonical Agenda schema owner: `src/services/sts_database.py`
+          - Runtime monkey-patch: removed
+          - Fresh/legacy and explicit 17→18: shared helper
+          - Agenda detail registry key: `agenda:detail`
+          - Status/Agenda/timer installation: idempotent
+          - Compile: PASS
+          - Schema targeted tests: PASS
+          - UI targeted tests: PASS
+          - Full Stage 5B targeted tests: PASS
+          - Agenda/database smokes: PASS
+          - Full candidate pytest: PASS
+          - Stage 5B-V validation gate: OPEN
+          - Main Merge Gate: CLOSED
+          "@ | Add-Content -Encoding UTF8 docs/agenda/AGENDA_STAGE_05B_CONTROLLED_INTEGRATION.md
+
+      - name: Remove online executor files
+        shell: pwsh
+        run: |
+          git rm .github/workflows/agenda-stage-05b-r1-online-fix.yml
+          git rm tools/validation/apply_agenda_stage_05b_r1.py
+          if (Test-Path validation-output) {
+            Remove-Item -Recurse -Force validation-output
+          }
+
+      - name: Verify final allowlist and commit
+        shell: pwsh
+        run: |
+          $allowed = @(
+            "docs/agenda/AGENDA_STAGE_05B_CONTROLLED_INTEGRATION.md",
+            "src/services/sts_database.py",
+            "src/services/sts_schema_upgrade.py",
+            "src/services/sts_schema_upgrade_gate.py",
+            "src/ui/main_page_analysis_window.py",
+            "tests/smoke_sts_agenda_schema.py",
+            "tests/smoke_sts_database.py",
+            "tests/test_agenda_current_main_composition.py",
+            "tests/test_agenda_schema_v18_integration.py",
+            "tests/test_agenda_startup_upgrade_integration.py",
+            "tests/test_main_page_agenda_integration.py",
+            "tests/test_sts_schema_upgrade.py",
+            "tests/test_sts_schema_upgrade_gate.py",
+            "tests/test_sts_schema_upgrade_orchestration.py"
+          )
+          $changed = git diff --name-only HEAD
+          foreach ($path in $changed) {
+            if ($allowed -notcontains $path) {
+              throw "Unexpected final changed path: $path"
+            }
+          }
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Complete Stage 5B-R1 online correction [stage5b-r1-applied]"
+          git push origin HEAD:integration/gundemim-current-main-20260713
+
+      - name: Upload validation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agenda-stage-05b-r1-online-evidence
+          path: validation-output/**
+          if-no-files-found: ignore
+          retention-days: 30
