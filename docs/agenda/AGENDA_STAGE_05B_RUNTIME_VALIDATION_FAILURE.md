@@ -2,7 +2,7 @@
 
 - baseline_main: `9ec9bded1a51fd6d4cf94e9f20f36134a709aebe`
 - product_candidate: `bbfc14292c8239221f992c228515008f9504f171`
-- control_head: `64f814fa53ca9c7803adb9dd43d1889f24709176`
+- control_head: `31ed849b3bfaeb14e8db0e88842025559c674931`
 - guard: `success`
 - install: `success`
 - compile: `success`
@@ -21,7 +21,7 @@ Preparing worktree (detached HEAD 9ec9bde)
 HEAD is now at 9ec9bde Merge pull request #336 from chat90278-png/feature/activity-history-redesign
 Preparing worktree (detached HEAD bbfc142)
 HEAD is now at bbfc142 Merge Gündemim Agenda after Activity History with schema v19
-control_head=64f814fa53ca9c7803adb9dd43d1889f24709176
+control_head=31ed849b3bfaeb14e8db0e88842025559c674931
 baseline=9ec9bded1a51fd6d4cf94e9f20f36134a709aebe
 candidate=bbfc14292c8239221f992c228515008f9504f171
 ```
@@ -69,16 +69,16 @@ Collecting pygments>=2.7.2 (from pytest)
 Collecting typing_extensions (from pytest-qt)
   Downloading typing_extensions-4.16.0-py3-none-any.whl.metadata (3.3 kB)
 Downloading pyside6-6.11.1-cp310-abi3-win_amd64.whl (578 kB)
-   ---------------------------------------- 578.4/578.4 kB 10.2 MB/s  0:00:00
+   ---------------------------------------- 578.4/578.4 kB 9.9 MB/s  0:00:00
 Downloading openpyxl-3.1.5-py2.py3-none-any.whl (250 kB)
 Downloading pyinstaller-6.21.0-py3-none-win_amd64.whl (1.4 MB)
-   ---------------------------------------- 1.4/1.4 MB 24.2 MB/s  0:00:00
+   ---------------------------------------- 1.4/1.4 MB 24.7 MB/s  0:00:00
 Downloading pyside6_addons-6.11.1-cp310-abi3-win_amd64.whl (168.8 MB)
-   ---------------------------------------- 168.8/168.8 MB 48.4 MB/s  0:00:03
+   ---------------------------------------- 168.8/168.8 MB 35.4 MB/s  0:00:04
 Downloading pyside6_essentials-6.11.1-cp310-abi3-win_amd64.whl (77.5 MB)
-   ---------------------------------------- 77.5/77.5 MB 50.5 MB/s  0:00:01
+   ---------------------------------------- 77.5/77.5 MB 49.0 MB/s  0:00:01
 Downloading shiboken6-6.11.1-cp310-abi3-win_amd64.whl (1.2 MB)
-   ---------------------------------------- 1.2/1.2 MB 30.0 MB/s  0:00:00
+   ---------------------------------------- 1.2/1.2 MB 31.0 MB/s  0:00:00
 Downloading pytest-9.1.1-py3-none-any.whl (386 kB)
 Downloading pluggy-1.6.0-py3-none-any.whl (20 kB)
 Downloading pytest_qt-4.5.0-py3-none-any.whl (37 kB)
@@ -87,7 +87,7 @@ Downloading iniconfig-2.3.0-py3-none-any.whl (7.5 kB)
 Downloading packaging-26.2-py3-none-any.whl (100 kB)
 Downloading pefile-2024.8.26-py3-none-any.whl (74 kB)
 Downloading pygments-2.20.0-py3-none-any.whl (1.2 MB)
-   ---------------------------------------- 1.2/1.2 MB 64.6 MB/s  0:00:00
+   ---------------------------------------- 1.2/1.2 MB 31.3 MB/s  0:00:00
 Downloading pyinstaller_hooks_contrib-2026.6-py3-none-any.whl (457 kB)
 Downloading pywin32_ctypes-0.2.3-py3-none-any.whl (30 kB)
 Downloading altgraph-0.17.5-py2.py3-none-any.whl (21 kB)
@@ -123,7 +123,7 @@ candidate_compile=PASS
 ........................................................................ [ 83%]
 ........................................................................ [ 91%]
 .....................................................................    [100%]
-861 passed in 82.55s (0:01:22)
+861 passed in 87.82s (0:01:27)
 /d/a/sozappsql2/sozappsql2
 ```
 
@@ -139,7 +139,7 @@ candidate_compile=PASS
 ........................................................................ [ 82%]
 ........................................................................ [ 93%]
 ......................................                                   [100%]
-614 passed in 34.25s
+614 passed in 39.57s
 agenda_schema=PASS
 schema_version=19
 ok
@@ -168,25 +168,25 @@ ok
 ........................................................................ [ 92%]
 ........................................................................ [ 98%]
 .....................                                                    [100%]
-1317 passed in 88.64s (0:01:28)
+1317 passed in 103.39s (0:01:43)
 /d/a/sozappsql2/sozappsql2
 ```
 
 ## runtime-validator.log tail
 ```text
 Traceback (most recent call last):
-  File "D:\a\sozappsql2\sozappsql2\tools\validation\agenda_stage_05b_v_runtime_validation.py", line 718, in main
-    _assert_lineage(
-  File "D:\a\sozappsql2\sozappsql2\tools\validation\agenda_stage_05b_v_runtime_validation.py", line 113, in _assert_lineage
-    run.check("candidate_lineage_and_merge_shape", check)
+  File "D:\a\sozappsql2\sozappsql2\tools\validation\agenda_stage_05b_v_runtime_validation.py", line 735, in main
+    _assert_qt_runtime(run, output_dir)
+  File "D:\a\sozappsql2\sozappsql2\tools\validation\agenda_stage_05b_v_runtime_validation.py", line 617, in _assert_qt_runtime
+    run.check("qt_agenda_detail_registry_reuse_and_reopen", detail_registry_reuse_and_reopen)
   File "D:\a\sozappsql2\sozappsql2\tools\validation\agenda_stage_05b_v_runtime_validation.py", line 35, in check
     value = fn()
             ^^^^
-  File "D:\a\sozappsql2\sozappsql2\tools\validation\agenda_stage_05b_v_runtime_validation.py", line 110, in check
-    run.require(baseline_sha in parents[1:], "current main is not a direct merge parent")
+  File "D:\a\sozappsql2\sozappsql2\tools\validation\agenda_stage_05b_v_runtime_validation.py", line 577, in detail_registry_reuse_and_reopen
+    run.require(len(details) == 1, f"detail window count after reuse={len(details)}")
   File "D:\a\sozappsql2\sozappsql2\tools\validation\agenda_stage_05b_v_runtime_validation.py", line 46, in require
     raise ValidationFailure(message)
-ValidationFailure: current main is not a direct merge parent
+ValidationFailure: detail window count after reuse=0
 
 ```
 
@@ -207,23 +207,35 @@ ValidationFailure: current main is not a direct merge parent
 | Check | Status | Detail |
 |---|---:|---|
 | `exact_git_heads` | **PASS** | baseline=9ec9bded1a51fd6d4cf94e9f20f36134a709aebe; candidate=bbfc14292c8239221f992c228515008f9504f171 |
-| `candidate_lineage_and_merge_shape` | **FAIL** | ValidationFailure: current main is not a direct merge parent |
+| `candidate_lineage_and_merge_shape` | **PASS** | parents=['187bc9edca699bd01be47f1422914efbcfa56713', '66681d51877ad09db7379b6bbd7049a7436af1fc'] |
+| `current_main_critical_file_preservation` | **PASS** | identical=6 files |
+| `static_schema_contract` | **PASS** | schema v18 Activity + v19 Agenda contract present |
+| `startup_worker_gate_order` | **PASS** | upgrade gate → STSStore verification → finished |
+| `static_qt_runtime_contract` | **PASS** | status → Agenda → calendar composition and registry hooks present |
+| `schema_fresh_v19` | **PASS** | D:\a\sozappsql2\sozappsql2\evidence\runtime\schema-runtime\fresh\fresh-v19.sts |
+| `schema_real_v18_to_v19_upgrade` | **PASS** | backup=real-v18__backup_before_migration_v18_to_v19__2026-07-14_15-24.sts |
+| `schema_state_persistence_and_staff_cascade` | **PASS** | persistence=PASS; cascade=PASS |
+| `schema_migration_rollback_on_malformed_v18` | **PASS** | schema_version=18; malformed shape preserved; partial indexes absent |
+| `schema_fail_closed_current_and_future` | **PASS** | malformed current and future schema rejected before mutation |
+| `qt_status_agenda_calendar_and_idempotency` | **PASS** | order=1<2<3; compact=1; timer=1 |
+| `qt_single_signal_connections` | **PASS** | timer timeout=1 receiver; open_details=1 receiver |
+| `qt_agenda_detail_registry_reuse_and_reopen` | **FAIL** | ValidationFailure: detail window count after reuse=0 |
 
 ## Error
 
 ```text
 Traceback (most recent call last):
-  File "D:\a\sozappsql2\sozappsql2\tools\validation\agenda_stage_05b_v_runtime_validation.py", line 718, in main
-    _assert_lineage(
-  File "D:\a\sozappsql2\sozappsql2\tools\validation\agenda_stage_05b_v_runtime_validation.py", line 113, in _assert_lineage
-    run.check("candidate_lineage_and_merge_shape", check)
+  File "D:\a\sozappsql2\sozappsql2\tools\validation\agenda_stage_05b_v_runtime_validation.py", line 735, in main
+    _assert_qt_runtime(run, output_dir)
+  File "D:\a\sozappsql2\sozappsql2\tools\validation\agenda_stage_05b_v_runtime_validation.py", line 617, in _assert_qt_runtime
+    run.check("qt_agenda_detail_registry_reuse_and_reopen", detail_registry_reuse_and_reopen)
   File "D:\a\sozappsql2\sozappsql2\tools\validation\agenda_stage_05b_v_runtime_validation.py", line 35, in check
     value = fn()
             ^^^^
-  File "D:\a\sozappsql2\sozappsql2\tools\validation\agenda_stage_05b_v_runtime_validation.py", line 110, in check
-    run.require(baseline_sha in parents[1:], "current main is not a direct merge parent")
+  File "D:\a\sozappsql2\sozappsql2\tools\validation\agenda_stage_05b_v_runtime_validation.py", line 577, in detail_registry_reuse_and_reopen
+    run.require(len(details) == 1, f"detail window count after reuse={len(details)}")
   File "D:\a\sozappsql2\sozappsql2\tools\validation\agenda_stage_05b_v_runtime_validation.py", line 46, in require
     raise ValidationFailure(message)
-ValidationFailure: current main is not a direct merge parent
+ValidationFailure: detail window count after reuse=0
 
 ```
