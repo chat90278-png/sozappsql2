@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
-import importlib
 import json
 import os
 import platform
@@ -24,7 +23,7 @@ import traceback
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 BASELINE = "e1ed9a66318e19178f132602d3114a97880fa27f"
 CANDIDATE = "b6fe76d06abab31d70e7b129f4efdbe5bbb07472"
@@ -152,6 +151,21 @@ def preflight() -> None:
         raise GateFailure(f"unexpected candidate/main merge-base {actual_merge_base}")
     ahead_behind = git("rev-list", "--left-right", "--count", f"{BASELINE}...{CANDIDATE}")
     lines.append(f"ahead_behind={ahead_behind}")
+    behind, ahead = (int(part) for part in ahead_behind.split())
+    if ahead != 11 or behind != 0:
+        raise GateFailure(f"unexpected candidate compare: ahead={ahead}; behind={behind}")
+    remotes = git("remote", check=False).splitlines()
+    if "origin" in remotes:
+        origin_main = git("rev-parse", "origin/main")
+        origin_feature = git("rev-parse", "origin/feature/gundemim-agenda-system")
+        lines.append(f"origin_main={origin_main}")
+        lines.append(f"origin_feature_gundemim_agenda_system={origin_feature}")
+        if origin_main != BASELINE:
+            raise GateFailure(f"origin/main moved: {origin_main}")
+        if origin_feature != FEATURE:
+            raise GateFailure(f"origin/feature/gundemim-agenda-system moved: {origin_feature}")
+    else:
+        lines.append("origin_remote=absent; remote ref checks skipped in local bootstrap context")
     merge_tree = git("merge-tree", MERGE_BASE, BASELINE, FEATURE, check=True)
     write("merge-tree.txt", merge_tree + "\n")
     lowered = merge_tree.lower()
@@ -213,16 +227,18 @@ def assert_source_invariants() -> None:
     up = (CANDIDATE_DIR / "src/services/sts_schema_upgrade.py").read_text(encoding="utf-8")
     gate = (CANDIDATE_DIR / "src/services/sts_schema_upgrade_gate.py").read_text(encoding="utf-8")
     main = (CANDIDATE_DIR / "src/ui/main_window.py").read_text(encoding="utf-8")
+    analysis_main = (CANDIDATE_DIR / "src/ui/main_page_analysis_window.py").read_text(encoding="utf-8")
+    ui_sources = main + "\n" + analysis_main
     checks = {
         "CURRENT_SCHEMA_VERSION_18": "CURRENT_SCHEMA_VERSION = 18" in db,
         "helper_only_database": "def ensure_staff_agenda_state_schema" in db and "def ensure_staff_agenda_state_schema" not in up,
         "no_database_module_monkey_patch": "_sts_database_module" not in up,
         "migration_step": "v17_to_v18_staff_agenda_state" in up,
         "fingerprint_max_18": "FINGERPRINT_MAX_VERSION = 18" in gate,
-        "agenda_detail_key": '"agenda:detail"' in main or "'agenda:detail'" in main,
-        "open_or_raise": "open_or_raise_tool_window" in main,
-        "close_cleanup": 'close_tool_window("agenda:detail")' in main or "close_tool_window('agenda:detail')" in main,
-        "qt_obj_alive": "qt_obj_alive" in main,
+        "agenda_detail_key": '"agenda:detail"' in ui_sources or "'agenda:detail'" in ui_sources,
+        "open_or_raise": "open_or_raise_tool_window" in ui_sources,
+        "close_cleanup": 'close_tool_window("agenda:detail")' in ui_sources or "close_tool_window('agenda:detail')" in ui_sources,
+        "qt_obj_alive": "qt_obj_alive" in ui_sources,
         "ensure_after_staff": db.find("ensure_staff_table(self.conn)") < db.find("ensure_staff_agenda_state_schema(self.conn)"),
     }
     write_json("source-invariants.json", checks)
