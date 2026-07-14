@@ -1,0 +1,330 @@
+name: Gündemim Post-Activity Diagnostic
+
+on:
+  push:
+    branches:
+      - integration/gundemim-after-activity-20260714
+    paths:
+      - .github/workflows/gundemim-post-activity-diagnostic.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  diagnose:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    env:
+      SOURCE_BRANCH: integration/gundemim-current-main-20260713
+      TARGET_BRANCH: integration/gundemim-after-activity-20260714
+      EXPECTED_SOURCE_HEAD: 66681d51877ad09db7379b6bbd7049a7436af1fc
+      REQUIRED_MAIN_ANCESTOR: 9ec9bded1a51fd6d4cf94e9f20f36134a709aebe
+    steps:
+      - name: Checkout target
+        uses: actions/checkout@v4
+        with:
+          ref: integration/gundemim-after-activity-20260714
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Resolve merge in disposable worktree
+        id: resolve
+        continue-on-error: true
+        shell: bash
+        run: |
+          exec > >(tee "$RUNNER_TEMP/resolve.log") 2>&1
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git fetch --no-tags origin "$SOURCE_BRANCH" "$TARGET_BRANCH"
+          BASE_HEAD="$(git rev-parse HEAD)"
+          SOURCE_HEAD="$(git rev-parse "origin/$SOURCE_BRANCH")"
+          echo "$BASE_HEAD" > "$RUNNER_TEMP/base-head.txt"
+          echo "$SOURCE_HEAD" > "$RUNNER_TEMP/source-head.txt"
+          test "$SOURCE_HEAD" = "$EXPECTED_SOURCE_HEAD"
+          git merge-base --is-ancestor "$REQUIRED_MAIN_ANCESTOR" HEAD
+
+          set +e
+          git merge --no-commit --no-ff "origin/$SOURCE_BRANCH"
+          MERGE_EXIT=$?
+          set -e
+          test "$MERGE_EXIT" -eq 1
+
+          python - <<'PY'
+          from pathlib import Path
+
+          def resolve_conflicts(path: str, handler) -> str:
+              file_path = Path(path)
+              lines = file_path.read_text(encoding='utf-8').splitlines()
+              output: list[str] = []
+              index = 0
+              conflict_no = 0
+              while index < len(lines):
+                  if not lines[index].startswith('<<<<<<< '):
+                      output.append(lines[index])
+                      index += 1
+                      continue
+                  conflict_no += 1
+                  index += 1
+                  ours: list[str] = []
+                  while index < len(lines) and lines[index] != '=======':
+                      ours.append(lines[index])
+                      index += 1
+                  if index >= len(lines):
+                      raise RuntimeError(f'{path}: missing conflict separator')
+                  index += 1
+                  theirs: list[str] = []
+                  while index < len(lines) and not lines[index].startswith('>>>>>>> '):
+                      theirs.append(lines[index])
+                      index += 1
+                  if index >= len(lines):
+                      raise RuntimeError(f'{path}: missing conflict end')
+                  index += 1
+                  output.extend(handler(conflict_no, ours, theirs))
+              resolved = '\n'.join(output) + '\n'
+              if '<<<<<<< ' in resolved or '>>>>>>> ' in resolved:
+                  raise RuntimeError(f'{path}: unresolved conflict marker')
+              file_path.write_text(resolved, encoding='utf-8')
+              return resolved
+
+          def database_handler(_number: int, ours: list[str], theirs: list[str]) -> list[str]:
+              ours_text = '\n'.join(ours)
+              theirs_text = '\n'.join(theirs)
+              if 'ACTIVITY_LOG_COLUMNS' in ours_text and 'AGENDA_STATE_COLUMNS' in theirs_text:
+                  return ours + [''] + theirs
+              if 'Own the outer transaction and use unique savepoints' in ours_text:
+                  return ours
+              raise RuntimeError('Unexpected sts_database conflict')
+
+          database = resolve_conflicts('src/services/sts_database.py', database_handler)
+          database = database.replace('CURRENT_SCHEMA_VERSION = 18', 'CURRENT_SCHEMA_VERSION = 19', 1)
+          Path('src/services/sts_database.py').write_text(database, encoding='utf-8')
+
+          def upgrade_handler(_number: int, ours: list[str], theirs: list[str]) -> list[str]:
+              ours_text = '\n'.join(ours)
+              theirs_text = '\n'.join(theirs)
+              if 'ACTIVITY_LOG_COLUMNS' in ours_text and 'ensure_staff_agenda_state_schema' in theirs_text:
+                  return ours + [
+                      '',
+                      '',
+                      'def _migrate_18_to_19(conn: sqlite3.Connection) -> None:',
+                      '    ensure_staff_agenda_state_schema(conn)',
+                  ]
+              if 'v17_to_v18_activity_history_infrastructure' in ours_text:
+                  return ours + [
+                      '    MigrationStep(18, 19, "v18_to_v19_staff_agenda_state", _migrate_18_to_19),'
+                  ]
+              raise RuntimeError('Unexpected sts_schema_upgrade conflict')
+
+          upgrade = resolve_conflicts('src/services/sts_schema_upgrade.py', upgrade_handler)
+          if '    ensure_staff_agenda_state_schema,\n' not in upgrade:
+              upgrade = upgrade.replace(
+                  '    STSMigrationError,\n',
+                  '    STSMigrationError,\n    ensure_staff_agenda_state_schema,\n',
+                  1,
+              )
+          Path('src/services/sts_schema_upgrade.py').write_text(upgrade, encoding='utf-8')
+
+          def gate_handler(number: int, ours: list[str], theirs: list[str]) -> list[str]:
+              if number == 1:
+                  activity: list[str] = []
+                  for line in ours:
+                      if line.startswith('FINGERPRINT_MIN_VERSION'):
+                          break
+                      activity.append(line)
+                  agenda: list[str] = []
+                  for line in theirs:
+                      if line.startswith('FINGERPRINT_MIN_VERSION'):
+                          break
+                      agenda.append(
+                          line.replace('_V18_AGENDA_STATE_COLUMNS', '_V19_AGENDA_STATE_COLUMNS')
+                              .replace('_V18_INDEXES', '_V19_AGENDA_INDEXES')
+                      )
+                  return activity + [''] + agenda + [
+                      '',
+                      'FINGERPRINT_MIN_VERSION = VERSIONED_MIGRATION_FLOOR',
+                      'FINGERPRINT_MAX_VERSION = CURRENT_SCHEMA_VERSION',
+                  ]
+              if number == 2:
+                  agenda_body = [
+                      line.replace('_V18_AGENDA_STATE_COLUMNS', '_V19_AGENDA_STATE_COLUMNS')
+                          .replace('_V18_INDEXES', '_V19_AGENDA_INDEXES')
+                      for line in theirs
+                  ]
+                  return ours + ['    if version >= 19:'] + agenda_body
+              raise RuntimeError('Unexpected sts_schema_upgrade_gate conflict')
+
+          gate = resolve_conflicts('src/services/sts_schema_upgrade_gate.py', gate_handler)
+          Path('src/services/sts_schema_upgrade_gate.py').write_text(gate, encoding='utf-8')
+
+          def migration_test_handler(_number: int, ours: list[str], _theirs: list[str]) -> list[str]:
+              return ours + ['        "v18_to_v19_staff_agenda_state",']
+
+          migration_tests = resolve_conflicts('tests/test_sts_schema_upgrade.py', migration_test_handler)
+          migration_tests = migration_tests.replace(
+              'CURRENT_SCHEMA_VERSION == 18', 'CURRENT_SCHEMA_VERSION == 19'
+          ).replace(
+              'read_sts_schema_version(path) == 18', 'read_sts_schema_version(path) == 19'
+          ).replace(
+              'def test_v16_runs_only_v16_to_v17', 'def test_v16_runs_full_v16_to_v19_chain'
+          ).replace(
+              'def test_v16_runs_v16_to_v17_and_v17_to_v18', 'def test_v16_runs_full_v16_to_v19_chain'
+          )
+          Path('tests/test_sts_schema_upgrade.py').write_text(migration_tests, encoding='utf-8')
+
+          gate_tests = resolve_conflicts('tests/test_sts_schema_upgrade_gate.py', migration_test_handler)
+          Path('tests/test_sts_schema_upgrade_gate.py').write_text(gate_tests, encoding='utf-8')
+
+          agenda_schema = Path('tests/test_agenda_schema_v18_integration.py')
+          agenda_text = agenda_schema.read_text(encoding='utf-8')
+          agenda_text = agenda_text.replace(
+              'def test_real_v17_without_agenda_state_upgrades_to_v18',
+              'def test_real_v18_without_agenda_state_upgrades_to_v19',
+          ).replace(
+              "conn.execute(\"UPDATE meta SET value='17' WHERE key='schema_version'\")",
+              "conn.execute(\"UPDATE meta SET value='18' WHERE key='schema_version'\")",
+          ).replace(
+              '("v17_to_v18_staff_agenda_state",)',
+              '("v18_to_v19_staff_agenda_state",)',
+          ).replace(
+              'CURRENT_SCHEMA_VERSION == 18', 'CURRENT_SCHEMA_VERSION == 19'
+          ).replace(
+              'validate_versioned_schema_fingerprint(path, 18)',
+              'validate_versioned_schema_fingerprint(path, 19)',
+          )
+          agenda_schema.write_text(agenda_text, encoding='utf-8')
+          agenda_schema.rename('tests/test_agenda_schema_v19_integration.py')
+
+          smoke = Path('tests/smoke_sts_agenda_schema.py')
+          smoke.write_text(
+              smoke.read_text(encoding='utf-8')
+                  .replace('CURRENT_SCHEMA_VERSION == 18', 'CURRENT_SCHEMA_VERSION == 19')
+                  .replace('schema_version_after_second_init == "18"', 'schema_version_after_second_init == "19"')
+                  .replace('print("schema_version=18")', 'print("schema_version=19")'),
+              encoding='utf-8',
+          )
+
+          required = {
+              'src/services/sts_database.py': (
+                  'CURRENT_SCHEMA_VERSION = 19',
+                  'ACTIVITY_LOG_COLUMNS',
+                  'AGENDA_STATE_COLUMNS',
+                  'def ensure_staff_agenda_state_schema',
+                  'Own the outer transaction and use unique savepoints',
+              ),
+              'src/services/sts_schema_upgrade.py': (
+                  'v17_to_v18_activity_history_infrastructure',
+                  'v18_to_v19_staff_agenda_state',
+                  'def _migrate_18_to_19',
+              ),
+              'src/services/sts_schema_upgrade_gate.py': (
+                  '_V18_ACTIVITY_COLUMNS',
+                  '_V19_AGENDA_STATE_COLUMNS',
+                  'if version >= 18:',
+                  'if version >= 19:',
+                  'required_primary_keys',
+                  'forbidden_tables',
+              ),
+          }
+          for path, tokens in required.items():
+              text = Path(path).read_text(encoding='utf-8')
+              missing = [token for token in tokens if token not in text]
+              if missing:
+                  raise RuntimeError(f'{path}: missing tokens {missing}')
+          PY
+
+          git add -A
+          test -z "$(git diff --name-only --diff-filter=U)"
+          git diff --cached --check
+          git status --short
+
+      - name: Install dependencies
+        id: install
+        if: steps.resolve.outcome == 'success'
+        continue-on-error: true
+        shell: bash
+        run: |
+          exec > >(tee "$RUNNER_TEMP/install.log") 2>&1
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pytest pytest-qt
+
+      - name: Compile
+        id: compile
+        if: steps.resolve.outcome == 'success' && steps.install.outcome == 'success'
+        continue-on-error: true
+        shell: bash
+        run: |
+          exec > >(tee "$RUNNER_TEMP/compile.log") 2>&1
+          set -euo pipefail
+          python -m compileall -q src tests
+
+      - name: Targeted tests
+        id: targeted
+        if: steps.compile.outcome == 'success'
+        continue-on-error: true
+        shell: bash
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          exec > >(tee "$RUNNER_TEMP/targeted.log") 2>&1
+          set -euo pipefail
+          python -m pytest -q \
+            tests/test_sts_schema_upgrade.py \
+            tests/test_sts_schema_upgrade_gate.py \
+            tests/test_agenda_schema_v19_integration.py \
+            tests/test_agenda_startup_upgrade_integration.py \
+            tests/test_sts_database_transactions.py
+          python tests/smoke_sts_agenda_schema.py
+          python tests/smoke_sts_database.py
+
+      - name: Persist diagnostic report only
+        if: always()
+        shell: bash
+        env:
+          RESOLVE_OUTCOME: ${{ steps.resolve.outcome }}
+          INSTALL_OUTCOME: ${{ steps.install.outcome }}
+          COMPILE_OUTCOME: ${{ steps.compile.outcome }}
+          TARGETED_OUTCOME: ${{ steps.targeted.outcome }}
+        run: |
+          set -euo pipefail
+          BASE_HEAD="$(cat "$RUNNER_TEMP/base-head.txt" 2>/dev/null || git rev-parse HEAD)"
+          SOURCE_HEAD="$(cat "$RUNNER_TEMP/source-head.txt" 2>/dev/null || printf unknown)"
+          {
+            echo '# Gündemim Post-Activity Diagnostic'
+            echo
+            echo '- target_base_head: `'$BASE_HEAD'`'
+            echo '- source_head: `'$SOURCE_HEAD'`'
+            echo '- resolve: `'$RESOLVE_OUTCOME'`'
+            echo '- install: `'$INSTALL_OUTCOME'`'
+            echo '- compile: `'$COMPILE_OUTCOME'`'
+            echo '- targeted: `'$TARGETED_OUTCOME'`'
+            for name in resolve install compile targeted; do
+              echo
+              echo '## '"$name"' log tail'
+              echo '```text'
+              tail -n 120 "$RUNNER_TEMP/$name.log" 2>/dev/null || echo '(no log)'
+              echo '```'
+            done
+          } > "$RUNNER_TEMP/diagnostic.md"
+
+          git reset --hard "$BASE_HEAD"
+          git clean -fd
+          mkdir -p docs/agenda
+          cp "$RUNNER_TEMP/diagnostic.md" docs/agenda/GUNDEMIM_POST_ACTIVITY_DIAGNOSTIC.md
+          git add docs/agenda/GUNDEMIM_POST_ACTIVITY_DIAGNOSTIC.md
+          git commit -m 'docs: record post-activity agenda integration diagnostic'
+          git push origin HEAD:"$TARGET_BRANCH"
+
+      - name: Upload diagnostic
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gundemim-post-activity-diagnostic
+          path: docs/agenda/GUNDEMIM_POST_ACTIVITY_DIAGNOSTIC.md
+          if-no-files-found: warn
