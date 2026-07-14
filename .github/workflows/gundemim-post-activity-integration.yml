@@ -1,0 +1,71 @@
+name: Gündemim Post-Activity Merge Probe
+
+on:
+  push:
+    branches:
+      - integration/gundemim-after-activity-20260714
+    paths:
+      - .github/workflows/gundemim-post-activity-integration.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact integration branch
+        uses: actions/checkout@v4
+        with:
+          ref: integration/gundemim-after-activity-20260714
+          fetch-depth: 0
+
+      - name: Probe merge without writing repository
+        shell: bash
+        run: |
+          set -euo pipefail
+          SOURCE_BRANCH='integration/gundemim-current-main-20260713'
+          TARGET_BRANCH='integration/gundemim-after-activity-20260714'
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git fetch --no-tags origin "$SOURCE_BRANCH" "$TARGET_BRANCH"
+
+          TARGET_HEAD="$(git rev-parse HEAD)"
+          SOURCE_HEAD="$(git rev-parse "origin/$SOURCE_BRANCH")"
+          MERGE_BASE="$(git merge-base HEAD "origin/$SOURCE_BRANCH")"
+
+          set +e
+          git merge --no-commit --no-ff "origin/$SOURCE_BRANCH"
+          MERGE_EXIT=$?
+          set -e
+
+          {
+            echo "target_branch=$TARGET_BRANCH"
+            echo "target_head=$TARGET_HEAD"
+            echo "source_branch=$SOURCE_BRANCH"
+            echo "source_head=$SOURCE_HEAD"
+            echo "merge_base=$MERGE_BASE"
+            echo "merge_exit=$MERGE_EXIT"
+            echo
+            echo '[unmerged_paths]'
+            git diff --name-only --diff-filter=U || true
+            echo
+            echo '[status]'
+            git status --short
+          } | tee merge-probe.txt
+
+          if git rev-parse -q --verify MERGE_HEAD >/dev/null; then
+            git merge --abort
+          else
+            git reset --hard HEAD
+          fi
+
+      - name: Upload merge probe evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gundemim-post-activity-merge-probe
+          path: merge-probe.txt
+          if-no-files-found: error
