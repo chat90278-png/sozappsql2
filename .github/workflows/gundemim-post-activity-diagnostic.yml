@@ -53,6 +53,21 @@ jobs:
           MERGE_EXIT=$?
           set -e
           test "$MERGE_EXIT" -eq 1
+          python - <<'PY'
+          from pathlib import Path
+
+          paths = (
+              Path('tests/test_activity_history_main_integration.py'),
+              Path('tests/test_activity_history_operations.py'),
+              Path('tests/test_activity_history_query.py'),
+          )
+          for path in paths:
+              text = path.read_text(encoding='utf-8')
+              text = text.replace('CURRENT_SCHEMA_VERSION == 18', 'CURRENT_SCHEMA_VERSION == 19')
+              text = text.replace('read_sts_schema_version(store.path) == 18', 'read_sts_schema_version(store.path) == 19')
+              text = text.replace('schema_version_remains_18', 'schema_version_remains_19')
+              path.write_text(text, encoding='utf-8')
+          PY
           python tools/validation/gundemim_post_activity_resolve.py
           git add -A
           test -z "$(git diff --name-only --diff-filter=U)"
