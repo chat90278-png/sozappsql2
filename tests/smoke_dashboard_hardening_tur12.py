@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import os
+from datetime import date
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -18,6 +20,12 @@ from analysis_center.analysis_dashboard_workspace import (
 )
 from analysis_center.analysis_models import VisualSettings
 from analysis_center.analysis_qt_window import AnalysisCenterWindow
+
+
+class FrozenSmokeDate(date):
+    @classmethod
+    def today(cls):
+        return cls(2026, 7, 1)
 
 
 def settings() -> VisualSettings:
@@ -66,6 +74,7 @@ def dashboard_card_frame_by_title(window: AnalysisCenterWindow, title: str) -> Q
     raise AssertionError(f"Kart bulunamadı: {title}")
 
 
+@patch("analysis_center.analysis_metrics.date", FrozenSmokeDate)
 def main() -> None:
     app = QApplication.instance() or QApplication([])
     root = Path(__file__).resolve().parents[1]
@@ -239,6 +248,7 @@ def main() -> None:
         upcoming = int(metrics["upcoming_deadline_count"])
         past = int(metrics["past_deadline_count"])
         unknown = int(metrics["unknown_deadline_count"])
+        assert metrics["generated_at"] == "2026-07-01"
         assert (upcoming, past, unknown) == (1, 0, 2)
         assert any(
             row.get("date_field") == "planned_acceptance_date" and row.get("due_date") == "2026-07-09"
