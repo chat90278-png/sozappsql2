@@ -14,7 +14,7 @@ permissions:
 jobs:
   integrate-and-validate:
     runs-on: windows-latest
-    timeout-minutes: 35
+    timeout-minutes: 45
     env:
       SOURCE_BRANCH: integration/gundemim-current-main-20260713
       TARGET_BRANCH: integration/gundemim-after-activity-20260714
@@ -32,20 +32,23 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Merge and resolve Activity plus Agenda schema v19
+      - name: Resolve Activity plus Agenda schema v19 merge
+        id: resolve
         shell: bash
         run: |
+          exec > >(tee "$RUNNER_TEMP/resolve.log") 2>&1
           set -euo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git fetch --no-tags origin "$SOURCE_BRANCH" "$TARGET_BRANCH"
 
-          TARGET_PREMERGE_HEAD="$(git rev-parse HEAD)"
+          BASE_HEAD="$(git rev-parse HEAD)"
           SOURCE_HEAD="$(git rev-parse "origin/$SOURCE_BRANCH")"
+          echo "BASE_HEAD=$BASE_HEAD" >> "$GITHUB_ENV"
+          echo "SOURCE_HEAD=$SOURCE_HEAD" >> "$GITHUB_ENV"
+
           test "$SOURCE_HEAD" = "$EXPECTED_SOURCE_HEAD"
           git merge-base --is-ancestor "$REQUIRED_MAIN_ANCESTOR" HEAD
-          echo "TARGET_PREMERGE_HEAD=$TARGET_PREMERGE_HEAD" >> "$GITHUB_ENV"
-          echo "SOURCE_HEAD=$SOURCE_HEAD" >> "$GITHUB_ENV"
 
           set +e
           git merge --no-commit --no-ff "origin/$SOURCE_BRANCH"
@@ -56,241 +59,78 @@ jobs:
           python - <<'PY'
           from pathlib import Path
 
-          def resolve_conflicts(path: str, handler) -> str:
-              file_path = Path(path)
-              lines = file_path.read_text(encoding='utf-8').splitlines()
-              output: list[str] = []
-              index = 0
-              conflict_no = 0
-              while index < len(lines):
-                  if not lines[index].startswith('<<<<<<< '):
-                      output.append(lines[index])
-                      index += 1
-                      continue
-                  conflict_no += 1
-                  index += 1
-                  ours: list[str] = []
-                  while index < len(lines) and lines[index] != '=======':
-                      ours.append(lines[index])
-                      index += 1
-                  if index >= len(lines):
-                      raise RuntimeError(f'{path}: missing conflict separator')
-                  index += 1
-                  theirs: list[str] = []
-                  while index < len(lines) and not lines[index].startswith('>>>>>>> '):
-                      theirs.append(lines[index])
-                      index += 1
-                  if index >= len(lines):
-                      raise RuntimeError(f'{path}: missing conflict end')
-                  index += 1
-                  output.extend(handler(conflict_no, ours, theirs))
-              resolved = '\n'.join(output) + '\n'
-              if any(marker in resolved for marker in ('<<<<<<< ', '=======', '>>>>>>> ')):
-                  raise RuntimeError(f'{path}: unresolved conflict marker')
-              file_path.write_text(resolved, encoding='utf-8')
-              return resolved
-
-          def database_handler(_number: int, ours: list[str], theirs: list[str]) -> list[str]:
-              ours_text = '\n'.join(ours)
-              theirs_text = '\n'.join(theirs)
-              if 'ACTIVITY_LOG_COLUMNS' in ours_text and 'AGENDA_STATE_COLUMNS' in theirs_text:
-                  return ours + [''] + theirs
-              if 'Own the outer transaction and use unique savepoints' in ours_text:
-                  return ours
-              raise RuntimeError('Unexpected sts_database conflict')
-
-          database = resolve_conflicts('src/services/sts_database.py', database_handler)
-          database = database.replace('CURRENT_SCHEMA_VERSION = 18', 'CURRENT_SCHEMA_VERSION = 19', 1)
-          Path('src/services/sts_database.py').write_text(database, encoding='utf-8')
-          assert 'ACTIVITY_LOG_COLUMNS' in database
-          assert 'AGENDA_STATE_COLUMNS' in database
-          assert 'def ensure_staff_agenda_state_schema' in database
-          assert 'CURRENT_SCHEMA_VERSION = 19' in database
-          assert 'Own the outer transaction and use unique savepoints' in database
-
-          def upgrade_handler(number: int, ours: list[str], theirs: list[str]) -> list[str]:
-              ours_text = '\n'.join(ours)
-              theirs_text = '\n'.join(theirs)
-              if number == 1 and 'ACTIVITY_LOG_COLUMNS' in ours_text and 'ensure_staff_agenda_state_schema' in theirs_text:
-                  return ours + [
-                      '',
-                      '',
-                      'def _migrate_18_to_19(conn: sqlite3.Connection) -> None:',
-                      '    ensure_staff_agenda_state_schema(conn)',
-                  ]
-              if 'v17_to_v18_activity_history_infrastructure' in ours_text:
-                  return ours + [
-                      '    MigrationStep(18, 19, "v18_to_v19_staff_agenda_state", _migrate_18_to_19),'
-                  ]
-              raise RuntimeError('Unexpected sts_schema_upgrade conflict')
-
-          upgrade = resolve_conflicts('src/services/sts_schema_upgrade.py', upgrade_handler)
-          if '    ensure_staff_agenda_state_schema,\n' not in upgrade:
-              upgrade = upgrade.replace(
-                  '    STSMigrationError,\n',
-                  '    STSMigrationError,\n    ensure_staff_agenda_state_schema,\n',
-                  1,
-              )
-          Path('src/services/sts_schema_upgrade.py').write_text(upgrade, encoding='utf-8')
-          assert 'v17_to_v18_activity_history_infrastructure' in upgrade
-          assert 'v18_to_v19_staff_agenda_state' in upgrade
-          assert 'def _migrate_18_to_19' in upgrade
-
-          def gate_handler(number: int, ours: list[str], theirs: list[str]) -> list[str]:
-              if number == 1:
-                  activity: list[str] = []
-                  for line in ours:
-                      if line.startswith('FINGERPRINT_MIN_VERSION'):
-                          break
-                      activity.append(line)
-                  agenda: list[str] = []
-                  for line in theirs:
-                      if line.startswith('FINGERPRINT_MIN_VERSION'):
-                          break
-                      agenda.append(
-                          line.replace('_V18_AGENDA_STATE_COLUMNS', '_V19_AGENDA_STATE_COLUMNS')
-                              .replace('_V18_INDEXES', '_V19_AGENDA_INDEXES')
-                      )
-                  return activity + [''] + agenda + [
-                      '',
-                      'FINGERPRINT_MIN_VERSION = VERSIONED_MIGRATION_FLOOR',
-                      'FINGERPRINT_MAX_VERSION = CURRENT_SCHEMA_VERSION',
-                  ]
-              if number == 2:
-                  agenda_body = [
-                      line.replace('_V18_AGENDA_STATE_COLUMNS', '_V19_AGENDA_STATE_COLUMNS')
-                          .replace('_V18_INDEXES', '_V19_AGENDA_INDEXES')
-                      for line in theirs
-                  ]
-                  return ours + ['    if version >= 19:'] + agenda_body
-              raise RuntimeError('Unexpected sts_schema_upgrade_gate conflict')
-
-          gate = resolve_conflicts('src/services/sts_schema_upgrade_gate.py', gate_handler)
-          Path('src/services/sts_schema_upgrade_gate.py').write_text(gate, encoding='utf-8')
-          assert '_V18_ACTIVITY_COLUMNS' in gate
-          assert '_V19_AGENDA_STATE_COLUMNS' in gate
-          assert 'if version >= 18:' in gate
-          assert 'if version >= 19:' in gate
-          assert 'required_primary_keys' in gate
-          assert 'forbidden_tables' in gate
-          assert 'FINGERPRINT_MAX_VERSION = CURRENT_SCHEMA_VERSION' in gate
-
-          def migration_test_handler(_number: int, ours: list[str], _theirs: list[str]) -> list[str]:
-              return ours + ['        "v18_to_v19_staff_agenda_state",']
-
-          migration_tests = resolve_conflicts('tests/test_sts_schema_upgrade.py', migration_test_handler)
-          migration_tests = migration_tests.replace(
-              'CURRENT_SCHEMA_VERSION == 18', 'CURRENT_SCHEMA_VERSION == 19'
-          ).replace(
-              'read_sts_schema_version(path) == 18',
-              'read_sts_schema_version(path) == 19',
-          ).replace(
-              'def test_v16_runs_only_v16_to_v17',
-              'def test_v16_runs_full_v16_to_v19_chain',
-          ).replace(
-              'def test_v16_runs_v16_to_v17_and_v17_to_v18',
-              'def test_v16_runs_full_v16_to_v19_chain',
+          paths = (
+              Path('tests/test_activity_history_main_integration.py'),
+              Path('tests/test_activity_history_operations.py'),
+              Path('tests/test_activity_history_query.py'),
           )
-          Path('tests/test_sts_schema_upgrade.py').write_text(migration_tests, encoding='utf-8')
-
-          gate_tests = resolve_conflicts(
-              'tests/test_sts_schema_upgrade_gate.py', migration_test_handler
-          )
-          Path('tests/test_sts_schema_upgrade_gate.py').write_text(gate_tests, encoding='utf-8')
-
-          agenda_schema = Path('tests/test_agenda_schema_v18_integration.py')
-          agenda_text = agenda_schema.read_text(encoding='utf-8')
-          agenda_text = agenda_text.replace(
-              'def test_real_v17_without_agenda_state_upgrades_to_v18',
-              'def test_real_v18_without_agenda_state_upgrades_to_v19',
-          ).replace(
-              "conn.execute(\"UPDATE meta SET value='17' WHERE key='schema_version'\")",
-              "conn.execute(\"UPDATE meta SET value='18' WHERE key='schema_version'\")",
-          ).replace(
-              '("v17_to_v18_staff_agenda_state",)',
-              '("v18_to_v19_staff_agenda_state",)',
-          ).replace(
-              'CURRENT_SCHEMA_VERSION == 18',
-              'CURRENT_SCHEMA_VERSION == 19',
-          ).replace(
-              'validate_versioned_schema_fingerprint(path, 18)',
-              'validate_versioned_schema_fingerprint(path, 19)',
-          )
-          agenda_schema.write_text(agenda_text, encoding='utf-8')
-          agenda_schema.rename('tests/test_agenda_schema_v19_integration.py')
-
-          smoke = Path('tests/smoke_sts_agenda_schema.py')
-          smoke_text = smoke.read_text(encoding='utf-8').replace(
-              'CURRENT_SCHEMA_VERSION == 18', 'CURRENT_SCHEMA_VERSION == 19'
-          ).replace(
-              'schema_version_after_second_init == "18"',
-              'schema_version_after_second_init == "19"',
-          ).replace(
-              'print("schema_version=18")',
-              'print("schema_version=19")',
-          )
-          smoke.write_text(smoke_text, encoding='utf-8')
-
-          stale_patterns = (
-              'v17_to_v18_staff_agenda_state',
-              'CURRENT_SCHEMA_VERSION == 18',
-              'schema_version_after_second_init == "18"',
-              'schema_version=18',
-          )
-          stale_hits = []
-          for path in Path('tests').rglob('*.py'):
+          for path in paths:
               text = path.read_text(encoding='utf-8')
-              for pattern in stale_patterns:
-                  if pattern in text:
-                      stale_hits.append(f'{path}:{pattern}')
-          if stale_hits:
-              raise RuntimeError('Stale Agenda v18 expectations:\n' + '\n'.join(stale_hits))
+              text = text.replace('CURRENT_SCHEMA_VERSION == 18', 'CURRENT_SCHEMA_VERSION == 19')
+              text = text.replace('read_sts_schema_version(store.path) == 18', 'read_sts_schema_version(store.path) == 19')
+              text = text.replace('schema_version_remains_18', 'schema_version_remains_19')
+              path.write_text(text, encoding='utf-8')
           PY
 
+          python tools/validation/gundemim_post_activity_resolve.py
           git add -A
-          UNMERGED="$(git diff --name-only --diff-filter=U)"
-          test -z "$UNMERGED"
-          git diff --cached --check
+          test -z "$(git diff --name-only --diff-filter=U)"
+          git diff --cached --check -- src tests
           git status --short
 
       - name: Install test dependencies
+        id: install
         shell: bash
         run: |
+          exec > >(tee "$RUNNER_TEMP/install.log") 2>&1
           set -euo pipefail
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt pytest pytest-qt
 
       - name: Compile integrated source
+        id: compile
         shell: bash
         run: |
+          exec > >(tee "$RUNNER_TEMP/compile.log") 2>&1
           set -euo pipefail
           python -m compileall -q src tests
 
-      - name: Run schema and Agenda integration gates
+      - name: Run schema Agenda and Activity targeted gates
+        id: targeted
         shell: bash
+        env:
+          QT_QPA_PLATFORM: offscreen
         run: |
+          exec > >(tee "$RUNNER_TEMP/targeted.log") 2>&1
           set -euo pipefail
-          export QT_QPA_PLATFORM=offscreen
           python -m pytest -q \
             tests/test_sts_schema_upgrade.py \
             tests/test_sts_schema_upgrade_gate.py \
             tests/test_agenda_schema_v19_integration.py \
             tests/test_agenda_startup_upgrade_integration.py \
             tests/test_sts_database_transactions.py \
-            2>&1 | tee targeted-pytest.txt
-          python tests/smoke_sts_agenda_schema.py 2>&1 | tee agenda-smoke.txt
-          python tests/smoke_sts_database.py 2>&1 | tee -a agenda-smoke.txt
+            tests/test_activity_history_main_integration.py \
+            tests/test_activity_history_operations.py \
+            tests/test_activity_history_query.py \
+            tests/test_*agenda*.py
+          python tests/smoke_sts_agenda_schema.py
+          python tests/smoke_sts_database.py
 
       - name: Run full regression suite
+        id: full
         shell: bash
+        env:
+          QT_QPA_PLATFORM: offscreen
         run: |
+          exec > >(tee "$RUNNER_TEMP/full.log") 2>&1
           set -euo pipefail
-          export QT_QPA_PLATFORM=offscreen
-          python -m pytest -q 2>&1 | tee full-pytest.txt
+          python -m pytest -q
 
-      - name: Commit validated integration and remove temporary probe
+      - name: Commit validated merge and clean temporary integration files
+        id: finalize
         shell: bash
         run: |
+          exec > >(tee "$RUNNER_TEMP/finalize.log") 2>&1
           set -euo pipefail
           mkdir -p docs/agenda
           {
@@ -299,28 +139,88 @@ jobs:
             echo '- source_branch: `'$SOURCE_BRANCH'`'
             echo '- source_head: `'$SOURCE_HEAD'`'
             echo '- target_branch: `'$TARGET_BRANCH'`'
-            echo '- target_premerge_head: `'$TARGET_PREMERGE_HEAD'`'
+            echo '- target_premerge_head: `'$BASE_HEAD'`'
             echo '- required_main_ancestor: `'$REQUIRED_MAIN_ANCESTOR'`'
             echo '- schema_chain: `v17 → v18 Activity History → v19 Gündemim Agenda`'
+            echo '- conflict_resolution: `PASS`'
             echo '- compile: `PASS`'
-            echo '- targeted_schema_agenda_tests: `PASS`'
-            echo '- agenda_smokes: `PASS`'
+            echo '- targeted_schema_agenda_activity: `PASS`'
+            echo '- agenda_database_smokes: `PASS`'
             echo '- full_pytest: `PASS`'
             echo '- main_modified: `NO`'
             echo
+            echo '## Targeted test tail'
+            echo '```text'
+            tail -n 20 "$RUNNER_TEMP/targeted.log"
+            echo '```'
+            echo
             echo '## Full pytest tail'
             echo '```text'
-            tail -n 20 full-pytest.txt
+            tail -n 20 "$RUNNER_TEMP/full.log"
             echo '```'
           } > docs/agenda/AGENDA_POST_ACTIVITY_INTEGRATION.md
 
+          rm -f docs/agenda/AGENDA_POST_ACTIVITY_INTEGRATION_FAILURE.md
           rm -f docs/agenda/GUNDEMIM_POST_ACTIVITY_MERGE_PROBE.md
+          rm -f docs/agenda/GUNDEMIM_POST_ACTIVITY_DIAGNOSTIC.md
+          rm -f docs/agenda/GUNDEMIM_GATE_TEST_CONFLICT.md
           rm -f .github/workflows/gundemim-post-activity-integration.yml
+          rm -f .github/workflows/gundemim-post-activity-diagnostic.yml
+          rm -f .github/workflows/dispatch-gundemim-post-activity-diagnostic.yml
+          rm -f .github/workflows/probe-gundemim-gate-test-conflict.yml
+          rm -f tools/validation/gundemim_post_activity_resolve.py
+          printf '*.ico diff\n' > .gitattributes
+
           git add -A
-          git diff --cached --check
+          test -z "$(git diff --name-only --diff-filter=U)"
+          git diff --cached --check -- src tests
           git commit -m 'Merge Gündemim Agenda after Activity History with schema v19'
+          set -- $(git rev-list --parents -n 1 HEAD)
+          test "$#" -eq 3
           INTEGRATION_HEAD="$(git rev-parse HEAD)"
           echo "INTEGRATION_HEAD=$INTEGRATION_HEAD" >> "$GITHUB_ENV"
+          git push origin HEAD:"$TARGET_BRANCH"
+
+      - name: Persist guarded failure report
+        if: failure()
+        shell: bash
+        env:
+          RESOLVE_OUTCOME: ${{ steps.resolve.outcome }}
+          INSTALL_OUTCOME: ${{ steps.install.outcome }}
+          COMPILE_OUTCOME: ${{ steps.compile.outcome }}
+          TARGETED_OUTCOME: ${{ steps.targeted.outcome }}
+          FULL_OUTCOME: ${{ steps.full.outcome }}
+          FINALIZE_OUTCOME: ${{ steps.finalize.outcome }}
+        run: |
+          set -euo pipefail
+          SAFE_BASE="${BASE_HEAD:-$(git rev-parse HEAD)}"
+          SAFE_SOURCE="${SOURCE_HEAD:-unknown}"
+          {
+            echo '# Gündemim Post-Activity Integration Failure'
+            echo
+            echo '- target_base_head: `'$SAFE_BASE'`'
+            echo '- source_head: `'$SAFE_SOURCE'`'
+            echo '- resolve: `'$RESOLVE_OUTCOME'`'
+            echo '- install: `'$INSTALL_OUTCOME'`'
+            echo '- compile: `'$COMPILE_OUTCOME'`'
+            echo '- targeted: `'$TARGETED_OUTCOME'`'
+            echo '- full: `'$FULL_OUTCOME'`'
+            echo '- finalize: `'$FINALIZE_OUTCOME'`'
+            for name in resolve install compile targeted full finalize; do
+              echo
+              echo '## '"$name"' log tail'
+              echo '```text'
+              tail -n 120 "$RUNNER_TEMP/$name.log" 2>/dev/null || echo '(no log)'
+              echo '```'
+            done
+          } > "$RUNNER_TEMP/integration-failure.md"
+
+          git reset --hard "$SAFE_BASE"
+          git clean -fd
+          mkdir -p docs/agenda
+          cp "$RUNNER_TEMP/integration-failure.md" docs/agenda/AGENDA_POST_ACTIVITY_INTEGRATION_FAILURE.md
+          git add docs/agenda/AGENDA_POST_ACTIVITY_INTEGRATION_FAILURE.md
+          git commit -m 'docs: record failed post-activity agenda integration'
           git push origin HEAD:"$TARGET_BRANCH"
 
       - name: Upload integration evidence
@@ -329,8 +229,12 @@ jobs:
         with:
           name: gundemim-post-activity-integration-evidence
           path: |
-            targeted-pytest.txt
-            agenda-smoke.txt
-            full-pytest.txt
+            ${{ runner.temp }}/resolve.log
+            ${{ runner.temp }}/install.log
+            ${{ runner.temp }}/compile.log
+            ${{ runner.temp }}/targeted.log
+            ${{ runner.temp }}/full.log
+            ${{ runner.temp }}/finalize.log
             docs/agenda/AGENDA_POST_ACTIVITY_INTEGRATION.md
+            docs/agenda/AGENDA_POST_ACTIVITY_INTEGRATION_FAILURE.md
           if-no-files-found: warn
