@@ -1,11 +1,11 @@
 # Gündemim Post-Activity Diagnostic
 
-- target_base_head: `ddb11a171434386f6ed199b077a8cdaa4c61609f`
+- target_base_head: `96f191c07c533e167b4395fe869c2c968a8d98c6`
 - source_head: `66681d51877ad09db7379b6bbd7049a7436af1fc`
 - resolve: `success`
 - install: `success`
-- compile: `success`
-- targeted: `failure`
+- compile: `failure`
+- targeted: `skipped`
 
 ## resolve log tail
 ```text
@@ -143,16 +143,16 @@ Collecting pygments>=2.7.2 (from pytest)
 Collecting typing_extensions (from pytest-qt)
   Downloading typing_extensions-4.16.0-py3-none-any.whl.metadata (3.3 kB)
 Downloading pyside6-6.11.1-cp310-abi3-win_amd64.whl (578 kB)
-   ---------------------------------------- 578.4/578.4 kB 4.1 MB/s  0:00:00
+   ---------------------------------------- 578.4/578.4 kB 10.2 MB/s  0:00:00
 Downloading openpyxl-3.1.5-py2.py3-none-any.whl (250 kB)
 Downloading pyinstaller-6.21.0-py3-none-win_amd64.whl (1.4 MB)
-   ---------------------------------------- 1.4/1.4 MB 36.6 MB/s  0:00:00
+   ---------------------------------------- 1.4/1.4 MB 24.2 MB/s  0:00:00
 Downloading pyside6_addons-6.11.1-cp310-abi3-win_amd64.whl (168.8 MB)
-   ---------------------------------------- 168.8/168.8 MB 47.3 MB/s  0:00:03
+   ---------------------------------------- 168.8/168.8 MB 52.6 MB/s  0:00:03
 Downloading pyside6_essentials-6.11.1-cp310-abi3-win_amd64.whl (77.5 MB)
-   ---------------------------------------- 77.5/77.5 MB 51.0 MB/s  0:00:01
+   ---------------------------------------- 77.5/77.5 MB 62.6 MB/s  0:00:01
 Downloading shiboken6-6.11.1-cp310-abi3-win_amd64.whl (1.2 MB)
-   ---------------------------------------- 1.2/1.2 MB 30.0 MB/s  0:00:00
+   ---------------------------------------- 1.2/1.2 MB 20.5 MB/s  0:00:00
 Downloading pytest-9.1.1-py3-none-any.whl (386 kB)
 Downloading pluggy-1.6.0-py3-none-any.whl (20 kB)
 Downloading pytest_qt-4.5.0-py3-none-any.whl (37 kB)
@@ -161,7 +161,7 @@ Downloading iniconfig-2.3.0-py3-none-any.whl (7.5 kB)
 Downloading packaging-26.2-py3-none-any.whl (100 kB)
 Downloading pefile-2024.8.26-py3-none-any.whl (74 kB)
 Downloading pygments-2.20.0-py3-none-any.whl (1.2 MB)
-   ---------------------------------------- 1.2/1.2 MB 31.3 MB/s  0:00:00
+   ---------------------------------------- 1.2/1.2 MB 20.6 MB/s  0:00:00
 Downloading pyinstaller_hooks_contrib-2026.6-py3-none-any.whl (457 kB)
 Downloading pywin32_ctypes-0.2.3-py3-none-any.whl (30 kB)
 Downloading altgraph-0.17.5-py2.py3-none-any.whl (21 kB)
@@ -174,68 +174,15 @@ Successfully installed PyInstaller-6.21.0 PySide6-6.11.1 PySide6_Addons-6.11.1 P
 
 ## compile log tail
 ```text
+*** Error compiling 'tests\\test_sts_schema_upgrade_gate.py'...
+  File "tests\test_sts_schema_upgrade_gate.py", line 241
+    "v18_to_v19_staff_agenda_state",
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+SyntaxError: invalid syntax
+
 ```
 
 ## targeted log tail
 ```text
-.............F..F.................                                       [100%]
-================================== FAILURES ===================================
-_____ test_current_v18_with_v16_shape_is_rejected_instead_of_silent_noop ______
-
-tmp_path = WindowsPath('C:/Users/runneradmin/AppData/Local/Temp/pytest-of-runneradmin/pytest-0/test_current_v18_with_v16_shap0')
-
-    def test_current_v18_with_v16_shape_is_rejected_instead_of_silent_noop(
-        tmp_path: Path,
-    ):
-        path = tmp_path / "drifted-current.sts"
-        _make_historical_database(path, 16)
-        conn = sqlite3.connect(path)
-        try:
-            _set_schema_version(conn, CURRENT_SCHEMA_VERSION)
-            conn.commit()
-        finally:
-            conn.close()
-    
-        with pytest.raises(STSMigrationError) as exc_info:
-            gate.upgrade_sts_file(path)
-    
-        error = exc_info.value
-        assert "\u015fema s\xfcr\xfcm\xfc ile ger\xe7ek veri yap\u0131s\u0131 uyu\u015fmuyor" in error.user_message
->       assert "schema_fingerprint_mismatch=v18" in error.technical_detail
-E       AssertionError: assert 'schema_fingerprint_mismatch=v18' in 'schema_fingerprint_mismatch=v19; issues=missing_column:share_packages.cancelled_at;missing_column:share_packages.canc...ssing_table:staff_agenda_state;missing_index:idx_staff_agenda_state_snoozed;missing_index:idx_staff_agenda_state_staff'
-E        +  where 'schema_fingerprint_mismatch=v19; issues=missing_column:share_packages.cancelled_at;missing_column:share_packages.canc...ssing_table:staff_agenda_state;missing_index:idx_staff_agenda_state_snoozed;missing_index:idx_staff_agenda_state_staff' = STSMigrationError('STS dosyas\u0131n\u0131n \u015fema s\xfcr\xfcm\xfc ile ger\xe7ek veri yap\u0131s\u0131 uyu\u015fmuyor. G\xfcvenli otomatik g\xfcncelleme durduruldu.').technical_detail
-
-tests\test_sts_schema_upgrade_gate.py:257: AssertionError
-____________ test_missing_future_fingerprint_contract_fails_closed ____________
-
-tmp_path = WindowsPath('C:/Users/runneradmin/AppData/Local/Temp/pytest-of-runneradmin/pytest-0/test_missing_future_fingerprin0')
-monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x00000231B6BD0B10>
-
-    def test_missing_future_fingerprint_contract_fails_closed(
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ):
-        path = tmp_path / "current.sts"
-        db = STSDatabase(path)
-        db.close()
-    
-        monkeypatch.setattr(gate, "FINGERPRINT_VERSIONS", (14, 15, 16))
-    
-        with pytest.raises(STSMigrationError) as exc_info:
-            gate.validate_versioned_schema_fingerprint(
-                path,
-                CURRENT_SCHEMA_VERSION,
-            )
-    
-        assert "\u015fema do\u011frulama s\xf6zle\u015fmesi kay\u0131tl\u0131 de\u011fil" in exc_info.value.user_message
->       assert "schema_fingerprint_not_registered=v18" in exc_info.value.technical_detail
-E       AssertionError: assert 'schema_fingerprint_not_registered=v18' in 'schema_fingerprint_not_registered=v19; error=schema fingerprint kay\u0131tl\u0131 de\u011fil: v19; supported=(14, 15, 16)'
-E        +  where 'schema_fingerprint_not_registered=v19; error=schema fingerprint kay\u0131tl\u0131 de\u011fil: v19; supported=(14, 15, 16)' = STSMigrationError('Bu uygulama s\xfcr\xfcm\xfcnde \u015fema do\u011frulama s\xf6zle\u015fmesi kay\u0131tl\u0131 de\u011fil. G\xfcvenli otomatik g\xfcncelleme durduruldu.').technical_detail
-E        +    where STSMigrationError('Bu uygulama s\xfcr\xfcm\xfcnde \u015fema do\u011frulama s\xf6zle\u015fmesi kay\u0131tl\u0131 de\u011fil. G\xfcvenli otomatik g\xfcncelleme durduruldu.') = <ExceptionInfo STSMigrationError('Bu uygulama s\xfcr\xfcm\xfcnde \u015fema do\u011frulama s\xf6zle\u015fmesi kay\u0131tl\u0131 de\u011fil. G\xfcvenli otomatik g\xfcncelleme durduruldu.') tblen=2>.value
-
-tests\test_sts_schema_upgrade_gate.py:319: AssertionError
-=========================== short test summary info ===========================
-FAILED tests/test_sts_schema_upgrade_gate.py::test_current_v18_with_v16_shape_is_rejected_instead_of_silent_noop - AssertionError: assert 'schema_fingerprint_mismatch=v18' in 'schema_fingerprint_mismatch=v19; issues=missing_column:share_packages.cancelled_at;missing_column:share_packages.canc...ssing_table:staff_agenda_state;missing_index:idx_staff_agenda_state_snoozed;missing_index:idx_staff_agenda_state_staff'\n +  where 'schema_fingerprint_mismatch=v19; issues=missing_column:share_packages.cancelled_at;missing_column:share_packages.canc...ssing_table:staff_agenda_state;missing_index:idx_staff_agenda_state_snoozed;missing_index:idx_staff_agenda_state_staff' = STSMigrationError('STS dosyas\u0131n\u0131n \u015fema s\xfcr\xfcm\xfc ile ger\xe7ek veri yap\u0131s\u0131 uyu\u015fmuyor. G\xfcvenli otomatik g\xfcncelleme durduruldu.').technical_detail
-FAILED tests/test_sts_schema_upgrade_gate.py::test_missing_future_fingerprint_contract_fails_closed - AssertionError: assert 'schema_fingerprint_not_registered=v18' in 'schema_fingerprint_not_registered=v19; error=schema fingerprint kay\u0131tl\u0131 de\u011fil: v19; supported=(14, 15, 16)'\n +  where 'schema_fingerprint_not_registered=v19; error=schema fingerprint kay\u0131tl\u0131 de\u011fil: v19; supported=(14, 15, 16)' = STSMigrationError('Bu uygulama s\xfcr\xfcm\xfcnde \u015fema do\u011frulama s\xf6zle\u015fmesi kay\u0131tl\u0131 de\u011fil. G\xfcvenli otomatik g\xfcncelleme durduruldu.').technical_detail\n +    where STSMigrationError('Bu uygulama s\xfcr\xfcm\xfcnde \u015fema do\u011frulama s\xf6zle\u015fmesi kay\u0131tl\u0131 de\u011fil. G\xfcvenli otomatik g\xfcncelleme durduruldu.') = <ExceptionInfo STSMigrationError('Bu uygulama s\xfcr\xfcm\xfcnde \u015fema do\u011frulama s\xf6zle\u015fmesi kay\u0131tl\u0131 de\u011fil. G\xfcvenli otomatik g\xfcncelleme durduruldu.') tblen=2>.value
-2 failed, 32 passed in 9.29s
+(no log)
 ```
