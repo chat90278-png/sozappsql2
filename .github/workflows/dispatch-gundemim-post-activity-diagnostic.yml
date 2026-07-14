@@ -19,6 +19,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # diagnostic rerun 2
           gh workflow run gundemim-post-activity-diagnostic.yml \
             --repo "${{ github.repository }}" \
             --ref "${{ github.ref_name }}"
