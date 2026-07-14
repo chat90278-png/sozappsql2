@@ -111,111 +111,111 @@ jobs:
             $baselineOnly = $junit.baseline_only | ConvertTo-Json -Compress
 
             $doc = @"
-# AŞAMA 5B-V — GÜNDEMİM RUNTIME DIFFERENTIAL VALIDATION
-
-Tarih: 2026-07-14
-
-## 1. Summary
-
-Exact current-main baseline ve accepted Stage 5B candidate,
-Windows/Python/PySide6 ortamında bağımsız differential validation'dan geçti.
-Bu kayıt main merge yetkisi vermez.
-
-## 2. Exact refs ve lineage
-
-- Baseline/current main: ``$($refs.main)``
-- Candidate: ``$($refs.candidate)``
-- Accepted feature: ``$($refs.feature)``
-- Original merge base: ``$($refs.original_merge_base)``
-- Stage 5B-V bootstrap commit: ``335a4244859749cb25be6cc7808467ba987fef0f``
-- Official validation execution SHA: ``$env:GITHUB_SHA``
-- Candidate/main merge base: ``$($refs.merge_base)``
-- Candidate ahead/behind main: ``$($refs.ahead) / $($refs.behind)``
-
-## 3. Temporary PR
-
-- PR: ``#334`` — ``TEMP VALIDATION: Agenda Stage 5B-V``
-- Base/head: ``main`` ← ``integration/gundemim-current-main-20260713``
-- Draft: ``true``
-- Final state: closed, unmerged
-
-## 4. Workflow, job and artifact
-
-- Workflow run ID: ``$env:GITHUB_RUN_ID``
-- Job ID: ``$jobId``
-- Artifact ID/name: ``$env:ARTIFACT_ID`` / ``agenda-stage-05b-v-evidence``
-- Artifact size: ``$artifactSize`` bytes
-- Artifact digest: ``$env:ARTIFACT_DIGEST``
-- Retention: 30 days
-
-## 5. Environment
-
-``````text
-$environment
-``````
-
-## 6. Requirements parity
-
-- Byte-for-byte equal: ``$($req.equal)``
-- Baseline SHA-256: ``$($req.baseline_sha256)``
-- Candidate SHA-256: ``$($req.candidate_sha256)``
-
-## 7. Compile, tests, smokes and differential
-
-- Baseline/Candidate compile: PASS/PASS
-- Baseline full: ``$($junit.baseline.tests)`` tests; failures/errors/skips ``0/0/0``
-- Candidate targeted: ``$($junit.targeted.tests)`` tests; failures/errors/skips ``0/0/0``
-- Candidate full: ``$($junit.candidate.tests)`` tests; failures/errors/skips ``0/0/0``
-- baseline_only: ``$baselineOnly``
-- candidate_only: ``$candidateOnly``
-- Agenda schema smoke / database smoke: PASS / PASS
-
-## 8. Schema runtime matrix
-
-Runtime matrisi fresh v18, caller-owned transaction, missing parent,
-malformed pre-existing table, genuine v17→v18, current v18 no-op,
-future-version fail-closed, exact structural drift cases ve cascade/reopen
-davranışlarını doğruladı.
-
-``````json
-$schema
-``````
-
-## 9. Qt runtime matrix
-
-Gerçek initialize edilmiş QMainWindow harness'ında production widget install,
-production tool-window registry, widget/timer idempotency, tek signal etkisi,
-status → Agenda → calendar sırası, ``agenda:detail`` open/raise/close/reopen,
-permission-loss, file-reset, Agenda closeEvent cleanup ve integer-ID navigation
-doğrulandı.
-
-``````json
-$qt
-``````
-
-## 10. Protected source parity ve cleanup
-
-Current-main protected source blobları exact baseline ile aynı kaldı.
-Temporary workflow ve validator bu kayıt commit'inde silindi.
-Validation outputları commit edilmedi. Main ve accepted feature refleri değişmedi.
-
-## 11. Gate decision
-
-``````text
-STAGE 5A CURRENT-MAIN INTEGRATION AUDIT: ACCEPTED
-STAGE 5B CONTROLLED INTEGRATION SOURCE: ACCEPTED
-STAGE 5B STATIC/SOURCE TEST GATE: PASS
-STAGE 5B WINDOWS/QT RUNTIME GATE: PASS
-STAGE 5B SCHEMA V18 RUNTIME GATE: PASS
-STAGE 5B BASELINE/CANDIDATE DIFFERENTIAL GATE: PASS
-CURRENT-MAIN RUNTIME FIXES: PRESERVED
-AGENDA DETAIL TOOL-WINDOW REGISTRY RUNTIME: ACCEPTED
-AGENDA UI INSTALL IDEMPOTENCY RUNTIME: ACCEPTED
-STAGE 5B-V INTEGRATION VALIDATION: ACCEPTED
-FINAL MERGE-READINESS AUDIT GATE: OPEN
-MAIN MERGE GATE: CLOSED
-``````
-"@
+          # AŞAMA 5B-V — GÜNDEMİM RUNTIME DIFFERENTIAL VALIDATION
+          
+          Tarih: 2026-07-14
+          
+          ## 1. Summary
+          
+          Exact current-main baseline ve accepted Stage 5B candidate,
+          Windows/Python/PySide6 ortamında bağımsız differential validation'dan geçti.
+          Bu kayıt main merge yetkisi vermez.
+          
+          ## 2. Exact refs ve lineage
+          
+          - Baseline/current main: ``$($refs.main)``
+          - Candidate: ``$($refs.candidate)``
+          - Accepted feature: ``$($refs.feature)``
+          - Original merge base: ``$($refs.original_merge_base)``
+          - Stage 5B-V bootstrap commit: ``335a4244859749cb25be6cc7808467ba987fef0f``
+          - Official validation execution SHA: ``$env:GITHUB_SHA``
+          - Candidate/main merge base: ``$($refs.merge_base)``
+          - Candidate ahead/behind main: ``$($refs.ahead) / $($refs.behind)``
+          
+          ## 3. Temporary PR
+          
+          - PR: ``#334`` — ``TEMP VALIDATION: Agenda Stage 5B-V``
+          - Base/head: ``main`` ← ``integration/gundemim-current-main-20260713``
+          - Draft: ``true``
+          - Final state: closed, unmerged
+          
+          ## 4. Workflow, job and artifact
+          
+          - Workflow run ID: ``$env:GITHUB_RUN_ID``
+          - Job ID: ``$jobId``
+          - Artifact ID/name: ``$env:ARTIFACT_ID`` / ``agenda-stage-05b-v-evidence``
+          - Artifact size: ``$artifactSize`` bytes
+          - Artifact digest: ``$env:ARTIFACT_DIGEST``
+          - Retention: 30 days
+          
+          ## 5. Environment
+          
+          ``````text
+          $environment
+          ``````
+          
+          ## 6. Requirements parity
+          
+          - Byte-for-byte equal: ``$($req.equal)``
+          - Baseline SHA-256: ``$($req.baseline_sha256)``
+          - Candidate SHA-256: ``$($req.candidate_sha256)``
+          
+          ## 7. Compile, tests, smokes and differential
+          
+          - Baseline/Candidate compile: PASS/PASS
+          - Baseline full: ``$($junit.baseline.tests)`` tests; failures/errors/skips ``0/0/0``
+          - Candidate targeted: ``$($junit.targeted.tests)`` tests; failures/errors/skips ``0/0/0``
+          - Candidate full: ``$($junit.candidate.tests)`` tests; failures/errors/skips ``0/0/0``
+          - baseline_only: ``$baselineOnly``
+          - candidate_only: ``$candidateOnly``
+          - Agenda schema smoke / database smoke: PASS / PASS
+          
+          ## 8. Schema runtime matrix
+          
+          Runtime matrisi fresh v18, caller-owned transaction, missing parent,
+          malformed pre-existing table, genuine v17→v18, current v18 no-op,
+          future-version fail-closed, exact structural drift cases ve cascade/reopen
+          davranışlarını doğruladı.
+          
+          ``````json
+          $schema
+          ``````
+          
+          ## 9. Qt runtime matrix
+          
+          Gerçek initialize edilmiş QMainWindow harness'ında production widget install,
+          production tool-window registry, widget/timer idempotency, tek signal etkisi,
+          status → Agenda → calendar sırası, ``agenda:detail`` open/raise/close/reopen,
+          permission-loss, file-reset, Agenda closeEvent cleanup ve integer-ID navigation
+          doğrulandı.
+          
+          ``````json
+          $qt
+          ``````
+          
+          ## 10. Protected source parity ve cleanup
+          
+          Current-main protected source blobları exact baseline ile aynı kaldı.
+          Temporary workflow ve validator bu kayıt commit'inde silindi.
+          Validation outputları commit edilmedi. Main ve accepted feature refleri değişmedi.
+          
+          ## 11. Gate decision
+          
+          ``````text
+          STAGE 5A CURRENT-MAIN INTEGRATION AUDIT: ACCEPTED
+          STAGE 5B CONTROLLED INTEGRATION SOURCE: ACCEPTED
+          STAGE 5B STATIC/SOURCE TEST GATE: PASS
+          STAGE 5B WINDOWS/QT RUNTIME GATE: PASS
+          STAGE 5B SCHEMA V18 RUNTIME GATE: PASS
+          STAGE 5B BASELINE/CANDIDATE DIFFERENTIAL GATE: PASS
+          CURRENT-MAIN RUNTIME FIXES: PRESERVED
+          AGENDA DETAIL TOOL-WINDOW REGISTRY RUNTIME: ACCEPTED
+          AGENDA UI INSTALL IDEMPOTENCY RUNTIME: ACCEPTED
+          STAGE 5B-V INTEGRATION VALIDATION: ACCEPTED
+          FINAL MERGE-READINESS AUDIT GATE: OPEN
+          MAIN MERGE GATE: CLOSED
+          ``````
+          "@
 
             New-Item -ItemType Directory -Force docs/agenda | Out-Null
             Set-Content `
