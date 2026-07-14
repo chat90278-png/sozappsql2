@@ -225,6 +225,78 @@ def fix_agenda_schema_test_staff_fixture(patcher) -> None:
         )
     patcher.write(path, text.replace(old, new, 1))
 
+
+def fix_ui_targeted_test_contracts(patcher) -> None:
+    composition_path = "tests/test_agenda_current_main_composition.py"
+    composition = patcher.read(composition_path)
+    old_close_assertion = '    assert "detail.close()" in close'
+    new_close_assertion = (
+        "    assert 'close_tool_window(\"agenda:detail\")' in close"
+    )
+    count = composition.count(old_close_assertion)
+    if count != 1:
+        raise AssertionError(
+            "Agenda close registry assertion: "
+            f"expected exactly one match, got {count}"
+        )
+    patcher.write(
+        composition_path,
+        composition.replace(
+            old_close_assertion,
+            new_close_assertion,
+            1,
+        ),
+    )
+
+    startup_path = "tests/test_agenda_startup_upgrade_integration.py"
+    startup = patcher.read(startup_path)
+    startup = patcher.replace_top_level_function(
+        startup,
+        "test_main_window_open_sequence_keeps_worker_before_store",
+        """
+def test_main_window_open_sequence_keeps_worker_before_store():
+    source = Path("src/ui/main_window.py").read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    cls = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "MainWindow"
+    )
+    start = next(
+        node
+        for node in cls.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "start_sts_load"
+    )
+    finished = next(
+        node
+        for node in cls.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "_on_sts_load_finished"
+    )
+
+    def called_names(node: ast.AST) -> set[str]:
+        names: set[str] = set()
+        for item in ast.walk(node):
+            if not isinstance(item, ast.Call):
+                continue
+            func = item.func
+            if isinstance(func, ast.Name):
+                names.add(func.id)
+            elif isinstance(func, ast.Attribute):
+                names.add(func.attr)
+        return names
+
+    start_calls = called_names(start)
+    finished_calls = called_names(finished)
+
+    assert "STSLoadWorker" in start_calls
+    assert "STSStore" not in start_calls
+    assert "STSStore" in finished_calls
+""",
+    )
+    patcher.write(startup_path, startup)
+
 def main() -> None:
     verify_bootstrap_boundary()
     patcher = load_original_patcher()
@@ -257,6 +329,7 @@ def main() -> None:
     patcher.patch_main_page()
     patcher.patch_tests()
     fix_agenda_schema_test_staff_fixture(patcher)
+    fix_ui_targeted_test_contracts(patcher)
     patcher.verify_source_contracts()
 
     for relative_path in (
