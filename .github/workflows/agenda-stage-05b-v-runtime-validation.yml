@@ -14,7 +14,7 @@ permissions:
 
 concurrency:
   group: agenda-stage-05b-v-${{ github.ref_name }}-${{ github.event.pull_request.number || 'push' }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   validate:
@@ -31,6 +31,11 @@ jobs:
         with:
           ref: integration/gundemim-current-main-20260713
           fetch-depth: 0
+      - name: Record official run start
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh pr comment 334 --repo $env:GITHUB_REPOSITORY --body "Stage 5B-V official run $env:GITHUB_RUN_ID started for $env:GITHUB_SHA."
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
