@@ -162,8 +162,13 @@ def preflight() -> None:
 
 
 def materialize() -> None:
-    if VALIDATION.exists():
-        shutil.rmtree(VALIDATION)
+    # Keep preflight evidence already written under ARTIFACT; only reset the
+    # materialized detached trees.
+    for tree in (BASELINE_DIR, CANDIDATE_DIR):
+        if tree.exists():
+            run(["git", "worktree", "remove", "--force", str(tree)], cwd=ROOT)
+            if tree.exists():
+                shutil.rmtree(tree)
     ARTIFACT.mkdir(parents=True, exist_ok=True)
     git("worktree", "prune")
     git("worktree", "add", "--detach", str(BASELINE_DIR), BASELINE)
@@ -311,7 +316,7 @@ def schema_runtime() -> None:
         except Exception:
             future_failed = True
         evidence["future_v19"] = {"fail_closed": future_failed, "version": read_sts_schema_version(future)}
-        cascade = tmp / "cascade.db"; d = STSDatabase(str(cascade)); c = d.conn; c.execute("INSERT INTO staff(id, name) VALUES (?, ?)", (9001, "Agenda Runtime")); c.execute("INSERT INTO staff_agenda_state(staff_id, agenda_key, is_dismissed) VALUES (?,?,?)", (9001, "x", 1)); c.commit(); d.close()
+        cascade = tmp / "cascade.db"; d = STSDatabase(str(cascade)); c = d.conn; c.execute("INSERT INTO staff(id, name) VALUES (?, ?)", (9001, "Agenda Runtime")); c.execute("INSERT INTO staff_agenda_state(staff_id, agenda_key, seen_version) VALUES (?,?,?)", (9001, "x", "runtime")); c.commit(); d.close()
         c = sqlite3.connect(cascade); c.execute("PRAGMA foreign_keys=ON"); preserved = c.execute("SELECT COUNT(*) FROM staff_agenda_state WHERE staff_id=9001").fetchone()[0]; c.execute("DELETE FROM staff WHERE id=9001"); c.commit(); cascaded = c.execute("SELECT COUNT(*) FROM staff_agenda_state WHERE staff_id=9001").fetchone()[0]; c.close()
         evidence["cascade_reopen"] = {"preserved": preserved, "after_delete": cascaded}
     write_json("schema-runtime.json", evidence)
@@ -323,7 +328,8 @@ def schema_runtime() -> None:
 def qt_runtime() -> None:
     evidence: dict[str, Any] = {}
     with candidate_imports():
-        from PySide6.QtWidgets import QApplication, QWidget, QVBoxLayout
+        from PySide6.QtWidgets import QApplication, QWidget, QVBoxLayout, QHBoxLayout
+        from PySide6.QtGui import QFontMetrics
         from PySide6.QtCore import QTimer
         app = QApplication.instance() or QApplication([])
         from src.ui.main_page_analysis_window import MainWindow
@@ -349,7 +355,19 @@ def qt_runtime() -> None:
         MainWindow._install_personal_agenda_widget(h); agenda2 = h.agenda_compact_widget
         layout_widgets = [h.contract_status_layout.itemAt(i).widget().__class__.__name__ for i in range(h.contract_status_layout.count())]
         evidence["widget_install"] = {"status_reused": status1 is status2, "agenda_reused": agenda1 is agenda2, "timer_unchanged": timer is h._agenda_refresh_timer, "layout": layout_widgets}
-        reg = object.__new__(MainWindow); reg._tool_windows = {}; reg._tool_window_chips = {}; reg._agenda_detail_window = None
+        reg = object.__new__(MainWindow)
+        reg._tool_windows_by_key = {}
+        reg._tool_window_chip_by_key = {}
+        reg._active_tool_window_key = ""
+        reg._agenda_detail_window = None
+        reg.open_windows_host = QWidget()
+        reg.open_windows_layout = QHBoxLayout(reg.open_windows_host)
+        reg.open_windows_scroll = QWidget()
+        reg.open_windows_strip = QWidget()
+        reg.font = app.font
+        reg.fontMetrics = lambda: QFontMetrics(app.font())
+        reg.frameGeometry = lambda: reg.open_windows_host.frameGeometry()
+        reg.screen = lambda: reg.open_windows_host.screen()
         calls = {"factory": 0}
         def factory():
             calls["factory"] += 1
@@ -358,7 +376,7 @@ def qt_runtime() -> None:
         second = MainWindow.open_or_raise_tool_window(reg, "agenda:detail", "Agenda", factory)
         MainWindow.close_tool_window(reg, "agenda:detail")
         third = MainWindow.open_or_raise_tool_window(reg, "agenda:detail", "Agenda", factory)
-        evidence["registry"] = {"same_on_second_open": first is second, "factory_calls_after_second": calls["factory"], "closed_removed": "agenda:detail" not in reg._tool_windows, "new_after_reopen": third is not first, "key_present": "agenda:detail" in reg._tool_windows}
+        evidence["registry"] = {"same_on_second_open": first is second, "factory_calls_after_second": calls["factory"], "closed_removed": "agenda:detail" not in reg._tool_windows_by_key, "new_after_reopen": third is not first, "key_present": "agenda:detail" in reg._tool_windows_by_key}
         app.processEvents()
     write_json("qt-runtime.json", evidence)
     if not (evidence["widget_install"]["status_reused"] and evidence["widget_install"]["agenda_reused"] and evidence["registry"]["same_on_second_open"]):
