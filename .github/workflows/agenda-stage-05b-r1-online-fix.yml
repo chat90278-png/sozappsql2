@@ -7,6 +7,7 @@ on:
     paths:
       - ".github/workflows/agenda-stage-05b-r1-online-fix.yml"
       - "tools/validation/apply_agenda_stage_05b_r1.py"
+      - "tools/validation/run_agenda_stage_05b_r1_hotfix.py"
 
 permissions:
   contents: write
@@ -24,6 +25,7 @@ jobs:
       PYTHONUTF8: "1"
       PYTHONHASHSEED: "0"
       QT_QPA_PLATFORM: "offscreen"
+      STAGE5B_R1_BASE: "80b6f927d0c0f3a89e8b2cb7cef603892c60202d"
 
     steps:
       - name: Checkout exact integration branch
@@ -35,18 +37,40 @@ jobs:
       - name: Verify bootstrap boundary
         shell: pwsh
         run: |
-          $expectedParent = "80b6f927d0c0f3a89e8b2cb7cef603892c60202d"
+          $expectedBase = $env:STAGE5B_R1_BASE
           $branch = git branch --show-current
-          $parent = git rev-parse HEAD^
           if ($branch -ne "integration/gundemim-current-main-20260713") {
             throw "Wrong branch: $branch"
           }
-          if ($parent -ne $expectedParent) {
-            throw "Bootstrap parent mismatch. expected=$expectedParent actual=$parent"
-          }
+
+          git cat-file -e "$expectedBase^{commit}"
           git cat-file -e "e1ed9a66318e19178f132602d3114a97880fa27f^{commit}"
           git cat-file -e "b45d6f2e2b2948d1bbf9dcf1f83c8b04386a5c98^{commit}"
-          git merge-base e1ed9a66318e19178f132602d3114a97880fa27f HEAD^
+
+          git merge-base --is-ancestor $expectedBase HEAD
+          if ($LASTEXITCODE -ne 0) {
+            throw "Expected Stage 5B base is not an ancestor of HEAD."
+          }
+
+          $candidateBase = git merge-base `
+            e1ed9a66318e19178f132602d3114a97880fa27f `
+            $expectedBase
+          if ($candidateBase -ne "e1ed9a66318e19178f132602d3114a97880fa27f") {
+            throw "Candidate/current-main merge-base mismatch: $candidateBase"
+          }
+
+          $allowedBootstrap = @(
+            ".github/workflows/agenda-stage-05b-r1-online-fix.yml",
+            "tools/validation/apply_agenda_stage_05b_r1.py",
+            "tools/validation/run_agenda_stage_05b_r1_hotfix.py"
+          )
+          $changed = git diff --name-only $expectedBase HEAD
+          foreach ($path in $changed) {
+            if ($allowedBootstrap -notcontains $path) {
+              throw "Unexpected bootstrap path: $path"
+            }
+          }
+
           git status --short
 
       - name: Set up Python
@@ -63,7 +87,7 @@ jobs:
           python -m pip install pytest
 
       - name: Apply exact Stage 5B-R1 corrections
-        run: python tools/validation/apply_agenda_stage_05b_r1.py
+        run: python tools/validation/run_agenda_stage_05b_r1_hotfix.py
 
       - name: Compile
         run: python -m compileall -q src tests
@@ -139,6 +163,15 @@ jobs:
       - name: Full candidate pytest
         run: python -m pytest -q --junitxml=validation-output/stage-05b-r1-full.xml
 
+      - name: Upload validation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agenda-stage-05b-r1-online-evidence
+          path: validation-output/**
+          if-no-files-found: ignore
+          retention-days: 30
+
       - name: Record successful correction
         shell: pwsh
         run: |
@@ -146,7 +179,7 @@ jobs:
 
           ## Stage 5B-R1 online correction — PASS
 
-          - Bootstrap parent: `80b6f927d0c0f3a89e8b2cb7cef603892c60202d`
+          - Original candidate: `80b6f927d0c0f3a89e8b2cb7cef603892c60202d`
           - Canonical Agenda schema owner: `src/services/sts_database.py`
           - Runtime monkey-patch: removed
           - Fresh/legacy and explicit 17→18: shared helper
@@ -160,13 +193,15 @@ jobs:
           - Full candidate pytest: PASS
           - Stage 5B-V validation gate: OPEN
           - Main Merge Gate: CLOSED
-          "@ | Add-Content -Encoding UTF8 docs/agenda/AGENDA_STAGE_05B_CONTROLLED_INTEGRATION.md
+          "@ | Add-Content -Encoding UTF8 `
+            docs/agenda/AGENDA_STAGE_05B_CONTROLLED_INTEGRATION.md
 
       - name: Remove online executor files
         shell: pwsh
         run: |
           git rm .github/workflows/agenda-stage-05b-r1-online-fix.yml
           git rm tools/validation/apply_agenda_stage_05b_r1.py
+          git rm tools/validation/run_agenda_stage_05b_r1_hotfix.py
           if (Test-Path validation-output) {
             Remove-Item -Recurse -Force validation-output
           }
@@ -174,6 +209,7 @@ jobs:
       - name: Verify final allowlist and commit
         shell: pwsh
         run: |
+          $expectedBase = $env:STAGE5B_R1_BASE
           $allowed = @(
             "docs/agenda/AGENDA_STAGE_05B_CONTROLLED_INTEGRATION.md",
             "src/services/sts_database.py",
@@ -190,23 +226,29 @@ jobs:
             "tests/test_sts_schema_upgrade_gate.py",
             "tests/test_sts_schema_upgrade_orchestration.py"
           )
-          $changed = git diff --name-only HEAD
+
+          git add -A
+          $changed = git diff --cached --name-only $expectedBase
           foreach ($path in $changed) {
             if ($allowed -notcontains $path) {
               throw "Unexpected final changed path: $path"
             }
           }
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git commit -m "Complete Stage 5B-R1 online correction [stage5b-r1-applied]"
-          git push origin HEAD:integration/gundemim-current-main-20260713
 
-      - name: Upload validation evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: agenda-stage-05b-r1-online-evidence
-          path: validation-output/**
-          if-no-files-found: ignore
-          retention-days: 30
+          if (Test-Path .github/workflows/agenda-stage-05b-r1-online-fix.yml) {
+            throw "Temporary workflow still exists."
+          }
+          if (Test-Path tools/validation/apply_agenda_stage_05b_r1.py) {
+            throw "Temporary original patcher still exists."
+          }
+          if (Test-Path tools/validation/run_agenda_stage_05b_r1_hotfix.py) {
+            throw "Temporary hotfix runner still exists."
+          }
+
+          git config user.name "github-actions[bot]"
+          git config user.email `
+            "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m `
+            "Complete Stage 5B-R1 online correction [stage5b-r1-applied]"
+          git push origin `
+            HEAD:integration/gundemim-current-main-20260713
