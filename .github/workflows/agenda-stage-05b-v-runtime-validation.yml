@@ -1,6 +1,9 @@
 name: Agenda Stage 05B-V Runtime Validation
 
 on:
+  push:
+    branches:
+      - integration/gundemim-current-main-20260713
   pull_request:
     branches: [main]
     types: [opened, synchronize, reopened]
@@ -10,19 +13,19 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: agenda-stage-05b-v-${{ github.event.pull_request.number }}
+  group: agenda-stage-05b-v-${{ github.ref_name }}-${{ github.event.pull_request.number || 'push' }}
   cancel-in-progress: false
 
 jobs:
   validate:
-    if: github.head_ref == 'integration/gundemim-current-main-20260713'
+    if: github.ref_name == 'integration/gundemim-current-main-20260713' || github.head_ref == 'integration/gundemim-current-main-20260713'
     runs-on: windows-latest
     timeout-minutes: 120
     env:
       QT_QPA_PLATFORM: offscreen
       PYTHONUTF8: '1'
       PYTHONHASHSEED: '0'
-      PR_NUMBER: ${{ github.event.pull_request.number }}
+      PR_NUMBER: ${{ github.event.pull_request.number || 334 }}
     steps:
       - name: Checkout validation bootstrap branch
         uses: actions/checkout@v4
