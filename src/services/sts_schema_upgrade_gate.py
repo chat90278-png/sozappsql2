@@ -16,7 +16,6 @@ from src.services.sts_schema_upgrade import (
     upgrade_sts_file as _upgrade_sts_file,
 )
 
-
 ProgressCallback = Callable[[int, str], None]
 
 
@@ -26,6 +25,10 @@ class SchemaFingerprint:
     required_columns: tuple[tuple[str, tuple[str, ...]], ...]
     required_indexes: tuple[str, ...] = ()
     required_metadata: tuple[tuple[str, str], ...] = ()
+    required_primary_keys: tuple[tuple[str, tuple[str, ...]], ...] = ()
+    required_foreign_keys: tuple[tuple[str, str, str, str, str], ...] = ()
+    required_index_columns: tuple[tuple[str, tuple[str, ...]], ...] = ()
+    forbidden_tables: tuple[str, ...] = ()
 
 
 _V14_COLUMNS: tuple[tuple[str, tuple[str, ...]], ...] = (
@@ -217,6 +220,29 @@ _V18_ACTIVITY_INDEXES = (
     "idx_activity_logs_platform_occurred",
 )
 
+
+_V19_AGENDA_STATE_COLUMNS = (
+    "staff_id",
+    "agenda_key",
+    "first_presented_at",
+    "last_presented_at",
+    "seen_at",
+    "seen_version",
+    "snoozed_until",
+    "snoozed_version",
+    "snoozed_severity",
+    "dismissed_at",
+    "dismissed_version",
+    "created_at",
+    "updated_at",
+)
+
+_V19_AGENDA_INDEXES = (
+    "idx_staff_agenda_state_staff",
+    "idx_staff_agenda_state_snoozed",
+)
+
+
 FINGERPRINT_MIN_VERSION = VERSIONED_MIGRATION_FLOOR
 FINGERPRINT_MAX_VERSION = CURRENT_SCHEMA_VERSION
 FINGERPRINT_VERSIONS = tuple(
@@ -256,6 +282,11 @@ def schema_fingerprint_for_version(version: int) -> SchemaFingerprint:
 
     columns = _V14_COLUMNS
     indexes = set(_V14_INDEXES)
+    primary_keys: tuple[tuple[str, tuple[str, ...]], ...] = ()
+    foreign_keys: tuple[tuple[str, str, str, str, str], ...] = ()
+    index_columns: tuple[tuple[str, tuple[str, ...]], ...] = ()
+    forbidden_tables: tuple[str, ...] = ()
+
     if version >= 15:
         columns = _merge_required_columns(
             columns,
@@ -282,13 +313,41 @@ def schema_fingerprint_for_version(version: int) -> SchemaFingerprint:
             _V18_ACTIVITY_COLUMNS,
         )
         indexes.update(_V18_ACTIVITY_INDEXES)
+    if version >= 19:
+        columns = _merge_required_columns(columns, "staff", ("id",))
+        columns = _merge_required_columns(
+            columns,
+            "staff_agenda_state",
+            _V19_AGENDA_STATE_COLUMNS,
+        )
+        indexes.update(_V19_AGENDA_INDEXES)
+        primary_keys = (("staff_agenda_state", ("staff_id", "agenda_key")),)
+        foreign_keys = (
+            ("staff_agenda_state", "staff_id", "staff", "id", "CASCADE"),
+        )
+        index_columns = (
+            ("idx_staff_agenda_state_staff", ("staff_id",)),
+            (
+                "idx_staff_agenda_state_snoozed",
+                ("staff_id", "snoozed_until"),
+            ),
+        )
+        forbidden_tables = ("agenda_items",)
 
     return SchemaFingerprint(
         version=version,
         required_columns=columns,
         required_indexes=tuple(sorted(indexes)),
         required_metadata=(("sts_metadata", "sts_instance_id"),),
+        required_primary_keys=primary_keys,
+        required_foreign_keys=foreign_keys,
+        required_index_columns=index_columns,
+        forbidden_tables=forbidden_tables,
     )
+
+
+def _quote(identifier: str) -> str:
+    return '"' + str(identifier or "").replace('"', '""') + '"'
 
 
 def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
@@ -299,14 +358,14 @@ def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
     return row is not None
 
 
-def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
+def _table_info(conn: sqlite3.Connection, table: str) -> list[sqlite3.Row | tuple]:
     if not _table_exists(conn, table):
-        return set()
-    escaped = str(table or "").replace('"', '""')
-    return {
-        str(row[1])
-        for row in conn.execute(f'PRAGMA table_info("{escaped}")').fetchall()
-    }
+        return []
+    return list(conn.execute(f"PRAGMA table_info({_quote(table)})").fetchall())
+
+
+def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
+    return {str(row[1]) for row in _table_info(conn, table)}
 
 
 def _index_names(conn: sqlite3.Connection) -> set[str]:
@@ -314,6 +373,39 @@ def _index_names(conn: sqlite3.Connection) -> set[str]:
         str(row[0])
         for row in conn.execute(
             "SELECT name FROM sqlite_master WHERE type='index'"
+        ).fetchall()
+    }
+
+
+def _index_columns(conn: sqlite3.Connection, index_name: str) -> tuple[str, ...]:
+    return tuple(
+        str(row[2])
+        for row in conn.execute(
+            f"PRAGMA index_info({_quote(index_name)})"
+        ).fetchall()
+    )
+
+
+def _primary_key_columns(conn: sqlite3.Connection, table: str) -> tuple[str, ...]:
+    return tuple(
+        str(row[1])
+        for row in sorted(
+            (row for row in _table_info(conn, table) if int(row[5] or 0) > 0),
+            key=lambda row: int(row[5]),
+        )
+    )
+
+
+def _foreign_key_contracts(
+    conn: sqlite3.Connection,
+    table: str,
+) -> set[tuple[str, str, str, str]]:
+    if not _table_exists(conn, table):
+        return set()
+    return {
+        (str(row[3]), str(row[2]), str(row[4]), str(row[6]).upper())
+        for row in conn.execute(
+            f"PRAGMA foreign_key_list({_quote(table)})"
         ).fetchall()
     }
 
@@ -337,6 +429,54 @@ def _fingerprint_issues(
     for index_name in fingerprint.required_indexes:
         if index_name not in actual_indexes:
             issues.append(f"missing_index:{index_name}")
+
+    for index_name, expected_columns in fingerprint.required_index_columns:
+        if index_name not in actual_indexes:
+            continue
+        actual_columns = _index_columns(conn, index_name)
+        if actual_columns != expected_columns:
+            issues.append(
+                f"mismatched_index:{index_name}:"
+                f"expected={','.join(expected_columns)}:"
+                f"actual={','.join(actual_columns)}"
+            )
+
+    for table, expected_columns in fingerprint.required_primary_keys:
+        if not _table_exists(conn, table):
+            continue
+        actual_columns = _primary_key_columns(conn, table)
+        if actual_columns != expected_columns:
+            issues.append(
+                f"mismatched_primary_key:{table}:"
+                f"expected={','.join(expected_columns)}:"
+                f"actual={','.join(actual_columns)}"
+            )
+
+    for table, from_column, ref_table, ref_column, on_delete in (
+        fingerprint.required_foreign_keys
+    ):
+        if not _table_exists(conn, table):
+            continue
+        contracts = _foreign_key_contracts(conn, table)
+        expected = (from_column, ref_table, ref_column, on_delete.upper())
+        same_relation = {
+            item for item in contracts if item[:3] == expected[:3]
+        }
+        if not same_relation:
+            issues.append(
+                f"missing_foreign_key:{table}.{from_column}->"
+                f"{ref_table}.{ref_column}"
+            )
+        elif expected not in same_relation:
+            actual_delete = ",".join(sorted(item[3] for item in same_relation))
+            issues.append(
+                f"mismatched_foreign_key_on_delete:{table}.{from_column}:"
+                f"expected={expected[3]}:actual={actual_delete}"
+            )
+
+    for table in fingerprint.forbidden_tables:
+        if _table_exists(conn, table):
+            issues.append(f"forbidden_table:{table}")
 
     for table, key in fingerprint.required_metadata:
         columns = _table_columns(conn, table)
@@ -369,6 +509,7 @@ def validate_versioned_schema_fingerprint(
                 f"error={exc}"
             ),
         ) from exc
+
     uri = f"file:{sts_path.as_posix()}?mode=ro"
     conn = sqlite3.connect(uri, uri=True)
     try:
@@ -429,7 +570,6 @@ def upgrade_sts_file(
     try:
         from_version = read_sts_schema_version(sts_path)
     except Exception:
-        # The core upgrade engine owns the canonical unreadable-schema error.
         from_version = None
 
     if (

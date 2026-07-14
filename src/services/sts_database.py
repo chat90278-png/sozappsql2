@@ -69,7 +69,7 @@ def quote_identifier(identifier: str) -> str:
 LEGACY_CONTRACT_PARENT_NO_COLUMN = "parent_contract_" "no"
 LEGACY_CONTRACT_USERS_COLUMN = "user_" "names"
 LEGACY_DELIVERY_SYSTEM_LABEL_COLUMN = "system_" "name"
-CURRENT_SCHEMA_VERSION = 18
+CURRENT_SCHEMA_VERSION = 19
 
 ACTIVITY_LOG_COLUMNS: tuple[tuple[str, str], ...] = (
     ("occurred_at_utc", "TEXT"),
@@ -99,6 +99,159 @@ ACTIVITY_LOG_INDEX_SQL: tuple[str, ...] = (
     "CREATE INDEX IF NOT EXISTS idx_activity_logs_contract_occurred ON activity_logs(contract_id, occurred_at_utc DESC)",
     "CREATE INDEX IF NOT EXISTS idx_activity_logs_platform_occurred ON activity_logs(platform_id, occurred_at_utc DESC)",
 )
+
+AGENDA_STATE_COLUMNS: tuple[str, ...] = (
+    "staff_id", "agenda_key", "first_presented_at", "last_presented_at",
+    "seen_at", "seen_version", "snoozed_until", "snoozed_version",
+    "snoozed_severity", "dismissed_at", "dismissed_version",
+    "created_at", "updated_at",
+)
+
+AGENDA_STATE_INDEXES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("idx_staff_agenda_state_staff", ("staff_id",)),
+    ("idx_staff_agenda_state_snoozed", ("staff_id", "snoozed_until")),
+)
+
+
+def _agenda_table_exists(conn: sqlite3.Connection, table: str) -> bool:
+    return conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1",
+        (str(table or ""),),
+    ).fetchone() is not None
+
+
+def _agenda_table_info(conn: sqlite3.Connection, table: str) -> list[sqlite3.Row | tuple]:
+    if not _agenda_table_exists(conn, table):
+        return []
+    return list(conn.execute(f"PRAGMA table_info({quote_identifier(table)})").fetchall())
+
+
+def _agenda_index_columns(conn: sqlite3.Connection, index_name: str) -> tuple[str, ...]:
+    return tuple(
+        str(row[2])
+        for row in conn.execute(
+            f"PRAGMA index_info({quote_identifier(index_name)})"
+        ).fetchall()
+    )
+
+
+def ensure_staff_agenda_state_schema(
+    conn: sqlite3.Connection,
+) -> tuple[str, ...]:
+    # Caller owns transaction, commit and rollback behavior.
+    staff_columns = {
+        str(row[1])
+        for row in _agenda_table_info(conn, "staff")
+    }
+    if "id" not in staff_columns:
+        raise RuntimeError(
+            "staff_agenda_state oluşturulamadı: "
+            "staff tablosu veya staff.id eksik."
+        )
+    if _agenda_table_exists(conn, "agenda_items"):
+        raise RuntimeError("Yasak agenda_items tablosu tespit edildi.")
+
+    created: list[str] = []
+    table_existed = _agenda_table_exists(conn, "staff_agenda_state")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS staff_agenda_state(
+            staff_id INTEGER NOT NULL,
+            agenda_key TEXT NOT NULL,
+            first_presented_at TEXT,
+            last_presented_at TEXT,
+            seen_at TEXT,
+            seen_version TEXT NOT NULL DEFAULT '',
+            snoozed_until TEXT,
+            snoozed_version TEXT NOT NULL DEFAULT '',
+            snoozed_severity TEXT NOT NULL DEFAULT '',
+            dismissed_at TEXT,
+            dismissed_version TEXT NOT NULL DEFAULT '',
+            created_at TEXT,
+            updated_at TEXT,
+            PRIMARY KEY(staff_id, agenda_key),
+            FOREIGN KEY(staff_id) REFERENCES staff(id) ON DELETE CASCADE
+        )
+        """
+    )
+    if not table_existed:
+        created.append("staff_agenda_state")
+
+    # Fail closed on malformed pre-existing tables before attempting indexes.
+    table_info = _agenda_table_info(conn, "staff_agenda_state")
+    actual_columns = tuple(str(row[1]) for row in table_info)
+    if actual_columns != AGENDA_STATE_COLUMNS:
+        raise RuntimeError(
+            "staff_agenda_state kolon sözleşmesi geçersiz: "
+            f"expected={AGENDA_STATE_COLUMNS}; actual={actual_columns}"
+        )
+
+    primary_key = tuple(
+        str(row[1])
+        for row in sorted(
+            (row for row in table_info if int(row[5] or 0) > 0),
+            key=lambda row: int(row[5]),
+        )
+    )
+    if primary_key != ("staff_id", "agenda_key"):
+        raise RuntimeError(
+            "staff_agenda_state primary key sözleşmesi geçersiz: "
+            f"expected=('staff_id', 'agenda_key'); actual={primary_key}"
+        )
+
+    foreign_keys = [
+        (str(row[3]), str(row[2]), str(row[4]), str(row[6]).upper())
+        for row in conn.execute(
+            'PRAGMA foreign_key_list("staff_agenda_state")'
+        ).fetchall()
+    ]
+    expected_fk = ("staff_id", "staff", "id", "CASCADE")
+    if foreign_keys != [expected_fk]:
+        raise RuntimeError(
+            "staff_agenda_state foreign key sözleşmesi geçersiz: "
+            f"expected={expected_fk}; actual={foreign_keys}"
+        )
+
+    existing_indexes = {
+        str(row[0])
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='index'"
+        ).fetchall()
+    }
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_staff_agenda_state_staff "
+        "ON staff_agenda_state(staff_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_staff_agenda_state_snoozed "
+        "ON staff_agenda_state(staff_id,snoozed_until)"
+    )
+    for index_name, _columns in AGENDA_STATE_INDEXES:
+        if index_name not in existing_indexes:
+            created.append(index_name)
+
+    current_indexes = {
+        str(row[0])
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='index'"
+        ).fetchall()
+    }
+    for index_name, expected_columns in AGENDA_STATE_INDEXES:
+        if index_name not in current_indexes:
+            raise RuntimeError(
+                f"staff_agenda_state index eksik: {index_name}"
+            )
+        actual_index_columns = _agenda_index_columns(conn, index_name)
+        if actual_index_columns != expected_columns:
+            raise RuntimeError(
+                f"{index_name} kolon sırası geçersiz: "
+                f"expected={expected_columns}; "
+                f"actual={actual_index_columns}"
+            )
+
+    if _agenda_table_exists(conn, "agenda_items"):
+        raise RuntimeError("Yasak agenda_items tablosu tespit edildi.")
+    return tuple(created)
 
 
 class STSMigrationError(RuntimeError):
@@ -834,6 +987,7 @@ CREATE TABLE IF NOT EXISTS activity_logs(
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_contract_files_contract_size_sha256 ON contract_files(contract_id,size_bytes,sha256)")
         self._create_runtime_indexes()
         ensure_staff_table(self.conn)
+        migrated.extend(ensure_staff_agenda_state_schema(self.conn))
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_staff_role_id ON staff(role_id)")
         self.conn.execute("""
             CREATE TABLE IF NOT EXISTS contract_responsible_engineers (

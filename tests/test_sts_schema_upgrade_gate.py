@@ -100,6 +100,10 @@ def _make_historical_database(path: Path, version: int) -> None:
     conn = sqlite3.connect(path)
     try:
         _drop_share_package_indexes(conn)
+        if version <= 17:
+            conn.execute("DROP INDEX IF EXISTS idx_staff_agenda_state_staff")
+            conn.execute("DROP INDEX IF EXISTS idx_staff_agenda_state_snoozed")
+            conn.execute("DROP TABLE IF EXISTS staff_agenda_state")
         conn.execute("DROP TABLE IF EXISTS share_packages")
         if version >= 15:
             _create_share_packages_for_version(conn, version)
@@ -233,7 +237,7 @@ def test_mislabeled_v14_missing_foundation_fails_before_backup_or_mutation(
     assert not (tmp_path / "yedekler").exists()
 
 
-def test_current_v18_with_v16_shape_is_rejected_instead_of_silent_noop(
+def test_current_v19_with_v16_shape_is_rejected_instead_of_silent_noop(
     tmp_path: Path,
 ):
     path = tmp_path / "drifted-current.sts"
@@ -250,7 +254,7 @@ def test_current_v18_with_v16_shape_is_rejected_instead_of_silent_noop(
 
     error = exc_info.value
     assert "şema sürümü ile gerçek veri yapısı uyuşmuyor" in error.user_message
-    assert "schema_fingerprint_mismatch=v18" in error.technical_detail
+    assert "schema_fingerprint_mismatch=v19" in error.technical_detail
     assert "missing_column:share_packages.cancelled_at" in error.technical_detail
     assert read_sts_schema_version(path) == CURRENT_SCHEMA_VERSION
     assert not (tmp_path / "yedekler").exists()
@@ -265,6 +269,7 @@ def test_v16_upgrade_is_postflight_validated_as_current_schema(tmp_path: Path):
     assert result.applied_migrations == (
         "v16_to_v17_share_cancellation_audit",
         "v17_to_v18_activity_history_infrastructure",
+        "v18_to_v19_staff_agenda_state",
     )
     assert read_sts_schema_version(path) == CURRENT_SCHEMA_VERSION
     assert (
@@ -311,7 +316,7 @@ def test_missing_future_fingerprint_contract_fails_closed(
         )
 
     assert "şema doğrulama sözleşmesi kayıtlı değil" in exc_info.value.user_message
-    assert "schema_fingerprint_not_registered=v18" in exc_info.value.technical_detail
+    assert "schema_fingerprint_not_registered=v19" in exc_info.value.technical_detail
 
 
 def test_sts_load_worker_uses_schema_upgrade_gate_entrypoint():
