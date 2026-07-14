@@ -233,7 +233,7 @@ def test_mislabeled_v14_missing_foundation_fails_before_backup_or_mutation(
     assert not (tmp_path / "yedekler").exists()
 
 
-def test_current_v18_with_v16_shape_is_rejected_instead_of_silent_noop(
+def test_current_v19_with_v16_shape_is_rejected_instead_of_silent_noop(
     tmp_path: Path,
 ):
     path = tmp_path / "drifted-current.sts"
@@ -250,7 +250,7 @@ def test_current_v18_with_v16_shape_is_rejected_instead_of_silent_noop(
 
     error = exc_info.value
     assert "şema sürümü ile gerçek veri yapısı uyuşmuyor" in error.user_message
-    assert "schema_fingerprint_mismatch=v18" in error.technical_detail
+    assert "schema_fingerprint_mismatch=v19" in error.technical_detail
     assert "missing_column:share_packages.cancelled_at" in error.technical_detail
     assert read_sts_schema_version(path) == CURRENT_SCHEMA_VERSION
     assert not (tmp_path / "yedekler").exists()
@@ -311,7 +311,7 @@ def test_missing_future_fingerprint_contract_fails_closed(
         )
 
     assert "şema doğrulama sözleşmesi kayıtlı değil" in exc_info.value.user_message
-    assert "schema_fingerprint_not_registered=v18" in exc_info.value.technical_detail
+    assert "schema_fingerprint_not_registered=v19" in exc_info.value.technical_detail
 
 
 def test_sts_load_worker_uses_schema_upgrade_gate_entrypoint():
