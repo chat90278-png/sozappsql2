@@ -1,4 +1,4 @@
-name: Dispatch Gündemim Post-Activity Diagnostic
+name: Dispatch Gündemim Post-Activity Integration
 
 on:
   push:
@@ -15,11 +15,10 @@ jobs:
   dispatch:
     runs-on: ubuntu-latest
     steps:
-      - name: Dispatch existing diagnostic workflow
+      - name: Dispatch controlled integration workflow
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # diagnostic rerun 2
-          gh workflow run gundemim-post-activity-diagnostic.yml \
+          gh workflow run gundemim-post-activity-integration.yml \
             --repo "${{ github.repository }}" \
             --ref "${{ github.ref_name }}"
