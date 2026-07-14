@@ -82,7 +82,8 @@ def test_activity_schema_migration_is_additive_idempotent_and_preserves_rows(tmp
         assert _count(db) == 1
         assert db.conn.execute("SELECT action FROM activity_logs").fetchone()[0] == "legacy_event"
         assert int(db.conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0]) == 19
-        assert CURRENT_SCHEMA_VERSION == ACTIVITY_SCHEMA_VERSION == 18
+        assert CURRENT_SCHEMA_VERSION == 19
+        assert ACTIVITY_SCHEMA_VERSION == 18
         indexes = {str(row[1]) for row in db.conn.execute("PRAGMA index_list(activity_logs)")}
         assert {
             "idx_activity_logs_occurred_id",
