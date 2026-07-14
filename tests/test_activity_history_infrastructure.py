@@ -81,7 +81,7 @@ def test_activity_schema_migration_is_additive_idempotent_and_preserves_rows(tmp
         assert expected <= columns
         assert _count(db) == 1
         assert db.conn.execute("SELECT action FROM activity_logs").fetchone()[0] == "legacy_event"
-        assert int(db.conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0]) == 18
+        assert int(db.conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0]) == 19
         assert CURRENT_SCHEMA_VERSION == ACTIVITY_SCHEMA_VERSION == 18
         indexes = {str(row[1]) for row in db.conn.execute("PRAGMA index_list(activity_logs)")}
         assert {
@@ -329,7 +329,7 @@ def test_activity_behavior_is_defined_directly_in_source_files():
     package_source = Path("src/services/__init__.py").read_text(encoding="utf-8")
     store_source = Path("src/services/sts_store.py").read_text(encoding="utf-8")
 
-    assert "CURRENT_SCHEMA_VERSION = 18" in database_source
+    assert "CURRENT_SCHEMA_VERSION = 19" in database_source
     assert STSDatabase.add_log.__module__ == "src.services.sts_database"
     assert STSDatabase.tx.__module__ == "src.services.sts_database"
     assert STSDatabase.list_logs.__module__ == "src.services.sts_database"
