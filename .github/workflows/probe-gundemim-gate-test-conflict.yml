@@ -1,4 +1,4 @@
-name: Probe Current Gündemim Gate Test Conflict
+name: Patch Remaining Activity Schema v19 Tests
 
 on:
   push:
@@ -11,51 +11,31 @@ permissions:
   contents: write
 
 jobs:
-  probe:
+  patch:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           ref: integration/gundemim-after-activity-20260714
           fetch-depth: 0
-      - shell: bash
+      - name: Patch exact combined-schema assertions
+        shell: bash
         run: |
           set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('tests/test_activity_history_infrastructure.py')
+          text = path.read_text(encoding='utf-8')
+          text = text.replace('fetchone()[0]) == 18', 'fetchone()[0]) == 19')
+          text = text.replace('"CURRENT_SCHEMA_VERSION = 18"', '"CURRENT_SCHEMA_VERSION = 19"')
+          path.write_text(text, encoding='utf-8')
+          assert 'fetchone()[0]) == 18' not in text
+          assert '"CURRENT_SCHEMA_VERSION = 18"' not in text
+          PY
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git fetch origin integration/gundemim-current-main-20260713
-          set +e
-          git merge --no-commit --no-ff origin/integration/gundemim-current-main-20260713
-          set -e
-          python - <<'PY' > "$RUNNER_TEMP/conflict.md"
-          from pathlib import Path
-          path = Path('tests/test_sts_schema_upgrade_gate.py')
-          lines = path.read_text(encoding='utf-8').splitlines()
-          print('# Current Schema Gate Test Conflict')
-          print()
-          index = 0
-          region = 0
-          while index < len(lines):
-              if not lines[index].startswith('<<<<<<< '):
-                  index += 1
-                  continue
-              region += 1
-              start = max(0, index - 12)
-              end = index
-              while end < len(lines) and not lines[end].startswith('>>>>>>> '):
-                  end += 1
-              end = min(len(lines), end + 13)
-              print(f'## Region {region}')
-              print('```text')
-              for line_no in range(start, end):
-                  print(f'{line_no + 1:04d}: {lines[line_no]}')
-              print('```')
-              index = end
-          PY
-          BASE_HEAD="$(git rev-parse HEAD)"
-          git merge --abort
-          mkdir -p docs/agenda
-          cp "$RUNNER_TEMP/conflict.md" docs/agenda/GUNDEMIM_GATE_TEST_CONFLICT.md
-          git add docs/agenda/GUNDEMIM_GATE_TEST_CONFLICT.md
-          git commit -m 'docs: record current schema gate test conflict'
+          git add tests/test_activity_history_infrastructure.py
+          git diff --cached --check
+          git commit -m 'test: align activity infrastructure schema assertions with v19'
           git push origin HEAD:integration/gundemim-after-activity-20260714
