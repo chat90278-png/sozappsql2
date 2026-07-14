@@ -199,6 +199,9 @@ def install_requirements(tree: Path) -> None:
 
 
 def environment_and_requirements() -> None:
+    # Install both trees explicitly, even though the runner environment is shared,
+    # so each checkout proves its own requirements file can drive setup.
+    install_requirements(BASELINE_DIR)
     install_requirements(CANDIDATE_DIR)
     parity = {
         "baseline_sha256": sha256(BASELINE_DIR / "requirements.txt"),
@@ -301,6 +304,7 @@ def schema_runtime() -> None:
     with candidate_imports(), tempfile.TemporaryDirectory() as td:
         from src.services.sts_database import CURRENT_SCHEMA_VERSION, STSDatabase, ensure_staff_agenda_state_schema, read_sts_schema_version
         from src.services import sts_schema_upgrade as upgrade
+        run_upgrade = getattr(upgrade, "upgrade_sts_file", None) or getattr(upgrade, "upgrade_database")
         tmp = Path(td)
         fresh = tmp / "fresh.db"
         db = STSDatabase(str(fresh)); db.close()
@@ -310,7 +314,7 @@ def schema_runtime() -> None:
         idx = {r[1]: [c[2] for c in conn.execute(f"PRAGMA index_info({r[1]})")] for r in conn.execute("PRAGMA index_list(staff_agenda_state)")}
         evidence["fresh_v18"] = {"version": read_sts_schema_version(fresh), "columns": cols, "foreign_keys": fk, "indexes": idx, "integrity": conn.execute("PRAGMA integrity_check").fetchone()[0], "fk_check": conn.execute("PRAGMA foreign_key_check").fetchall(), "agenda_items_absent": conn.execute("SELECT name FROM sqlite_master WHERE name='agenda_items'").fetchone() is None}
         conn.close()
-        tx = tmp / "tx.db"; conn = sqlite3.connect(tx); conn.execute("PRAGMA foreign_keys=ON"); conn.execute("CREATE TABLE staff(id INTEGER PRIMARY KEY)"); conn.execute("INSERT INTO staff(id) VALUES (1)"); conn.execute("BEGIN")
+        tx = tmp / "tx.db"; conn = sqlite3.connect(tx); conn.execute("PRAGMA foreign_keys=ON"); conn.execute("CREATE TABLE staff(id INTEGER PRIMARY KEY)"); conn.execute("INSERT INTO staff(id) VALUES (1)"); conn.commit(); conn.execute("BEGIN")
         ensure_staff_agenda_state_schema(conn); in_tx = conn.in_transaction; second = ensure_staff_agenda_state_schema(conn); conn.rollback(); conn.close()
         evidence["helper_transaction"] = {"in_transaction_after_helper": in_tx, "second_call": second}
         malformed = tmp / "malformed.db"; conn = sqlite3.connect(malformed); conn.execute("CREATE TABLE staff(id INTEGER PRIMARY KEY)"); conn.execute("CREATE TABLE staff_agenda_state(staff_id INTEGER)")
@@ -322,13 +326,13 @@ def schema_runtime() -> None:
         v17 = tmp / "v17.db"; d = STSDatabase(str(v17)); d.close(); conn = sqlite3.connect(v17)
         for name in list(idx): conn.execute(f"DROP INDEX IF EXISTS {name}")
         conn.execute("DROP TABLE IF EXISTS staff_agenda_state"); conn.execute("UPDATE meta SET value='17' WHERE key='schema_version'"); conn.commit(); conn.close()
-        result = upgrade.upgrade_database(v17)
+        result = run_upgrade(v17)
         evidence["v17_to_v18"] = {"steps": [getattr(s, "name", str(s)) for s in getattr(result, "applied_migrations", [])], "version": read_sts_schema_version(v17), "current": CURRENT_SCHEMA_VERSION}
-        before = sorted(tmp.glob("v17*.bak*")); result2 = upgrade.upgrade_database(v17); after = sorted(tmp.glob("v17*.bak*"))
+        before = sorted(tmp.glob("v17*.bak*")); result2 = run_upgrade(v17); after = sorted(tmp.glob("v17*.bak*"))
         evidence["current_noop"] = {"steps": [getattr(s, "name", str(s)) for s in getattr(result2, "applied_migrations", [])], "new_backup": len(after) > len(before)}
         future = tmp / "future.db"; shutil.copy2(v17, future); conn = sqlite3.connect(future); conn.execute("UPDATE meta SET value='19' WHERE key='schema_version'"); conn.commit(); conn.close()
         try:
-            upgrade.upgrade_database(future); future_failed = False
+            run_upgrade(future); future_failed = False
         except Exception:
             future_failed = True
         evidence["future_v19"] = {"fail_closed": future_failed, "version": read_sts_schema_version(future)}
@@ -401,7 +405,13 @@ def qt_runtime() -> None:
 
 def junit_differential(baseline: dict[str, Any], candidate: dict[str, Any]) -> None:
     bnodes, cnodes = set(baseline["nodes"]), set(candidate["nodes"])
-    diff = {"baseline_totals": {k: baseline[k] for k in ["tests", "failures", "errors", "skipped"]}, "candidate_totals": {k: candidate[k] for k in ["tests", "failures", "errors", "skipped"]}, "baseline_only": sorted(bnodes - cnodes), "candidate_only": sorted(cnodes - bnodes), "baseline_failure_error_nodes": baseline["failure_nodes"], "candidate_failure_error_nodes": candidate["failure_nodes"], "skipped_nodes": sorted(set(baseline["skipped_nodes"]) | set(candidate["skipped_nodes"]))}
+    candidate_only = sorted(cnodes - bnodes)
+    allowed_candidate_only = [
+        node for node in candidate_only
+        if any(token in node.lower() for token in ("agenda", "schema_v18", "startup_upgrade"))
+    ]
+    unexpected_candidate_only = sorted(set(candidate_only) - set(allowed_candidate_only))
+    diff = {"baseline_totals": {k: baseline[k] for k in ["tests", "failures", "errors", "skipped"]}, "candidate_totals": {k: candidate[k] for k in ["tests", "failures", "errors", "skipped"]}, "baseline_only": sorted(bnodes - cnodes), "candidate_only": candidate_only, "unexpected_candidate_only": unexpected_candidate_only, "baseline_failure_error_nodes": baseline["failure_nodes"], "candidate_failure_error_nodes": candidate["failure_nodes"], "skipped_nodes": sorted(set(baseline["skipped_nodes"]) | set(candidate["skipped_nodes"]))}
     write_json("junit-differential.json", diff)
     write("junit-differential.txt", textwrap.dedent(f"""\
         baseline totals: {diff['baseline_totals']}
@@ -410,7 +420,7 @@ def junit_differential(baseline: dict[str, Any], candidate: dict[str, Any]) -> N
         candidate_only: {diff['candidate_only']}
         skipped_nodes: {diff['skipped_nodes']}
         """))
-    if diff["baseline_only"] or diff["baseline_failure_error_nodes"] or diff["candidate_failure_error_nodes"] or diff["skipped_nodes"]:
+    if diff["baseline_only"] or diff["unexpected_candidate_only"] or diff["baseline_failure_error_nodes"] or diff["candidate_failure_error_nodes"] or diff["skipped_nodes"]:
         raise GateFailure("JUnit differential failed")
 
 
@@ -421,10 +431,14 @@ def protected_source_parity() -> None:
         c = git("rev-parse", f"{CANDIDATE}:{path}", check=False)
         rows[path] = {"baseline_blob": b, "candidate_blob": c, "identical": b == c}
     unexpected = [p for p in TEMP_PATHS if run(["git", "cat-file", "-e", f"{CANDIDATE}:{p}"]).returncode == 0]
+    mismatched = [path for path, row in rows.items() if isinstance(row, dict) and not row.get("identical", False)]
     rows["unexpected_temp_at_candidate"] = unexpected
+    rows["mismatched_protected_paths"] = mismatched
     write_json("protected-source-parity.json", rows)
     if unexpected:
         raise GateFailure("temporary validation paths exist at candidate exact SHA")
+    if mismatched:
+        raise GateFailure(f"protected source parity failed: {mismatched}")
 
 
 def pr_state() -> None:
