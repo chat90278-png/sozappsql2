@@ -60,7 +60,49 @@ jobs:
             echo '```text'
             git status --short
             echo '```'
-          } | tee merge-probe.md
+          } > merge-probe.md
+
+          python - <<'PY' >> merge-probe.md
+          from pathlib import Path
+
+          paths = [
+              Path('src/services/sts_database.py'),
+              Path('src/services/sts_schema_upgrade.py'),
+              Path('src/services/sts_schema_upgrade_gate.py'),
+              Path('tests/test_sts_schema_upgrade.py'),
+              Path('tests/test_sts_schema_upgrade_gate.py'),
+          ]
+
+          print('\n## Conflict regions')
+          for path in paths:
+              text = path.read_text(encoding='utf-8')
+              lines = text.splitlines()
+              regions = []
+              index = 0
+              while index < len(lines):
+                  if lines[index].startswith('<<<<<<< '):
+                      start = max(0, index - 8)
+                      end = index
+                      while end < len(lines) and not lines[end].startswith('>>>>>>> '):
+                          end += 1
+                      end = min(len(lines), end + 9)
+                      regions.append((start, end))
+                      index = end
+                  else:
+                      index += 1
+              print(f'\n### `{path.as_posix()}`')
+              if not regions:
+                  print('_No marker region found._')
+                  continue
+              for region_no, (start, end) in enumerate(regions, 1):
+                  print(f'\nRegion {region_no}, lines {start + 1}-{end}:')
+                  print('```text')
+                  for line_no in range(start, end):
+                      print(f'{line_no + 1:05d}: {lines[line_no]}')
+                  print('```')
+          PY
+
+          cat merge-probe.md
 
           if git rev-parse -q --verify MERGE_HEAD >/dev/null; then
             git merge --abort
@@ -71,7 +113,7 @@ jobs:
           mkdir -p docs/agenda
           mv merge-probe.md docs/agenda/GUNDEMIM_POST_ACTIVITY_MERGE_PROBE.md
           git add docs/agenda/GUNDEMIM_POST_ACTIVITY_MERGE_PROBE.md
-          git commit -m 'docs: record post-activity agenda merge probe'
+          git commit -m 'docs: record detailed post-activity agenda merge probe'
           git push origin HEAD:"$TARGET_BRANCH"
 
       - name: Upload merge probe evidence
