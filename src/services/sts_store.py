@@ -431,6 +431,13 @@ class STSStore:
             operation_id, access=access, limit=limit
         )
 
+    def get_activity_operation_events_by_group_key(self, operation_group_key: str, *, access, limit: int = 200):
+        from src.services.activity_history_query import ActivityHistoryQueryService
+
+        return ActivityHistoryQueryService(self.db.conn).get_operation_events_by_group_key(
+            operation_group_key, access=access, limit=limit
+        )
+
 
     def _resolve_contract_id(self, platform: str, contract_no: str, contract_type: str = "Ana Sözleşme") -> int | None:
         row = self.db.conn.execute(

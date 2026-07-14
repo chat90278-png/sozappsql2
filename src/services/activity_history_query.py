@@ -40,6 +40,7 @@ class ActivityHistoryQuery:
     actor_text: str = ""
     search_text: str = ""
     platform_id: int | None = None
+    platform_text: str = ""
     contract_id: int | None = None
     contract_no: str = ""
     operation_id: str = ""
@@ -238,6 +239,11 @@ def _action_label(action: str) -> str:
     return " ".join(words).capitalize() if words else "Bilinmeyen işlem"
 
 
+def activity_action_label(action: str) -> str:
+    """Public, UI-safe label resolver for canonical and legacy actions."""
+    return _action_label(canonical_activity_action(action))
+
+
 def _deep_hide_forbidden(value: Any) -> Any:
     sanitized = sanitize_activity_value(value)
     if isinstance(sanitized, dict):
@@ -331,6 +337,7 @@ class ActivityHistoryQueryService:
         to_utc = _normalize_iso(query.occurred_to_utc, field="bitiş zamanı")
         actions = _canonical_db_actions(query.actions)
         normalized_contract_no = normalize_activity_text(query.contract_no, max_length=512)
+        normalized_platform_text = normalize_activity_text(query.platform_text, max_length=512)
         normalized_operation_id = normalize_activity_text(query.operation_id, max_length=512)
         actor_text = normalize_activity_text(query.actor_text, max_length=512)
         search_text = normalize_activity_text(query.search_text, max_length=2048)
@@ -342,6 +349,7 @@ class ActivityHistoryQueryService:
             "actor_text": actor_text,
             "search_text": search_text,
             "platform_id": safe_positive_int(query.platform_id),
+            "platform_text": normalized_platform_text,
             "contract_id": safe_positive_int(query.contract_id),
             "contract_no": normalized_contract_no,
             "operation_id": normalized_operation_id,
@@ -370,6 +378,7 @@ class ActivityHistoryQueryService:
                 actor_text=actor_text,
                 search_text=search_text,
                 platform_id=safe_positive_int(query.platform_id),
+                platform_text=normalized_platform_text,
                 contract_id=safe_positive_int(query.contract_id),
                 contract_no=normalized_contract_no,
                 operation_id=normalized_operation_id,
@@ -423,6 +432,7 @@ class ActivityHistoryQueryService:
             actor_text="",
             search_text="",
             platform_id=None,
+            platform_text="",
             contract_id=None,
             contract_no="",
             operation_id=operation,
@@ -442,6 +452,34 @@ class ActivityHistoryQueryService:
                     break
         return tuple(items)
 
+    def get_operation_events_by_group_key(
+        self,
+        operation_group_key: str,
+        *,
+        access: ActivityHistoryAccess,
+        limit: int = MAX_QUERY_LIMIT,
+    ) -> tuple[ActivityHistoryItem, ...]:
+        """Resolve an opaque group key without exposing the full operation id."""
+        key = normalize_activity_text(operation_group_key, max_length=128)
+        if not access.can_view or not key.startswith("op_") or len(key) != 15:
+            return ()
+        categories = tuple(sorted(set(access.allowed_categories) & set(ALLOWED_CATEGORIES)))
+        if not categories:
+            return ()
+        placeholders = ",".join("?" for _ in categories)
+        rows = self._conn.execute(
+            f"SELECT DISTINCT operation_id FROM activity_logs "
+            f"WHERE operation_id IS NOT NULL AND operation_id<>'' "
+            f"AND (category IN ({placeholders}) OR category IS NULL OR category='') "
+            "ORDER BY id DESC LIMIT 1000",
+            list(categories),
+        ).fetchall()
+        for row in rows:
+            operation_id = str(row[0] or "")
+            if _operation_group_key(operation_id) == key:
+                return self.get_operation_events(operation_id, access=access, limit=limit)
+        return ()
+
     def _fetch_rows(
         self,
         *,
@@ -450,6 +488,7 @@ class ActivityHistoryQueryService:
         actor_text: str,
         search_text: str,
         platform_id: int | None,
+        platform_text: str,
         contract_id: int | None,
         contract_no: str,
         operation_id: str,
@@ -492,6 +531,9 @@ class ActivityHistoryQueryService:
         if platform_id is not None:
             sql += " AND l.platform_id=?"
             params.append(platform_id)
+        if platform_text:
+            sql += " AND COALESCE(NULLIF(l.platform_name_snapshot,''),p.name,'') LIKE ? ESCAPE '\\'"
+            params.append(f"%{_escape_like(platform_text)}%")
         if contract_id is not None:
             sql += " AND l.contract_id=?"
             params.append(contract_id)
