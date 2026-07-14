@@ -1,0 +1,298 @@
+name: Agenda Stage 5B-V Runtime Differential
+
+on:
+  push:
+    branches:
+      - integration/gundemim-after-activity-20260714
+    paths:
+      - .github/workflows/agenda-stage-05b-v-runtime-validation.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: agenda-stage-05b-v-runtime-validation
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: windows-latest
+    timeout-minutes: 50
+    env:
+      TARGET_BRANCH: integration/gundemim-after-activity-20260714
+      BASELINE_SHA: 9ec9bded1a51fd6d4cf94e9f20f36134a709aebe
+      CANDIDATE_SHA: bbfc14292c8239221f992c228515008f9504f171
+      QT_QPA_PLATFORM: offscreen
+      PYTHONUNBUFFERED: '1'
+    steps:
+      - name: Checkout validation control branch
+        uses: actions/checkout@v4
+        with:
+          ref: integration/gundemim-after-activity-20260714
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Guard exact refs and create worktrees
+        id: guard
+        shell: bash
+        run: |
+          exec > >(tee "$RUNNER_TEMP/guard.log") 2>&1
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git fetch --no-tags origin main "$TARGET_BRANCH"
+
+          CONTROL_HEAD="$(git rev-parse HEAD)"
+          REMOTE_TARGET="$(git rev-parse "origin/$TARGET_BRANCH")"
+          REMOTE_MAIN="$(git rev-parse origin/main)"
+          test "$CONTROL_HEAD" = "$REMOTE_TARGET"
+          test "$REMOTE_MAIN" = "$BASELINE_SHA"
+          git merge-base --is-ancestor "$CANDIDATE_SHA" "$CONTROL_HEAD"
+
+          BASELINE_DIR="$RUNNER_TEMP/agenda-stage-05b-v-baseline"
+          CANDIDATE_DIR="$RUNNER_TEMP/agenda-stage-05b-v-candidate"
+          rm -rf "$BASELINE_DIR" "$CANDIDATE_DIR"
+          git worktree add --detach "$BASELINE_DIR" "$BASELINE_SHA"
+          git worktree add --detach "$CANDIDATE_DIR" "$CANDIDATE_SHA"
+
+          test "$(git -C "$BASELINE_DIR" rev-parse HEAD)" = "$BASELINE_SHA"
+          test "$(git -C "$CANDIDATE_DIR" rev-parse HEAD)" = "$CANDIDATE_SHA"
+          test "$(sha256sum "$BASELINE_DIR/requirements.txt" | awk '{print $1}')" = \
+               "$(sha256sum "$CANDIDATE_DIR/requirements.txt" | awk '{print $1}')"
+
+          mkdir -p "$GITHUB_WORKSPACE/evidence"
+          echo "CONTROL_HEAD=$CONTROL_HEAD" >> "$GITHUB_ENV"
+          echo "REMOTE_MAIN=$REMOTE_MAIN" >> "$GITHUB_ENV"
+          echo "BASELINE_DIR=$BASELINE_DIR" >> "$GITHUB_ENV"
+          echo "CANDIDATE_DIR=$CANDIDATE_DIR" >> "$GITHUB_ENV"
+          echo "control_head=$CONTROL_HEAD"
+          echo "baseline=$BASELINE_SHA"
+          echo "candidate=$CANDIDATE_SHA"
+
+      - name: Install exact runtime and test dependencies
+        id: install
+        shell: bash
+        run: |
+          exec > >(tee "$RUNNER_TEMP/install.log") 2>&1
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install -r "$CANDIDATE_DIR/requirements.txt" pytest pytest-qt
+
+      - name: Compile baseline and candidate
+        id: compile
+        shell: bash
+        run: |
+          exec > >(tee "$RUNNER_TEMP/compile.log") 2>&1
+          set -euo pipefail
+          pushd "$BASELINE_DIR"
+          python -m compileall -q src tests
+          popd
+          pushd "$CANDIDATE_DIR"
+          python -m compileall -q src tests
+          popd
+          echo 'baseline_compile=PASS'
+          echo 'candidate_compile=PASS'
+
+      - name: Run current-main baseline full suite
+        id: baseline_tests
+        shell: bash
+        run: |
+          exec > >(tee "$GITHUB_WORKSPACE/evidence/baseline-full-pytest.log") 2>&1
+          set -euo pipefail
+          pushd "$BASELINE_DIR"
+          python -m pytest -q \
+            --junitxml="$GITHUB_WORKSPACE/evidence/baseline-full-junit.xml"
+          popd
+
+      - name: Run candidate targeted schema Agenda Activity suite
+        id: targeted_tests
+        shell: bash
+        run: |
+          exec > >(tee "$GITHUB_WORKSPACE/evidence/candidate-targeted-pytest.log") 2>&1
+          set -euo pipefail
+          pushd "$CANDIDATE_DIR"
+          python -m pytest -q \
+            tests/test_sts_schema_upgrade.py \
+            tests/test_sts_schema_upgrade_gate.py \
+            tests/test_agenda_schema_v19_integration.py \
+            tests/test_agenda_startup_upgrade_integration.py \
+            tests/test_sts_database_transactions.py \
+            tests/test_activity_history_infrastructure.py \
+            tests/test_activity_history_main_integration.py \
+            tests/test_activity_history_operations.py \
+            tests/test_activity_history_policy.py \
+            tests/test_activity_history_query.py \
+            tests/test_activity_history_ui.py \
+            tests/test_*agenda*.py \
+            --junitxml="$GITHUB_WORKSPACE/evidence/candidate-targeted-junit.xml"
+          python tests/smoke_sts_agenda_schema.py | tee "$GITHUB_WORKSPACE/evidence/candidate-smokes.log"
+          python tests/smoke_sts_database.py | tee -a "$GITHUB_WORKSPACE/evidence/candidate-smokes.log"
+          popd
+
+      - name: Run candidate full regression suite
+        id: candidate_tests
+        shell: bash
+        run: |
+          exec > >(tee "$GITHUB_WORKSPACE/evidence/candidate-full-pytest.log") 2>&1
+          set -euo pipefail
+          pushd "$CANDIDATE_DIR"
+          python -m pytest -q \
+            --junitxml="$GITHUB_WORKSPACE/evidence/candidate-full-junit.xml"
+          popd
+
+      - name: Run schema and real PySide6 runtime differential validator
+        id: runtime
+        shell: bash
+        run: |
+          exec > >(tee "$GITHUB_WORKSPACE/evidence/runtime-validator.log") 2>&1
+          set -euo pipefail
+          python tools/validation/agenda_stage_05b_v_runtime_validation.py \
+            --baseline-root "$BASELINE_DIR" \
+            --candidate-root "$CANDIDATE_DIR" \
+            --output-dir "$GITHUB_WORKSPACE/evidence/runtime" \
+            --baseline-sha "$BASELINE_SHA" \
+            --candidate-sha "$CANDIDATE_SHA" \
+            --main-sha "$REMOTE_MAIN"
+
+      - name: Persist accepted validation record and clean temporary files
+        id: finalize
+        shell: bash
+        run: |
+          exec > >(tee "$RUNNER_TEMP/finalize.log") 2>&1
+          set -euo pipefail
+          git fetch --no-tags origin main "$TARGET_BRANCH"
+          test "$(git rev-parse origin/main)" = "$BASELINE_SHA"
+          test "$(git rev-parse "origin/$TARGET_BRANCH")" = "$CONTROL_HEAD"
+
+          mkdir -p docs/agenda
+          {
+            cat "$GITHUB_WORKSPACE/evidence/runtime/agenda-stage-05b-v.md"
+            echo
+            echo '## Automated suite gates'
+            echo
+            echo '- baseline_compile: `PASS`'
+            echo '- candidate_compile: `PASS`'
+            echo '- baseline_full_pytest: `PASS`'
+            echo '- candidate_targeted_schema_agenda_activity: `PASS`'
+            echo '- candidate_agenda_database_smokes: `PASS`'
+            echo '- candidate_full_pytest: `PASS`'
+            echo '- Windows_PySide6_offscreen_runtime: `PASS`'
+            echo '- main_modified: `NO`'
+            echo '- temporary_validator_cleanup: `PASS`'
+            echo
+            echo '## Baseline full pytest tail'
+            echo '```text'
+            tail -n 24 "$GITHUB_WORKSPACE/evidence/baseline-full-pytest.log"
+            echo '```'
+            echo
+            echo '## Candidate targeted pytest tail'
+            echo '```text'
+            tail -n 24 "$GITHUB_WORKSPACE/evidence/candidate-targeted-pytest.log"
+            echo '```'
+            echo
+            echo '## Candidate full pytest tail'
+            echo '```text'
+            tail -n 24 "$GITHUB_WORKSPACE/evidence/candidate-full-pytest.log"
+            echo '```'
+          } > docs/agenda/AGENDA_STAGE_05B_RUNTIME_VALIDATION.md
+
+          rm -f docs/agenda/AGENDA_STAGE_05B_RUNTIME_VALIDATION_FAILURE.md
+          rm -f .github/workflows/agenda-stage-05b-v-runtime-validation.yml
+          rm -f tools/validation/agenda_stage_05b_v_runtime_validation.py
+
+          mapfile -t PRODUCT_DIFF < <(git diff --name-only "$CANDIDATE_SHA")
+          test "${#PRODUCT_DIFF[@]}" -eq 1
+          test "${PRODUCT_DIFF[0]}" = 'docs/agenda/AGENDA_STAGE_05B_RUNTIME_VALIDATION.md'
+
+          git add -A
+          git diff --cached --check
+          git commit -m 'docs: accept Agenda Stage 5B-V runtime validation'
+          VALIDATED_HEAD="$(git rev-parse HEAD)"
+          echo "VALIDATED_HEAD=$VALIDATED_HEAD" >> "$GITHUB_ENV"
+          git push origin HEAD:"$TARGET_BRANCH"
+
+          git fetch --no-tags origin main "$TARGET_BRANCH"
+          test "$(git rev-parse origin/main)" = "$BASELINE_SHA"
+          test "$(git rev-parse "origin/$TARGET_BRANCH")" = "$VALIDATED_HEAD"
+          echo "validated_head=$VALIDATED_HEAD"
+
+      - name: Persist guarded failure evidence
+        if: failure()
+        shell: bash
+        env:
+          GUARD_OUTCOME: ${{ steps.guard.outcome }}
+          INSTALL_OUTCOME: ${{ steps.install.outcome }}
+          COMPILE_OUTCOME: ${{ steps.compile.outcome }}
+          BASELINE_OUTCOME: ${{ steps.baseline_tests.outcome }}
+          TARGETED_OUTCOME: ${{ steps.targeted_tests.outcome }}
+          CANDIDATE_OUTCOME: ${{ steps.candidate_tests.outcome }}
+          RUNTIME_OUTCOME: ${{ steps.runtime.outcome }}
+          FINALIZE_OUTCOME: ${{ steps.finalize.outcome }}
+        run: |
+          set -euo pipefail
+          SAFE_HEAD="${CONTROL_HEAD:-$(git rev-parse HEAD)}"
+          git reset --hard "$SAFE_HEAD"
+          mkdir -p docs/agenda
+          {
+            echo '# Agenda Stage 5B-V Runtime Validation Failure'
+            echo
+            echo '- baseline_main: `'$BASELINE_SHA'`'
+            echo '- product_candidate: `'$CANDIDATE_SHA'`'
+            echo '- control_head: `'$SAFE_HEAD'`'
+            echo '- guard: `'$GUARD_OUTCOME'`'
+            echo '- install: `'$INSTALL_OUTCOME'`'
+            echo '- compile: `'$COMPILE_OUTCOME'`'
+            echo '- baseline_full: `'$BASELINE_OUTCOME'`'
+            echo '- candidate_targeted: `'$TARGETED_OUTCOME'`'
+            echo '- candidate_full: `'$CANDIDATE_OUTCOME'`'
+            echo '- runtime_validator: `'$RUNTIME_OUTCOME'`'
+            echo '- finalize: `'$FINALIZE_OUTCOME'`'
+            for log in \
+              "$RUNNER_TEMP/guard.log" \
+              "$RUNNER_TEMP/install.log" \
+              "$RUNNER_TEMP/compile.log" \
+              "$GITHUB_WORKSPACE/evidence/baseline-full-pytest.log" \
+              "$GITHUB_WORKSPACE/evidence/candidate-targeted-pytest.log" \
+              "$GITHUB_WORKSPACE/evidence/candidate-full-pytest.log" \
+              "$GITHUB_WORKSPACE/evidence/runtime-validator.log" \
+              "$RUNNER_TEMP/finalize.log"; do
+                echo
+                echo '## '"$(basename "$log")"' tail'
+                echo '```text'
+                tail -n 120 "$log" 2>/dev/null || echo '(no log)'
+                echo '```'
+            done
+            if test -f "$GITHUB_WORKSPACE/evidence/runtime/agenda-stage-05b-v.md"; then
+              echo
+              cat "$GITHUB_WORKSPACE/evidence/runtime/agenda-stage-05b-v.md"
+            fi
+          } > docs/agenda/AGENDA_STAGE_05B_RUNTIME_VALIDATION_FAILURE.md
+
+          git fetch --no-tags origin "$TARGET_BRANCH"
+          if test "$(git rev-parse "origin/$TARGET_BRANCH")" = "$SAFE_HEAD"; then
+            git add docs/agenda/AGENDA_STAGE_05B_RUNTIME_VALIDATION_FAILURE.md
+            git commit -m 'docs: record Agenda Stage 5B-V validation failure'
+            git push origin HEAD:"$TARGET_BRANCH"
+          else
+            echo 'Remote branch moved; failure evidence was not pushed.'
+          fi
+
+      - name: Upload Stage 5B-V evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agenda-stage-05b-v-runtime-evidence
+          path: |
+            evidence/**
+            docs/agenda/AGENDA_STAGE_05B_RUNTIME_VALIDATION.md
+            docs/agenda/AGENDA_STAGE_05B_RUNTIME_VALIDATION_FAILURE.md
+            ${{ runner.temp }}/guard.log
+            ${{ runner.temp }}/install.log
+            ${{ runner.temp }}/compile.log
+            ${{ runner.temp }}/finalize.log
+          if-no-files-found: warn
