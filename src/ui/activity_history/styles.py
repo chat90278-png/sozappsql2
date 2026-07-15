@@ -10,7 +10,6 @@ QDialog#activityHistoryDialog QWidget {
     font-size: 12px;
 }
 QFrame#activityHeader,
-QFrame#activityToolbar,
 QFrame#activityViewBar,
 QFrame#activityDetailsPanel,
 QFrame#activityStatePanel,
@@ -21,6 +20,11 @@ QFrame#activityTimelineDay {
 }
 QFrame#activityHeader {
     background: #f8fbff;
+}
+QFrame#activityToolbar {
+    background: #f8fbff;
+    border: 1px solid #cdddec;
+    border-radius: 12px;
 }
 QLabel#activityEyebrow {
     color: #1f5fe0;
@@ -85,31 +89,102 @@ QPushButton#activitySegment:checked {
 QLineEdit#activityFilter,
 QComboBox#activityFilter,
 QDateEdit#activityFilter {
-    min-height: 31px;
-    padding: 0 8px;
+    min-height: 34px;
+    padding: 0 10px;
     background: #ffffff;
-    border: 1px solid #d8e3ee;
-    border-radius: 7px;
-    color: #2d3d52;
+    border: 1px solid #d3dfeb;
+    border-radius: 9px;
+    color: #24364c;
     selection-background-color: #dce8ff;
+    selection-color: #122033;
+}
+QComboBox#activityFilter,
+QDateEdit#activityFilter {
+    padding-right: 36px;
 }
 QLineEdit#activityFilter:hover,
 QComboBox#activityFilter:hover,
 QDateEdit#activityFilter:hover {
-    border-color: #b8c8dc;
+    border-color: #9fb7d0;
+    background: #ffffff;
 }
 QLineEdit#activityFilter:focus,
 QComboBox#activityFilter:focus,
 QDateEdit#activityFilter:focus {
-    border: 2px solid #7f9fdf;
-    padding-left: 7px;
+    border: 2px solid #5d86df;
+    background: #ffffff;
+    padding-left: 9px;
+}
+QComboBox#activityFilter::drop-down,
+QDateEdit#activityFilter::drop-down {
+    subcontrol-origin: padding;
+    subcontrol-position: top right;
+    width: 30px;
+    border: none;
+    border-left: 1px solid #e3eaf2;
+    border-top-right-radius: 9px;
+    border-bottom-right-radius: 9px;
+    background: #f7faff;
+}
+QComboBox#activityFilter::drop-down:hover,
+QDateEdit#activityFilter::drop-down:hover {
+    background: #edf4ff;
+}
+QComboBox#activityFilter::down-arrow,
+QDateEdit#activityFilter::down-arrow {
+    image: none;
+    width: 0;
+    height: 0;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-top: 5px solid #5b6d84;
+}
+QComboBox#activityFilter QAbstractItemView {
+    background: #ffffff;
+    color: #24364c;
+    border: 1px solid #cbd9e8;
+    border-radius: 9px;
+    padding: 4px;
+    outline: 0;
+    selection-background-color: #e9f1ff;
+    selection-color: #164aa8;
+}
+QComboBox#activityFilter QAbstractItemView::item {
+    min-height: 28px;
+    padding: 3px 8px;
+    border-radius: 6px;
+}
+QComboBox#activityFilter QAbstractItemView::item:hover {
+    background: #f2f6fc;
+}
+QCalendarWidget {
+    background: #ffffff;
+    color: #24364c;
+}
+QCalendarWidget QToolButton {
+    color: #24364c;
+    background: transparent;
+    border: none;
+    border-radius: 7px;
+    padding: 5px 8px;
+    font-weight: 700;
+}
+QCalendarWidget QToolButton:hover {
+    background: #edf4ff;
+    color: #174aa8;
+}
+QCalendarWidget QAbstractItemView {
+    background: #ffffff;
+    selection-background-color: #1f5fe0;
+    selection-color: #ffffff;
+    outline: none;
 }
 
 QPushButton#activityPrimary {
-    min-height: 31px;
+    min-height: 34px;
     padding: 0 13px;
     border: none;
-    border-radius: 7px;
+    border-radius: 9px;
     background: #1f5fe0;
     color: #ffffff;
     font-weight: 800;
@@ -125,17 +200,18 @@ QPushButton#activityPrimary:disabled {
     color: #edf2fa;
 }
 QPushButton#activitySecondary {
-    min-height: 29px;
+    min-height: 32px;
     padding: 0 11px;
-    border: 1px solid #d8e3ee;
-    border-radius: 7px;
+    border: 1px solid #d3dfeb;
+    border-radius: 9px;
     background: #ffffff;
     color: #34455d;
     font-weight: 700;
 }
 QPushButton#activitySecondary:hover {
-    background: #f5f8fc;
-    border-color: #bccbdd;
+    background: #edf4ff;
+    border-color: #9fb7d0;
+    color: #174aa8;
 }
 QPushButton#activityLoadMore {
     min-height: 32px;
@@ -256,8 +332,14 @@ QHeaderView::section {
     font-weight: 700;
 }
 
-QFrame#activityDetailsPanel {
+QFrame#activityDetailsPanel,
+QFrame#activityDetailsPanel QWidget,
+QFrame#activityDetailsPanel QScrollArea,
+QFrame#activityDetailsPanel QScrollArea QWidget {
     background: #ffffff;
+}
+QFrame#activityDetailsPanel {
+    border-color: #d9e3ee;
 }
 QLabel#activityDetailsTitle {
     color: #122033;
@@ -275,47 +357,67 @@ QLabel#activityDetailSummary {
     font-size: 11px;
 }
 QLabel#activityDetailMeta {
-    color: #5f6f82;
-    background: #f6f8fb;
-    border: 1px solid #e0e7ef;
-    border-radius: 7px;
-    padding: 6px 7px;
+    color: #52657c;
+    background: transparent;
+    border: none;
+    border-left: 3px solid #78a0ef;
+    border-radius: 0;
+    padding: 3px 0 3px 8px;
     font-size: 10px;
 }
 QLabel#activitySectionTitle {
-    color: #526278;
+    color: #2758ae;
     font-size: 9px;
     font-weight: 900;
+    border-bottom: 1px solid #e6edf6;
+    padding-bottom: 4px;
 }
-QTreeWidget#activityChanges,
-QListWidget#activityOperationEvents,
-QPlainTextEdit#activityTechnicalText {
-    background: #fbfdff;
-    border: 1px solid #d8e3ee;
-    border-radius: 7px;
+QFrame#activityDetailsPanel QTreeWidget#activityChanges,
+QFrame#activityDetailsPanel QListWidget#activityOperationEvents,
+QFrame#activityDetailsPanel QPlainTextEdit#activityTechnicalText {
+    background: #ffffff;
+    alternate-background-color: #ffffff;
+    border: 1px solid #e1e9f2;
+    border-radius: 8px;
     color: #27374c;
     outline: none;
 }
+QFrame#activityDetailsPanel QHeaderView::section {
+    background: #ffffff;
+    color: #52657c;
+    border: none;
+    border-bottom: 1px solid #e6edf6;
+    padding: 6px 7px;
+    font-weight: 800;
+}
 QTreeWidget#activityChanges::item,
 QListWidget#activityOperationEvents::item {
-    padding: 4px 5px;
+    padding: 5px 6px;
+    border-bottom: 1px solid #f0f3f7;
+}
+QTreeWidget#activityChanges::item:hover,
+QListWidget#activityOperationEvents::item:hover {
+    background: #f7faff;
 }
 QTreeWidget#activityChanges::item:selected,
 QListWidget#activityOperationEvents::item:selected {
-    background: #e7f0ff;
+    background: #e9f1ff;
     color: #122033;
 }
 QToolButton#activityTechnicalToggle {
     text-align: left;
-    min-height: 27px;
-    border: 1px solid #d8e3ee;
-    border-radius: 7px;
-    background: #f8fafc;
+    min-height: 29px;
+    border: 1px solid #e1e9f2;
+    border-radius: 8px;
+    background: #ffffff;
     color: #526278;
     font-weight: 800;
+    padding-left: 7px;
 }
 QToolButton#activityTechnicalToggle:hover {
-    background: #f1f5fa;
+    background: #f7faff;
+    border-color: #b8cbe0;
+    color: #174aa8;
 }
 
 QScrollArea#activityTimelineScroll {
