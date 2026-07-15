@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from typing import Iterable
 
-from PySide6.QtCore import Signal
-from PySide6.QtWidgets import QLabel, QPushButton
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtWidgets import QLabel, QPushButton, QSizePolicy
 
 from .widgets_legacy import *  # noqa: F401,F403
 from .widgets_legacy import ActivityDetailsPanel as _ActivityDetailsPanelBase
@@ -29,6 +29,10 @@ class ActivityDetailsPanel(_ActivityDetailsPanelBase):
         self.open_contract_button.setObjectName("activityPrimary")
         self.open_contract_button.setAccessibleName("İlgili sözleşmeye git")
         self.open_contract_button.setVisible(False)
+        self.open_contract_button.setSizePolicy(
+            QSizePolicy.Expanding,
+            QSizePolicy.Fixed,
+        )
         self.open_contract_button.setStyleSheet(
             "QPushButton { min-height:34px; padding:0 13px; border:none; "
             "border-radius:9px; background:#1f5fe0; color:#ffffff; "
@@ -41,8 +45,39 @@ class ActivityDetailsPanel(_ActivityDetailsPanelBase):
         content = self.scroll.widget()
         layout = content.layout() if content is not None else None
         if layout is not None:
+            # The scroll area's content fills the viewport. Without a bottom stretch,
+            # Qt distributes unused height between word-wrapped labels, which makes
+            # the values appear missing even though they are present.
+            layout.setAlignment(Qt.AlignTop)
+            layout.setStretchFactor(self.changed, 0)
+            layout.setStretchFactor(self.operation_events, 0)
+
+            for widget in (
+                self.heading,
+                self.subtitle,
+                self.title,
+                self.summary,
+                self.meta,
+                self.changed_title,
+                self.operation_title,
+            ):
+                if widget is not None:
+                    widget.setSizePolicy(
+                        QSizePolicy.Expanding,
+                        QSizePolicy.Maximum,
+                    )
+
+            self.changed.setMaximumHeight(220)
+            self.operation_events.setMaximumHeight(160)
+            self.technical_toggle.setSizePolicy(
+                QSizePolicy.Maximum,
+                QSizePolicy.Maximum,
+            )
+
             # Heading, subtitle, title, summary and meta come first in the base panel.
             layout.insertWidget(5, self.open_contract_button)
+            layout.addStretch(1)
+            self.scroll.setAlignment(Qt.AlignTop | Qt.AlignLeft)
 
     def _request_contract_open(self) -> None:
         if self._item is not None and str(self._item.contract_no or "").strip():
@@ -100,3 +135,8 @@ class ActivityDetailsPanel(_ActivityDetailsPanelBase):
         self.open_contract_button.setToolTip(
             f"{item.contract_no} sözleşmesini aç" if has_contract else ""
         )
+
+        content = self.scroll.widget()
+        if content is not None and content.layout() is not None:
+            content.layout().invalidate()
+            content.updateGeometry()
