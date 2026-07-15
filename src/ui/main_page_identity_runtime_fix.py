@@ -24,10 +24,16 @@ def install_main_page_identity_runtime_fix() -> None:
         if label is None:
             return
         text = str(label.text() or "").strip()
-        if text in {"✓ STS veri dosyası bağlandı", "✓ STS bağlı"}:
-            label.setText("✓ STS bağlandı")
+        if text in {"✓ STS veri dosyası bağlandı", "✓ STS veri dosyası bağlı", "✓ STS bağlı"}:
+            label.setText("✓ STS bağlı")
         label.setWordWrap(False)
-        label.setToolTip("STS veri dosyası bağlandı" if "bağlandı" in text else text)
+        label.setMinimumWidth(0)
+        label.setMaximumWidth(160)
+        font = label.font()
+        point_size = max(8, min(9, int(font.pointSize() or 9)))
+        font.setPointSize(point_size)
+        label.setFont(font)
+        label.setToolTip("STS veri dosyası bağlı" if "bağ" in text else text)
 
     def apply_identity_fit(self) -> None:
         root = self.centralWidget()
