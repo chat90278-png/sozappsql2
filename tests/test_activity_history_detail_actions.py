@@ -167,9 +167,13 @@ def test_contract_button_opens_matching_contract(app):
         access=ACCESS,
         auto_load=False,
     )
+    dialog.resize(1366, 768)
+    dialog.show()
     assert dialog.refresh_logs()
     dialog.select_item(item)
-    assert not dialog.details.open_contract_button.isHidden()
+    QApplication.processEvents()
+    assert dialog.details.open_contract_button.isVisible()
+    assert dialog.details.open_contract_button.height() >= 30
 
     dialog.details.open_contract_button.click()
     QApplication.processEvents()
