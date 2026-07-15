@@ -130,6 +130,20 @@ QComboBox#activityFilter::drop-down:hover,
 QDateEdit#activityFilter::drop-down:hover {
     background: #edf4ff;
 }
+QComboBox#activityFilter::down-arrow,
+QDateEdit#activityFilter::down-arrow {
+    image: none;
+    width: 0;
+    height: 0;
+}
+QLabel#activityFilterChevron {
+    color: #52657c;
+    background: transparent;
+    border: none;
+    font-size: 16px;
+    font-weight: 800;
+    padding-bottom: 4px;
+}
 QComboBox#activityFilter QAbstractItemView {
     background: #ffffff;
     color: #24364c;
@@ -425,9 +439,6 @@ QLabel#activityStateTitle {
 }
 QLabel#activityError {
     color: #a13030;
-}
-QSplitter#activitySplitter {
-    min-width: 860px;
 }
 QSplitter#activitySplitter::handle {
     background: #d4dfea;
