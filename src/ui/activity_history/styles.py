@@ -333,6 +333,9 @@ QLabel#activityStateTitle {
 QLabel#activityError {
     color: #a13030;
 }
+QSplitter#activitySplitter {
+    min-width: 860px;
+}
 QSplitter#activitySplitter::handle {
     background: #d4dfea;
     width: 3px;
