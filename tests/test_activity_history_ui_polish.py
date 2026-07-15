@@ -12,6 +12,7 @@ from PySide6.QtWidgets import QApplication
 from src.services.activity_history_policy import ActivityHistoryAccess
 from src.services.activity_history_query import ActivityHistoryItem, ActivityHistoryPage
 from src.ui.activity_history.labels import visible_action_label
+from src.ui.activity_history.styles import ACTIVITY_HISTORY_QSS
 from src.ui.activity_history.widgets import TimelineCard
 from src.ui.dialogs.activity_logs import ActivityLogDialog
 
@@ -148,3 +149,19 @@ def test_narrow_layout_keeps_vertical_splitter(app):
     QApplication.processEvents()
     assert dialog.splitter.orientation() == Qt.Vertical
     dialog.close()
+
+
+def test_filter_styles_use_segmented_modern_dropdown_controls():
+    assert "QComboBox#activityFilter::drop-down" in ACTIVITY_HISTORY_QSS
+    assert "QDateEdit#activityFilter::drop-down" in ACTIVITY_HISTORY_QSS
+    assert "border-left: 1px solid #e3eaf2" in ACTIVITY_HISTORY_QSS
+    assert "border-top: 5px solid #5b6d84" in ACTIVITY_HISTORY_QSS
+    assert "QComboBox#activityFilter QAbstractItemView" in ACTIVITY_HISTORY_QSS
+
+
+def test_detail_panel_removes_gray_fill_from_readable_sections():
+    assert "QFrame#activityDetailsPanel QWidget" in ACTIVITY_HISTORY_QSS
+    assert "QLabel#activityDetailMeta" in ACTIVITY_HISTORY_QSS
+    assert "background: transparent" in ACTIVITY_HISTORY_QSS
+    assert "alternate-background-color: #ffffff" in ACTIVITY_HISTORY_QSS
+    assert "QFrame#activityDetailsPanel QHeaderView::section" in ACTIVITY_HISTORY_QSS
