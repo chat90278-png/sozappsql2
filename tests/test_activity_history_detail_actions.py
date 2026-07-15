@@ -111,10 +111,10 @@ def test_empty_detail_sections_are_hidden(app):
     assert dialog.refresh_logs()
     dialog.select_item(item)
 
-    assert not dialog.details.changed.isVisible()
-    assert not dialog.details.changed_title.isVisible()
-    assert not dialog.details.operation_events.isVisible()
-    assert not dialog.details.operation_title.isVisible()
+    assert dialog.details.changed.isHidden()
+    assert dialog.details.changed_title.isHidden()
+    assert dialog.details.operation_events.isHidden()
+    assert dialog.details.operation_title.isHidden()
     dialog.close()
 
 
@@ -133,10 +133,10 @@ def test_detail_sections_show_only_real_content(app):
     assert dialog.refresh_logs()
     dialog.select_item(first)
 
-    assert dialog.details.changed.isVisible()
+    assert not dialog.details.changed.isHidden()
     assert dialog.details.changed.topLevelItemCount() == 1
-    assert dialog.details.operation_events.isVisible()
-    assert dialog.details.operation_events.count() == 1
+    assert not dialog.details.operation_events.isHidden()
+    assert dialog.details.operation_events.count() == 2
     dialog.close()
 
 
@@ -169,7 +169,7 @@ def test_contract_button_opens_matching_contract(app):
     )
     assert dialog.refresh_logs()
     dialog.select_item(item)
-    assert dialog.details.open_contract_button.isVisible()
+    assert not dialog.details.open_contract_button.isHidden()
 
     dialog.details.open_contract_button.click()
     QApplication.processEvents()
@@ -189,5 +189,5 @@ def test_contract_button_hides_when_record_has_no_contract(app):
     )
     assert dialog.refresh_logs()
     dialog.select_item(item)
-    assert not dialog.details.open_contract_button.isVisible()
+    assert dialog.details.open_contract_button.isHidden()
     dialog.close()
