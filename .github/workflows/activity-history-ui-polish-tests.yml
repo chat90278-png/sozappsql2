@@ -62,6 +62,7 @@ jobs:
           python -m py_compile src/ui/activity_history/widgets.py
           python -m py_compile src/ui/dialogs/activity_logs.py
           python -m py_compile tests/test_activity_history_ui_polish.py
+          python -m py_compile tests/test_activity_history_detail_actions.py
           python -m py_compile tools/validation/render_activity_history_ui_polish.py
 
       - name: Run focused Activity History tests
@@ -77,6 +78,7 @@ jobs:
             tests/test_activity_history_query.py \
             tests/test_activity_history_ui.py \
             tests/test_activity_history_ui_polish.py \
+            tests/test_activity_history_detail_actions.py \
             tests/test_activity_history_main_integration.py \
             > activity-history-focused.txt 2>&1
 
@@ -105,6 +107,10 @@ jobs:
             activity-history-full.txt
             activity-history-render.txt
             activity-history-polish-artifacts/*.png
+            src/ui/activity_history/widgets.py
+            src/ui/activity_history/widgets_legacy.py
+            src/ui/dialogs/activity_logs.py
+            src/ui/dialogs/activity_logs_legacy.py
           if-no-files-found: error
           retention-days: 14
 
