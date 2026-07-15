@@ -1,0 +1,100 @@
+name: Gündemim UI Bindings Validation
+
+on:
+  push:
+    branches:
+      - codex/gundemim-ui-bindings-20260715
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    env:
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - name: Checkout exact branch commit
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --quiet --disable-pip-version-check -r requirements.txt
+          python -m pip install --quiet --disable-pip-version-check pytest
+
+      - name: Apply validated four-file payload
+        shell: bash
+        run: |
+          python - <<'PYCODE'
+          import base64
+          import io
+          import zipfile
+          from pathlib import Path
+
+          encoded = Path(".github/validation/gundemim-ui-bindings-payload.b64").read_text(encoding="utf-8")
+          allowed = {
+              "src/ui/agenda_compact_widget.py",
+              "src/ui/agenda_detail_window.py",
+              "tests/test_agenda_compact_widget.py",
+              "tests/test_agenda_detail_window.py",
+          }
+          with zipfile.ZipFile(io.BytesIO(base64.b64decode(encoded))) as archive:
+              names = set(archive.namelist())
+              if names != allowed:
+                  raise SystemExit(f"Unexpected payload paths: {sorted(names)}")
+              for name in sorted(names):
+                  target = Path(name)
+                  if target.is_absolute() or ".." in target.parts:
+                      raise SystemExit(f"Unsafe path: {name}")
+                  target.parent.mkdir(parents=True, exist_ok=True)
+                  target.write_bytes(archive.read(name))
+          PYCODE
+
+      - name: Compile changed UI files
+        run: |
+          python -m py_compile src/ui/agenda_compact_widget.py src/ui/agenda_detail_window.py
+
+      - name: Run requested pytest command
+        shell: bash
+        run: |
+          mkdir -p validation-out
+          set +e
+          python3 -m pytest tests/test_agenda_compact_widget.py tests/test_agenda_detail_window.py tests/test_main_page_agenda_integration.py tests/test_staff_agenda_service.py tests/test_agenda_presentation.py -v 2>&1 | tee validation-out/pytest-output.txt
+          status=${PIPESTATUS[0]}
+          echo "PYTEST_EXIT_CODE=$status" | tee validation-out/pytest-exit-code.txt
+          exit "$status"
+
+      - name: Package changed files
+        if: always()
+        shell: bash
+        run: |
+          python - <<'PYCODE'
+          from pathlib import Path
+          import zipfile
+
+          files = [
+              "src/ui/agenda_compact_widget.py",
+              "src/ui/agenda_detail_window.py",
+              "tests/test_agenda_compact_widget.py",
+              "tests/test_agenda_detail_window.py",
+          ]
+          out = Path("validation-out/gundemim-ui-bindings-files.zip")
+          out.parent.mkdir(parents=True, exist_ok=True)
+          with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as archive:
+              for name in files:
+                  archive.write(name, name)
+          PYCODE
+
+      - name: Upload validation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gundemim-ui-bindings-validation
+          path: validation-out/*
+          if-no-files-found: error
+          retention-days: 7
