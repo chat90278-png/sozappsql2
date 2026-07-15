@@ -107,10 +107,6 @@ jobs:
             activity-history-full.txt
             activity-history-render.txt
             activity-history-polish-artifacts/*.png
-            src/ui/activity_history/widgets.py
-            src/ui/activity_history/widgets_legacy.py
-            src/ui/dialogs/activity_logs.py
-            src/ui/dialogs/activity_logs_legacy.py
           if-no-files-found: error
           retention-days: 14
 
