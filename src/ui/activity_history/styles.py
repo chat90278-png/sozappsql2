@@ -130,15 +130,6 @@ QComboBox#activityFilter::drop-down:hover,
 QDateEdit#activityFilter::drop-down:hover {
     background: #edf4ff;
 }
-QComboBox#activityFilter::down-arrow,
-QDateEdit#activityFilter::down-arrow {
-    image: none;
-    width: 0;
-    height: 0;
-    border-left: 4px solid transparent;
-    border-right: 4px solid transparent;
-    border-top: 5px solid #5b6d84;
-}
 QComboBox#activityFilter QAbstractItemView {
     background: #ffffff;
     color: #24364c;
