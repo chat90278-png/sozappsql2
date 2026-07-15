@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import unicodedata
+
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtWidgets import (
     QBoxLayout,
@@ -246,29 +248,122 @@ class ActivityLogDialog(_ActivityLogDialogBase):
             host = host.parentWidget()
         return None
 
-    def _contract_candidate(self, host, item: ActivityHistoryItem):
-        contract_no = str(item.contract_no or "").strip()
-        platform_name = str(item.platform_name or "").strip()
-        if not contract_no:
-            return None
+    @staticmethod
+    def _navigation_key(value) -> str:
+        text = unicodedata.normalize("NFKC", str(value or "").strip()).casefold()
+        text = text.replace("ı", "i")
+        return "".join(character for character in text if character.isalnum())
 
-        rows = list(getattr(host, "contract_index", ()) or ())
-        if not rows:
+    @staticmethod
+    def _row_contract_id(row) -> int | None:
+        if not isinstance(row, dict):
+            return None
+        for key in ("row", "entry_start_row", "contract_id", "id"):
+            try:
+                value = int(row.get(key) or 0)
+            except (TypeError, ValueError):
+                value = 0
+            if value > 0:
+                return value
+        return None
+
+    def _activity_contract_id(self, item: ActivityHistoryItem) -> int | None:
+        technical = getattr(item, "technical", None)
+        try:
+            technical_id = int(getattr(technical, "contract_id", 0) or 0)
+        except (TypeError, ValueError):
+            technical_id = 0
+        if technical_id > 0:
+            return technical_id
+
+        resolver = getattr(self.store, "activity_contract_id_for_log", None)
+        if callable(resolver):
+            try:
+                resolved = int(resolver(int(item.id)) or 0)
+            except Exception:
+                resolved = 0
+            if resolved > 0:
+                return resolved
+
+        connection = getattr(getattr(self.store, "db", None), "conn", None)
+        if connection is not None:
+            try:
+                row = connection.execute(
+                    "SELECT contract_id FROM activity_logs WHERE id=?",
+                    (int(item.id),),
+                ).fetchone()
+                resolved = int(row[0] or 0) if row else 0
+            except Exception:
+                resolved = 0
+            if resolved > 0:
+                return resolved
+        return None
+
+    def _database_contract_candidate(self, contract_id: int | None):
+        if not contract_id:
+            return None
+        connection = getattr(getattr(self.store, "db", None), "conn", None)
+        if connection is None:
+            return None
+        try:
+            row = connection.execute(
+                """
+                SELECT c.id, p.name, c.contract_no, c.contract_type
+                FROM contracts c
+                JOIN platforms p ON p.id=c.platform_id
+                WHERE c.id=?
+                """,
+                (int(contract_id),),
+            ).fetchone()
+        except Exception:
+            return None
+        if not row:
+            return None
+        return {
+            "row": int(row[0]),
+            "entry_start_row": int(row[0]),
+            "contract_id": int(row[0]),
+            "platform": str(row[1] or ""),
+            "no": str(row[2] or ""),
+            "contract_no": str(row[2] or ""),
+            "type": str(row[3] or ""),
+        }
+
+    def _candidate_rows(self, host, *, rebuild: bool = False) -> list[dict]:
+        rows = [] if rebuild else list(getattr(host, "contract_index", ()) or ())
+        if rebuild or not rows:
             builder = getattr(self.store, "build_contract_index", None)
             if callable(builder):
                 try:
-                    rows = list(builder() or ())
+                    rows = [dict(row) for row in list(builder() or ())]
                 except Exception:
                     rows = []
+        return [dict(row) for row in rows if isinstance(row, dict)]
+
+    def _find_contract_candidate(
+        self,
+        rows: list[dict],
+        item: ActivityHistoryItem,
+        contract_id: int | None,
+    ):
+        if contract_id:
+            for row in rows:
+                if self._row_contract_id(row) == contract_id:
+                    return row
+
+        contract_key = self._navigation_key(item.contract_no)
+        platform_key = self._navigation_key(item.platform_name)
+        if not contract_key:
+            return None
 
         exact = [
             row
             for row in rows
-            if str(row.get("no") or row.get("contract_no") or "").strip()
-            == contract_no
+            if self._navigation_key(row.get("no") or row.get("contract_no"))
+            == contract_key
             and (
-                not platform_name
-                or str(row.get("platform") or "").strip() == platform_name
+                not platform_key
+                or self._navigation_key(row.get("platform")) == platform_key
             )
         ]
         if exact:
@@ -277,19 +372,50 @@ class ActivityLogDialog(_ActivityLogDialogBase):
         by_number = [
             row
             for row in rows
-            if str(row.get("no") or row.get("contract_no") or "").strip()
-            == contract_no
+            if self._navigation_key(row.get("no") or row.get("contract_no"))
+            == contract_key
         ]
         return by_number[0] if len(by_number) == 1 else None
 
+    def _contract_candidate(self, host, item: ActivityHistoryItem):
+        if str(item.action or "").strip().casefold() == "contract_deleted":
+            return None
+
+        contract_id = self._activity_contract_id(item)
+        rows = self._candidate_rows(host)
+        candidate = self._find_contract_candidate(rows, item, contract_id)
+        if candidate is not None:
+            return candidate
+
+        # The main-window index can lag behind a save, rename or platform move.
+        # Rebuild once from the live STS store before reporting a missing contract.
+        fresh_rows = self._candidate_rows(host, rebuild=True)
+        candidate = self._find_contract_candidate(fresh_rows, item, contract_id)
+        if candidate is not None:
+            return candidate
+
+        # Stable database identity is the final source of truth when the visible
+        # contract number or platform name changed after the logged operation.
+        return self._database_contract_candidate(contract_id)
+
     def _open_contract_from_history(self, item: ActivityHistoryItem) -> None:
+        action = str(item.action or "").strip().casefold()
+        if action == "contract_deleted":
+            QMessageBox.information(
+                self,
+                "Sözleşme silinmiş",
+                "Bu kayıt silinmiş bir sözleşmeye aittir ve artık açılamaz.",
+            )
+            return
+
         host = self._main_window_host()
         candidate = self._contract_candidate(host, item) if host is not None else None
         if host is None or candidate is None:
             QMessageBox.information(
                 self,
                 "Sözleşme bulunamadı",
-                "İlgili sözleşme mevcut sözleşme listesinde bulunamadı.",
+                "İlgili sözleşme güncel sözleşme listesinde bulunamadı. "
+                "Sözleşme silinmiş veya numarası değiştirilmiş olabilir.",
             )
             return
 
