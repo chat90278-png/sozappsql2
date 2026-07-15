@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 
 from src.services.activity_history_policy import ActivityHistoryAccess
@@ -106,6 +107,19 @@ def test_loaded_count_uses_readable_continuation_text(app):
     dialog.close()
 
 
+def test_detail_title_translates_legacy_english_action(app):
+    item = _item()
+    dialog = ActivityLogDialog(
+        FakeStore(ActivityHistoryPage((item,), None, False)),
+        access=NORMAL_ACCESS,
+        auto_load=False,
+    )
+    assert dialog.refresh_logs()
+    dialog.select_item(item)
+    assert dialog.details.title.text() == "Sözleşme etiketleri güncellendi"
+    dialog.close()
+
+
 def test_dialog_root_spacing_is_compact(app):
     dialog = ActivityLogDialog(
         FakeStore(ActivityHistoryPage((_item(),), None, False)),
@@ -132,5 +146,5 @@ def test_narrow_layout_keeps_vertical_splitter(app):
     dialog.resize(920, 620)
     dialog.show()
     QApplication.processEvents()
-    assert dialog.splitter.orientation().name == "Vertical"
+    assert dialog.splitter.orientation() == Qt.Vertical
     dialog.close()
