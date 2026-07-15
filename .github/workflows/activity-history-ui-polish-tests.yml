@@ -1,0 +1,127 @@
+name: Activity History UI polish tests
+
+on:
+  pull_request:
+    paths:
+      - "src/ui/activity_history/**"
+      - "src/ui/dialogs/activity_logs.py"
+      - "src/services/activity_history_*.py"
+      - "tests/test_activity_history_*.py"
+      - "tools/validation/render_activity_history_ui_polish.py"
+      - ".github/workflows/activity-history-ui-polish-tests.yml"
+  push:
+    paths:
+      - "src/ui/activity_history/**"
+      - "src/ui/dialogs/activity_logs.py"
+      - "src/services/activity_history_*.py"
+      - "tests/test_activity_history_*.py"
+      - "tools/validation/render_activity_history_ui_polish.py"
+      - ".github/workflows/activity-history-ui-polish-tests.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  ui-polish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      QT_QPA_PLATFORM: offscreen
+      PYTHONHASHSEED: "0"
+      ACTIVITY_HISTORY_POLISH_OUTPUT: activity-history-polish-artifacts
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install Qt runtime libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libegl1 \
+            libgl1 \
+            libxkbcommon-x11-0
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade \
+            pytest \
+            PySide6==6.11.1 \
+            openpyxl==3.1.5
+
+      - name: Compile Activity History polish surface
+        run: |
+          python -m py_compile src/ui/activity_history/labels.py
+          python -m py_compile src/ui/activity_history/styles.py
+          python -m py_compile src/ui/activity_history/widgets.py
+          python -m py_compile src/ui/dialogs/activity_logs.py
+          python -m py_compile tests/test_activity_history_ui_polish.py
+          python -m py_compile tools/validation/render_activity_history_ui_polish.py
+
+      - name: Run focused Activity History tests
+        id: focused_tests
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m pytest -q \
+            tests/test_activity_history_infrastructure.py \
+            tests/test_activity_history_operations.py \
+            tests/test_activity_history_policy.py \
+            tests/test_activity_history_query.py \
+            tests/test_activity_history_ui.py \
+            tests/test_activity_history_ui_polish.py \
+            tests/test_activity_history_main_integration.py \
+            > activity-history-focused.txt 2>&1
+
+      - name: Run full repository suite
+        id: full_tests
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m pytest -q > activity-history-full.txt 2>&1
+
+      - name: Render synthetic Activity History screenshots
+        id: render
+        continue-on-error: true
+        run: |
+          python tools/validation/render_activity_history_ui_polish.py \
+            > activity-history-render.txt 2>&1
+
+      - name: Upload Activity History validation artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: activity-history-ui-polish-validation
+          path: |
+            activity-history-focused.txt
+            activity-history-full.txt
+            activity-history-render.txt
+            activity-history-polish-artifacts/*.png
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Enforce Activity History UI polish gate
+        if: always()
+        shell: bash
+        run: |
+          if [ "${{ steps.focused_tests.outcome }}" != "success" ]; then
+            cat activity-history-focused.txt
+            exit 1
+          fi
+          if [ "${{ steps.full_tests.outcome }}" != "success" ]; then
+            tail -n 120 activity-history-full.txt
+            exit 1
+          fi
+          if [ "${{ steps.render.outcome }}" != "success" ]; then
+            cat activity-history-render.txt
+            exit 1
+          fi
+          echo "Activity History UI polish gate passed."
