@@ -79,9 +79,7 @@ def _item(
         entity_label=entity_label,
         platform_name="AKINCI",
         contract_no=contract_no,
-        changed_fields=(
-            ActivityFieldChange("Durum", "Planlandı", "Devam Ediyor"),
-        ),
+        changed_fields=(ActivityFieldChange("Durum", "Planlandı", "Devam Ediyor"),),
         changed_fields_parse_error=False,
         operation_group_key=operation_group_key,
         technical=technical,
@@ -90,15 +88,48 @@ def _item(
 
 USER_ITEMS = (
     _item(1, "contract_tags_updated", "USER", "Sözleşme etiketleri güncellendi"),
-    _item(2, "delivery_created", "USER", "Teslimat kaydı eklendi", minutes=1, entity_type="delivery", entity_label="Teslimat"),
-    _item(3, "system_created", "USER", "Sistem kaydı oluşturuldu", minutes=2, entity_type="system", entity_label="Sistem"),
+    _item(
+        2,
+        "delivery_created",
+        "USER",
+        "Teslimat kaydı eklendi",
+        minutes=1,
+        entity_type="delivery",
+        entity_label="Teslimat",
+    ),
+    _item(
+        3,
+        "system_created",
+        "USER",
+        "Sistem kaydı oluşturuldu",
+        minutes=2,
+        entity_type="system",
+        entity_label="Sistem",
+    ),
     _item(4, "contract_updated", "USER", "Sözleşme ana bilgileri güncellendi", minutes=3),
     _item(5, "contract_created", "USER", "Sözleşme oluşturuldu", minutes=4),
 )
 
 MANAGEMENT_ITEMS = (
-    _item(11, "platform_updated", "MANAGEMENT", "Platform bilgileri güncellendi", actor="Yönetici", entity_type="platform", entity_label="Platform"),
-    _item(12, "user_updated", "MANAGEMENT", "Kullanıcı bilgileri güncellendi", actor="Yönetici", entity_type="user", entity_label="Kullanıcı", minutes=1),
+    _item(
+        11,
+        "platform_updated",
+        "MANAGEMENT",
+        "Platform bilgileri güncellendi",
+        actor="Yönetici",
+        entity_type="platform",
+        entity_label="Platform",
+    ),
+    _item(
+        12,
+        "user_updated",
+        "MANAGEMENT",
+        "Kullanıcı bilgileri güncellendi",
+        actor="Yönetici",
+        entity_type="user",
+        entity_label="Kullanıcı",
+        minutes=1,
+    ),
 )
 
 TECHNICAL_ITEMS = (
@@ -124,7 +155,11 @@ class FakeStore:
             "MANAGEMENT": MANAGEMENT_ITEMS,
             "TECHNICAL": TECHNICAL_ITEMS,
         }.get(category, ())
-        return ActivityHistoryPage(tuple(items), "cursor-more" if category == "USER" else None, category == "USER")
+        return ActivityHistoryPage(
+            tuple(items),
+            "cursor-more" if category == "USER" else None,
+            category == "USER",
+        )
 
     def get_activity_operation_events(self, operation_id, *, access, limit=200):
         return TECHNICAL_ITEMS
@@ -140,8 +175,43 @@ def _capture(dialog: ActivityLogDialog, path: Path) -> None:
         raise RuntimeError(f"Screenshot kaydedilemedi: {path}")
 
 
+def _print_geometry(dialog: ActivityLogDialog, label: str) -> None:
+    current_page = dialog.left_stack.currentWidget()
+    content = getattr(dialog.timeline, "_content", None)
+    print(
+        "GEOMETRY",
+        label,
+        {
+            "dialog": (dialog.width(), dialog.height()),
+            "splitter": (dialog.splitter.width(), dialog.splitter.height()),
+            "left_stack": (dialog.left_stack.width(), dialog.left_stack.height()),
+            "current_page": (current_page.width(), current_page.height()),
+            "view_stack": (dialog.view_stack.width(), dialog.view_stack.height()),
+            "timeline": (dialog.timeline.width(), dialog.timeline.height()),
+            "timeline_viewport": (
+                dialog.timeline.viewport().width(),
+                dialog.timeline.viewport().height(),
+            ),
+            "timeline_content": (
+                content.width() if content is not None else -1,
+                content.height() if content is not None else -1,
+            ),
+            "timeline_content_min_width": (
+                content.minimumWidth() if content is not None else -1
+            ),
+            "details": (dialog.details.width(), dialog.details.height()),
+            "load_more": (dialog.load_more.width(), dialog.load_more.height()),
+        },
+    )
+
+
 def main() -> int:
-    output = Path(os.environ.get("ACTIVITY_HISTORY_POLISH_OUTPUT", "activity-history-polish-artifacts"))
+    output = Path(
+        os.environ.get(
+            "ACTIVITY_HISTORY_POLISH_OUTPUT",
+            "activity-history-polish-artifacts",
+        )
+    )
     output.mkdir(parents=True, exist_ok=True)
 
     app = QApplication.instance() or QApplication([])
@@ -155,6 +225,9 @@ def main() -> int:
     dialog.show()
     dialog.refresh_logs()
     QApplication.processEvents()
+    dialog._sync_timeline_width()
+    QApplication.processEvents()
+    _print_geometry(dialog, "user-1366")
 
     _capture(dialog, output / "01-user-timeline-1366.png")
     dialog.select_item(dialog.items[0])
@@ -173,6 +246,10 @@ def main() -> int:
     dialog.resize(920, 620)
     if dialog.items:
         dialog.select_item(dialog.items[0])
+    QApplication.processEvents()
+    dialog._sync_timeline_width()
+    QApplication.processEvents()
+    _print_geometry(dialog, "user-920")
     _capture(dialog, output / "05-narrow-920.png")
 
     dialog.close()
