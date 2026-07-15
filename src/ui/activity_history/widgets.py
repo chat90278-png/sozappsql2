@@ -65,12 +65,10 @@ class ActivityDetailsPanel(_ActivityDetailsPanelBase):
         item: ActivityHistoryItem,
         operation_events: Iterable[ActivityHistoryItem] = (),
     ) -> None:
-        other_events = tuple(
-            event for event in operation_events if int(event.id) != int(item.id)
-        )
-        super().set_item(item, other_events)
+        events = tuple(operation_events)
+        super().set_item(item, events)
 
-        has_changes = bool(item.changed_fields)
+        has_changes = bool(item.changed_fields or item.changed_fields_parse_error)
         if not has_changes:
             self.changed.clear()
         self._set_section_visible(
@@ -79,13 +77,13 @@ class ActivityDetailsPanel(_ActivityDetailsPanelBase):
             has_changes,
         )
 
-        has_other_events = bool(other_events)
-        if not has_other_events:
+        has_events = bool(events)
+        if not has_events:
             self.operation_events.clear()
         self._set_section_visible(
             getattr(self, "operation_title", None),
             self.operation_events,
-            has_other_events,
+            has_events,
         )
 
         has_contract = bool(str(item.contract_no or "").strip())
