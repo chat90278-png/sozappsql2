@@ -25,11 +25,19 @@ def qapp():
     yield app
 
 
-def _item(key: str, *, lifecycle=AgendaLifecycleType.CONDITION, snooze=True, contract_id=4):
+def _item(
+    key: str,
+    *,
+    lifecycle=AgendaLifecycleType.CONDITION,
+    snooze=True,
+    contract_id=4,
+    kind="deadline",
+    reason_text="",
+):
     return AgendaItem(
         key=key,
         provider_code="test",
-        kind="deadline",
+        kind=kind,
         lifecycle_type=lifecycle,
         title=f"Başlık {key}",
         description=f"Açıklama {key}",
@@ -40,11 +48,12 @@ def _item(key: str, *, lifecycle=AgendaLifecycleType.CONDITION, snooze=True, con
         contract_no="S-1",
         platform="P1",
         remaining_days=3,
+        reason_text=reason_text,
         supports_snooze=snooze,
     )
 
 
-def _snapshot(items=(), *, new_keys=(), snoozed=0, states=None):
+def _snapshot(items=(), *, new_keys=(), snoozed=0, states=None, counts_by_kind=None):
     items = tuple(items)
     profile = AgendaPresentationProfile(
         code=AgendaPresentationProfileCode.PERSONAL,
@@ -61,6 +70,7 @@ def _snapshot(items=(), *, new_keys=(), snoozed=0, states=None):
         new_count=len(new_keys),
         snoozed_count=snoozed,
         filtered_count=0,
+        counts_by_kind=counts_by_kind or {},
         new_keys=frozenset(new_keys),
         states_by_key=states or {},
         compact_limit=2,
@@ -196,3 +206,37 @@ def test_snapshot_order_preserved(qapp):
     window = AgendaDetailWindow()
     window.set_snapshot(_snapshot([_item("z"), _item("a"), _item("m")]))
     assert [row.item.key for row in window._rows] == ["z", "a", "m"]
+
+
+def test_reason_text_renders_only_when_non_empty(qapp):
+    window = AgendaDetailWindow()
+    window.set_snapshot(
+        _snapshot(
+            [
+                _item("with", reason_text="Tarih değişikliği bekleniyor."),
+                _item("without", reason_text="  "),
+            ]
+        )
+    )
+    reason = window._rows[0].findChild(QLabel, "agendaDetailReason")
+    assert reason is not None
+    assert reason.text() == "Tarih değişikliği bekleniyor."
+    assert window._rows[1].findChild(QLabel, "agendaDetailReason") is None
+
+
+def test_kind_filter_uses_all_items_and_all_restores_detail_items(qapp):
+    window = AgendaDetailWindow()
+    items = tuple(
+        _item(str(index), kind="deadline" if index < 20 else "activity")
+        for index in range(22)
+    )
+    window.set_snapshot(
+        _snapshot(items, counts_by_kind={"deadline": 20, "activity": 2})
+    )
+    assert len(window._rows) == 20
+
+    QTest.mouseClick(window._filter_buttons["activity"], Qt.LeftButton)
+    assert [row.item.key for row in window._rows] == ["20", "21"]
+
+    QTest.mouseClick(window._filter_buttons[None], Qt.LeftButton)
+    assert [row.item.key for row in window._rows] == [str(index) for index in range(20)]

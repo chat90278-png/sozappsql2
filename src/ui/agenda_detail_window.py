@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
+    QButtonGroup,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -22,6 +23,7 @@ from src.ui.agenda_compact_widget import (
     _ElidedLabel,
     _severity_color,
     agenda_date_label,
+    agenda_kind_label,
 )
 
 
@@ -78,6 +80,13 @@ class _AgendaDetailRow(QFrame):
         description = _ElidedLabel(item.description, center)
         description.setObjectName("agendaDetailDescription")
         center_lay.addWidget(description)
+
+        reason_text = str(item.reason_text or "").strip()
+        if reason_text:
+            reason = QLabel(reason_text, center)
+            reason.setObjectName("agendaDetailReason")
+            reason.setWordWrap(True)
+            center_lay.addWidget(reason)
 
         context_parts = [
             str(item.contract_no or "").strip(),
@@ -191,6 +200,27 @@ class AgendaDetailWindow(QWidget):
         padding:5px 10px;
         font-weight:800;
     }
+    QWidget#agendaDetailFilters {
+        background:transparent;
+    }
+    QPushButton#agendaDetailFilter {
+        background:#ffffff;
+        color:#475569;
+        border:1px solid #d7e0ea;
+        border-radius:8px;
+        padding:4px 9px;
+        font-size:10px;
+        font-weight:800;
+    }
+    QPushButton#agendaDetailFilter:hover {
+        border-color:#93c5fd;
+        color:#1554d1;
+    }
+    QPushButton#agendaDetailFilter:checked {
+        background:#dbeafe;
+        color:#1d4ed8;
+        border-color:#93c5fd;
+    }
     QFrame#agendaDetailRow {
         background:#ffffff;
         border:1px solid #e2e8f0;
@@ -211,9 +241,13 @@ class AgendaDetailWindow(QWidget):
         font-size:12px;
         font-weight:900;
     }
-    QLabel#agendaDetailDescription, QLabel#agendaDetailContext {
+    QLabel#agendaDetailDescription, QLabel#agendaDetailContext,
+    QLabel#agendaDetailReason {
         color:#64748b;
         font-size:10px;
+    }
+    QLabel#agendaDetailReason {
+        color:#7c8ca1;
     }
     QLabel#agendaDetailDate {
         color:#52647a;
@@ -255,6 +289,8 @@ class AgendaDetailWindow(QWidget):
         self._loading = False
         self._error_message: str | None = None
         self._rows: list[_AgendaDetailRow] = []
+        self._filter_buttons: dict[str | None, QPushButton] = {}
+        self._active_kind: str | None = None
         self._selected_item: AgendaItem | None = None
         self._emitted_seen_identities: set[tuple[str, str]] = set()
 
@@ -303,6 +339,13 @@ class AgendaDetailWindow(QWidget):
         header_lay.addWidget(refresh, 0, Qt.AlignVCenter)
         root.addWidget(header)
 
+        self.filter_host = QWidget(self)
+        self.filter_host.setObjectName("agendaDetailFilters")
+        self.filter_layout = QHBoxLayout(self.filter_host)
+        self.filter_layout.setContentsMargins(2, 0, 2, 0)
+        self.filter_layout.setSpacing(6)
+        root.addWidget(self.filter_host)
+
         panel = QFrame(self)
         panel.setObjectName("agendaDetailPanel")
         panel_lay = QVBoxLayout(panel)
@@ -335,6 +378,7 @@ class AgendaDetailWindow(QWidget):
         self._snapshot = snapshot
         self._loading = False
         self._error_message = None
+        self._active_kind = None
         self._selected_item = None
         self._dwell_timer.stop()
         self._render()
@@ -364,6 +408,46 @@ class AgendaDetailWindow(QWidget):
             target.setFocus(Qt.OtherFocusReason)
             self.scroll.ensureWidgetVisible(target)
 
+    def _clear_filter_buttons(self) -> None:
+        while self.filter_layout.count():
+            item = self.filter_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.hide()
+                widget.setParent(None)
+                widget.deleteLater()
+        self._filter_buttons.clear()
+        self._filter_group = QButtonGroup(self.filter_host)
+        self._filter_group.setExclusive(True)
+
+    def _render_filter_buttons(self, snapshot: AgendaPresentationSnapshot) -> None:
+        self._clear_filter_buttons()
+        entries: list[tuple[str | None, str]] = [(None, "Tümü")]
+        for kind, raw_count in snapshot.counts_by_kind.items():
+            try:
+                count = int(raw_count)
+            except (TypeError, ValueError):
+                continue
+            if count <= 0:
+                continue
+            normalized_kind = str(kind)
+            entries.append((normalized_kind, f"{agenda_kind_label(normalized_kind)} ({count})"))
+
+        for kind, text in entries:
+            button = QPushButton(text, self.filter_host)
+            button.setObjectName("agendaDetailFilter")
+            button.setProperty("agendaKind", "" if kind is None else kind)
+            button.setCheckable(True)
+            button.setChecked(kind == self._active_kind)
+            button.clicked.connect(
+                lambda _checked=False, selected_kind=kind: self._apply_filter(selected_kind)
+            )
+            self._filter_group.addButton(button)
+            self.filter_layout.addWidget(button)
+            self._filter_buttons[kind] = button
+        self.filter_layout.addStretch(1)
+        self.filter_host.show()
+
     def _clear_rows(self) -> None:
         self._dwell_timer.stop()
         self._selected_item = None
@@ -376,31 +460,18 @@ class AgendaDetailWindow(QWidget):
                 widget.deleteLater()
         self._rows.clear()
 
-    def _render(self) -> None:
-        self._clear_rows()
-        snapshot = self._snapshot
-        if self._loading:
-            self._set_state("Yükleniyor…")
-            return
-        if self._error_message:
-            self._set_state("Gündem yüklenemedi", tooltip=self._error_message)
-            return
-        if snapshot is None or not snapshot.detail_items:
-            self._set_state("Şu anda gündeminiz temiz.")
-            return
+    def _items_for_active_filter(self, snapshot: AgendaPresentationSnapshot) -> tuple[AgendaItem, ...]:
+        if self._active_kind is None:
+            return tuple(snapshot.detail_items)
+        return tuple(
+            item for item in snapshot.all_items if str(item.kind) == self._active_kind
+        )
 
+    def _render_rows(self, snapshot: AgendaPresentationSnapshot) -> None:
+        self._clear_rows()
         self.state_label.hide()
         self.scroll.show()
-        summary_parts = [
-            f"{snapshot.active_count} aktif",
-            f"{snapshot.new_count} yeni",
-        ]
-        if snapshot.snoozed_count > 0:
-            summary_parts.append(f"{snapshot.snoozed_count} ertelendi")
-        self.summary_label.setText(" · ".join(summary_parts))
-        self.profile_label.setText(str(snapshot.profile.display_name or ""))
-
-        for agenda_item in tuple(snapshot.detail_items):
+        for agenda_item in self._items_for_active_filter(snapshot):
             row = _AgendaDetailRow(
                 agenda_item,
                 is_new=agenda_item.key in snapshot.new_keys,
@@ -413,9 +484,43 @@ class AgendaDetailWindow(QWidget):
             self._rows.append(row)
         self.rows_layout.addStretch(1)
 
+    def _apply_filter(self, kind: str | None) -> None:
+        self._active_kind = kind
+        for button_kind, button in self._filter_buttons.items():
+            button.setChecked(button_kind == kind)
+        snapshot = self._snapshot
+        if snapshot is not None:
+            self._render_rows(snapshot)
+
+    def _render(self) -> None:
+        self._clear_rows()
+        self._clear_filter_buttons()
+        snapshot = self._snapshot
+        if self._loading:
+            self._set_state("Yükleniyor…")
+            return
+        if self._error_message:
+            self._set_state("Gündem yüklenemedi", tooltip=self._error_message)
+            return
+        if snapshot is None or not snapshot.detail_items:
+            self._set_state("Şu anda gündeminiz temiz.")
+            return
+
+        summary_parts = [
+            f"{snapshot.active_count} aktif",
+            f"{snapshot.new_count} yeni",
+        ]
+        if snapshot.snoozed_count > 0:
+            summary_parts.append(f"{snapshot.snoozed_count} ertelendi")
+        self.summary_label.setText(" · ".join(summary_parts))
+        self.profile_label.setText(str(snapshot.profile.display_name or ""))
+        self._render_filter_buttons(snapshot)
+        self._render_rows(snapshot)
+
     def _set_state(self, text: str, *, tooltip: str = "") -> None:
         self.summary_label.clear()
         self.profile_label.clear()
+        self.filter_host.hide()
         self.state_label.setText(text)
         self.state_label.setToolTip(tooltip)
         self.state_label.show()

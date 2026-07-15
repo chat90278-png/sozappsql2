@@ -26,11 +26,11 @@ def qapp():
     yield app
 
 
-def _item(key: str, *, severity=AgendaSeverity.INFO, remaining=5, contract_id=10):
+def _item(key: str, *, severity=AgendaSeverity.INFO, remaining=5, contract_id=10, kind="deadline"):
     return AgendaItem(
         key=key,
         provider_code="test",
-        kind="deadline",
+        kind=kind,
         lifecycle_type=AgendaLifecycleType.CONDITION,
         title=f"Başlık {key}",
         description=f"Açıklama {key}",
@@ -46,7 +46,7 @@ def _item(key: str, *, severity=AgendaSeverity.INFO, remaining=5, contract_id=10
     )
 
 
-def _snapshot(items=(), *, new_keys=(), active_count=None, new_count=None):
+def _snapshot(items=(), *, new_keys=(), active_count=None, new_count=None, counts_by_kind=None):
     items = tuple(items)
     profile = AgendaPresentationProfile(
         code=AgendaPresentationProfileCode.PERSONAL,
@@ -63,6 +63,7 @@ def _snapshot(items=(), *, new_keys=(), active_count=None, new_count=None):
         new_count=len(new_keys) if new_count is None else new_count,
         snoozed_count=0,
         filtered_count=0,
+        counts_by_kind=counts_by_kind or {},
         new_keys=frozenset(new_keys),
         compact_limit=2,
         detail_limit=20,
@@ -201,3 +202,28 @@ def test_set_snapshot_does_not_mutate_snapshot(qapp):
     widget.set_snapshot(snapshot)
     assert snapshot.compact_items == before
     assert snapshot.all_items == items
+
+
+def test_kind_chips_hidden_when_counts_empty_and_show_top_three(qapp):
+    widget = AgendaCompactWidget()
+    widget.set_snapshot(_snapshot([_item("a")], counts_by_kind={}))
+    assert widget._kind_chips == []
+    assert not widget.kind_chip_host.isVisible()
+
+    widget.set_snapshot(
+        _snapshot(
+            [_item("a")],
+            counts_by_kind={
+                "deadline": 1,
+                "unknown_date": 4,
+                "returned_share": 3,
+                "document_lock": 2,
+                "activity": 5,
+            },
+        )
+    )
+    assert [chip.text() for chip in widget._kind_chips] == [
+        "5 Değişiklik",
+        "4 Belirsiz",
+        "3 Paylaşım",
+    ]

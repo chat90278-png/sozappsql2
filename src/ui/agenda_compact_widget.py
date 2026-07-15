@@ -28,6 +28,33 @@ _SEVERITY_COLORS = {
     "SUCCESS": "#16A34A",
 }
 
+AGENDA_KIND_LABELS = {
+    "deadline": "Yaklaşan",
+    "unknown_date": "Belirsiz",
+    "returned_share": "Paylaşım",
+    "document_lock": "Kilit",
+    "activity": "Değişiklik",
+}
+
+
+def agenda_kind_label(kind: str) -> str:
+    normalized = str(kind or "").strip()
+    return AGENDA_KIND_LABELS.get(normalized, normalized)
+
+
+def _top_kind_counts(snapshot: AgendaPresentationSnapshot, limit: int = 3) -> tuple[tuple[str, int], ...]:
+    indexed_counts = []
+    for index, (kind, raw_count) in enumerate(snapshot.counts_by_kind.items()):
+        try:
+            count = int(raw_count)
+        except (TypeError, ValueError):
+            continue
+        if count <= 0:
+            continue
+        indexed_counts.append((str(kind), count, index))
+    indexed_counts.sort(key=lambda entry: (-entry[1], entry[2]))
+    return tuple((kind, count) for kind, count, _index in indexed_counts[:limit])
+
 
 def _severity_color(item: AgendaItem) -> str:
     return _SEVERITY_COLORS.get(
@@ -198,6 +225,15 @@ class AgendaCompactWidget(QWidget):
         font-size:9px;
         font-weight:800;
     }
+    QLabel#agendaCompactKindChip {
+        background:#f1f5f9;
+        color:#475569;
+        border:1px solid #d8e2ed;
+        border-radius:6px;
+        padding:1px 5px;
+        font-size:8px;
+        font-weight:800;
+    }
     QLabel#agendaCompactNewBadge {
         background:#dbeafe;
         color:#1d4ed8;
@@ -269,6 +305,7 @@ class AgendaCompactWidget(QWidget):
         self._loading = False
         self._error_message: str | None = None
         self._rows: list[_CompactAgendaRow] = []
+        self._kind_chips: list[QLabel] = []
         self._selected_item: AgendaItem | None = None
         self._emitted_seen_identities: set[tuple[str, str]] = set()
 
@@ -294,14 +331,20 @@ class AgendaCompactWidget(QWidget):
 
         header = QHBoxLayout()
         header.setContentsMargins(0, 0, 0, 0)
-        header.setSpacing(6)
+        header.setSpacing(4)
         title = QLabel("GÜNDEMİM", self)
         title.setObjectName("agendaCompactTitle")
+        self.kind_chip_host = QWidget(self)
+        self.kind_chip_host.setObjectName("agendaCompactKindChipHost")
+        self.kind_chip_layout = QHBoxLayout(self.kind_chip_host)
+        self.kind_chip_layout.setContentsMargins(0, 0, 0, 0)
+        self.kind_chip_layout.setSpacing(3)
         self.count_label = QLabel("", self)
         self.count_label.setObjectName("agendaCompactCount")
         self.new_badge = QLabel("", self)
         self.new_badge.setObjectName("agendaCompactNewBadge")
         header.addWidget(title)
+        header.addWidget(self.kind_chip_host, 0)
         header.addStretch(1)
         header.addWidget(self.count_label)
         header.addWidget(self.new_badge)
@@ -355,6 +398,27 @@ class AgendaCompactWidget(QWidget):
         self._emitted_seen_identities.clear()
         self._render()
 
+    def _clear_kind_chips(self) -> None:
+        while self.kind_chip_layout.count():
+            item = self.kind_chip_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.hide()
+                widget.setParent(None)
+                widget.deleteLater()
+        self._kind_chips.clear()
+        self.kind_chip_host.hide()
+
+    def _render_kind_chips(self, snapshot: AgendaPresentationSnapshot) -> None:
+        self._clear_kind_chips()
+        for kind, count in _top_kind_counts(snapshot):
+            chip = QLabel(f"{count} {agenda_kind_label(kind)}", self.kind_chip_host)
+            chip.setObjectName("agendaCompactKindChip")
+            chip.setProperty("agendaKind", kind)
+            self.kind_chip_layout.addWidget(chip)
+            self._kind_chips.append(chip)
+        self.kind_chip_host.setVisible(bool(self._kind_chips))
+
     def _clear_rows(self) -> None:
         self._dwell_timer.stop()
         self._selected_item = None
@@ -369,6 +433,7 @@ class AgendaCompactWidget(QWidget):
 
     def _render(self) -> None:
         self._clear_rows()
+        self._clear_kind_chips()
         snapshot = self._snapshot
 
         if self._loading:
@@ -381,6 +446,7 @@ class AgendaCompactWidget(QWidget):
             self._set_state("Şu anda gündeminiz temiz.")
             return
 
+        self._render_kind_chips(snapshot)
         self.state_label.clear()
         self.state_label.setToolTip("")
         self.new_badge.setVisible(snapshot.new_count > 0)
@@ -445,4 +511,9 @@ class AgendaCompactWidget(QWidget):
         super().closeEvent(event)
 
 
-__all__ = ["AgendaCompactWidget", "agenda_date_label"]
+__all__ = [
+    "AGENDA_KIND_LABELS",
+    "AgendaCompactWidget",
+    "agenda_date_label",
+    "agenda_kind_label",
+]
