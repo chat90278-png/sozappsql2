@@ -544,7 +544,10 @@ class ActivityDetailsPanel(QFrame):
     ) -> None:
         self._item = item
         action_label = visible_action_label(item.action, item.action_label)
-        self.title.setText(item.title or action_label)
+        title = str(item.title or "").strip()
+        if not title or title == str(item.action_label or "").strip():
+            title = action_label
+        self.title.setText(title)
         self.summary.setText(item.summary)
 
         first_line = " · ".join(
