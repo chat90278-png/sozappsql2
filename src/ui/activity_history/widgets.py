@@ -16,6 +16,7 @@ class ActivityDetailsPanel(_ActivityDetailsPanelBase):
 
     def _build(self) -> None:
         super()._build()
+        self.subtitle.setText("Seçilen kaydın özeti ve ilgili bilgiler")
 
         labels = {
             str(label.text() or "").strip(): label
@@ -28,6 +29,13 @@ class ActivityDetailsPanel(_ActivityDetailsPanelBase):
         self.open_contract_button.setObjectName("activityPrimary")
         self.open_contract_button.setAccessibleName("İlgili sözleşmeye git")
         self.open_contract_button.setVisible(False)
+        self.open_contract_button.setStyleSheet(
+            "QPushButton { min-height:34px; padding:0 13px; border:none; "
+            "border-radius:9px; background:#1f5fe0; color:#ffffff; "
+            "font-weight:800; } "
+            "QPushButton:hover { background:#174fc1; } "
+            "QPushButton:pressed { background:#123f9c; }"
+        )
         self.open_contract_button.clicked.connect(self._request_contract_open)
 
         content = self.scroll.widget()
