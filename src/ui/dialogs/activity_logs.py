@@ -2,17 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime, time, timezone
 
-from PySide6.QtCore import QDate, QItemSelection, QItemSelectionModel, QTimer, Qt
-from PySide6.QtGui import (
-    QCloseEvent,
-    QColor,
-    QKeySequence,
-    QPainter,
-    QPainterPath,
-    QPen,
-    QShortcut,
-    QShowEvent,
-)
+from PySide6.QtCore import QDate, QEvent, QItemSelection, QItemSelectionModel, QTimer, Qt
+from PySide6.QtGui import QCloseEvent, QKeySequence, QShortcut, QShowEvent
 from PySide6.QtWidgets import (
     QApplication,
     QButtonGroup,
@@ -24,12 +15,10 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
     QLineEdit,
-    QProxyStyle,
     QPushButton,
     QSizePolicy,
     QSplitter,
     QStackedWidget,
-    QStyle,
     QTableView,
     QVBoxLayout,
     QWidget,
@@ -54,33 +43,6 @@ from src.ui.activity_history.widgets import (
     ActivityHistoryTableModel,
     ActivityTimelineView,
 )
-
-
-class ActivityFilterProxyStyle(QProxyStyle):
-    """Draw a small antialiased chevron for Activity History drop-downs."""
-
-    def drawPrimitive(self, element, option, painter, widget=None):  # noqa: N802
-        if (
-            element == QStyle.PE_IndicatorArrowDown
-            and widget is not None
-            and widget.objectName() == "activityFilter"
-        ):
-            painter.save()
-            painter.setRenderHint(QPainter.Antialiasing, True)
-            center = option.rect.center()
-            pen = QPen(QColor("#5b6d84"), 1.7)
-            pen.setCapStyle(Qt.RoundCap)
-            pen.setJoinStyle(Qt.RoundJoin)
-            painter.setPen(pen)
-            painter.setBrush(Qt.NoBrush)
-            path = QPainterPath()
-            path.moveTo(center.x() - 4.0, center.y() - 1.5)
-            path.lineTo(center.x(), center.y() + 2.5)
-            path.lineTo(center.x() + 4.0, center.y() - 1.5)
-            painter.drawPath(path)
-            painter.restore()
-            return
-        super().drawPrimitive(element, option, painter, widget)
 
 
 class ActivityLogDialog(QDialog):
@@ -122,11 +84,9 @@ class ActivityLogDialog(QDialog):
         self._selected_id: int | None = None
         self._active_category = "USER"
         self._current_view = "timeline"
+        self._filter_chevrons: dict[QWidget, QLabel] = {}
         self.last_error = ""
         self.query_count = 0
-
-        self._filter_style = ActivityFilterProxyStyle()
-        self._filter_style.setParent(self)
 
         self.setObjectName("activityHistoryDialog")
         self.setWindowTitle("İşlem Geçmişi")
@@ -234,9 +194,29 @@ class ActivityLogDialog(QDialog):
         layout.addLayout(self.tab_row)
         return frame
 
-    def _apply_filter_style(self, widget) -> None:
+    def _position_filter_chevron(self, widget: QWidget) -> None:
+        chevron = self._filter_chevrons.get(widget)
+        if chevron is None:
+            return
+        width = 30
+        chevron.setGeometry(max(0, widget.width() - width), 0, width, widget.height())
+        chevron.raise_()
+
+    def _attach_filter_chevron(self, widget: QWidget) -> None:
+        chevron = QLabel("⌄", widget)
+        chevron.setObjectName("activityFilterChevron")
+        chevron.setAlignment(Qt.AlignCenter)
+        chevron.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        chevron.setAccessibleName("")
+        widget.installEventFilter(self)
+        self._filter_chevrons[widget] = chevron
+        self._position_filter_chevron(widget)
+        chevron.show()
+
+    def _apply_filter_style(self, widget, *, dropdown: bool = False) -> None:
         widget.setObjectName("activityFilter")
-        widget.setStyle(self._filter_style)
+        if dropdown:
+            self._attach_filter_chevron(widget)
 
     def _build_toolbar(self) -> QWidget:
         frame = QFrame()
@@ -255,7 +235,7 @@ class ActivityLogDialog(QDialog):
         first_row.addWidget(self.search, 5)
 
         self.action = QComboBox()
-        self._apply_filter_style(self.action)
+        self._apply_filter_style(self.action, dropdown=True)
         self.action.setMinimumWidth(0)
         self.action.setMaxVisibleItems(12)
         self.action.setAccessibleName("İşlem türü")
@@ -270,7 +250,7 @@ class ActivityLogDialog(QDialog):
         first_row.addWidget(self.actor, 2)
 
         self.limit = QComboBox()
-        self._apply_filter_style(self.limit)
+        self._apply_filter_style(self.limit, dropdown=True)
         self.limit.setFixedWidth(68)
         self.limit.setAccessibleName("Sayfa başına kayıt sayısı")
         for value in (50, 100, 200):
@@ -415,7 +395,7 @@ class ActivityLogDialog(QDialog):
 
     def _date_edit(self, special: str) -> QDateEdit:
         edit = QDateEdit()
-        self._apply_filter_style(edit)
+        self._apply_filter_style(edit, dropdown=True)
         edit.setCalendarPopup(True)
         edit.setDisplayFormat("dd.MM.yyyy")
         edit.setMinimumDate(QDate(2000, 1, 1))
@@ -762,8 +742,19 @@ class ActivityLogDialog(QDialog):
         QApplication.clipboard().setText(text)
 
     # ------------------------------------------------------------- Qt events
+    def eventFilter(self, watched, event) -> bool:  # noqa: N802
+        if watched in self._filter_chevrons and event.type() in {
+            QEvent.Resize,
+            QEvent.Show,
+            QEvent.StyleChange,
+        }:
+            QTimer.singleShot(0, lambda value=watched: self._position_filter_chevron(value))
+        return super().eventFilter(watched, event)
+
     def showEvent(self, event: QShowEvent) -> None:  # noqa: N802
         super().showEvent(event)
+        for widget in self._filter_chevrons:
+            self._position_filter_chevron(widget)
         QTimer.singleShot(0, self._sync_timeline_width)
 
     def resizeEvent(self, event) -> None:  # noqa: N802
@@ -779,6 +770,8 @@ class ActivityLogDialog(QDialog):
             self.details.setMaximumWidth(430)
             self.details.setVisible(True)
             self.splitter.setSizes([980, 340])
+        for widget in self._filter_chevrons:
+            self._position_filter_chevron(widget)
         QTimer.singleShot(0, self._sync_timeline_width)
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
