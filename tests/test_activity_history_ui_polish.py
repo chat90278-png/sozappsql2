@@ -14,7 +14,7 @@ from src.services.activity_history_query import ActivityHistoryItem, ActivityHis
 from src.ui.activity_history.labels import visible_action_label
 from src.ui.activity_history.styles import ACTIVITY_HISTORY_QSS
 from src.ui.activity_history.widgets import TimelineCard
-from src.ui.dialogs.activity_logs import ActivityLogDialog
+from src.ui.dialogs.activity_logs import ActivityFilterProxyStyle, ActivityLogDialog
 
 
 NORMAL_ACCESS = ActivityHistoryAccess(
@@ -151,12 +151,19 @@ def test_narrow_layout_keeps_vertical_splitter(app):
     dialog.close()
 
 
-def test_filter_styles_use_segmented_modern_dropdown_controls():
+def test_filter_widgets_use_proxy_chevrons_and_segmented_dropdowns(app):
+    dialog = ActivityLogDialog(
+        FakeStore(ActivityHistoryPage((_item(),), None, False)),
+        access=NORMAL_ACCESS,
+        auto_load=False,
+    )
+    assert isinstance(dialog._filter_style, ActivityFilterProxyStyle)
     assert "QComboBox#activityFilter::drop-down" in ACTIVITY_HISTORY_QSS
     assert "QDateEdit#activityFilter::drop-down" in ACTIVITY_HISTORY_QSS
     assert "border-left: 1px solid #e3eaf2" in ACTIVITY_HISTORY_QSS
-    assert "border-top: 5px solid #5b6d84" in ACTIVITY_HISTORY_QSS
+    assert "QComboBox#activityFilter::down-arrow" not in ACTIVITY_HISTORY_QSS
     assert "QComboBox#activityFilter QAbstractItemView" in ACTIVITY_HISTORY_QSS
+    dialog.close()
 
 
 def test_detail_panel_removes_gray_fill_from_readable_sections():
@@ -165,3 +172,19 @@ def test_detail_panel_removes_gray_fill_from_readable_sections():
     assert "background: transparent" in ACTIVITY_HISTORY_QSS
     assert "alternate-background-color: #ffffff" in ACTIVITY_HISTORY_QSS
     assert "QFrame#activityDetailsPanel QHeaderView::section" in ACTIVITY_HISTORY_QSS
+
+
+def test_timeline_content_tracks_viewport_width(app):
+    page = ActivityHistoryPage((_item(),), None, False)
+    dialog = ActivityLogDialog(
+        FakeStore(page),
+        access=NORMAL_ACCESS,
+        auto_load=False,
+    )
+    dialog.resize(1366, 768)
+    dialog.show()
+    assert dialog.refresh_logs()
+    QApplication.processEvents()
+    dialog._sync_timeline_width()
+    assert dialog.timeline._content.minimumWidth() >= dialog.timeline.viewport().width() - 4
+    dialog.close()
