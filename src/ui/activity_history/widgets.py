@@ -9,6 +9,9 @@ from .widgets_legacy import *  # noqa: F401,F403
 from .widgets_legacy import ActivityDetailsPanel as _ActivityDetailsPanelBase
 
 
+_NON_NAVIGABLE_CONTRACT_ACTIONS = frozenset({"contract_deleted"})
+
+
 class ActivityDetailsPanel(_ActivityDetailsPanelBase):
     """Detail panel that hides empty sections and exposes contract navigation."""
 
@@ -80,7 +83,7 @@ class ActivityDetailsPanel(_ActivityDetailsPanelBase):
             self.scroll.setAlignment(Qt.AlignTop | Qt.AlignLeft)
 
     def _request_contract_open(self) -> None:
-        if self._item is not None and str(self._item.contract_no or "").strip():
+        if self._item is not None and self.open_contract_button.isEnabled():
             self.open_contract_requested.emit(self._item)
 
     def _set_section_visible(self, title, widget, visible: bool) -> None:
@@ -129,11 +132,13 @@ class ActivityDetailsPanel(_ActivityDetailsPanelBase):
             has_events,
         )
 
+        action = str(item.action or "").strip().casefold()
         has_contract = bool(str(item.contract_no or "").strip())
-        self.open_contract_button.setVisible(has_contract)
-        self.open_contract_button.setEnabled(has_contract)
+        can_navigate = has_contract and action not in _NON_NAVIGABLE_CONTRACT_ACTIONS
+        self.open_contract_button.setVisible(can_navigate)
+        self.open_contract_button.setEnabled(can_navigate)
         self.open_contract_button.setToolTip(
-            f"{item.contract_no} sözleşmesini aç" if has_contract else ""
+            f"{item.contract_no} sözleşmesini aç" if can_navigate else ""
         )
 
         content = self.scroll.widget()

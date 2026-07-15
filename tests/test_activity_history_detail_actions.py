@@ -33,23 +33,29 @@ def app():
 def _item(
     item_id: int = 1,
     *,
+    action: str = "contract_updated",
+    platform_name: str | None = "AKINCI",
     contract_no: str | None = "AKINCI - TBD - 4",
     changed_fields=(),
     operation_group_key: str | None = None,
 ) -> ActivityHistoryItem:
+    action_label = {
+        "contract_deleted": "Sözleşme silindi",
+        "contract_updated": "Sözleşme güncellendi",
+    }.get(action, "Sözleşme güncellendi")
     return ActivityHistoryItem(
         id=item_id,
         occurred_at="2026-07-15T06:00:00Z",
         category="USER",
-        action="contract_updated",
-        action_label="Sözleşme güncellendi",
+        action=action,
+        action_label=action_label,
         status="SUCCESS",
         actor_display_name="Serhat",
-        title="Sözleşme güncellendi",
+        title=action_label,
         summary="Sözleşme bilgileri güncellendi",
         entity_type="contract",
         entity_label="Sözleşme",
-        platform_name="AKINCI",
+        platform_name=platform_name,
         contract_no=contract_no,
         changed_fields=tuple(changed_fields),
         changed_fields_parse_error=False,
@@ -59,8 +65,10 @@ def _item(
 
 
 class FakeStore:
-    def __init__(self, items):
+    def __init__(self, items, *, contract_ids=None, rebuilt_rows=None):
         self.items = tuple(items)
+        self.contract_ids = dict(contract_ids or {})
+        self.rebuilt_rows = list(rebuilt_rows or [])
 
     def platform_names(self):
         return ["AKINCI", "BAYRAKTAR TB3"]
@@ -83,22 +91,47 @@ class FakeStore:
     ):
         return self.items
 
+    def activity_contract_id_for_log(self, activity_log_id):
+        return self.contract_ids.get(int(activity_log_id))
+
+    def build_contract_index(self):
+        return list(self.rebuilt_rows)
+
 
 class Host(QWidget):
-    def __init__(self):
+    def __init__(self, rows=None):
         super().__init__()
         self.opened = None
-        self.contract_index = [
-            {
-                "platform": "AKINCI",
-                "no": "AKINCI - TBD - 4",
-                "type": "Ana Sözleşme",
-                "row": 7,
-            }
-        ]
+        self.contract_index = list(
+            rows
+            if rows is not None
+            else [
+                {
+                    "platform": "AKINCI",
+                    "no": "AKINCI - TBD - 4",
+                    "type": "Ana Sözleşme",
+                    "row": 7,
+                }
+            ]
+        )
 
     def open_contract_item(self, item):
         self.opened = item
+
+
+def _open_dialog(app, item, store, host):
+    dialog = ActivityLogDialog(
+        store,
+        parent=host,
+        access=ACCESS,
+        auto_load=False,
+    )
+    dialog.resize(1366, 768)
+    dialog.show()
+    assert dialog.refresh_logs()
+    dialog.select_item(item)
+    QApplication.processEvents()
+    return dialog
 
 
 def test_empty_detail_sections_are_hidden(app):
@@ -161,20 +194,10 @@ def test_platform_filter_is_searchable_dropdown(app):
 def test_contract_button_opens_matching_contract(app):
     item = _item()
     host = Host()
-    dialog = ActivityLogDialog(
-        FakeStore((item,)),
-        parent=host,
-        access=ACCESS,
-        auto_load=False,
-    )
-    dialog.resize(1366, 768)
-    dialog.show()
-    assert dialog.refresh_logs()
-    dialog.select_item(item)
-    QApplication.processEvents()
+    dialog = _open_dialog(app, item, FakeStore((item,)), host)
+
     assert dialog.details.open_contract_button.isVisible()
     assert dialog.details.open_contract_button.height() >= 30
-
     dialog.details.open_contract_button.click()
     QApplication.processEvents()
 
@@ -184,10 +207,89 @@ def test_contract_button_opens_matching_contract(app):
     host.close()
 
 
+def test_contract_navigation_prefers_stable_contract_id(app):
+    item = _item(
+        item_id=11,
+        platform_name="Eski Platform",
+        contract_no="ESKI-NO",
+    )
+    current = {
+        "platform": "Yeni Platform",
+        "no": "YENI-NO",
+        "type": "Ana Sözleşme",
+        "row": 42,
+    }
+    host = Host([current])
+    store = FakeStore((item,), contract_ids={11: 42})
+    dialog = _open_dialog(app, item, store, host)
+
+    dialog.details.open_contract_button.click()
+    QApplication.processEvents()
+
+    assert host.opened == current
+    dialog.close()
+    host.close()
+
+
+def test_contract_navigation_normalizes_platform_and_contract_text(app):
+    item = _item(
+        platform_name="ANKA – III",
+        contract_no=" demo plus 060 ",
+    )
+    current = {
+        "platform": "ANKA-III",
+        "no": "DEMO-PLUS-060",
+        "type": "Ana Sözleşme",
+        "row": 8,
+    }
+    host = Host([current])
+    dialog = _open_dialog(app, item, FakeStore((item,)), host)
+
+    dialog.details.open_contract_button.click()
+    QApplication.processEvents()
+
+    assert host.opened == current
+    dialog.close()
+    host.close()
+
+
+def test_contract_navigation_rebuilds_stale_index(app):
+    item = _item(contract_no="DEMO-CURRENT-010", platform_name="HÜRJET")
+    current = {
+        "platform": "HÜRJET",
+        "no": "DEMO-CURRENT-010",
+        "type": "Ana Sözleşme",
+        "row": 91,
+    }
+    host = Host([{"platform": "AKINCI", "no": "OTHER", "row": 4}])
+    store = FakeStore((item,), rebuilt_rows=[current])
+    dialog = _open_dialog(app, item, store, host)
+
+    dialog.details.open_contract_button.click()
+    QApplication.processEvents()
+
+    assert host.opened == current
+    dialog.close()
+    host.close()
+
+
 def test_contract_button_hides_when_record_has_no_contract(app):
     item = _item(contract_no=None)
     dialog = ActivityLogDialog(
         FakeStore((item,)),
+        access=ACCESS,
+        auto_load=False,
+    )
+    assert dialog.refresh_logs()
+    dialog.select_item(item)
+    assert dialog.details.open_contract_button.isHidden()
+    dialog.close()
+
+
+def test_contract_button_hides_for_deleted_contract(app):
+    item = _item(action="contract_deleted")
+    dialog = ActivityLogDialog(
+        FakeStore((item,), contract_ids={item.id: 7}),
         access=ACCESS,
         auto_load=False,
     )
