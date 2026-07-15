@@ -5,7 +5,8 @@ import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
-from PySide6.QtCore import Qt
+import shiboken6
+from PySide6.QtCore import QCoreApplication, QEvent, Qt
 from PySide6.QtTest import QSignalSpy, QTest
 from PySide6.QtWidgets import QApplication, QLabel, QToolButton
 
@@ -240,3 +241,22 @@ def test_kind_filter_uses_all_items_and_all_restores_detail_items(qapp):
 
     QTest.mouseClick(window._filter_buttons[None], Qt.LeftButton)
     assert [row.item.key for row in window._rows] == [str(index) for index in range(20)]
+
+
+def test_snapshot_refresh_deletes_previous_filter_button_group(qapp):
+    window = AgendaDetailWindow()
+    snapshot = _snapshot(
+        [_item("a")],
+        counts_by_kind={"deadline": 1},
+    )
+    window.set_snapshot(snapshot)
+    previous_group = window._filter_group
+
+    window.set_snapshot(snapshot)
+    current_group = window._filter_group
+
+    assert current_group is not previous_group
+    QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+    qapp.processEvents()
+    assert not shiboken6.isValid(previous_group)
+    assert shiboken6.isValid(current_group)

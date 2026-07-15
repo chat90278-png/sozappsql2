@@ -290,6 +290,7 @@ class AgendaDetailWindow(QWidget):
         self._error_message: str | None = None
         self._rows: list[_AgendaDetailRow] = []
         self._filter_buttons: dict[str | None, QPushButton] = {}
+        self._filter_group: QButtonGroup | None = None
         self._active_kind: str | None = None
         self._selected_item: AgendaItem | None = None
         self._emitted_seen_identities: set[tuple[str, str]] = set()
@@ -417,6 +418,8 @@ class AgendaDetailWindow(QWidget):
                 widget.setParent(None)
                 widget.deleteLater()
         self._filter_buttons.clear()
+        if self._filter_group is not None:
+            self._filter_group.deleteLater()
         self._filter_group = QButtonGroup(self.filter_host)
         self._filter_group.setExclusive(True)
 
