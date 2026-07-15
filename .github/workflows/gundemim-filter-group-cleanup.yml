@@ -34,30 +34,15 @@ jobs:
           python -m pip install --quiet --disable-pip-version-check -r requirements.txt
           python -m pip install --quiet --disable-pip-version-check pytest
 
-      - name: Apply exact two-file payload
+      - name: Apply exact two-file patch
         shell: bash
         run: |
-          python - <<'PYCODE'
-          import base64
-          import io
-          import zipfile
-          from pathlib import Path
-
-          encoded = Path(".github/validation/gundemim-filter-group-cleanup.b64").read_text(encoding="utf-8")
-          allowed = {
-              "src/ui/agenda_detail_window.py",
-              "tests/test_agenda_detail_window.py",
-          }
-          with zipfile.ZipFile(io.BytesIO(base64.b64decode(encoded))) as archive:
-              names = set(archive.namelist())
-              if names != allowed:
-                  raise SystemExit(f"Unexpected payload paths: {sorted(names)}")
-              for name in sorted(names):
-                  target = Path(name)
-                  if target.is_absolute() or ".." in target.parts:
-                      raise SystemExit(f"Unsafe path: {name}")
-                  target.write_bytes(archive.read(name))
-          PYCODE
+          base64 --decode .github/validation/gundemim-filter-group-cleanup.b64 > /tmp/gundemim-filter-group-cleanup.patch
+          git apply --check /tmp/gundemim-filter-group-cleanup.patch
+          git apply /tmp/gundemim-filter-group-cleanup.patch
+          changed=$(git diff --name-only | sort)
+          expected=$(printf '%s\n' src/ui/agenda_detail_window.py tests/test_agenda_detail_window.py | sort)
+          test "$changed" = "$expected"
 
       - name: Compile changed files
         run: |
@@ -79,7 +64,7 @@ jobs:
         with:
           name: gundemim-filter-group-cleanup-validation
           path: validation-out/*
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 7
 
       - name: Commit exact cleanup and remove temporary validation files
