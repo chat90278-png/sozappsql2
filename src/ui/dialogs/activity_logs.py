@@ -5,6 +5,7 @@ from PySide6.QtWidgets import (
     QBoxLayout,
     QComboBox,
     QCompleter,
+    QLabel,
     QMessageBox,
     QSizePolicy,
 )
@@ -13,6 +14,38 @@ from src.services.activity_history_query import ActivityHistoryItem, ActivityHis
 
 from .activity_logs_legacy import *  # noqa: F401,F403
 from .activity_logs_legacy import ActivityLogDialog as _ActivityLogDialogBase
+
+
+class ActivityPlatformComboBox(QComboBox):
+    """Editable platform picker with a modern overlay chevron."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.chevron = QLabel("⌄", self)
+        self.chevron.setObjectName("activityFilterChevron")
+        self.chevron.setAlignment(Qt.AlignCenter)
+        self.chevron.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self.chevron.setAccessibleName("")
+        self.chevron.show()
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        width = 30
+        self.chevron.setGeometry(max(0, self.width() - width), 0, width, self.height())
+        self.chevron.raise_()
+
+    def text(self) -> str:
+        return self.currentText()
+
+    def setText(self, value: str) -> None:
+        text = str(value or "").strip()
+        index = self.findData(text)
+        if index < 0:
+            index = self.findText(text, Qt.MatchFixedString)
+        if index >= 0:
+            self.setCurrentIndex(index)
+        else:
+            self.setEditText(text)
 
 
 class ActivityLogDialog(_ActivityLogDialogBase):
@@ -92,14 +125,14 @@ class ActivityLogDialog(_ActivityLogDialogBase):
 
     def _replace_platform_filter(self) -> None:
         old_platform = self.platform
-        combo = QComboBox(old_platform.parentWidget())
+        combo = ActivityPlatformComboBox(old_platform.parentWidget())
         combo.setEditable(True)
         combo.setInsertPolicy(QComboBox.NoInsert)
         combo.setMaxVisibleItems(14)
         combo.setMinimumWidth(0)
         combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         combo.setAccessibleName("Platform filtresi")
-        self._apply_filter_style(combo, dropdown=True)
+        self._apply_filter_style(combo)
 
         line_edit = combo.lineEdit()
         if line_edit is not None:
