@@ -1,10 +1,18 @@
 from __future__ import annotations
 
 from datetime import datetime, time, timezone
-from typing import Iterable
 
 from PySide6.QtCore import QDate, QItemSelection, QItemSelectionModel, QTimer, Qt
-from PySide6.QtGui import QCloseEvent, QKeySequence, QShortcut
+from PySide6.QtGui import (
+    QCloseEvent,
+    QColor,
+    QKeySequence,
+    QPainter,
+    QPainterPath,
+    QPen,
+    QShortcut,
+    QShowEvent,
+)
 from PySide6.QtWidgets import (
     QApplication,
     QButtonGroup,
@@ -16,11 +24,12 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
     QLineEdit,
-    QMessageBox,
+    QProxyStyle,
     QPushButton,
     QSizePolicy,
     QSplitter,
     QStackedWidget,
+    QStyle,
     QTableView,
     QVBoxLayout,
     QWidget,
@@ -45,6 +54,33 @@ from src.ui.activity_history.widgets import (
     ActivityHistoryTableModel,
     ActivityTimelineView,
 )
+
+
+class ActivityFilterProxyStyle(QProxyStyle):
+    """Draw a small antialiased chevron for Activity History drop-downs."""
+
+    def drawPrimitive(self, element, option, painter, widget=None):  # noqa: N802
+        if (
+            element == QStyle.PE_IndicatorArrowDown
+            and widget is not None
+            and widget.objectName() == "activityFilter"
+        ):
+            painter.save()
+            painter.setRenderHint(QPainter.Antialiasing, True)
+            center = option.rect.center()
+            pen = QPen(QColor("#5b6d84"), 1.7)
+            pen.setCapStyle(Qt.RoundCap)
+            pen.setJoinStyle(Qt.RoundJoin)
+            painter.setPen(pen)
+            painter.setBrush(Qt.NoBrush)
+            path = QPainterPath()
+            path.moveTo(center.x() - 4.0, center.y() - 1.5)
+            path.lineTo(center.x(), center.y() + 2.5)
+            path.lineTo(center.x() + 4.0, center.y() - 1.5)
+            painter.drawPath(path)
+            painter.restore()
+            return
+        super().drawPrimitive(element, option, painter, widget)
 
 
 class ActivityLogDialog(QDialog):
@@ -88,6 +124,9 @@ class ActivityLogDialog(QDialog):
         self._current_view = "timeline"
         self.last_error = ""
         self.query_count = 0
+
+        self._filter_style = ActivityFilterProxyStyle()
+        self._filter_style.setParent(self)
 
         self.setObjectName("activityHistoryDialog")
         self.setWindowTitle("İşlem Geçmişi")
@@ -145,11 +184,9 @@ class ActivityLogDialog(QDialog):
         text_col = QVBoxLayout()
         text_col.setContentsMargins(0, 0, 0, 0)
         text_col.setSpacing(1)
-
         title = QLabel("İşlem Geçmişi")
         title.setObjectName("activityTitle")
         text_col.addWidget(title)
-
         subtitle = QLabel(
             "Kullanıcı değişikliklerini okunabilir özetlerle izleyin. "
             "Teknik kayıtlar yalnız yetkili kullanıcılara gösterilir."
@@ -179,7 +216,6 @@ class ActivityLogDialog(QDialog):
         self.tab_group = QButtonGroup(self)
         self.tab_group.setExclusive(True)
         self.tab_buttons: dict[str, QPushButton] = {}
-
         for category, label in self.CATEGORY_TABS:
             if category == "TECHNICAL" and not self.access.can_view_technical:
                 continue
@@ -193,11 +229,14 @@ class ActivityLogDialog(QDialog):
             self.tab_group.addButton(button)
             self.tab_buttons[category] = button
             self.tab_row.addWidget(button)
-
         self.tab_row.addStretch(1)
         self.tab_buttons["USER"].setChecked(True)
         layout.addLayout(self.tab_row)
         return frame
+
+    def _apply_filter_style(self, widget) -> None:
+        widget.setObjectName("activityFilter")
+        widget.setStyle(self._filter_style)
 
     def _build_toolbar(self) -> QWidget:
         frame = QFrame()
@@ -216,8 +255,10 @@ class ActivityLogDialog(QDialog):
         first_row.addWidget(self.search, 5)
 
         self.action = QComboBox()
-        self.action.setObjectName("activityFilter")
+        self._apply_filter_style(self.action)
         self.action.setMinimumWidth(0)
+        self.action.setMaxVisibleItems(12)
+        self.action.setAccessibleName("İşlem türü")
         self.action.currentIndexChanged.connect(
             lambda _=0: self.refresh_logs(reset=True)
         )
@@ -229,7 +270,7 @@ class ActivityLogDialog(QDialog):
         first_row.addWidget(self.actor, 2)
 
         self.limit = QComboBox()
-        self.limit.setObjectName("activityFilter")
+        self._apply_filter_style(self.limit)
         self.limit.setFixedWidth(68)
         self.limit.setAccessibleName("Sayfa başına kayıt sayısı")
         for value in (50, 100, 200):
@@ -293,7 +334,6 @@ class ActivityLogDialog(QDialog):
             button.setCheckable(True)
             self.view_group.addButton(button)
             layout.addWidget(button)
-
         self.timeline_button.setChecked(True)
         self.timeline_button.clicked.connect(lambda: self.set_view("timeline"))
         self.table_button.clicked.connect(lambda: self.set_view("table"))
@@ -322,13 +362,11 @@ class ActivityLogDialog(QDialog):
         self.table.verticalHeader().setVisible(False)
         self.table.verticalHeader().setDefaultSectionSize(30)
         self.table.horizontalHeader().setMinimumHeight(30)
-
         header = self.table.horizontalHeader()
         header.setStretchLastSection(False)
         for column in range(self.table_model.columnCount()):
             header.setSectionResizeMode(column, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(1, QHeaderView.Stretch)
-
         self.table.selectionModel().selectionChanged.connect(
             self._table_selection_changed
         )
@@ -368,7 +406,7 @@ class ActivityLogDialog(QDialog):
 
     def _line_edit(self, placeholder: str) -> QLineEdit:
         edit = QLineEdit()
-        edit.setObjectName("activityFilter")
+        self._apply_filter_style(edit)
         edit.setPlaceholderText(placeholder)
         edit.setClearButtonEnabled(True)
         edit.setMinimumWidth(0)
@@ -377,7 +415,7 @@ class ActivityLogDialog(QDialog):
 
     def _date_edit(self, special: str) -> QDateEdit:
         edit = QDateEdit()
-        edit.setObjectName("activityFilter")
+        self._apply_filter_style(edit)
         edit.setCalendarPopup(True)
         edit.setDisplayFormat("dd.MM.yyyy")
         edit.setMinimumDate(QDate(2000, 1, 1))
@@ -393,9 +431,7 @@ class ActivityLogDialog(QDialog):
         self._search_timer = QTimer(self)
         self._search_timer.setSingleShot(True)
         self._search_timer.setInterval(320)
-        self._search_timer.timeout.connect(
-            lambda: self.refresh_logs(reset=True)
-        )
+        self._search_timer.timeout.connect(lambda: self.refresh_logs(reset=True))
 
     # -------------------------------------------------------------- interaction
     @property
@@ -457,60 +493,39 @@ class ActivityLogDialog(QDialog):
             self._restore_selection(self._selected_id)
 
     def clear_filters(self) -> None:
-        widgets = (self.search, self.actor, self.contract_no, self.platform)
-        for widget in widgets:
+        for widget in (self.search, self.actor, self.contract_no, self.platform):
             widget.blockSignals(True)
             widget.clear()
             widget.blockSignals(False)
-
         for edit in (self.date_from, self.date_to):
             edit.blockSignals(True)
             edit.setDate(edit.minimumDate())
             edit.blockSignals(False)
-
         self.action.blockSignals(True)
         self.action.setCurrentIndex(0)
         self.action.blockSignals(False)
-
         self.limit.blockSignals(True)
         self.limit.setCurrentIndex(0)
         self.limit.blockSignals(False)
         self.refresh_logs(reset=True)
 
     def _validate_dates(self) -> tuple[str | None, str | None]:
-        start = (
-            None
-            if self.date_from.date() == self.date_from.minimumDate()
-            else self.date_from.date()
-        )
-        end = (
-            None
-            if self.date_to.date() == self.date_to.minimumDate()
-            else self.date_to.date()
-        )
+        start = None if self.date_from.date() == self.date_from.minimumDate() else self.date_from.date()
+        end = None if self.date_to.date() == self.date_to.minimumDate() else self.date_to.date()
         if start is not None and end is not None and start > end:
             raise ActivityHistoryQueryError(
                 "Başlangıç tarihi bitiş tarihinden sonra olamaz."
             )
-
         start_iso = None
         end_iso = None
         if start is not None:
-            start_iso = (
-                datetime.combine(
-                    start.toPython(), time.min, tzinfo=timezone.utc
-                )
-                .isoformat()
-                .replace("+00:00", "Z")
-            )
+            start_iso = datetime.combine(
+                start.toPython(), time.min, tzinfo=timezone.utc
+            ).isoformat().replace("+00:00", "Z")
         if end is not None:
-            end_iso = (
-                datetime.combine(
-                    end.toPython(), time.max, tzinfo=timezone.utc
-                )
-                .isoformat()
-                .replace("+00:00", "Z")
-            )
+            end_iso = datetime.combine(
+                end.toPython(), time.max, tzinfo=timezone.utc
+            ).isoformat().replace("+00:00", "Z")
         return start_iso, end_iso
 
     def build_query(self, *, cursor: str | None = None) -> ActivityHistoryQuery:
@@ -540,7 +555,6 @@ class ActivityLogDialog(QDialog):
         except ActivityHistoryQueryError as exc:
             self._show_error(str(exc), retry=False)
             return False
-
         if not reset and not self.next_cursor:
             return False
 
@@ -552,7 +566,6 @@ class ActivityLogDialog(QDialog):
         self.load_more.setEnabled(False)
         self._show_loading(append=not reset)
         QApplication.processEvents()
-
         try:
             page = self.store.query_activity_history(
                 query,
@@ -584,7 +597,6 @@ class ActivityLogDialog(QDialog):
     ) -> bool:
         if self._closed or generation != self._query_generation:
             return False
-
         incoming = list(page.items)
         if reset:
             self.items = incoming
@@ -592,32 +604,42 @@ class ActivityLogDialog(QDialog):
         else:
             known = {item.id for item in self.items}
             self.items.extend(item for item in incoming if item.id not in known)
-
         self.next_cursor = page.next_cursor
         self.has_more = bool(page.has_more and page.next_cursor)
         self._render_items()
         return True
 
+    def _sync_timeline_width(self) -> None:
+        if not hasattr(self, "timeline"):
+            return
+        viewport_width = max(0, self.timeline.viewport().width() - 2)
+        content = getattr(self.timeline, "_content", None)
+        if content is not None and viewport_width:
+            content.setMinimumWidth(viewport_width)
+
     def _render_items(self) -> None:
         self.timeline.set_items(self.items)
         self.table_model.set_items(self.items)
-
         count = len(self.items)
         loaded_text = f"{count} kayıt yüklendi"
         if self.has_more:
             loaded_text += " · devamı var"
         self.loaded_label.setText(loaded_text)
         self.result_label.setText(f"{count} işlem · En yeni önce")
-
         self.load_more.setText("Daha Fazla Yükle")
         self.load_more.setVisible(self.has_more)
         self.load_more.setEnabled(not self._loading)
-
         if self.items:
             self.left_stack.setCurrentIndex(0)
             self._restore_selection(self._selected_id)
+            QTimer.singleShot(0, self._sync_timeline_width)
         else:
             self._show_empty()
+
+    def _restyle_state_message(self, object_name: str) -> None:
+        self.state_message.setObjectName(object_name)
+        self.state_message.style().unpolish(self.state_message)
+        self.state_message.style().polish(self.state_message)
 
     def _show_loading(self, *, append: bool) -> None:
         if append:
@@ -626,14 +648,14 @@ class ActivityLogDialog(QDialog):
             return
         self.state_title.setText("Yükleniyor…")
         self.state_message.setText("İşlem geçmişi güvenli biçimde hazırlanıyor.")
-        self.state_message.setObjectName("activityMuted")
+        self._restyle_state_message("activityMuted")
         self.retry_button.setVisible(False)
         self.left_stack.setCurrentIndex(1)
 
     def _show_empty(self) -> None:
         self.state_title.setText("Bu filtrelerle eşleşen işlem bulunamadı")
         self.state_message.setText("Arama, tarih veya kategori seçimini değiştirin.")
-        self.state_message.setObjectName("activityMuted")
+        self._restyle_state_message("activityMuted")
         self.retry_button.setVisible(False)
         self.left_stack.setCurrentIndex(1)
         self.load_more.setVisible(False)
@@ -642,7 +664,7 @@ class ActivityLogDialog(QDialog):
         self.last_error = message
         self.state_title.setText("İşlem geçmişi yüklenemedi")
         self.state_message.setText(message)
-        self.state_message.setObjectName("activityError")
+        self._restyle_state_message("activityError")
         self.retry_button.setVisible(retry)
         self.left_stack.setCurrentIndex(1)
         self.load_more.setVisible(False)
@@ -713,8 +735,7 @@ class ActivityLogDialog(QDialog):
                 selection = self.table.selectionModel()
                 selection.select(
                     self.table_model.index(row, 0),
-                    QItemSelectionModel.ClearAndSelect
-                    | QItemSelectionModel.Rows,
+                    QItemSelectionModel.ClearAndSelect | QItemSelectionModel.Rows,
                 )
                 self.table.scrollTo(self.table_model.index(row, 0))
                 return
@@ -722,10 +743,7 @@ class ActivityLogDialog(QDialog):
     def _restore_selection(self, item_id: int | None) -> None:
         if item_id is None:
             return
-        item = next(
-            (value for value in self.items if value.id == item_id),
-            None,
-        )
+        item = next((value for value in self.items if value.id == item_id), None)
         if item is not None:
             self.timeline.select_item(item_id)
             self._select_table_row(item_id)
@@ -744,13 +762,15 @@ class ActivityLogDialog(QDialog):
         QApplication.clipboard().setText(text)
 
     # ------------------------------------------------------------- Qt events
+    def showEvent(self, event: QShowEvent) -> None:  # noqa: N802
+        super().showEvent(event)
+        QTimer.singleShot(0, self._sync_timeline_width)
+
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
         orientation = Qt.Vertical if self.width() < 1020 else Qt.Horizontal
-
         if self.splitter.orientation() != orientation:
             self.splitter.setOrientation(orientation)
-
         if orientation == Qt.Vertical:
             self.details.setMaximumWidth(16777215)
             self.details.setVisible(self._selected_id is not None)
@@ -759,6 +779,7 @@ class ActivityLogDialog(QDialog):
             self.details.setMaximumWidth(430)
             self.details.setVisible(True)
             self.splitter.setSizes([980, 340])
+        QTimer.singleShot(0, self._sync_timeline_width)
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
         self._closed = True
