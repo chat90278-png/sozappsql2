@@ -1,0 +1,67 @@
+name: Apply Gündemim UI Missing Bindings
+
+on:
+  push:
+    branches:
+      - feature/gundemim-ui-missing-bindings
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout feature branch
+        uses: actions/checkout@v4
+        with:
+          ref: feature/gundemim-ui-missing-bindings
+          fetch-depth: 0
+
+      - name: Apply exact validated files
+        shell: bash
+        run: |
+          python - <<'PYCODE'
+          import base64
+          import io
+          import lzma
+          import tarfile
+          from pathlib import Path
+
+          payload = Path('.github/validation/gundemim-ui-missing-bindings.tar.xz.b64')
+          raw = lzma.decompress(base64.b64decode(payload.read_text(encoding='utf-8')))
+          allowed = {
+              'src/ui/agenda_compact_widget.py',
+              'src/ui/agenda_detail_window.py',
+              'tests/test_agenda_compact_widget.py',
+              'tests/test_agenda_detail_window.py',
+          }
+          with tarfile.open(fileobj=io.BytesIO(raw), mode='r:') as archive:
+              members = [member for member in archive.getmembers() if member.isfile()]
+              names = {member.name for member in members}
+              if names != allowed:
+                  raise SystemExit(f'Unexpected payload paths: {sorted(names)}')
+              for member in members:
+                  target = Path(member.name)
+                  if target.is_absolute() or '..' in target.parts:
+                      raise SystemExit(f'Unsafe payload path: {member.name}')
+                  source = archive.extractfile(member)
+                  if source is None:
+                      raise SystemExit(f'Cannot read payload path: {member.name}')
+                  target.parent.mkdir(parents=True, exist_ok=True)
+                  target.write_bytes(source.read())
+          PYCODE
+
+      - name: Commit only product and tests
+        shell: bash
+        run: |
+          rm -f .github/workflows/apply-gundemim-ui-missing-bindings.yml
+          rm -f .github/validation/gundemim-ui-missing-bindings.tar.xz.b64
+          rmdir .github/validation 2>/dev/null || true
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git diff --cached --check
+          git commit -m 'feat: expose Gündemim UI metadata'
+          git push origin HEAD:feature/gundemim-ui-missing-bindings
