@@ -9,6 +9,7 @@ from PySide6.QtCore import QAbstractTableModel, QModelIndex, QObject, Qt, Signal
 from PySide6.QtGui import QKeyEvent
 from PySide6.QtWidgets import (
     QFrame,
+    QHeaderView,
     QHBoxLayout,
     QLabel,
     QListWidget,
@@ -24,8 +25,14 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from src.services.activity_history_infra import PATH_LIKE_KEYS, SENSITIVE_KEYS, redact_path_value, sanitize_activity_value
+from src.services.activity_history_infra import (
+    PATH_LIKE_KEYS,
+    SENSITIVE_KEYS,
+    redact_path_value,
+    sanitize_activity_value,
+)
 from src.services.activity_history_query import ActivityHistoryItem
+from src.ui.activity_history.labels import visible_action_label
 
 
 def parse_activity_datetime(value: str) -> datetime:
@@ -89,7 +96,9 @@ def safe_ui_payload(value: Any, *, key: str = "") -> Any:
         return [safe_ui_payload(item) for item in value]
     if isinstance(value, str):
         text = value.strip()
-        if (":\\" in text or text.startswith("/") or text.startswith("\\\\")) and ("/" in text or "\\" in text):
+        if (":\\" in text or text.startswith("/") or text.startswith("\\\\")) and (
+            "/" in text or "\\" in text
+        ):
             return redact_path_value(text)
     return sanitize_activity_value(value)
 
@@ -106,51 +115,72 @@ class TimelineCard(QFrame):
     def __init__(self, item: ActivityHistoryItem, parent: QWidget | None = None):
         super().__init__(parent)
         self.item = item
+        self.display_action_label = visible_action_label(item.action, item.action_label)
         self.setObjectName("activityTimelineCard")
         self.setProperty("selected", False)
         self.setFocusPolicy(Qt.StrongFocus)
         self.setCursor(Qt.PointingHandCursor)
-        self.setAccessibleName(f"{item.action_label}: {item.summary}")
+        self.setAccessibleName(f"{self.display_action_label}: {item.summary}")
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.setMinimumHeight(76)
+        self.setMaximumHeight(92)
         self._build()
 
     def _build(self) -> None:
         root = QHBoxLayout(self)
-        root.setContentsMargins(12, 10, 12, 10)
-        root.setSpacing(12)
+        root.setContentsMargins(10, 7, 10, 7)
+        root.setSpacing(9)
 
-        icon = QLabel(self._icon_text())
-        icon.setAlignment(Qt.AlignCenter)
-        icon.setFixedSize(38, 38)
-        icon.setStyleSheet(self._icon_style())
-        root.addWidget(icon, 0, Qt.AlignTop)
+        self.icon = QLabel(self._icon_text())
+        self.icon.setObjectName("activityCardIcon")
+        self.icon.setAlignment(Qt.AlignCenter)
+        self.icon.setFixedSize(32, 32)
+        self.icon.setStyleSheet(self._icon_style())
+        root.addWidget(self.icon, 0, Qt.AlignTop)
 
         content = QVBoxLayout()
-        content.setSpacing(5)
+        content.setContentsMargins(0, 0, 0, 0)
+        content.setSpacing(3)
+
         top = QHBoxLayout()
-        title = QLabel(self.item.action_label)
+        top.setContentsMargins(0, 0, 0, 0)
+        top.setSpacing(8)
+        title = QLabel(self.display_action_label)
         title.setObjectName("activityCardTitle")
-        top.addWidget(title)
-        top.addStretch(1)
+        title.setMinimumWidth(0)
+        title.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        title.setToolTip(self.display_action_label)
+        top.addWidget(title, 1)
         time_label = QLabel(format_activity_time(self.item.occurred_at))
-        time_label.setObjectName("activityMuted")
-        top.addWidget(time_label)
+        time_label.setObjectName("activityCardTime")
+        top.addWidget(time_label, 0, Qt.AlignRight | Qt.AlignTop)
         content.addLayout(top)
 
+        middle = QHBoxLayout()
+        middle.setContentsMargins(0, 0, 0, 0)
+        middle.setSpacing(8)
         actor = QLabel(self.item.actor_display_name)
-        actor.setObjectName("activityMuted")
-        content.addWidget(actor)
+        actor.setObjectName("activityCardActor")
+        actor.setMinimumWidth(0)
+        actor.setToolTip(self.item.actor_display_name)
+        middle.addWidget(actor, 0)
 
         summary = QLabel(self.item.summary)
         summary.setObjectName("activityCardSummary")
-        summary.setWordWrap(True)
+        summary.setWordWrap(False)
+        summary.setMinimumWidth(0)
+        summary.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         summary.setToolTip(self.item.summary)
-        content.addWidget(summary)
+        middle.addWidget(summary, 1)
+        content.addLayout(middle)
 
         chips = QHBoxLayout()
-        chips.setSpacing(6)
+        chips.setContentsMargins(0, 0, 0, 0)
+        chips.setSpacing(4)
         for text in self._chips():
             chip = QLabel(text)
             chip.setObjectName("activityChip")
+            chip.setToolTip(text)
             chips.addWidget(chip)
         status = QLabel(status_text(self.item.status))
         status.setObjectName(
@@ -163,6 +193,7 @@ class TimelineCard(QFrame):
         chips.addWidget(status)
         chips.addStretch(1)
         content.addLayout(chips)
+
         root.addLayout(content, 1)
 
     def _chips(self) -> list[str]:
@@ -187,10 +218,10 @@ class TimelineCard(QFrame):
 
     def _icon_style(self) -> str:
         if self.item.category == "MANAGEMENT":
-            return "background:#f3efff;color:#6c48c7;border-radius:11px;font-weight:900;"
+            return "background:#f3efff;color:#6c48c7;border-radius:9px;font-weight:900;"
         if self.item.category == "TECHNICAL":
-            return "background:#f1f3f6;color:#64748b;border-radius:11px;font-weight:900;"
-        return "background:#eaf1ff;color:#1f5fe0;border-radius:11px;font-weight:900;"
+            return "background:#f1f3f6;color:#64748b;border-radius:9px;font-weight:900;"
+        return "background:#eaf1ff;color:#1f5fe0;border-radius:9px;font-weight:900;"
 
     def set_selected(self, selected: bool) -> None:
         self.setProperty("selected", bool(selected))
@@ -213,19 +244,26 @@ class TimelineCard(QFrame):
 class ActivityTimelineView(QScrollArea):
     item_selected = Signal(object)
 
-    def __init__(self, parent: QWidget | None = None, *, now_provider: Callable[[], datetime] | None = None):
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        *,
+        now_provider: Callable[[], datetime] | None = None,
+    ):
         super().__init__(parent)
         self.setObjectName("activityTimelineScroll")
         self.setWidgetResizable(True)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._now_provider = now_provider or (lambda: datetime.now().astimezone())
         self._items: list[ActivityHistoryItem] = []
         self._cards: dict[int, TimelineCard] = {}
         self._selected_id: int | None = None
+
         self._content = QWidget()
         self._content.setObjectName("activityTimelineContent")
         self._layout = QVBoxLayout(self._content)
         self._layout.setContentsMargins(0, 0, 0, 0)
-        self._layout.setSpacing(11)
+        self._layout.setSpacing(7)
         self._layout.addStretch(1)
         self.setWidget(self._content)
 
@@ -268,18 +306,24 @@ class ActivityTimelineView(QScrollArea):
             widget = child.widget()
             if widget is not None:
                 widget.deleteLater()
+
         self._cards.clear()
         grouped: OrderedDict[str, list[ActivityHistoryItem]] = OrderedDict()
         for item in self._items:
-            grouped.setdefault(activity_day_label(item.occurred_at, self._now_provider()), []).append(item)
+            grouped.setdefault(
+                activity_day_label(item.occurred_at, self._now_provider()), []
+            ).append(item)
+
         for label, day_items in grouped.items():
             day = QFrame()
             day.setObjectName("activityTimelineDay")
             day.setProperty("dayLabel", label)
             layout = QVBoxLayout(day)
-            layout.setContentsMargins(8, 8, 8, 8)
-            layout.setSpacing(7)
+            layout.setContentsMargins(6, 6, 6, 6)
+            layout.setSpacing(5)
+
             header = QHBoxLayout()
+            header.setContentsMargins(2, 0, 2, 1)
             title = QLabel(label)
             title.setObjectName("activityDayTitle")
             count = QLabel(f"{len(day_items)} işlem")
@@ -288,13 +332,16 @@ class ActivityTimelineView(QScrollArea):
             header.addStretch(1)
             header.addWidget(count)
             layout.addLayout(header)
+
             for item in day_items:
                 card = TimelineCard(item)
                 card.selected.connect(self._on_selected)
                 card.set_selected(item.id == self._selected_id)
                 self._cards[item.id] = card
                 layout.addWidget(card)
+
             self._layout.addWidget(day)
+
         self._layout.addStretch(1)
 
     def _on_selected(self, item: ActivityHistoryItem) -> None:
@@ -332,7 +379,12 @@ class ActivityHistoryTableModel(QAbstractTableModel):
     def columnCount(self, parent=QModelIndex()) -> int:  # noqa: N802
         return 0 if parent.isValid() else len(self.HEADERS)
 
-    def headerData(self, section: int, orientation: Qt.Orientation, role: int = Qt.DisplayRole):  # noqa: N802
+    def headerData(
+        self,
+        section: int,
+        orientation: Qt.Orientation,
+        role: int = Qt.DisplayRole,
+    ):  # noqa: N802
         if role == Qt.DisplayRole and orientation == Qt.Horizontal and 0 <= section < len(self.HEADERS):
             return self.HEADERS[section]
         return None
@@ -343,7 +395,7 @@ class ActivityHistoryTableModel(QAbstractTableModel):
         item = self._items[index.row()]
         values = (
             format_activity_datetime(item.occurred_at),
-            item.action_label,
+            visible_action_label(item.action, item.action_label),
             item.actor_display_name,
             item.entity_label or item.entity_type or "—",
             item.platform_name or "—",
@@ -371,6 +423,7 @@ class ActivityDetailsPanel(QFrame):
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
         self.setObjectName("activityDetailsPanel")
+        self.setMinimumWidth(300)
         self._item: ActivityHistoryItem | None = None
         self._build()
         self.clear()
@@ -378,55 +431,66 @@ class ActivityDetailsPanel(QFrame):
     def _build(self) -> None:
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
+
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
         self.scroll.setFrameShape(QFrame.NoFrame)
         self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+
         content = QWidget()
         root = QVBoxLayout(content)
-        root.setContentsMargins(14, 14, 14, 14)
-        root.setSpacing(9)
+        root.setContentsMargins(12, 12, 12, 12)
+        root.setSpacing(7)
         self.scroll.setWidget(content)
         outer.addWidget(self.scroll)
+
         self.heading = QLabel("İşlem Ayrıntısı")
         self.heading.setObjectName("activityDetailsTitle")
         root.addWidget(self.heading)
-        self.subtitle = QLabel("Seçilen kaydın okunabilir özeti ve değişen alanları")
+
+        self.subtitle = QLabel("Seçilen kaydın özeti ve değişen alanları")
         self.subtitle.setObjectName("activityMuted")
         self.subtitle.setWordWrap(True)
         root.addWidget(self.subtitle)
 
         self.title = QLabel()
-        self.title.setObjectName("activityCardTitle")
+        self.title.setObjectName("activityDetailRecordTitle")
         self.title.setWordWrap(True)
         root.addWidget(self.title)
+
         self.summary = QLabel()
-        self.summary.setObjectName("activityCardSummary")
+        self.summary.setObjectName("activityDetailSummary")
         self.summary.setWordWrap(True)
         root.addWidget(self.summary)
 
         self.meta = QLabel()
-        self.meta.setObjectName("activityMuted")
+        self.meta.setObjectName("activityDetailMeta")
         self.meta.setWordWrap(True)
         root.addWidget(self.meta)
 
         changed_title = QLabel("DEĞİŞEN ALANLAR")
         changed_title.setObjectName("activitySectionTitle")
         root.addWidget(changed_title)
+
         self.changed = QTreeWidget()
         self.changed.setObjectName("activityChanges")
         self.changed.setHeaderLabels(["Alan", "Önce", "Sonra"])
         self.changed.setRootIsDecorated(False)
         self.changed.setAlternatingRowColors(True)
-        self.changed.setMinimumHeight(130)
+        self.changed.setMinimumHeight(112)
+        self.changed.header().setStretchLastSection(True)
+        self.changed.header().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        self.changed.header().setSectionResizeMode(1, QHeaderView.Stretch)
+        self.changed.header().setSectionResizeMode(2, QHeaderView.Stretch)
         root.addWidget(self.changed, 1)
 
         operation_title = QLabel("AYNI İŞLEMDEKİ HAREKETLER")
         operation_title.setObjectName("activitySectionTitle")
         root.addWidget(operation_title)
+
         self.operation_events = QListWidget()
         self.operation_events.setObjectName("activityOperationEvents")
-        self.operation_events.setMinimumHeight(90)
+        self.operation_events.setMinimumHeight(72)
         root.addWidget(self.operation_events)
 
         self.technical_toggle = QToolButton()
@@ -438,16 +502,20 @@ class ActivityDetailsPanel(QFrame):
         self.technical_toggle.setArrowType(Qt.RightArrow)
         self.technical_toggle.toggled.connect(self._toggle_technical)
         root.addWidget(self.technical_toggle)
+
         self.technical_text = QPlainTextEdit()
         self.technical_text.setObjectName("activityTechnicalText")
         self.technical_text.setReadOnly(True)
         self.technical_text.setVisible(False)
-        self.technical_text.setMaximumHeight(190)
+        self.technical_text.setMaximumHeight(180)
         root.addWidget(self.technical_text)
+
         self.copy_button = QPushButton("Gösterilen teknik metni kopyala")
         self.copy_button.setObjectName("activitySecondary")
         self.copy_button.setVisible(False)
-        self.copy_button.clicked.connect(lambda: self.copy_requested.emit(self.technical_text.toPlainText()))
+        self.copy_button.clicked.connect(
+            lambda: self.copy_requested.emit(self.technical_text.toPlainText())
+        )
         root.addWidget(self.copy_button)
 
     def _toggle_technical(self, visible: bool) -> None:
@@ -458,8 +526,10 @@ class ActivityDetailsPanel(QFrame):
     def clear(self) -> None:
         self._item = None
         self.title.setText("Bir işlem seçin")
-        self.summary.setText("Timeline veya tablodan bir kayıt seçildiğinde ayrıntılar burada görünür.")
-        self.meta.setText("—")
+        self.summary.setText(
+            "Zaman akışından veya özet tablodan bir kayıt seçildiğinde ayrıntılar burada görünür."
+        )
+        self.meta.setText("")
         self.changed.clear()
         self.operation_events.clear()
         self.technical_toggle.setVisible(False)
@@ -467,19 +537,34 @@ class ActivityDetailsPanel(QFrame):
         self.technical_text.setVisible(False)
         self.copy_button.setVisible(False)
 
-    def set_item(self, item: ActivityHistoryItem, operation_events: Iterable[ActivityHistoryItem] = ()) -> None:
+    def set_item(
+        self,
+        item: ActivityHistoryItem,
+        operation_events: Iterable[ActivityHistoryItem] = (),
+    ) -> None:
         self._item = item
-        self.title.setText(item.title or item.action_label)
+        action_label = visible_action_label(item.action, item.action_label)
+        self.title.setText(item.title or action_label)
         self.summary.setText(item.summary)
-        parts = [
-            f"Tarih: {format_activity_datetime(item.occurred_at)}",
-            f"İşlem yapan: {item.actor_display_name}",
-            f"Durum: {status_text(item.status)}",
-            f"Varlık: {item.entity_label or item.entity_type or '—'}",
-            f"Platform: {item.platform_name or '—'}",
-            f"Sözleşme: {item.contract_no or '—'}",
-        ]
-        self.meta.setText("\n".join(parts))
+
+        first_line = " · ".join(
+            [
+                format_activity_datetime(item.occurred_at),
+                item.actor_display_name,
+                status_text(item.status),
+            ]
+        )
+        second_line = " · ".join(
+            value
+            for value in (
+                item.entity_label or item.entity_type or "—",
+                item.platform_name or "—",
+                item.contract_no or "—",
+            )
+            if value and value != "—"
+        )
+        self.meta.setText(first_line + (f"\n{second_line}" if second_line else ""))
+
         self.changed.clear()
         if item.changed_fields:
             for change in item.changed_fields:
@@ -491,21 +576,32 @@ class ActivityDetailsPanel(QFrame):
                     ]
                 )
                 for column in range(3):
-                    row.setToolTip(column, bounded_display((change.field, change.before, change.after)[column], max_chars=700))
+                    row.setToolTip(
+                        column,
+                        bounded_display(
+                            (change.field, change.before, change.after)[column],
+                            max_chars=700,
+                        ),
+                    )
                 self.changed.addTopLevelItem(row)
         else:
             note = "Alan bazlı değişiklik bilgisi bulunmuyor"
             if item.changed_fields_parse_error:
                 note += "; kayıt güvenli biçimde gösterildi."
             self.changed.addTopLevelItem(QTreeWidgetItem([note, "", ""]))
+
         self.operation_events.clear()
         for event in operation_events:
+            event_label = visible_action_label(event.action, event.action_label)
             QListWidgetItem(
-                f"{format_activity_time(event.occurred_at)} · {event.action_label} · {event.summary}",
+                f"{format_activity_time(event.occurred_at)} · {event_label} · {event.summary}",
                 self.operation_events,
             )
         if not self.operation_events.count():
-            QListWidgetItem("Bu işlem için başka izinli hareket bulunmuyor.", self.operation_events)
+            QListWidgetItem(
+                "Bu işlem için başka izinli hareket bulunmuyor.",
+                self.operation_events,
+            )
 
         technical = item.technical
         self.technical_toggle.setVisible(technical is not None)
@@ -526,6 +622,8 @@ class ActivityDetailsPanel(QFrame):
                 "payload": technical.payload,
                 "technical_payload": technical.technical_payload,
             }
-            self.technical_text.setPlainText(bounded_display(safe_ui_payload(payload), max_chars=8000))
+            self.technical_text.setPlainText(
+                bounded_display(safe_ui_payload(payload), max_chars=8000)
+            )
         self.technical_text.setVisible(False)
         self.copy_button.setVisible(False)
