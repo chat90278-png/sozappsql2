@@ -46,6 +46,7 @@ QLabel#activitySummaryValue {
     font-size: 12px;
     font-weight: 800;
 }
+
 QPushButton#activityTab {
     min-height: 29px;
     padding: 0 11px;
@@ -80,6 +81,7 @@ QPushButton#activitySegment:checked {
     background: #eaf1ff;
     color: #174aa8;
 }
+
 QLineEdit#activityFilter,
 QComboBox#activityFilter,
 QDateEdit#activityFilter {
@@ -102,6 +104,7 @@ QDateEdit#activityFilter:focus {
     border: 2px solid #7f9fdf;
     padding-left: 7px;
 }
+
 QPushButton#activityPrimary {
     min-height: 31px;
     padding: 0 13px;
@@ -146,6 +149,7 @@ QPushButton#activityLoadMore:hover {
     background: #eaf1ff;
     border-color: #91ace0;
 }
+
 QFrame#activityTimelineCard {
     background: #ffffff;
     border: 1px solid #e2e9f2;
@@ -167,9 +171,19 @@ QLabel#activityCardTitle {
     font-size: 12px;
     font-weight: 800;
 }
+QLabel#activityCardActor {
+    color: #4f6076;
+    font-size: 10px;
+    font-weight: 700;
+}
+QLabel#activityCardTime {
+    color: #718096;
+    font-size: 10px;
+    font-weight: 700;
+}
 QLabel#activityCardSummary {
     color: #27374c;
-    font-size: 12px;
+    font-size: 11px;
 }
 QLabel#activityChip {
     color: #506176;
@@ -211,6 +225,7 @@ QLabel#activityDayTitle {
     font-size: 11px;
     font-weight: 800;
 }
+
 QTableView#activityTable {
     background: #ffffff;
     alternate-background-color: #f8fafc;
@@ -240,6 +255,7 @@ QHeaderView::section {
     padding: 6px 7px;
     font-weight: 700;
 }
+
 QFrame#activityDetailsPanel {
     background: #ffffff;
 }
@@ -247,6 +263,24 @@ QLabel#activityDetailsTitle {
     color: #122033;
     font-size: 15px;
     font-weight: 800;
+}
+QLabel#activityDetailRecordTitle {
+    color: #122033;
+    font-size: 13px;
+    font-weight: 800;
+    padding-top: 2px;
+}
+QLabel#activityDetailSummary {
+    color: #27374c;
+    font-size: 11px;
+}
+QLabel#activityDetailMeta {
+    color: #5f6f82;
+    background: #f6f8fb;
+    border: 1px solid #e0e7ef;
+    border-radius: 7px;
+    padding: 6px 7px;
+    font-size: 10px;
 }
 QLabel#activitySectionTitle {
     color: #526278;
@@ -283,6 +317,7 @@ QToolButton#activityTechnicalToggle {
 QToolButton#activityTechnicalToggle:hover {
     background: #f1f5fa;
 }
+
 QScrollArea#activityTimelineScroll {
     background: transparent;
     border: none;
@@ -306,6 +341,7 @@ QSplitter#activitySplitter::handle {
 QSplitter#activitySplitter::handle:hover {
     background: #9fb3ca;
 }
+
 QScrollBar:vertical {
     background: transparent;
     width: 10px;
