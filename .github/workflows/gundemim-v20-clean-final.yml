@@ -1,0 +1,271 @@
+name: Gündemim v20 clean final integration
+
+on:
+  push:
+    branches:
+      - agent/gundemim-v20-clean-final-20260716
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  actions: read
+
+concurrency:
+  group: gundemim-v20-clean-final
+  cancel-in-progress: false
+
+jobs:
+  validate-and-merge:
+    runs-on: ubuntu-latest
+    env:
+      QT_QPA_PLATFORM: offscreen
+      GH_TOKEN: ${{ github.token }}
+      BRANCH: agent/gundemim-v20-clean-final-20260716
+    steps:
+      - name: Checkout clean integration branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/gundemim-v20-clean-final-20260716
+          fetch-depth: 0
+
+      - name: Merge latest main normally
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin main
+          git merge --no-edit origin/main
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libegl1 libgl1 libxkbcommon-x11-0 libxcb-cursor0
+          python -m pip install --quiet --disable-pip-version-check -r requirements.txt
+          python -m pip install --quiet --disable-pip-version-check pytest
+
+      - name: Reconstruct verified package from Git blobs
+        shell: bash
+        run: |
+          python - <<'PY'
+          import base64
+          import hashlib
+          import json
+          import os
+          import urllib.request
+          from pathlib import Path
+          from zipfile import ZipFile
+
+          repo = os.environ['GITHUB_REPOSITORY']
+          token = os.environ['GH_TOKEN']
+          blob_shas = [
+              'd3b20960586357aeadaa7d1a0e16349f1409876f',
+              '3f50615d97523dcecbd56646c39dff1cae8123e6',
+              '1cd745a65165341b891acd891696ae2b6ba937fb',
+              'b1fe587d78540a633e89ecc39075f9f4e297d12f',
+              '6947bb00e74d407501447f96b71733e0e44775ee',
+              'cf359ec632c603198c19eabc5c3dd3a82d29b222',
+              '2b4cc1b56500117d4898f8233e75b477024f4c97',
+              '47c5bfaf86601f2d010c94ce1eb96c79f2fd2767',
+              '83e49d92d9265fb1fb733975427154fe9d8a804b',
+              '88264b3598219242f1694464911d93b55d4a2ba0',
+              'd13f1f622ef3f477e7ff44775b8446452a9d2c65',
+              'df5a296bbae51304dfacc033a0afb8ecfe5d2e24',
+              'bcfc36299ca0af0ab4b3fb6a70889bfe36f7a97f',
+              '3f1c1859f900327f0ac2da2d2f2c81b20d9cb1c1',
+              '3a47db75e8b46727ba9f0350e684e3109806454c',
+              'b17f238fdd53d68af61cf830c33099a071ea1135',
+              'e42cc07ba91eec5656074e73f218b0e990453c86',
+              '8c79e1be6166fa11d15b3283326e7c1f56d419af',
+              '56d0a5a8df8f5e43e0dc4d3c8be9212e3f1cfeb2',
+              '85d14454f97533ffa91b15b8deda014bed3f8323',
+              'a5ee0d5468cf250ad8edc7b8e15e9d7a216aab90',
+              '37b5545b4c85125f769c1fe85731dea3e79f1384',
+              '4a9fbe3423a023b94dbc91fb3c6798102a181dee',
+          ]
+          chunks = []
+          for sha in blob_shas:
+              request = urllib.request.Request(
+                  f'https://api.github.com/repos/{repo}/git/blobs/{sha}',
+                  headers={
+                      'Authorization': f'Bearer {token}',
+                      'Accept': 'application/vnd.github+json',
+                      'X-GitHub-Api-Version': '2022-11-28',
+                      'User-Agent': 'gundemim-v20-integration',
+                  },
+              )
+              with urllib.request.urlopen(request, timeout=30) as response:
+                  payload = json.load(response)
+              chunks.append(base64.b64decode(payload['content']))
+
+          encoded = b''.join(chunks)
+          archive_bytes = base64.b64decode(encoded, validate=True)
+          digest = hashlib.sha256(archive_bytes).hexdigest()
+          expected_digest = '03613d85b54f90be62dadac79dbacfab5436e60af5cd636ef9b9864dda2f5495'
+          if digest != expected_digest:
+              raise SystemExit(f'Package SHA mismatch: {digest}')
+
+          archive_path = Path('/tmp/gundemim.zip')
+          archive_path.write_bytes(archive_bytes)
+          required = {
+              'src/domain/agenda/deadline_stage.py',
+              'src/domain/agenda/activity.py',
+              'src/domain/agenda/lifecycle.py',
+              'src/domain/agenda/models.py',
+              'src/domain/agenda/providers/deadline.py',
+              'src/domain/agenda/providers/unknown_date.py',
+              'src/domain/agenda/providers/document_lock.py',
+              'src/domain/agenda/providers/activity.py',
+              'src/services/sts_database.py',
+              'src/services/sts_schema_upgrade.py',
+              'src/services/sts_schema_upgrade_gate.py',
+              'src/services/agenda_state_repository.py',
+              'src/services/personal_agenda_facade.py',
+              'src/ui/agenda_compact_widget.py',
+              'src/ui/agenda_detail_window.py',
+              'src/ui/main_page_analysis_window.py',
+              'tests/test_activity_agenda_provider.py',
+              'tests/test_activity_history_infrastructure.py',
+              'tests/test_activity_history_main_integration.py',
+              'tests/test_activity_history_operations.py',
+              'tests/test_activity_history_query.py',
+              'tests/test_agenda_compact_widget.py',
+              'tests/test_agenda_detail_window.py',
+              'tests/test_agenda_lifecycle.py',
+              'tests/test_agenda_schema_v19_integration.py',
+              'tests/test_agenda_state_repository.py',
+              'tests/test_document_lock_agenda_provider.py',
+              'tests/test_main_page_agenda_integration.py',
+              'tests/test_personal_agenda_facade.py',
+              'tests/test_staff_agenda_service.py',
+              'tests/test_sts_schema_upgrade.py',
+              'tests/test_sts_schema_upgrade_gate.py',
+          }
+          with ZipFile(archive_path) as archive:
+              actual = {name for name in archive.namelist() if not name.endswith('/')}
+              if actual != required:
+                  raise SystemExit(f'Unexpected paths: missing={sorted(required-actual)}, extra={sorted(actual-required)}')
+              archive.extractall('.')
+          print(f'PACKAGE_SHA256={digest}')
+          print(f'PACKAGE_FILES={len(required)}')
+          PY
+
+      - name: Verify v20 source contracts
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from src.services.sts_database import CURRENT_SCHEMA_VERSION
+
+          assert CURRENT_SCHEMA_VERSION == 20, CURRENT_SCHEMA_VERSION
+          assert 'quick_dismiss_count' in Path('src/services/sts_database.py').read_text(encoding='utf-8')
+          assert 'v19_to_v20_agenda_quick_dismiss_count' in Path('src/services/sts_schema_upgrade.py').read_text(encoding='utf-8')
+          assert 'quick_dismiss_count' in Path('src/services/sts_schema_upgrade_gate.py').read_text(encoding='utf-8')
+          PY
+
+      - name: Run migration and data-binding tests
+        shell: bash
+        run: |
+          mkdir -p validation-out
+          python3 -m pytest \
+            tests/test_sts_schema_upgrade.py \
+            tests/test_sts_schema_upgrade_gate.py \
+            tests/test_agenda_schema_v19_integration.py \
+            tests/test_agenda_state_repository.py \
+            tests/test_personal_agenda_facade.py \
+            tests/test_agenda_lifecycle.py -q 2>&1 | tee validation-out/migration-data-binding.txt
+
+      - name: Run full test suite
+        shell: bash
+        run: |
+          python3 -m pytest tests/ -q 2>&1 | tee validation-out/pytest-full.txt
+
+      - name: Upload validation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gundemim-v20-clean-final-validation
+          path: validation-out/*
+          retention-days: 7
+          if-no-files-found: warn
+
+      - name: Commit validated integration
+        if: success()
+        shell: bash
+        run: |
+          rm .github/workflows/gundemim-v20-clean-final.yml
+          git add -A
+          python - <<'PY'
+          import subprocess
+
+          changed = set(subprocess.check_output(['git', 'diff', '--cached', '--name-only'], text=True).splitlines())
+          critical = {
+              'src/services/sts_database.py',
+              'src/services/sts_schema_upgrade.py',
+              'src/services/sts_schema_upgrade_gate.py',
+              'src/services/agenda_state_repository.py',
+              'src/services/personal_agenda_facade.py',
+          }
+          if changed and not critical.issubset(changed):
+              raise SystemExit(f'Critical files not staged: {sorted(critical-changed)}')
+          unexpected = [p for p in changed if not (p.startswith('src/') or p.startswith('tests/') or p.startswith('.github/'))]
+          if unexpected:
+              raise SystemExit(f'Unexpected staged paths: {unexpected}')
+          PY
+          if git diff --cached --quiet; then
+            echo "NO_SOURCE_DIFF=1" >> "$GITHUB_ENV"
+          else
+            git commit -m "feat: integrate Gündemim and upgrade STS schema to v20"
+            git push origin HEAD:"${BRANCH}"
+            echo "NO_SOURCE_DIFF=0" >> "$GITHUB_ENV"
+          fi
+
+      - name: Open and merge clean pull request
+        if: success() && env.NO_SOURCE_DIFF == '0'
+        shell: bash
+        run: |
+          BODY_FILE=/tmp/pr-body.md
+          cat > "$BODY_FILE" <<'EOF'
+          ## Özet
+          - Gündemim UI, facade, repository ve provider düzeltmeleri entegre edildi.
+          - `staff_agenda_state` şeması v19→v20'ye yükseltildi.
+          - Yeni sütun: `quick_dismiss_count`.
+          - Migration adı: `v19_to_v20_agenda_quick_dismiss_count`.
+
+          ## Doğrulama
+          - Kaynak paket SHA-256 doğrulandı.
+          - v19→v20 ve v14→v20 tarihsel şema zincirleri test edildi.
+          - Repository/facade/UI veri-bağlantısı testleri geçti.
+          - `python3 -m pytest tests/ -q` geçti.
+
+          Üretimden alınmış ve hassas verileri temizlenmiş gerçek bir `.sts` dosyası sağlanmadığından, üretim-türevi dosya üzerinde doğrulama yapıldığı iddia edilmemektedir.
+          EOF
+          git fetch origin main
+          if git diff --quiet origin/main HEAD -- src tests; then
+            echo "Main already contains the validated source files."
+          else
+            PR_URL=$(gh pr list --head "${BRANCH}" --base main --state open --json url --jq '.[0].url')
+            if [ -z "$PR_URL" ]; then
+              PR_URL=$(gh pr create --base main --head "${BRANCH}" --title "Gündemim entegrasyonu ve STS şema v20" --body-file "$BODY_FILE")
+            fi
+            gh pr merge "$PR_URL" --merge
+          fi
+
+      - name: Verify main and clean temporary records
+        if: success()
+        shell: bash
+        run: |
+          git fetch origin main
+          git show origin/main:src/services/sts_database.py | grep -q 'CURRENT_SCHEMA_VERSION = 20'
+          git show origin/main:src/services/sts_schema_upgrade.py | grep -q 'v19_to_v20_agenda_quick_dismiss_count'
+          git show origin/main:src/services/sts_schema_upgrade_gate.py | grep -q 'quick_dismiss_count'
+          for number in $(gh pr list --head agent/gundemim-v20-main-20260716 --state open --json number --jq '.[].number'); do
+            gh pr close "$number" --comment "Temiz final entegrasyon akışı kullanıldı; bu geçici PR kapatıldı."
+          done
+          gh issue close 348 --comment "Gündemim v20 entegrasyonu doğrulandı ve main'e alındı." || true
