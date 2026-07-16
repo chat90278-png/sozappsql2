@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import QPoint, QTimer, Qt
 from PySide6.QtGui import QFontMetrics, QPixmap
-from PySide6.QtWidgets import QLabel
+from PySide6.QtWidgets import QLabel, QSizePolicy
 
 from src.ui.main_window import app_icon_path
 
@@ -20,39 +20,68 @@ def install_main_page_identity_runtime_fix() -> None:
     original_polish_platform_rail = main_page.MainWindow._polish_left_platform_rail
     original_update_connection_badge = main_page.MainWindow.update_connection_badge
 
+    connected_texts = {
+        "✓ STS veri dosyası bağlandı",
+        "✓ STS veri dosyası bağlı",
+        "✓ STS bağlandı",
+        "✓ STS bağlı",
+    }
+    connected_text = "✓ STS veri dosyası bağlı"
+    badge_max_width = 160
+
+    def refresh_label_style(label: QLabel) -> None:
+        try:
+            label.style().unpolish(label)
+            label.style().polish(label)
+        except Exception:
+            pass
+        label.updateGeometry()
+        label.update()
+
+    def connected_badge_style(font_px: int, horizontal_padding: int) -> str:
+        return (
+            "QLabel#okPill{"
+            "color:#047857;background:#dcfce7;border-radius:9px;"
+            f"padding:8px {horizontal_padding}px;"
+            f"font-size:{font_px}px;font-weight:800;"
+            "}"
+        )
+
     def compact_connection_text(label: QLabel | None) -> None:
         if label is None:
             return
-        text = str(label.text() or "").strip()
-        connected_texts = {
-            "✓ STS veri dosyası bağlandı",
-            "✓ STS veri dosyası bağlı",
-            "✓ STS bağlandı",
-            "✓ STS bağlı",
-        }
-        is_connected = text in connected_texts
+
+        current_text = str(label.text() or "").strip()
+        is_connected = current_text in connected_texts
         if is_connected:
-            text = "✓ STS veri dosyası bağlı"
-            label.setText(text)
+            label.setText(connected_text)
 
         label.setWordWrap(False)
         label.setMinimumWidth(0)
-        label.setMaximumWidth(160)
+        label.setMaximumWidth(badge_max_width)
+        label.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
 
         if is_connected:
-            font = label.font()
-            point_size = max(7, min(9, int(font.pointSize() or 9)))
-            available_width = max(1, label.maximumWidth() - 20)
-            while point_size > 7:
-                font.setPointSize(point_size)
-                if QFontMetrics(font).horizontalAdvance(text) <= available_width:
+            # Main theme sets QWidget font-size:13px and okPill padding:8px 14px.
+            # Those stylesheet values override setFont() and made the 160 px badge
+            # clip. Override only the green connected state, then verify the real
+            # styled sizeHint (including padding) before accepting the size.
+            for font_px, horizontal_padding in ((10, 8), (9, 7), (8, 6)):
+                label.setStyleSheet(
+                    connected_badge_style(font_px, horizontal_padding)
+                )
+                refresh_label_style(label)
+                if label.sizeHint().width() <= badge_max_width:
                     break
-                point_size -= 1
-            font.setPointSize(point_size)
-            label.setFont(font)
             label.setToolTip("STS veri dosyası bağlı")
         else:
-            label.setToolTip(text)
+            # Bad/loading states keep the original theme and original text sizing.
+            label.setStyleSheet("")
+            refresh_label_style(label)
+            label.setToolTip(current_text)
+
+        label.adjustSize()
+        label.updateGeometry()
 
     def apply_identity_fit(self) -> None:
         root = self.centralWidget()
