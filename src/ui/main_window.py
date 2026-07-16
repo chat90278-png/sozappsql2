@@ -22,6 +22,7 @@ from typing import Callable, Dict, List, Optional, Protocol, Tuple
 from src.ui.dialogs.auto_accept_dialog import open_auto_accept_dialog
 from src.services.share_package_service import read_share_metadata, write_share_metadata, validate_share_package
 from src.services import perf_tracker
+from src._build_info import BUILD_COMMIT, BUILD_COMMIT_SHORT, BUILD_DATE
 
 
 from src.domain.constants import (
@@ -1346,6 +1347,15 @@ class MainWindow(QMainWindow):
             traceback.print_exc()
             QMessageBox.warning(self, "Kullanım Kılavuzu", f"Kullanım kılavuzu açılamadı:\n{exc}")
 
+    def show_build_info(self):
+        QMessageBox.information(
+            self,
+            "Sürüm / Build",
+            f"Commit: {BUILD_COMMIT}\n"
+            f"Kısa commit: {BUILD_COMMIT_SHORT}\n"
+            f"Build tarihi (UTC): {BUILD_DATE}",
+        )
+
     def build(self):
         root=QWidget(); self.setCentralWidget(root); main=QVBoxLayout(root)
         main.setContentsMargins(8, 8, 8, 8)
@@ -2398,6 +2408,7 @@ class MainWindow(QMainWindow):
 
         help_menu = self._add_top_actions_submenu(menu, "Yardım")
         self._add_menu_action(help_menu, "Kullanım Kılavuzu", self.open_usage_guide)
+        self._add_menu_action(help_menu, "Sürüm / Build", self.show_build_info)
 
         menu.aboutToShow.connect(self._refresh_permission_actions)
         self._refresh_permission_actions()

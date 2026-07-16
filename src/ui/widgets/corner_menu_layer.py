@@ -373,7 +373,10 @@ class CornerMenuPanel(QFrame):
             item = self._layout.takeAt(0)
             widget = item.widget()
             if widget is not None:
+                widget.hide()
+                widget.setParent(None)
                 widget.deleteLater()
+        self._layout.invalidate()
 
     def show_menu(self, menu: QMenu, *, caption: str, allow_back: bool) -> int:
         self._clear_rows()
